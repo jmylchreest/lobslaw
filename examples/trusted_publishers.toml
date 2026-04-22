@@ -1,0 +1,22 @@
+# Trusted publishers for signed skills.
+#
+# Only consulted when [skills] require_signed = true in config.toml.
+# Each entry lists a publisher's minisign public key and the skill
+# ID prefixes they are allowed to sign.
+#
+# To add a publisher:
+#   1. Obtain their minisign public key (minisign.pub)
+#   2. Add an entry below with the key, a human-readable name, and
+#      the skill ID prefix they may sign
+#   3. Commit the change — trusted_publishers.toml is policy, not
+#      secret, and version control is the audit trail.
+
+# [[publishers]]
+# name       = "OpenClaw Official"
+# public_key = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"
+# allowed_prefixes = ["openclaw/*"]
+
+# [[publishers]]
+# name       = "jmylchreest"
+# public_key = "PASTE_YOUR_MINISIGN_PUBKEY_HERE"
+# allowed_prefixes = ["lobslaw/*"]

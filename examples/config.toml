@@ -1,0 +1,183 @@
+# Example lobslaw configuration.
+#
+# Secret references are resolved at load time:
+#   env:VAR_NAME   read from process env
+#   file:/path     read from file (trailing newline trimmed)
+# Literal values without a scheme are rejected to stop accidental
+# plaintext secrets in config files.
+#
+# Env-var overrides use double underscore between sections and keep
+# single underscores within a key name:
+#   LOBSLAW__MEMORY__RAFT_PORT=9999 → memory.raft_port
+# See DESIGN.md for the full configuration reference.
+
+[node]
+# id is auto-generated and persisted on first start if unset.
+# id = "agent-1"
+
+[memory]
+enabled = true
+raft_port = 2380
+
+[memory.encryption]
+# nacl/secretbox key for boltdb values. 32 bytes, base64-encoded.
+key_ref = "env:LOBSLAW_MEMORY_KEY"
+
+[memory.snapshot]
+# Required when the cluster has < 3 nodes; startup fails without it.
+target    = "storage:r2-backup"
+cadence   = "1h"
+retention = "30d"
+
+[memory.dream]
+# Cron expression for dream/REM consolidation.
+schedule = "0 3 * * *"
+
+# rclone mounts — each becomes /cluster/store/{label}/
+[[storage.mounts]]
+label    = "shared"
+type     = "s3"
+bucket   = "lobslaw-data"
+endpoint = "https://s3.amazonaws.com"
+access_key_ref = "env:AWS_ACCESS_KEY_ID"
+secret_key_ref = "env:AWS_SECRET_ACCESS_KEY"
+# Enable rclone crypt to write ciphertext to the backend.
+crypt                = true
+crypt_password_ref   = "env:RCLONE_CRYPT_PASSWORD"
+crypt_salt_ref       = "env:RCLONE_CRYPT_SALT"
+
+[[storage.mounts]]
+label   = "r2-backup"
+type    = "r2"
+account = "YOUR_R2_ACCOUNT_ID"
+access_key_ref = "env:R2_ACCESS_KEY_ID"
+secret_key_ref = "env:R2_SECRET_ACCESS_KEY"
+
+[policy]
+enabled = true
+
+[compute]
+enabled             = true
+default_chain       = "fast"
+complexity_estimator = "heuristic"  # "heuristic" or "provider:<label>"
+
+# OpenRouter as the default example provider. Public trust tier.
+[[compute.providers]]
+label        = "fast"
+endpoint     = "https://openrouter.ai/api/v1"
+model        = "meta-llama/llama-3.1-8b-instruct"
+api_key_ref  = "env:OPENROUTER_API_KEY_LOBSLAW"
+trust_tier   = "public"
+capabilities = ["function-calling"]
+
+# Uncomment to add a private-tier provider (e.g. Anthropic via
+# OpenAI-compatible endpoint):
+# [[compute.providers]]
+# label       = "smart"
+# endpoint    = "https://api.anthropic.com/v1"
+# model       = "claude-3-5-sonnet"
+# api_key_ref = "env:ANTHROPIC_API_KEY"
+# trust_tier  = "private"
+# capabilities = ["function-calling", "vision"]
+
+# Uncomment to run a local model as the most-private tier:
+# [[compute.providers]]
+# label      = "local"
+# endpoint   = "http://localhost:8000/v1"
+# model      = "llama-3.1-70b"
+# trust_tier = "local"
+
+[compute.budgets]
+max_tool_calls_per_turn   = 30
+max_spend_usd_per_turn    = 0.50
+max_egress_bytes_per_turn = 10_000_000
+
+# RTK token-optimisation plugin (hashes bash output to ~10% of tokens).
+# Uncomment once rtk is on PATH or use auto_install_binary.
+# [[compute.plugins]]
+# name   = "rtk"
+# source = "github:rtk-ai/rtk"
+# auto_install_binary = true
+# enabled = true
+
+[gateway]
+enabled              = true
+grpc_port            = 9090
+http_port            = 8080
+confirmation_timeout = "5m"
+unknown_user_scope   = ""  # empty = reject unknown users
+
+[[gateway.channels]]
+type          = "telegram"
+bot_token_ref = "env:TELEGRAM_BOT_TOKEN"
+# secret_token_ref configures Telegram's X-Telegram-Bot-Api-Secret-Token.
+secret_token_ref = "env:TELEGRAM_WEBHOOK_SECRET"
+
+[[gateway.channels]]
+type     = "rest"
+tls_cert = "/etc/lobslaw/cert.pem"
+tls_key  = "/etc/lobslaw/key.pem"
+
+[discovery]
+seed_nodes          = []     # e.g. ["node2:9090", "node3:9090"]
+broadcast           = true
+broadcast_interface = "auto"
+
+[cluster.mtls]
+ca_cert   = "/etc/lobslaw/ca.pem"
+node_cert = "/etc/lobslaw/node.pem"
+node_key  = "/etc/lobslaw/node.key"
+
+[soul]
+path  = "./SOUL.md"
+scope = "default"
+
+[scheduler]
+enabled       = true
+tick_interval = "1m"
+claim_lease   = "5m"
+
+[[scheduler.tasks]]
+name     = "daily-dream"
+schedule = "0 3 * * *"
+handler  = "skill:dream"
+enabled  = true
+
+[auth]
+issuer       = "lobslaw"
+jwks_url     = ""    # e.g. "https://accounts.google.com/.well-known/openid-configuration"
+allow_hs256  = false # single-node HS256 fallback; RS256/EdDSA preferred
+
+[sandbox]
+allowed_paths      = ["/var/lobslaw/workspace", "/cluster/store/shared/skills"]
+read_only_paths    = ["/cluster/store/shared/skills", "/etc/lobslaw"]
+network_allow_cidr = ["0.0.0.0/0"]   # tighten per-tool via policy rules
+env_whitelist      = ["PATH", "HOME", "USER", "LANG"]
+cpu_quota          = 2000   # millicpus
+memory_limit_mb    = 512
+
+[audit.raft]
+enabled         = true
+anchor_target   = "storage:r2-backup"
+anchor_cadence  = "1h"
+
+[audit.local]
+enabled         = true
+path            = "/var/lobslaw/audit/audit.jsonl"
+max_size_mb     = 100
+max_files       = 10
+anchor_target   = "storage:r2-backup"
+anchor_cadence  = "1h"
+
+[skills]
+require_signed     = false
+trusted_publishers = "./trusted_publishers.toml"
+
+[observability]
+tracing_exporter = "stdout"  # "otlp" | "stdout" | "none"
+# otlp_endpoint  = "http://localhost:4318"
+
+[config]
+# Hot-reload: fsnotify on config.toml + SOUL.md + skill manifests.
+watch       = true
+debounce_ms = 1500
