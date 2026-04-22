@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // stubSummarizer records the summarize call count for test assertions
@@ -227,8 +228,10 @@ func TestDreamRunWithSummarizer(t *testing.T) {
 	}
 
 	// Consolidated record should exist in VectorRecord bucket with the
-	// correct SourceIds.
+	// correct SourceIds. Sources were both episodic (default), so the
+	// consolidation should inherit episodic retention — NOT long-term.
 	var found bool
+	var gotRetention string
 	err = svc.store.ForEach(BucketVectorRecords, func(id string, raw []byte) error {
 		var v lobslawv1.VectorRecord
 		if err := proto.Unmarshal(raw, &v); err != nil {
@@ -236,6 +239,7 @@ func TestDreamRunWithSummarizer(t *testing.T) {
 		}
 		if len(v.SourceIds) == 2 && v.Text == "met alice and bob" {
 			found = true
+			gotRetention = v.Retention
 		}
 		return nil
 	})
@@ -244,6 +248,77 @@ func TestDreamRunWithSummarizer(t *testing.T) {
 	}
 	if !found {
 		t.Error("consolidated VectorRecord not found")
+	}
+	if gotRetention != "episodic" {
+		t.Errorf("consolidation retention = %q, want episodic (inherited from sources)", gotRetention)
+	}
+}
+
+func TestDreamConsolidationInheritsHighestRetention(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	ctx := context.Background()
+	now := fixedNow()
+
+	// Mix of retentions: one long-term, two episodic. Consolidation
+	// should inherit long-term (the highest).
+	for _, rec := range []*lobslawv1.EpisodicRecord{
+		{Id: "e-1", Event: "routine A", Importance: 9, Timestamp: timestamppb.New(now), Retention: "episodic"},
+		{Id: "e-2", Event: "anniversary", Importance: 9, Timestamp: timestamppb.New(now), Retention: "long-term"},
+		{Id: "e-3", Event: "routine B", Importance: 9, Timestamp: timestamppb.New(now), Retention: "episodic"},
+	} {
+		if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sum := &stubSummarizer{summary: "mixed-retention summary", embedding: []float32{0.1}}
+	d := NewDreamRunner(svc.raft, svc.store, sum, DreamConfig{Now: func() time.Time { return now }}, nil)
+	if _, err := d.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotRetention string
+	err := svc.store.ForEach(BucketVectorRecords, func(_ string, raw []byte) error {
+		var v lobslawv1.VectorRecord
+		if err := proto.Unmarshal(raw, &v); err != nil {
+			return err
+		}
+		if v.Text == "mixed-retention summary" {
+			gotRetention = v.Retention
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRetention != "long-term" {
+		t.Errorf("consolidation retention = %q, want long-term (highest among sources)", gotRetention)
+	}
+}
+
+func TestHighestRetention(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   []types.Retention
+		want types.Retention
+	}{
+		{"empty", nil, types.RetentionSession},
+		{"only session", []types.Retention{types.RetentionSession}, types.RetentionSession},
+		{"only episodic", []types.Retention{types.RetentionEpisodic}, types.RetentionEpisodic},
+		{"only long-term", []types.Retention{types.RetentionLongTerm}, types.RetentionLongTerm},
+		{"session + episodic", []types.Retention{types.RetentionSession, types.RetentionEpisodic}, types.RetentionEpisodic},
+		{"episodic + long-term", []types.Retention{types.RetentionEpisodic, types.RetentionLongTerm}, types.RetentionLongTerm},
+		{"all three", []types.Retention{types.RetentionSession, types.RetentionEpisodic, types.RetentionLongTerm}, types.RetentionLongTerm},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := highestRetention(tt.in); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

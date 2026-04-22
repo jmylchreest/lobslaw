@@ -240,14 +240,14 @@ type EpisodicRecord struct {
 
 Dream is a write-only activity — its own processing is not stored.
 
-**Forget (`Memory.Forget`):** Cascading delete. Given a query and optional `before` timestamp:
+**Forget (`Memory.Forget`):** Cascading delete — aggressive-sweep semantics per `lobslaw-forget-cascade`. Given a query and optional `before` timestamp:
 
 1. Find matching source records.
-2. Find all consolidated records whose `SourceIDs` include any matching source.
-3. For consolidated records: if *all* sources are matched, delete the consolidated record too. If some sources survive, re-consolidate from the survivors (queue a targeted dream).
+2. Find all consolidated records whose `SourceIDs` include *any* matching source.
+3. Delete both the matching sources AND every consolidated record whose sources intersect the matched set — partial intersections too. The next dream run will rebuild consolidations from survivors.
 4. Audit-log the forget operation with the query and count.
 
-Right-to-be-forgotten is first-class. The forget-cascade is what prevents data resurfacing as a "summary" after you asked for it gone.
+Right-to-be-forgotten is first-class. The aggressive sweep is what keeps data from resurfacing as a "summary" after you asked for it gone: a consolidation that retains one fragment of forgotten content still has that content encoded in its text and embedding. Cheaper-but-leakier alternatives (re-consolidate in place from the surviving sources) were explicitly rejected.
 
 **Snapshot export:** Memory nodes write Raft snapshots periodically (default hourly) to a configured target resolved by the Storage function — typically `storage:r2-backup` or similar. This is why memory-enabled nodes must also enable Storage.
 

@@ -442,7 +442,7 @@ Dream runs as a background goroutine. It acquires a Raft log entry to apply its 
 Given a query (and optional `before` timestamp):
 1. Find matching source records
 2. Find all consolidated records whose `SourceIDs` include any matching source
-3. For consolidated records: if *all* sources matched → delete; if some survived → re-consolidate
+3. Delete the matched sources AND every consolidated record whose sources intersect the matched set — aggressive-sweep per aide decision `lobslaw-forget-cascade`. The next dream run rebuilds consolidations from surviving sources.
 4. Write audit log entry
 
 ### 3.4 Retention Enforcement

@@ -218,9 +218,11 @@ func (d *DreamRunner) selectTopN(scored []scoredRecord, n int) []scoredRecord {
 func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord, now time.Time) error {
 	events := make([]string, 0, len(candidates))
 	sourceIDs := make([]string, 0, len(candidates))
+	retentions := make([]types.Retention, 0, len(candidates))
 	for _, c := range candidates {
 		events = append(events, c.record.Event)
 		sourceIDs = append(sourceIDs, c.id)
+		retentions = append(retentions, c.retention)
 	}
 
 	summary, embedding, err := d.summarizer.Summarize(ctx, events)
@@ -231,11 +233,16 @@ func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord
 		return nil
 	}
 
+	// Consolidation inherits the highest retention tier among its
+	// sources. If all sources were episodic, the consolidation is
+	// episodic too — meaning a future dream run can prune it if its
+	// own score falls below threshold. Only sources tagged long-term
+	// make the consolidation long-term (durable summary).
 	consolidated := &lobslawv1.VectorRecord{
 		Id:        fmt.Sprintf("dream-%d", now.UnixNano()),
 		Embedding: embedding,
 		Text:      summary,
-		Retention: string(types.RetentionLongTerm),
+		Retention: string(highestRetention(retentions)),
 		SourceIds: sourceIDs,
 		CreatedAt: timestamppb.New(now),
 	}
@@ -244,6 +251,22 @@ func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord
 		Id:      consolidated.Id,
 		Payload: &lobslawv1.LogEntry_VectorRecord{VectorRecord: consolidated},
 	})
+}
+
+// highestRetention returns the most durable retention among sources.
+// long-term > episodic > session.
+func highestRetention(rs []types.Retention) types.Retention {
+	has := make(map[types.Retention]bool, len(rs))
+	for _, r := range rs {
+		has[r] = true
+	}
+	if has[types.RetentionLongTerm] {
+		return types.RetentionLongTerm
+	}
+	if has[types.RetentionEpisodic] {
+		return types.RetentionEpisodic
+	}
+	return types.RetentionSession
 }
 
 // prune deletes records whose score is below the threshold, unless

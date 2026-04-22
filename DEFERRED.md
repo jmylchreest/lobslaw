@@ -38,6 +38,20 @@ MVP treats CA material as an infrastructure concern (per `lobslaw-cluster-bootst
 
 ---
 
+## Memory
+
+### Session-retention pruning policy
+
+Records tagged `retention: session` should be pruned aggressively — the whole point of session retention is to keep tool-output and transient context out of long-term memory. Current implementation has no explicit session-prune loop; session records only disappear if they fall below the Dream/REM prune threshold, which isn't their purpose (dream prunes episodic-tier records).
+
+**Why deferred:** session pruning is conversation-lifecycle-aware — the natural trigger is "every N turns" or "on conversation close", both of which live at the Gateway / Channel layer (Phase 6). The memory layer exposes the records tagged `session`; the conversation owner prunes them.
+
+**Trigger to revisit:** Phase 6 (channel handlers + session management) or sooner if session records noticeably accumulate.
+
+**How:** `MemoryService.ForgetSession(session_id)` or a Channel-layer ticker that runs `Forget` scoped to a session tag. Either works.
+
+---
+
 ## Infrastructure / Workflow
 
 ### Verify SHA pins in `.github/workflows/*.yml`
