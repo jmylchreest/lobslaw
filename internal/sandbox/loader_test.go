@@ -3,6 +3,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -120,7 +121,7 @@ func TestPresetSpecToPreset(t *testing.T) {
 
 func TestLoadPolicyDirMissingIsNotError(t *testing.T) {
 	t.Parallel()
-	result, err := LoadPolicyDir("/no/such/dir/anywhere")
+	result, err := LoadPolicyDir("/no/such/dir/anywhere", LoadOptions{})
 	if err != nil {
 		t.Errorf("missing dir should return empty result, not error: %v", err)
 	}
@@ -131,7 +132,7 @@ func TestLoadPolicyDirMissingIsNotError(t *testing.T) {
 
 func TestLoadPolicyDirEmptyStringReturnsEmpty(t *testing.T) {
 	t.Parallel()
-	result, err := LoadPolicyDir("")
+	result, err := LoadPolicyDir("", LoadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +155,7 @@ name = "rsync"
 paths = ["/var/backups:rw"]
 `)
 
-	result, err := LoadPolicyDir(dir)
+	result, err := LoadPolicyDir(dir, LoadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,7 @@ func TestLoadPolicyDirRejectsFilenameMismatch(t *testing.T) {
 	writePolicyFile(t, filepath.Join(dir, "git.toml"), `
 name = "rsync"
 `)
-	_, err := LoadPolicyDir(dir)
+	_, err := LoadPolicyDir(dir, LoadOptions{})
 	if err == nil || !strings.Contains(err.Error(), "doesn't match filename") {
 		t.Errorf("expected name-mismatch error, got %v", err)
 	}
@@ -197,7 +198,7 @@ paths = ["/srv/code:rw"]
 		presetRegistry.mu.Unlock()
 	})
 
-	result, err := LoadPolicyDir(dir)
+	result, err := LoadPolicyDir(dir, LoadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +225,7 @@ paths = ["/tmp:r"]
 	original, _ := LookupPreset("tmp")
 	t.Cleanup(func() { RegisterPreset(original) })
 
-	result, err := LoadPolicyDir(dir)
+	result, err := LoadPolicyDir(dir, LoadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +263,7 @@ presets = ["`+presetName+`"]
 		presetRegistry.mu.Unlock()
 	})
 
-	result, err := LoadPolicyDir(dir)
+	result, err := LoadPolicyDir(dir, LoadOptions{})
 	if err != nil {
 		t.Fatalf("preset-before-tool ordering broke: %v", err)
 	}
@@ -284,11 +285,123 @@ func TestLoadPolicyDirRejectsNonDirectory(t *testing.T) {
 	f.Close()
 	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
-	_, err = LoadPolicyDir(f.Name())
+	_, err = LoadPolicyDir(f.Name(), LoadOptions{})
 	if err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Errorf("expected not-a-directory error, got %v", err)
 	}
 }
+
+// TestLoadPolicyDirRejectsGroupWritableFile confirms the integrity
+// check skips files that don't meet the required mode mask.
+// Unix-only (Windows has no Unix mode bits — checkPolicyFilePerms
+// on Windows is a no-op warn, tested separately).
+func TestLoadPolicyDirRejectsGroupWritableFile(t *testing.T) {
+	if runtime_GOOS() == "windows" {
+		t.Skip("mode-bit checks don't apply on Windows")
+	}
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "git.toml")
+	writePolicyFile(t, path, `
+name = "git"
+paths = ["/tmp:rw"]
+`)
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Skipf("chmod failed (maybe tmpfs): %v", err)
+	}
+
+	result, err := LoadPolicyDir(dir, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Policies["git"]; ok {
+		t.Error("SECURITY: group-writable file should have been rejected")
+	}
+	if !slices.Contains(result.Rejected, "git") {
+		t.Errorf("expected 'git' in Rejected, got %v", result.Rejected)
+	}
+}
+
+// TestLoadPolicyDirSkipPermChecksAcceptsAnyFile covers the opt-out
+// path — deployments on environments where Unix mode semantics
+// aren't reliable (some k8s volume drivers, tmpfs mounts with
+// non-standard options) need a way to turn the check off without
+// having to decompose LoadOptions' individual knobs.
+func TestLoadPolicyDirSkipPermChecksAcceptsAnyFile(t *testing.T) {
+	if runtime_GOOS() == "windows" {
+		t.Skip("mode-bit checks don't apply on Windows")
+	}
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "git.toml")
+	writePolicyFile(t, path, `
+name = "git"
+paths = ["/tmp:rw"]
+`)
+	_ = os.Chmod(path, 0o666)
+
+	result, err := LoadPolicyDir(dir, LoadOptions{SkipPermChecks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Policies["git"]; !ok {
+		t.Error("SkipPermChecks=true should load the policy despite bad mode")
+	}
+}
+
+// TestLoadPolicyDirRejectsWrongUID guards the UID check by setting
+// an impossible trusted UID (math.MaxInt32 — no real file owner).
+// The test file is owned by the test-runner UID, so this must fail.
+func TestLoadPolicyDirRejectsWrongUID(t *testing.T) {
+	if runtime_GOOS() == "windows" {
+		t.Skip("UID checks don't apply on Windows")
+	}
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "git.toml")
+	writePolicyFile(t, path, `
+name = "git"
+paths = ["/tmp:rw"]
+`)
+	result, err := LoadPolicyDir(dir, LoadOptions{TrustedUID: 2147483647}) // MaxInt32 UID
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Policies["git"]; ok {
+		t.Error("SECURITY: wrong-UID file should have been rejected")
+	}
+	if !slices.Contains(result.Rejected, "git") {
+		t.Errorf("expected 'git' in Rejected, got %v", result.Rejected)
+	}
+}
+
+// TestLoadPolicyDirRejectionIsPerFileNotFatal ensures one bad file
+// doesn't poison the whole load — sibling good files still surface.
+func TestLoadPolicyDirRejectionIsPerFileNotFatal(t *testing.T) {
+	if runtime_GOOS() == "windows" {
+		t.Skip("mode checks off on Windows")
+	}
+	t.Parallel()
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.toml")
+	bad := filepath.Join(dir, "bad.toml")
+	writePolicyFile(t, good, `name = "good"`+"\n"+`paths = ["/tmp:rw"]`)
+	writePolicyFile(t, bad, `name = "bad"`+"\n"+`paths = ["/tmp:rw"]`)
+	_ = os.Chmod(bad, 0o666)
+
+	result, err := LoadPolicyDir(dir, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Policies["good"]; !ok {
+		t.Error("good file should still load when sibling is rejected")
+	}
+	if _, ok := result.Policies["bad"]; ok {
+		t.Error("bad file should not have loaded")
+	}
+}
+
+func runtime_GOOS() string { return runtime.GOOS }
 
 func TestLoadPolicyDirIgnoresUnderscorePrefixedFiles(t *testing.T) {
 	t.Parallel()
@@ -302,7 +415,7 @@ name = "git"
 paths = ["/tmp:rw"]
 `)
 
-	result, err := LoadPolicyDir(dir)
+	result, err := LoadPolicyDir(dir, LoadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

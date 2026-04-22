@@ -259,6 +259,25 @@ type SandboxConfig struct {
 	EnvWhitelist       []string `koanf:"env_whitelist"`
 	CPUQuota           int      `koanf:"cpu_quota"`
 	MemoryLimitMB      int      `koanf:"memory_limit_mb"`
+
+	// PolicyDir overrides the conventional
+	// `<config-dir>/policy.d/` discovery. Leave empty in almost all
+	// cases — the loader derives the default from the resolved
+	// config.toml's directory (or CWD in env-only mode).
+	PolicyDir string `koanf:"policy_dir"`
+
+	// SkipPermChecks bypasses the policy-file integrity check. Use
+	// only in environments where Unix mode/UID semantics aren't
+	// reliable (certain k8s volume drivers, non-standard tmpfs).
+	// Default false — on Linux the check is meaningful defence in
+	// depth against a compromised tool writing policy files.
+	SkipPermChecks bool `koanf:"skip_perm_checks"`
+
+	// HotReloadOptOut disables the fsnotify policy-watcher (Phase
+	// 4.5.7a-reload). Named "opt-out" so the zero-value (false)
+	// gives the safe default: reload enabled. Operators setting
+	// this to true want an air-gapped, load-once-at-boot deployment.
+	HotReloadOptOut bool `koanf:"hot_reload_opt_out"`
 }
 
 type AuditConfig struct {
