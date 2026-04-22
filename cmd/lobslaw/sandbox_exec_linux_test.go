@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
@@ -82,6 +83,91 @@ func TestSandboxExecWithoutNoNewPrivsLeavesProcStatusClear(t *testing.T) {
 	if !strings.Contains(out.String(), "\nNoNewPrivs:\t0\n") {
 		t.Errorf("expected NoNewPrivs=0 when policy is zero; got:\n%s", out.String())
 	}
+}
+
+// TestSandboxExecLandlockBlocksOutsideAllowedPaths proves the
+// Landlock install path actually restricts filesystem access:
+//
+//   - A file INSIDE AllowedPaths reads successfully (sandbox doesn't
+//     blanket-deny; otherwise the test is vacuous).
+//   - A file OUTSIDE AllowedPaths returns Permission denied at the
+//     kernel level — no userspace check could produce this message
+//     against /etc/passwd without Landlock intervening.
+//
+// The host needs Linux 5.13+ with the Landlock LSM enabled; we skip
+// the test on older kernels since BestEffort would silently no-op.
+func TestSandboxExecLandlockBlocksOutsideAllowedPaths(t *testing.T) {
+	if !landlockSupported(t) {
+		t.Skip("kernel doesn't expose Landlock LSM")
+	}
+	bin := buildHelperBinary(t)
+
+	workDir := t.TempDir()
+	insideFile := filepath.Join(workDir, "allowed.txt")
+	if err := os.WriteFile(insideFile, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	policy := &sandbox.Policy{
+		NoNewPrivs: true,
+		// /usr covers cat binary + libs on merged-/usr distros (most
+		// modern Linux). ReadOnlyPaths keeps system dirs immutable to
+		// the tool; workDir stays RW.
+		AllowedPaths:  []string{"/usr", workDir},
+		ReadOnlyPaths: []string{"/usr"},
+	}
+	encoded, err := encodeSandboxPolicy(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envPolicy := envSandboxPolicy + "=" + encoded
+
+	t.Run("inside_allowed_reads", func(t *testing.T) {
+		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/cat", insideFile)
+		cmd.Env = append(os.Environ(), envPolicy)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("cat on allowed file failed: %v\n%s", err, out.String())
+		}
+		if out.String() != "ok" {
+			t.Errorf("expected %q, got %q", "ok", out.String())
+		}
+	})
+
+	t.Run("outside_denied_with_eacces", func(t *testing.T) {
+		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/cat", "/etc/passwd")
+		cmd.Env = append(os.Environ(), envPolicy)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err := cmd.Run()
+		if err == nil {
+			t.Fatalf("SECURITY: cat /etc/passwd succeeded with Landlock active:\n%s", out.String())
+		}
+		if !strings.Contains(strings.ToLower(out.String()), "permission denied") {
+			t.Errorf("expected 'permission denied', got: %s", out.String())
+		}
+	})
+}
+
+// landlockSupported probes the kernel for Landlock by calling
+// landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION).
+// A success return gives the ABI version (>= 1); ENOSYS / EOPNOTSUPP
+// means unavailable. Runs via a subprocess so the probe doesn't
+// itself get sandboxed.
+func landlockSupported(t *testing.T) bool {
+	t.Helper()
+	// syscall 444 = landlock_create_ruleset; arg3 == 1 means "return
+	// the ABI version". -errno on failure.
+	const sysLandlockCreateRuleset = 444
+	const landlockCreateRulesetVersion = 1
+	r1, _, errno := syscall.Syscall(sysLandlockCreateRuleset, 0, 0, landlockCreateRulesetVersion)
+	if errno != 0 {
+		return false
+	}
+	return int(r1) >= 1
 }
 
 // TestSandboxExecRejectsBadTarget verifies the helper surfaces a

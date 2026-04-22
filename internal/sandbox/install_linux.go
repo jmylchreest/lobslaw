@@ -5,8 +5,10 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"slices"
 	"syscall"
 
+	"github.com/landlock-lsm/go-landlock/landlock"
 	"golang.org/x/sys/unix"
 )
 
@@ -68,11 +70,47 @@ func setNoNewPrivs() error {
 	return unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
 }
 
-// installLandlock is stubbed out until Phase 4.5.5b wires the
-// landlock-lsm/go-landlock library. No-op until then.
+// installLandlock restricts filesystem access via the Landlock LSM
+// when the policy declares AllowedPaths. The permitted access set is:
+//
+//   - All AllowedPaths directories: read + write + create + delete
+//   - All ReadOnlyPaths directories: read only (subset of AllowedPaths)
+//
+// Anything outside these paths returns EACCES on syscall entry,
+// kernel-enforced. Uses .BestEffort() so older kernels (5.13+) still
+// benefit from partial enforcement; a kernel without Landlock at all
+// silently no-ops.
+//
+// Landlock requires PR_SET_NO_NEW_PRIVS=1 — the library sets it for
+// us if we haven't already (though we typically have via Policy.NoNewPrivs).
+//
+// No-op when AllowedPaths is empty; Normalise already populated any
+// sensible defaults.
 func installLandlock(p *Policy) error {
-	_ = p
-	return nil
+	if len(p.AllowedPaths) == 0 {
+		return nil
+	}
+
+	// Partition AllowedPaths into RW vs RO sets. Entries in
+	// ReadOnlyPaths get the read-only rule; everything else is RW.
+	var roDirs, rwDirs []string
+	for _, path := range p.AllowedPaths {
+		if slices.Contains(p.ReadOnlyPaths, path) {
+			roDirs = append(roDirs, path)
+		} else {
+			rwDirs = append(rwDirs, path)
+		}
+	}
+
+	rules := make([]landlock.Rule, 0, 2)
+	if len(roDirs) > 0 {
+		rules = append(rules, landlock.RODirs(roDirs...).IgnoreIfMissing())
+	}
+	if len(rwDirs) > 0 {
+		rules = append(rules, landlock.RWDirs(rwDirs...).IgnoreIfMissing())
+	}
+
+	return landlock.V5.BestEffort().RestrictPaths(rules...)
 }
 
 // installSeccomp is stubbed out until Phase 4.5.5c wires the
