@@ -1,0 +1,431 @@
+syntax = "proto3";
+
+package lobslaw.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// -----------------------------------------------------------------------------
+// Common types
+// -----------------------------------------------------------------------------
+
+message NodeInfo {
+  string id = 1;
+  repeated string functions = 2;   // "memory" | "policy" | "compute" | "gateway" | "storage"
+  string address = 3;              // host:port of the cluster gRPC listener
+  repeated string capabilities = 4;
+  bool raft_member = 5;
+}
+
+message HealthStatus {
+  string node_id = 1;
+  string status = 2;               // "healthy" | "degraded" | "unhealthy"
+  google.protobuf.Timestamp last_seen = 3;
+  repeated ComponentHealth components = 4;
+}
+
+message ComponentHealth {
+  string name = 1;
+  string status = 2;
+  string error = 3;
+}
+
+// -----------------------------------------------------------------------------
+// NodeService — cluster membership, heartbeat, reload
+// -----------------------------------------------------------------------------
+
+service NodeService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc GetPeers(GetPeersRequest) returns (GetPeersResponse);
+  rpc Reload(ReloadRequest) returns (ReloadResponse);
+}
+
+message RegisterRequest { NodeInfo node = 1; }
+message RegisterResponse {
+  bool accepted = 1;
+  string reason = 2;
+}
+
+message DeregisterRequest { string node_id = 1; }
+message DeregisterResponse {}
+
+message HeartbeatRequest {
+  string node_id = 1;
+  HealthStatus health = 2;
+}
+message HeartbeatResponse {}
+
+message GetPeersRequest {}
+message GetPeersResponse { repeated NodeInfo peers = 1; }
+
+message ReloadRequest {
+  // Empty list = reload everything reloadable.
+  repeated string sections = 1;
+}
+message ReloadResponse {
+  repeated string reloaded = 1;
+  repeated string restart_needed = 2;
+  map<string, string> errors = 3;
+}
+
+// -----------------------------------------------------------------------------
+// MemoryService — vector + episodic memory + retention + forget
+// -----------------------------------------------------------------------------
+
+service MemoryService {
+  rpc Store(StoreRequest) returns (StoreResponse);
+  rpc Recall(RecallRequest) returns (RecallResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc EpisodicAdd(EpisodicAddRequest) returns (EpisodicAddResponse);
+  rpc Dream(DreamRequest) returns (DreamResponse);
+  rpc Forget(ForgetRequest) returns (ForgetResponse);
+}
+
+message VectorRecord {
+  string id = 1;
+  repeated float embedding = 2;
+  string text = 3;
+  map<string, string> metadata = 4;
+  string scope = 5;
+  string retention = 6;            // "session" | "episodic" | "long-term"
+  repeated string source_ids = 7;  // consolidation provenance
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message EpisodicRecord {
+  string id = 1;
+  string event = 2;
+  string context = 3;
+  int32 importance = 4;            // 1..10
+  google.protobuf.Timestamp timestamp = 5;
+  repeated string tags = 6;
+  string retention = 7;
+  repeated string source_ids = 8;
+}
+
+message StoreRequest { VectorRecord record = 1; }
+message StoreResponse { string id = 1; }
+
+message RecallRequest { string id = 1; }
+message RecallResponse { VectorRecord record = 1; }
+
+message SearchRequest {
+  // Either embedding or text — server may call the embedding provider if text given.
+  repeated float embedding = 1;
+  string text = 2;
+  int32 limit = 3;
+  string scope_filter = 4;
+  string retention_filter = 5;
+}
+message SearchResponse { repeated VectorRecord hits = 1; }
+
+message EpisodicAddRequest { EpisodicRecord record = 1; }
+message EpisodicAddResponse { string id = 1; }
+
+message DreamRequest {}
+message DreamResponse {
+  int32 consolidated = 1;
+  int32 pruned = 2;
+}
+
+message ForgetRequest {
+  string query = 1;
+  google.protobuf.Timestamp before = 2;
+  repeated string tags = 3;
+}
+message ForgetResponse {
+  int32 records_removed = 1;
+  int32 consolidations_reforged = 2;
+}
+
+// -----------------------------------------------------------------------------
+// PolicyService — RBAC, risk tiers, confirmation
+// -----------------------------------------------------------------------------
+
+service PolicyService {
+  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
+  rpc SyncRules(SyncRulesRequest) returns (SyncRulesResponse);
+  rpc AddRule(AddRuleRequest) returns (AddRuleResponse);
+  rpc RequestConfirmation(RequestConfirmationRequest) returns (RequestConfirmationResponse);
+}
+
+message PolicyRule {
+  string id = 1;
+  string subject = 2;              // user:alice, role:admin, node:memory-1
+  string action = 3;               // memory:read, tool:exec, storage:write
+  string resource = 4;             // /path, memory:*, service:*
+  string effect = 5;               // "allow" | "deny" | "require_confirmation"
+  repeated Condition conditions = 6;
+  int32 priority = 7;
+  string scope = 8;
+}
+
+message Condition {
+  string key = 1;                  // "time_of_day" | "peer_cidr" | ...
+  string op = 2;                   // "in" | "between" | "eq"
+  string value = 3;
+}
+
+message Claims {
+  string user_id = 1;
+  repeated string roles = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  google.protobuf.Timestamp issued_at = 4;
+  string issuer = 5;
+  string audience = 6;
+  string scope = 7;
+}
+
+message EvaluateRequest {
+  Claims claims = 1;
+  string action = 2;
+  string resource = 3;
+}
+message EvaluateResponse {
+  string effect = 1;               // "allow" | "deny" | "require_confirmation"
+  string rule_id = 2;              // id of the matching rule (or "" for default-deny)
+  string reason = 3;
+}
+
+message SyncRulesRequest {}
+message SyncRulesResponse { repeated PolicyRule rules = 1; }
+
+message AddRuleRequest { PolicyRule rule = 1; }
+message AddRuleResponse { string id = 1; }
+
+message RequestConfirmationRequest {
+  string user = 1;
+  string question = 2;
+  repeated string options = 3;
+  google.protobuf.Duration timeout = 4;
+  string originating_channel = 5;  // which channel to deliver the prompt on
+}
+message RequestConfirmationResponse {
+  bool approved = 1;
+  string chosen_option = 2;
+  bool timed_out = 3;
+}
+
+// -----------------------------------------------------------------------------
+// AgentService — tool invocation, tool listing, message processing
+// -----------------------------------------------------------------------------
+
+service AgentService {
+  rpc InvokeTool(InvokeToolRequest) returns (InvokeToolResponse);
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+  rpc ProcessMessage(ProcessMessageRequest) returns (ProcessMessageResponse);
+}
+
+message ToolDef {
+  string name = 1;
+  string path = 2;
+  repeated string argv_template = 3;
+  repeated string capabilities = 4;
+  bool sidecar_only = 5;
+  string risk_tier = 6;            // "reversible" | "communicating" | "irreversible"
+}
+
+message InvokeToolRequest {
+  string tool = 1;
+  map<string, string> params = 2;
+  Claims claims = 3;
+  string turn_id = 4;
+}
+message InvokeToolResponse {
+  int32 exit_code = 1;
+  bytes stdout = 2;
+  bytes stderr = 3;
+  string effect_applied = 4;       // policy effect that gated the call
+}
+
+message ListToolsRequest {}
+message ListToolsResponse { repeated ToolDef tools = 1; }
+
+message ProcessMessageRequest {
+  Claims claims = 1;
+  string text = 2;
+  map<string, string> metadata = 3;
+  string channel = 4;
+  string turn_id = 5;
+}
+message ProcessMessageResponse {
+  string text = 1;
+  map<string, string> metadata = 2;
+  int32 tool_calls = 3;
+  double spend_usd = 4;
+}
+
+// -----------------------------------------------------------------------------
+// ChannelService — inbound update handling + inline confirmation prompts
+// -----------------------------------------------------------------------------
+
+service ChannelService {
+  rpc HandleUpdate(HandleUpdateRequest) returns (HandleUpdateResponse);
+  rpc Prompt(PromptRequest) returns (PromptResponse);
+}
+
+message HandleUpdateRequest {
+  string channel = 1;              // "telegram" | "rest" | "websocket"
+  bytes payload = 2;               // channel-specific encoded update
+  map<string, string> headers = 3;
+}
+message HandleUpdateResponse { bool accepted = 1; }
+
+message PromptRequest {
+  string channel = 1;
+  string user = 2;
+  string question = 3;
+  repeated string options = 4;
+  google.protobuf.Duration timeout = 5;
+}
+message PromptResponse {
+  string chosen_option = 1;
+  bool timed_out = 2;
+}
+
+// -----------------------------------------------------------------------------
+// PlanService — the "what's your plan today?" surface
+// -----------------------------------------------------------------------------
+
+service PlanService {
+  rpc GetPlan(GetPlanRequest) returns (GetPlanResponse);
+  rpc AddCommitment(AddCommitmentRequest) returns (AddCommitmentResponse);
+  rpc CancelCommitment(CancelCommitmentRequest) returns (CancelCommitmentResponse);
+}
+
+message AgentCommitment {
+  string id = 1;
+  google.protobuf.Timestamp due_at = 2;
+  string trigger = 3;              // "time" | "event:xxx"
+  string reason = 4;
+  string created_from_turn = 5;
+  string created_for = 6;
+  string status = 7;               // "pending" | "done" | "cancelled"
+  string handler_ref = 8;
+  map<string, string> params = 9;
+}
+
+message ScheduledTaskRecord {
+  string id = 1;
+  string name = 2;
+  string schedule = 3;             // cron expression
+  string handler_ref = 4;
+  map<string, string> params = 5;
+  bool enabled = 6;
+  string created_by = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp last_run = 9;
+  google.protobuf.Timestamp next_run = 10;
+}
+
+message InFlightWork {
+  string id = 1;
+  string goal = 2;
+  google.protobuf.Timestamp last_progress = 3;
+  string status = 4;
+  repeated string blockers = 5;
+}
+
+message CheckBack {
+  string id = 1;
+  string original_request = 2;
+  google.protobuf.Timestamp scheduled_for = 3;
+}
+
+message GetPlanRequest {
+  google.protobuf.Duration window = 1;
+  string scope = 2;
+}
+message GetPlanResponse {
+  google.protobuf.Duration window = 1;
+  repeated AgentCommitment commitments = 2;
+  repeated ScheduledTaskRecord scheduled_tasks = 3;
+  repeated InFlightWork in_flight = 4;
+  repeated CheckBack check_back_threads = 5;
+}
+
+message AddCommitmentRequest { AgentCommitment commitment = 1; }
+message AddCommitmentResponse { string id = 1; }
+
+message CancelCommitmentRequest { string id = 1; }
+message CancelCommitmentResponse {}
+
+// -----------------------------------------------------------------------------
+// AuditService — hash-chained tamper-evident log
+// -----------------------------------------------------------------------------
+
+service AuditService {
+  rpc Append(AppendRequest) returns (AppendResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc VerifyChain(VerifyChainRequest) returns (VerifyChainResponse);
+}
+
+message AuditEntry {
+  string id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string actor_scope = 3;
+  string action = 4;
+  string target = 5;
+  repeated string argv = 6;
+  string policy_rule = 7;
+  string effect = 8;
+  string result_hash = 9;
+  string prev_hash = 10;
+}
+
+message AppendRequest { AuditEntry entry = 1; }
+message AppendResponse { string id = 1; }
+
+message QueryRequest {
+  string actor_scope = 1;
+  string action = 2;
+  string target = 3;
+  google.protobuf.Timestamp since = 4;
+  google.protobuf.Timestamp until = 5;
+  int32 limit = 6;
+  string sink = 7;                 // "" | "raft" | "local"
+}
+message QueryResponse { repeated AuditEntry entries = 1; }
+
+message VerifyChainRequest {
+  string sink = 1;                 // "" | "raft" | "local"
+}
+message VerifyChainResponse {
+  bool ok = 1;
+  string first_break_id = 2;       // empty on success
+  int64 entries_checked = 3;
+}
+
+// -----------------------------------------------------------------------------
+// StorageService — cluster-wide mount config
+// -----------------------------------------------------------------------------
+
+service StorageService {
+  rpc AddMount(AddMountRequest) returns (AddMountResponse);
+  rpc RemoveMount(RemoveMountRequest) returns (RemoveMountResponse);
+  rpc ListMounts(ListMountsRequest) returns (ListMountsResponse);
+}
+
+message StorageMount {
+  string label = 1;
+  string type = 2;                 // "local" | "nfs" | "rclone"
+  string path = 3;                 // local: absolute path; nfs/rclone: backend-specific
+  string server = 4;               // nfs: server hostname
+  string export = 5;               // nfs: export path
+  string remote = 6;               // rclone: remote name
+  string bucket = 7;               // rclone: bucket (for object stores)
+  bool crypt = 8;                  // rclone: enable crypt
+  map<string, string> options = 9; // backend-specific (access_key_ref etc)
+  google.protobuf.Duration poll_interval = 10;
+}
+
+message AddMountRequest { StorageMount mount = 1; }
+message AddMountResponse {}
+
+message RemoveMountRequest { string label = 1; }
+message RemoveMountResponse {}
+
+message ListMountsRequest {}
+message ListMountsResponse { repeated StorageMount mounts = 1; }

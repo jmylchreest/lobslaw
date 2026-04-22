@@ -30,10 +30,11 @@ MVP treats CA material as an infrastructure concern (per `lobslaw-cluster-bootst
 
 ### Verify SHA pins in `.github/workflows/*.yml`
 
-Phase 1.7 lands CI with SHAs pinned from training-data recall:
+Phase 1.7 + Phase 2.1 land CI with SHAs pinned from training-data recall:
 - `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2)
 - `actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a9a` (v5.2.0)
 - `golangci/golangci-lint-action@a4f60bb28d35aeee14e6880718e0c85ff1882e64` (v7.0.0)
+- `bufbuild/buf-action@3f69d0a55ba1a61a3823f84f0cd7a27e0b66e56c` (v1.4.0)
 
 **Why deferred:** SHAs should be verified against the actual published tag at the time of commit, not recalled. Per `gha-action-pinning` we want SHA pinning with version comment — the format is right but the SHA values need confirming on first CI run.
 
