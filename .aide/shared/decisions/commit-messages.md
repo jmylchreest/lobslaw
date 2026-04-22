@@ -1,0 +1,21 @@
+---
+topic: commit-messages
+decision: Use Conventional Commits format with imperative mood
+decided_by: blueprint:general@0.0.61
+date: 2026-04-21
+references:
+  - https://www.conventionalcommits.org/
+---
+
+# commit-messages
+
+**Decision:** Use Conventional Commits format with imperative mood
+
+## Rationale
+
+Conventional Commits enable automated versioning (semver), changelog generation, and provide a parseable commit history. Imperative mood ('add feature' not 'added feature') matches git's own conventions (merge, revert).
+
+## Details
+
+Format: <type>[scope]: <description>. Types: feat (MINOR), fix (PATCH), docs, test, chore, refactor, perf, ci, build. Append ! for MAJOR: feat!: remove deprecated endpoint. Body explains WHY, not WHAT. Footer: Closes #123, BREAKING CHANGE: description.
+

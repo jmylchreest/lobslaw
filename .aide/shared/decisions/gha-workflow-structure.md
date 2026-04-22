@@ -1,0 +1,21 @@
+---
+topic: gha-workflow-structure
+decision: One workflow per concern with deny-all permissions and concurrency control
+decided_by: blueprint:github-actions@0.0.59
+date: 2026-04-21
+references:
+  - https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token
+---
+
+# gha-workflow-structure
+
+**Decision:** One workflow per concern with deny-all permissions and concurrency control
+
+## Rationale
+
+Separation of concerns keeps workflows maintainable and auditable. Deny-all permissions prevents accidental privilege escalation. Concurrency groups avoid wasted CI minutes on stale runs.
+
+## Details
+
+Files: ci.yml (PR checks), release.yml (tag-triggered), optionally codeql.yml, docs.yml. Set permissions: {} at workflow level, grant per-job. Concurrency on PR workflows: group: ci-${{ github.ref }}, cancel-in-progress: true. Add workflow_dispatch on release workflows. Set cancel-in-progress: false on deploy workflows.
+
