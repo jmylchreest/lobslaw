@@ -1,21 +1,15 @@
 ---
 topic: commit-messages
-decision: Use Conventional Commits format with imperative mood
-decided_by: blueprint:general@0.0.61
-date: 2026-04-21
-references:
-  - https://www.conventionalcommits.org/
+decision: "Use Conventional Commits format with imperative mood. Never include AI-assistant co-author trailers (no 'Co-Authored-By: Claude' or similar). Commits should read as human-authored work product — the AI-assisted nature of development is a process detail, not something to attribute in the permanent commit history"
+decided_by: johnm
+date: 2026-04-22
 ---
 
 # commit-messages
 
-**Decision:** Use Conventional Commits format with imperative mood
+**Decision:** Use Conventional Commits format with imperative mood. Never include AI-assistant co-author trailers (no 'Co-Authored-By: Claude' or similar). Commits should read as human-authored work product — the AI-assisted nature of development is a process detail, not something to attribute in the permanent commit history
 
 ## Rationale
 
-Conventional Commits enable automated versioning (semver), changelog generation, and provide a parseable commit history. Imperative mood ('add feature' not 'added feature') matches git's own conventions (merge, revert).
-
-## Details
-
-Format: <type>[scope]: <description>. Types: feat (MINOR), fix (PATCH), docs, test, chore, refactor, perf, ci, build. Append ! for MAJOR: feat!: remove deprecated endpoint. Body explains WHY, not WHAT. Footer: Closes #123, BREAKING CHANGE: description.
+Prior guidance only covered Conventional Commits format and missed the attribution question. AI co-author trailers pollute git history with process metadata that has no durable value, complicates attribution/licensing downstream, and creates noise when reading git log. The value of AI assistance in development is real but it belongs in project docs or README, not in every commit trailer
 

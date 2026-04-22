@@ -1,15 +1,15 @@
 ---
 topic: lobslaw-node-types
-decision: "Four node functions: Memory (vector+episodic, Raft+Boltdb), Policy (RBAC+rules+audit+scheduled tasks, same Raft group as memory for cluster metadata), Compute (agent core, LLM, tools, rclone mounts, sidecars), Gateway (gRPC server, channel handlers, auth). Storage is not a node - shared storage is an rclone mount owned by Compute. Single binary enables any subset per deployment"
+decision: "Five node functions: Memory (vector+episodic+retention, Raft+bbolt), Policy (RBAC+rules+audit+scheduled tasks, same Raft group as memory for cluster metadata), Compute (agent core, LLM, tools, hooks, sidecars), Gateway (gRPC server, channel handlers, auth, inline confirmation), Storage (rclone/local/nfs mount lifecycle, unified Watcher, namespace sandboxing). Single binary enables any subset per deployment. Single-agent mode enables all five. Memory must be co-located with Storage so snapshot-export targets resolve locally (enforced at startup)"
 decided_by: johnm
 date: 2026-04-22
 ---
 
 # lobslaw-node-types
 
-**Decision:** Four node functions: Memory (vector+episodic, Raft+Boltdb), Policy (RBAC+rules+audit+scheduled tasks, same Raft group as memory for cluster metadata), Compute (agent core, LLM, tools, rclone mounts, sidecars), Gateway (gRPC server, channel handlers, auth). Storage is not a node - shared storage is an rclone mount owned by Compute. Single binary enables any subset per deployment
+**Decision:** Five node functions: Memory (vector+episodic+retention, Raft+bbolt), Policy (RBAC+rules+audit+scheduled tasks, same Raft group as memory for cluster metadata), Compute (agent core, LLM, tools, hooks, sidecars), Gateway (gRPC server, channel handlers, auth, inline confirmation), Storage (rclone/local/nfs mount lifecycle, unified Watcher, namespace sandboxing). Single binary enables any subset per deployment. Single-agent mode enables all five. Memory must be co-located with Storage so snapshot-export targets resolve locally (enforced at startup)
 
 ## Rationale
 
-Original listed StorageNode (object+FUSE) as a separate node type. Subsequent lobslaw-storage-model collapsed storage into a compute-owned rclone mount. This supersede aligns the node-types decision with the storage-model decision - four nodes, not five, storage-as-mount-not-node
+Earlier four-function model put mount management under Compute, which broke snapshot-export for memory-only nodes and couldn't propagate mount config cluster-wide. Promoting Storage to a first-class function fixes both. See lobslaw-storage-model for the storage function's specific design
 

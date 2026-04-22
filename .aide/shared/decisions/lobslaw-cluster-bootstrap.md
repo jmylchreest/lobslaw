@@ -1,0 +1,15 @@
+---
+topic: lobslaw-cluster-bootstrap
+decision: "CA material (cluster CA cert + private key) is treated as an infrastructure concern, not a lobslaw responsibility. Operator generates it once via `lobslaw cluster ca-init` (writes ca.pem + ca-key.pem to a configured path) and distributes it via whatever secret mechanism they already use: k8s Secret mounted into pods, bind-mounted volume in Compose, configmap, NFS share, etc. The main lobslaw binary NEVER reads ca_key — only `lobslaw cluster sign-node` does (designed to run as a k8s initContainer or one-shot docker run). sign-node reads CA material, generates a per-node private key + cert signed by the CA, writes node-cert.pem + node-key.pem to a shared volume, exits. The main container only mounts the node certs volume, never the CA-key volume — so the running container literally cannot see the CA private key. On startup, main container fails fast if node_cert is absent. Single-node dev can set cluster.bootstrap.auto_init=true to collapse ca-init + sign-node into first-run auto-generation. Strict-security deployments (rare) can hold the CA key on one node running a future ClusterBootstrap gRPC sign-RPC; deferred post-MVP"
+decided_by: johnm
+date: 2026-04-22
+---
+
+# lobslaw-cluster-bootstrap
+
+**Decision:** CA material (cluster CA cert + private key) is treated as an infrastructure concern, not a lobslaw responsibility. Operator generates it once via `lobslaw cluster ca-init` (writes ca.pem + ca-key.pem to a configured path) and distributes it via whatever secret mechanism they already use: k8s Secret mounted into pods, bind-mounted volume in Compose, configmap, NFS share, etc. The main lobslaw binary NEVER reads ca_key — only `lobslaw cluster sign-node` does (designed to run as a k8s initContainer or one-shot docker run). sign-node reads CA material, generates a per-node private key + cert signed by the CA, writes node-cert.pem + node-key.pem to a shared volume, exits. The main container only mounts the node certs volume, never the CA-key volume — so the running container literally cannot see the CA private key. On startup, main container fails fast if node_cert is absent. Single-node dev can set cluster.bootstrap.auto_init=true to collapse ca-init + sign-node into first-run auto-generation. Strict-security deployments (rare) can hold the CA key on one node running a future ClusterBootstrap gRPC sign-RPC; deferred post-MVP
+
+## Rationale
+
+Previous proposals (bootstrap-node holds CA key, HMAC-signed join tokens, JoinRequest RPC) added complexity without improving the typical deployment's security. Distributing CA material via k8s Secret / ConfigMap / NFS is what operators already do for every other cluster CA; lobslaw shouldn't invent a parallel mechanism. Separating sign-node as an initContainer command means the main container's compromise cannot leak the CA key. Token-based alternatives to mTLS rejected: gRPC supports mTLS natively, cert SAN gives peer identity for audit attribution, industry-standard for container clusters
+
