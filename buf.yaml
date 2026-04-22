@@ -6,17 +6,6 @@ modules:
 lint:
   use:
     - STANDARD
-  except:
-    # Raft's pipeline legitimately reuses AppendEntriesRequest/Response
-    # across two RPCs — it's a batching variant, not a distinct message.
-    - RPC_REQUEST_RESPONSE_UNIQUE
-  ignore_only:
-    # The pipeline RPC's request/response types intentionally aren't
-    # named AppendEntriesPipeline* — they ARE AppendEntries messages.
-    RPC_REQUEST_STANDARD_NAME:
-      - pkg/proto/rafttransport
-    RPC_RESPONSE_STANDARD_NAME:
-      - pkg/proto/rafttransport
 
 breaking:
   use:

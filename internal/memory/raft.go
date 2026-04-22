@@ -2,7 +2,6 @@ package memory
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,16 +14,25 @@ import (
 type RaftConfig struct {
 	// NodeID is the raft.ServerID — must be stable across restarts.
 	NodeID string
+	// LocalAddr is this node's gRPC listen address as peers see it.
+	// For the in-memory transport, pass a label matching NodeID.
+	LocalAddr raft.ServerAddress
 	// DataDir is where raft.db + snapshots/ live.
 	DataDir string
 	// Bootstrap controls whether this node should bootstrap a new
 	// cluster as a single voter. Set true on first start of a new
 	// cluster; false when joining an existing one.
 	Bootstrap bool
-	// InMemoryTransport selects the in-process transport (for tests
-	// and Phase 2.3 pre-gRPC-transport scaffolding). Phase 2.4 swaps
-	// in the real gRPC-backed transport.
-	InMemoryTransport bool
+	// Transport is the raft.Transport implementation. Phase 2.4
+	// injects pkg/rafttransport's gRPC transport; tests can pass
+	// raft.NewInmemTransport(...) for single-process verification.
+	Transport raft.Transport
+	// Timeouts override Raft's heartbeat/election tuning. Zero values
+	// use sensible defaults tuned for test stability.
+	HeartbeatTimeout   time.Duration
+	ElectionTimeout    time.Duration
+	LeaderLeaseTimeout time.Duration
+	CommitTimeout      time.Duration
 }
 
 // RaftNode wraps a *raft.Raft with its dependencies. Callers do not
@@ -49,6 +57,12 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 	if cfg.DataDir == "" {
 		return nil, fmt.Errorf("RaftConfig: DataDir required")
 	}
+	if cfg.Transport == nil {
+		return nil, fmt.Errorf("RaftConfig: Transport required")
+	}
+	if cfg.LocalAddr == "" {
+		return nil, fmt.Errorf("RaftConfig: LocalAddr required")
+	}
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -66,27 +80,14 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 		return nil, fmt.Errorf("create snapshot store: %w", err)
 	}
 
-	var transport raft.Transport
-	var localAddr raft.ServerAddress
-	if cfg.InMemoryTransport {
-		localAddr = raft.ServerAddress(cfg.NodeID)
-		_, transport = raft.NewInmemTransport(localAddr)
-	} else {
-		// Placeholder — Phase 2.4 wires the gRPC transport here.
-		_ = net.Addr(nil)
-		return nil, fmt.Errorf("non-in-memory transport not yet implemented (Phase 2.4)")
-	}
-
 	raftCfg := raft.DefaultConfig()
 	raftCfg.LocalID = raft.ServerID(cfg.NodeID)
-	// Tune down heartbeats/timeouts for test environments; production
-	// deployments can override via environment or config later.
-	raftCfg.HeartbeatTimeout = 500 * time.Millisecond
-	raftCfg.ElectionTimeout = 500 * time.Millisecond
-	raftCfg.LeaderLeaseTimeout = 250 * time.Millisecond
-	raftCfg.CommitTimeout = 50 * time.Millisecond
+	raftCfg.HeartbeatTimeout = nonZeroDur(cfg.HeartbeatTimeout, 500*time.Millisecond)
+	raftCfg.ElectionTimeout = nonZeroDur(cfg.ElectionTimeout, 500*time.Millisecond)
+	raftCfg.LeaderLeaseTimeout = nonZeroDur(cfg.LeaderLeaseTimeout, 250*time.Millisecond)
+	raftCfg.CommitTimeout = nonZeroDur(cfg.CommitTimeout, 50*time.Millisecond)
 
-	r, err := raft.NewRaft(raftCfg, fsm, boltStore, boltStore, snapStore, transport)
+	r, err := raft.NewRaft(raftCfg, fsm, boltStore, boltStore, snapStore, cfg.Transport)
 	if err != nil {
 		_ = boltStore.Close()
 		return nil, fmt.Errorf("construct raft: %w", err)
@@ -95,7 +96,7 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 	if cfg.Bootstrap {
 		future := r.BootstrapCluster(raft.Configuration{
 			Servers: []raft.Server{
-				{ID: raft.ServerID(cfg.NodeID), Address: localAddr, Suffrage: raft.Voter},
+				{ID: raft.ServerID(cfg.NodeID), Address: cfg.LocalAddr, Suffrage: raft.Voter},
 			},
 		})
 		if err := future.Error(); err != nil && err != raft.ErrCantBootstrap {
@@ -107,12 +108,27 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 
 	return &RaftNode{
 		Raft:      r,
-		transport: transport,
+		transport: cfg.Transport,
 		logStore:  boltStore,
 		snapStore: snapStore,
 		fsm:       fsm,
 		dataDir:   cfg.DataDir,
 	}, nil
+}
+
+func nonZeroDur(v, fallback time.Duration) time.Duration {
+	if v > 0 {
+		return v
+	}
+	return fallback
+}
+
+// AddVoter requests that addr (a future cluster member at the given
+// raft.ServerAddress) join as a voting member. Must be called on the
+// leader.
+func (n *RaftNode) AddVoter(id raft.ServerID, addr raft.ServerAddress) error {
+	future := n.Raft.AddVoter(id, addr, 0, 10*time.Second)
+	return future.Error()
 }
 
 // Apply serialises data through Raft consensus. Returns the FSM's

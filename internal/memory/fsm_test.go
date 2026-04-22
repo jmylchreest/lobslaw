@@ -24,11 +24,14 @@ func newTestRaft(t *testing.T) (*RaftNode, *FSM) {
 		t.Fatal(err)
 	}
 	fsm := NewFSM(store)
+	localAddr := raft.ServerAddress("test-node")
+	_, inmem := raft.NewInmemTransport(localAddr)
 	node, err := NewRaft(RaftConfig{
-		NodeID:            "test-node",
-		DataDir:           dir,
-		Bootstrap:         true,
-		InMemoryTransport: true,
+		NodeID:    "test-node",
+		LocalAddr: localAddr,
+		DataDir:   dir,
+		Bootstrap: true,
+		Transport: inmem,
 	}, fsm)
 	if err != nil {
 		t.Fatalf("NewRaft: %v", err)
