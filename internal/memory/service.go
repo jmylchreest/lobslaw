@@ -151,6 +151,96 @@ func (s *Service) EpisodicAdd(ctx context.Context, req *lobslawv1.EpisodicAddReq
 	return &lobslawv1.EpisodicAddResponse{Id: rec.Id}, nil
 }
 
+// Forget deletes source records matching the query, then cascades to
+// any consolidated records whose sources intersect with the forgotten
+// set. Aggressive by design — a summary that "remembers" a forgotten
+// source still leaks its content, so we sweep it too.
+//
+// Each deletion goes through Raft as a LogEntry{DELETE}. Requires
+// leadership; followers return FailedPrecondition.
+func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lobslawv1.ForgetResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	if req.Query == "" && req.Before == nil && len(req.Tags) == 0 {
+		return nil, status.Error(codes.InvalidArgument,
+			"at least one filter (query, before, tags) required — refusing to forget everything")
+	}
+	if s.raft != nil && !s.raft.IsLeader() {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"not the raft leader; retry at %s", s.raft.LeaderAddress())
+	}
+
+	var before time.Time
+	if req.Before != nil {
+		before = req.Before.AsTime()
+	}
+
+	matched, err := forgetScan(s.store, req.Query, before, req.Tags)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "forget scan: %v", err)
+	}
+
+	swept, err := forgetCascade(s.store, matched)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "forget cascade: %v", err)
+	}
+
+	// Delete each matched and swept record through Raft. We don't know
+	// the bucket of each id at this layer; the FSM-level dispatch
+	// requires the record type, so we issue deletes with a VectorRecord
+	// payload stub as the type discriminator. The actual bucket is
+	// determined from the SourceIDs we already saw — but both buckets
+	// use the same-id-space so we try both for robustness.
+	for id := range matched {
+		if err := s.deleteFromBothBuckets(id); err != nil {
+			return nil, status.Errorf(codes.Internal, "delete %q: %v", id, err)
+		}
+	}
+	for id := range swept {
+		if err := s.deleteFromBothBuckets(id); err != nil {
+			return nil, status.Errorf(codes.Internal, "delete cascade %q: %v", id, err)
+		}
+	}
+
+	logging.From(ctx).Info("memory forget",
+		"query", req.Query,
+		"before", before,
+		"tags", req.Tags,
+		"direct", len(matched),
+		"cascaded", len(swept),
+	)
+
+	return &lobslawv1.ForgetResponse{
+		RecordsRemoved:         int32(len(matched)),
+		ConsolidationsReforged: int32(len(swept)),
+	}, nil
+}
+
+// deleteFromBothBuckets issues a DELETE log entry against both
+// VectorRecord and EpisodicRecord buckets. The FSM's applyDelete is
+// idempotent for absent keys, so the entry for whichever bucket
+// doesn't hold the id is a cheap no-op.
+func (s *Service) deleteFromBothBuckets(id string) error {
+	for _, payload := range []*lobslawv1.LogEntry{
+		{
+			Op:      lobslawv1.LogOp_LOG_OP_DELETE,
+			Id:      id,
+			Payload: &lobslawv1.LogEntry_VectorRecord{VectorRecord: &lobslawv1.VectorRecord{Id: id}},
+		},
+		{
+			Op:      lobslawv1.LogOp_LOG_OP_DELETE,
+			Id:      id,
+			Payload: &lobslawv1.LogEntry_EpisodicRecord{EpisodicRecord: &lobslawv1.EpisodicRecord{Id: id}},
+		},
+	} {
+		if err := s.applyEntry(payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // applyEntry proto-marshals e and submits it to Raft. Followers get a
 // FailedPrecondition with the leader's address; callers retry there.
 func (s *Service) applyEntry(e *lobslawv1.LogEntry) error {
