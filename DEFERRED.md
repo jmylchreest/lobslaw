@@ -239,37 +239,27 @@ MVP ships hardcoded pricing defaults per provider.
 
 Phase 4.5 lands the sandbox *structure*: Policy type, Validate/Normalise, CanonicalizeAndContain / RequireSingleLink helpers, and Apply wiring that sets Linux namespaces + UID/GID mapping via `syscall.SysProcAttr`. Several deny-in-depth layers are deliberately left as structural-only so the config surface is stable but install is deferred.
 
-### NoNewPrivs enforcement
+### Phase 4.5.5 hardening: NoNewPrivs + Landlock + seccomp BPF (reexec helper)
 
-Policy carries `NoNewPrivs` and Normalise defaults it to true when any sandboxing is enabled, but `syscall.SysProcAttr` in Go's stdlib does not expose the `NoNewPrivs` field. Go 1.23+ has `SysProcAttr.NoNewPrivs` on some builds; the module targets compatibility that doesn't assume it.
+See [`docs/SANDBOX.md`](docs/SANDBOX.md) for the full architecture. Three enforcement layers that must run in the child process between `fork()` and `execve()`. Policy already carries the fields; the helper subcommand that actually installs them is not yet wired.
 
-**Why deferred:** Needs either (a) a cgo hop to call `prctl(PR_SET_NO_NEW_PRIVS, 1)` from the child-side `Pdeathsig`-style setup, (b) a wrapper `setpriv --no-new-privs` around every tool invocation, or (c) a minimum Go version bump once stdlib exposes it consistently.
+**Why deferred as a batch:** All three share a single piece of infrastructure — a `lobslaw sandbox-exec` subcommand invoked via the reexec pattern. Building that helper well (policy serialisation across the exec boundary, tests that exercise actual kernel behaviour, compile-time guards for Linux-only) is ~400 LOC of careful work. The namespace + canonicalisation layers already block the majority of the threat model; these three upgrade it from "defence in layers" to "defence with teeth".
 
-**Trigger to revisit:** Option (c) — bump minimum Go version to one that has `SysProcAttr.NoNewPrivs` across our supported build matrix. Wire it in Apply with a one-liner.
+**Upstream path:** [golang/go#68595](https://github.com/golang/go/issues/68595) proposes `SysProcAttr.UseLandlockRestrictSelf` — it would land Landlock + NoNewPrivs together in the runtime's `forkExec` path. Active CL at [go.dev/cl/745940](https://go-review.googlesource.com/c/go/+/745940) (updated 2026-04-16). Seccomp has no active proposal ([#3405](https://github.com/golang/go/issues/3405) is dormant).
 
----
+**Our plan (per `docs/SANDBOX.md`):** Implement the reexec helper now for all three, with the `sandbox.Policy` API shape matching the stdlib proposal. When #68595 lands, Landlock + NoNewPrivs collapse into `SysProcAttr` fields with no caller-visible change. Seccomp stays in the helper indefinitely.
 
-### seccomp BPF install
-
-`DefaultSeccompPolicy` carries a deny-list (ptrace, unshare, setns, pivot_root, mount/umount, init_module, kexec_load, bpf, keyctl, etc.) and Normalise applies it when sandboxing is enabled. The install that turns the list into a kernel-enforced filter is not wired.
-
-**Why deferred:** The BPF install needs `elastic/go-seccomp-bpf` (per `lobslaw-seccomp-library` decision) plus careful attention to the arch-specific syscall numbering and the fact that the filter must be installed on the child side *after* exec — cleanest integration is a small wrapper binary that installs the filter then execve's the real tool.
-
-**Trigger to revisit:** Phase 4.5.5 / hardening pass. The Policy config is already stable so no config migration is needed when this lands.
-
-**How:** Write `internal/sandbox/seccomplinux/install.go` using `elastic/go-seccomp-bpf`. Either (a) a tiny `lobslaw-sandbox-helper` binary invoked as argv[0] that installs the filter and execve's, or (b) post-fork / pre-exec install via a cgo hop.
+**Trigger to revisit:** Phase 4.5.5 (scheduled). Independent of any upstream movement — we're not blocked on Go.
 
 ---
 
-### pivot_root / chroot into sandbox rootfs
+### pivot_root / chroot into sandbox rootfs — SUPERSEDED
 
-Apply sets `CLONE_NEWNS` so the subprocess has its own mount namespace, but it doesn't call `pivot_root` to relocate the rootfs. AllowedPaths / ReadOnlyPaths are carried by Policy but not bind-mounted.
+Originally planned as the filesystem-scoping mechanism. **Superseded by Landlock** (see above and `lobslaw-filesystem-sandbox` decision, 2026-04-22).
 
-**Why deferred:** Building the sandbox rootfs correctly (bind-mount `/proc` into the new PID namespace, mount tmpfs on `/tmp`, set up `/dev` minimally, pivot away from host root) is materially more work than the namespace-clone itself. It's the right thing to do eventually but each layer of sandboxing after the namespace has diminishing returns for a personal-assistant threat model.
+**Why superseded:** Landlock achieves the same end (tool sees only its allowed paths) with none of the prerequisites — no root, no rootfs construction, no bind-mount management, no cleanup. Kernel-enforced at syscall level, can't be escaped by `/proc/self/root` tricks. Drop-in replacement at a tenth the LOC.
 
-**Trigger to revisit:** First deployment profile that includes untrusted tools (cluster-mode running community skills). Before that, the owner-only allowed-paths pattern is enough.
-
-**How:** A `buildSandboxRoot(policy) (rootfsDir, cleanup, error)` that prepares the hierarchy, then Apply invokes a helper child that calls pivot_root after setting up mounts. Similar shape to containerd's shim.
+**What stays:** `CLONE_NEWNS` mount namespace (already wired). It's cheap and prevents tool-side `mount` calls from affecting the host mount table — complements Landlock rather than replacing it.
 
 ---
 
