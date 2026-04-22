@@ -1349,6 +1349,7 @@ internal/
   discovery/       # Seed/broadcast, mTLS peer identity
   rclone/          # Mount lifecycle
   audit/           # Hash-chained audit log
+  logging/         # slog wrapper (named "logging" to avoid shadowing stdlib "log")
 
 pkg/
   types/           # Core types, interfaces

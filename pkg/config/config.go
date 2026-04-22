@@ -89,12 +89,12 @@ type ComputeConfig struct {
 }
 
 type ProviderConfig struct {
-	Label        string               `koanf:"label"`
-	Endpoint     string               `koanf:"endpoint"`
-	Model        string               `koanf:"model"`
-	APIKeyRef    string               `koanf:"api_key_ref,omitempty"`
-	Capabilities []string             `koanf:"capabilities,omitempty"`
-	TrustTier    types.TrustTier      `koanf:"trust_tier"`
+	Label        string                `koanf:"label"`
+	Endpoint     string                `koanf:"endpoint"`
+	Model        string                `koanf:"model"`
+	APIKeyRef    string                `koanf:"api_key_ref,omitempty"`
+	Capabilities []string              `koanf:"capabilities,omitempty"`
+	TrustTier    types.TrustTier       `koanf:"trust_tier"`
 	Pricing      types.ProviderPricing `koanf:"pricing,omitempty"`
 }
 
@@ -135,20 +135,20 @@ type PluginConfig struct {
 type HooksConfig map[string][]types.HookConfig
 
 type GatewayConfig struct {
-	Enabled               bool                  `koanf:"enabled"`
-	GRPCPort              int                   `koanf:"grpc_port"`
-	HTTPPort              int                   `koanf:"http_port"`
-	Channels              []GatewayChannelConfig `koanf:"channels"`
-	ConfirmationTimeout   time.Duration         `koanf:"confirmation_timeout"`
-	UnknownUserScope      string                `koanf:"unknown_user_scope"`
+	Enabled             bool                   `koanf:"enabled"`
+	GRPCPort            int                    `koanf:"grpc_port"`
+	HTTPPort            int                    `koanf:"http_port"`
+	Channels            []GatewayChannelConfig `koanf:"channels"`
+	ConfirmationTimeout time.Duration          `koanf:"confirmation_timeout"`
+	UnknownUserScope    string                 `koanf:"unknown_user_scope"`
 }
 
 type GatewayChannelConfig struct {
-	Type         string `koanf:"type"`
-	BotTokenRef  string `koanf:"bot_token_ref,omitempty"`
+	Type           string `koanf:"type"`
+	BotTokenRef    string `koanf:"bot_token_ref,omitempty"`
 	SecretTokenRef string `koanf:"secret_token_ref,omitempty"`
-	TLSCert      string `koanf:"tls_cert,omitempty"`
-	TLSKey       string `koanf:"tls_key,omitempty"`
+	TLSCert        string `koanf:"tls_cert,omitempty"`
+	TLSKey         string `koanf:"tls_key,omitempty"`
 }
 
 type DiscoveryConfig struct {
@@ -173,10 +173,10 @@ type SoulLoaderConfig struct {
 }
 
 type SchedulerConfig struct {
-	Enabled      bool                      `koanf:"enabled"`
-	TickInterval time.Duration             `koanf:"tick_interval"`
-	ClaimLease   time.Duration             `koanf:"claim_lease"`
-	Tasks        []SchedulerTaskConfig     `koanf:"tasks"`
+	Enabled      bool                  `koanf:"enabled"`
+	TickInterval time.Duration         `koanf:"tick_interval"`
+	ClaimLease   time.Duration         `koanf:"claim_lease"`
+	Tasks        []SchedulerTaskConfig `koanf:"tasks"`
 }
 
 type SchedulerTaskConfig struct {

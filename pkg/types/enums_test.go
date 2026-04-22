@@ -94,10 +94,10 @@ func TestRiskTierIsValid(t *testing.T) {
 func TestRetentionIsValid(t *testing.T) {
 	t.Parallel()
 	cases := map[Retention]bool{
-		RetentionSession:   true,
-		RetentionEpisodic:  true,
-		RetentionLongTerm:  true,
-		Retention(""):      false,
+		RetentionSession:     true,
+		RetentionEpisodic:    true,
+		RetentionLongTerm:    true,
+		Retention(""):        false,
 		Retention("forever"): false,
 	}
 	for in, want := range cases {

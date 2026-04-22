@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/jmylchreest/lobslaw/internal/log"
+	"github.com/jmylchreest/lobslaw/internal/logging"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -131,7 +131,7 @@ func main() {
 		return
 	}
 
-	logger := log.New(os.Stderr, parseLogLevel(f.logLevel), log.Format(f.logFormat))
+	logger := logging.New(os.Stderr, parseLogLevel(f.logLevel), logging.Format(f.logFormat))
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load(config.LoadOptions{Path: f.configPath})

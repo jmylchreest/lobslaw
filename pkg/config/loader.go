@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	koanftoml "github.com/knadh/koanf/parsers/toml/v2"
 	koanfenv "github.com/knadh/koanf/providers/env/v2"
 	koanffile "github.com/knadh/koanf/providers/file"
-	koanftoml "github.com/knadh/koanf/parsers/toml/v2"
 	"github.com/knadh/koanf/v2"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -18,7 +18,7 @@ import (
 const (
 	envPrefix     = "LOBSLAW__" // prefix + section separator collapsed; no trailing-underscore pitfall
 	keyDelim      = "."
-	envSectionSep = "__"        // double underscore separates sections; single stays inside a key name
+	envSectionSep = "__" // double underscore separates sections; single stays inside a key name
 )
 
 // LoadOptions controls how Load resolves its config source.
@@ -33,8 +33,10 @@ type LoadOptions struct {
 //
 // Env-var overrides use double underscore (__) as the section
 // separator and preserve single underscores inside keys:
-//   LOBSLAW__MEMORY__RAFT_PORT=9999          → memory.raft_port
-//   LOBSLAW__MEMORY__ENCRYPTION__KEY_REF=... → memory.encryption.key_ref
+//
+//	LOBSLAW__MEMORY__RAFT_PORT=9999          → memory.raft_port
+//	LOBSLAW__MEMORY__ENCRYPTION__KEY_REF=... → memory.encryption.key_ref
+//
 // The prefix is lowercased and stripped; what remains is split on
 // __ into a hierarchy path.
 func Load(opts LoadOptions) (*Config, error) {
