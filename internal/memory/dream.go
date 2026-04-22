@@ -1,0 +1,307 @@
+package memory
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"math"
+	"sort"
+	"time"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
+)
+
+// Summarizer turns a set of source events into a consolidated
+// summary text plus an embedding for vector indexing. Phase 3.3
+// ships no real implementation — wiring waits for Phase 5's
+// Provider Resolver. A nil Summarizer makes Dream skip the
+// consolidation step while still running score + prune.
+type Summarizer interface {
+	Summarize(ctx context.Context, events []string) (summary string, embedding []float32, err error)
+}
+
+// DreamConfig tunes Dream/REM behaviour.
+type DreamConfig struct {
+	// MaxCandidates bounds how many top-scoring records are
+	// passed to the Summarizer in one run. Default 10.
+	MaxCandidates int
+
+	// PruneThreshold is the minimum score for an episodic record
+	// (non-long-term retention only) to survive the prune step.
+	// Default 0.1. long-term records are never auto-pruned.
+	PruneThreshold float32
+
+	// HalfLife is the recency-decay half-life. Default 14 days —
+	// records a half-life old score half as much as fresh ones.
+	HalfLife time.Duration
+
+	// Now is the wall-clock function for tests to override.
+	Now func() time.Time
+}
+
+// DreamRunner encapsulates the state needed to run a Dream pass.
+// Writes go through raft.Apply; reads hit the local store directly.
+type DreamRunner struct {
+	store      *Store
+	raft       *RaftNode
+	summarizer Summarizer // may be nil until Phase 5
+	cfg        DreamConfig
+	logger     *slog.Logger
+}
+
+// SetSummarizer swaps in the consolidation-layer summarizer.
+// Intended for Phase 5 to call after constructing the Provider
+// Resolver. Safe to call while the runner is idle.
+func (d *DreamRunner) SetSummarizer(s Summarizer) { d.summarizer = s }
+
+// NewDreamRunner constructs a runner. summarizer may be nil — Phase 5
+// supplies the real one.
+func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg DreamConfig, logger *slog.Logger) *DreamRunner {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if cfg.MaxCandidates <= 0 {
+		cfg.MaxCandidates = 10
+	}
+	if cfg.PruneThreshold <= 0 {
+		cfg.PruneThreshold = 0.1
+	}
+	if cfg.HalfLife <= 0 {
+		cfg.HalfLife = 14 * 24 * time.Hour
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	return &DreamRunner{
+		store:      store,
+		raft:       raft,
+		summarizer: summarizer,
+		cfg:        cfg,
+		logger:     logger,
+	}
+}
+
+// DreamResult is the outcome of one Dream run.
+type DreamResult struct {
+	Consolidated int
+	Pruned       int
+	Candidates   []string // IDs selected for consolidation (may be empty if no Summarizer)
+}
+
+// Run performs one Dream/REM pass: score → select → consolidate (if
+// Summarizer wired) → prune → write a dream-session episodic record.
+//
+// Non-leaders return (nil, nil) as a soft skip — the call is cheap
+// and dream is supposed to be idempotent/best-effort.
+func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
+	if d.raft != nil && !d.raft.IsLeader() {
+		d.logger.Debug("dream: not leader, skipping")
+		return nil, nil
+	}
+
+	now := d.cfg.Now()
+
+	scored, err := d.scoreAll(now)
+	if err != nil {
+		return nil, fmt.Errorf("score: %w", err)
+	}
+
+	candidates := d.selectTopN(scored, d.cfg.MaxCandidates)
+
+	consolidated := 0
+	if d.summarizer != nil && len(candidates) > 0 {
+		if err := d.consolidate(ctx, candidates, now); err != nil {
+			return nil, fmt.Errorf("consolidate: %w", err)
+		}
+		consolidated = 1 // one summary per dream pass
+	}
+
+	pruned, err := d.prune(scored)
+	if err != nil {
+		return nil, fmt.Errorf("prune: %w", err)
+	}
+
+	if err := d.logDreamSession(now, len(candidates), consolidated, pruned); err != nil {
+		// Don't fail the run for a log-entry error; just warn.
+		d.logger.Warn("dream: failed to log session", "err", err)
+	}
+
+	ids := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		ids = append(ids, c.id)
+	}
+	result := &DreamResult{
+		Consolidated: consolidated,
+		Pruned:       pruned,
+		Candidates:   ids,
+	}
+	d.logger.Info("dream complete",
+		"candidates", len(ids),
+		"consolidated", consolidated,
+		"pruned", pruned,
+	)
+	return result, nil
+}
+
+// scoredRecord is an internal carrier that remembers enough about
+// each episodic record to sort, prune, or pass into consolidation
+// without re-reading it from the store.
+type scoredRecord struct {
+	id        string
+	record    *lobslawv1.EpisodicRecord
+	score     float32
+	retention types.Retention
+}
+
+func (d *DreamRunner) scoreAll(now time.Time) ([]scoredRecord, error) {
+	halfLifeSecs := float64(d.cfg.HalfLife.Seconds())
+	var out []scoredRecord
+	err := d.store.ForEach(BucketEpisodicRecords, func(id string, value []byte) error {
+		var rec lobslawv1.EpisodicRecord
+		if err := proto.Unmarshal(value, &rec); err != nil {
+			return fmt.Errorf("unmarshal episodic %q: %w", id, err)
+		}
+		// Skip consolidated records — they're already summaries.
+		if len(rec.SourceIds) > 0 {
+			return nil
+		}
+
+		ageSecs := 0.0
+		if rec.Timestamp != nil {
+			ageSecs = now.Sub(rec.Timestamp.AsTime()).Seconds()
+			if ageSecs < 0 {
+				ageSecs = 0
+			}
+		}
+		recency := float32(math.Exp(-math.Ln2 * ageSecs / halfLifeSecs))
+
+		// Importance defaults to 5 (see service.go), so scores never
+		// collapse to zero purely from zero-importance. Access
+		// frequency is a future extension — for now everyone starts
+		// equal at 1.
+		score := float32(rec.Importance) * recency
+
+		out = append(out, scoredRecord{
+			id:        id,
+			record:    &rec,
+			score:     score,
+			retention: types.Retention(rec.Retention),
+		})
+		return nil
+	})
+	return out, err
+}
+
+// selectTopN picks the highest-scored records. Stable sort + slice;
+// consolidation sees the same ordering regardless of bbolt iteration
+// order.
+func (d *DreamRunner) selectTopN(scored []scoredRecord, n int) []scoredRecord {
+	if n <= 0 || len(scored) == 0 {
+		return nil
+	}
+	sorted := make([]scoredRecord, len(scored))
+	copy(sorted, scored)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].score > sorted[j].score })
+	if len(sorted) > n {
+		sorted = sorted[:n]
+	}
+	return sorted
+}
+
+// consolidate calls the Summarizer and writes the result as a new
+// VectorRecord referencing the source IDs. The summarizer is allowed
+// to return an empty summary — in that case we skip the write.
+func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord, now time.Time) error {
+	events := make([]string, 0, len(candidates))
+	sourceIDs := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		events = append(events, c.record.Event)
+		sourceIDs = append(sourceIDs, c.id)
+	}
+
+	summary, embedding, err := d.summarizer.Summarize(ctx, events)
+	if err != nil {
+		return err
+	}
+	if summary == "" {
+		return nil
+	}
+
+	consolidated := &lobslawv1.VectorRecord{
+		Id:        fmt.Sprintf("dream-%d", now.UnixNano()),
+		Embedding: embedding,
+		Text:      summary,
+		Retention: string(types.RetentionLongTerm),
+		SourceIds: sourceIDs,
+		CreatedAt: timestamppb.New(now),
+	}
+	return d.applyEntry(&lobslawv1.LogEntry{
+		Op:      lobslawv1.LogOp_LOG_OP_PUT,
+		Id:      consolidated.Id,
+		Payload: &lobslawv1.LogEntry_VectorRecord{VectorRecord: consolidated},
+	})
+}
+
+// prune deletes records whose score is below the threshold, unless
+// they carry long-term retention. Returns the count actually removed.
+func (d *DreamRunner) prune(scored []scoredRecord) (int, error) {
+	count := 0
+	for _, r := range scored {
+		if r.retention == types.RetentionLongTerm {
+			continue
+		}
+		if r.score >= d.cfg.PruneThreshold {
+			continue
+		}
+		if err := d.applyEntry(&lobslawv1.LogEntry{
+			Op:      lobslawv1.LogOp_LOG_OP_DELETE,
+			Id:      r.id,
+			Payload: &lobslawv1.LogEntry_EpisodicRecord{EpisodicRecord: &lobslawv1.EpisodicRecord{Id: r.id}},
+		}); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// logDreamSession writes a tiny episodic record summarising what the
+// dream pass did. Useful for post-hoc introspection ("what did the
+// agent remember to forget last night?").
+func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, pruned int) error {
+	session := &lobslawv1.EpisodicRecord{
+		Id:         fmt.Sprintf("dream-session-%d", now.UnixNano()),
+		Event:      fmt.Sprintf("dream run: %d candidates, %d consolidated, %d pruned", candidates, consolidated, pruned),
+		Importance: 3, // modest; dream sessions aren't the memories themselves
+		Timestamp:  timestamppb.New(now),
+		Tags:       []string{"dream-session"},
+		Retention:  string(types.RetentionLongTerm), // survive consolidation so audit trail persists
+	}
+	return d.applyEntry(&lobslawv1.LogEntry{
+		Op:      lobslawv1.LogOp_LOG_OP_PUT,
+		Id:      session.Id,
+		Payload: &lobslawv1.LogEntry_EpisodicRecord{EpisodicRecord: session},
+	})
+}
+
+func (d *DreamRunner) applyEntry(e *lobslawv1.LogEntry) error {
+	if d.raft == nil {
+		return fmt.Errorf("dream: raft stack not wired")
+	}
+	data, err := proto.Marshal(e)
+	if err != nil {
+		return fmt.Errorf("marshal log entry: %w", err)
+	}
+	resp, err := d.raft.Apply(data, applyTimeout)
+	if err != nil {
+		return fmt.Errorf("raft apply: %w", err)
+	}
+	if fsmErr, ok := resp.(error); ok && fsmErr != nil {
+		return fmt.Errorf("fsm apply: %w", fsmErr)
+	}
+	return nil
+}

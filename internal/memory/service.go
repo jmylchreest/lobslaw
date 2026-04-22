@@ -27,18 +27,31 @@ const applyTimeout = 5 * time.Second
 type Service struct {
 	lobslawv1.UnimplementedMemoryServiceServer
 
-	raft   *RaftNode
-	store  *Store
-	logger *slog.Logger
+	raft        *RaftNode
+	store       *Store
+	logger      *slog.Logger
+	dreamRunner *DreamRunner
 }
 
 // NewService wires a MemoryService against an existing Raft stack.
+// When raft is non-nil, a DreamRunner is constructed alongside — wire
+// a Summarizer on it (Phase 5) to enable consolidation; until then
+// dream runs score + prune but skip the consolidation step.
 func NewService(raft *RaftNode, store *Store, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{raft: raft, store: store, logger: logger}
+	s := &Service{raft: raft, store: store, logger: logger}
+	if raft != nil {
+		s.dreamRunner = NewDreamRunner(raft, store, nil, DreamConfig{}, logger)
+	}
+	return s
 }
+
+// DreamRunner exposes the runner so Phase 5 can inject a Summarizer
+// (via DreamRunner.SetSummarizer). Returns nil on nodes without
+// raft (compute-only, gateway-only).
+func (s *Service) DreamRunner() *DreamRunner { return s.dreamRunner }
 
 // Store persists a VectorRecord through Raft. Writes must run on the
 // leader — followers return FailedPrecondition with the leader's address
@@ -149,6 +162,31 @@ func (s *Service) EpisodicAdd(ctx context.Context, req *lobslawv1.EpisodicAddReq
 	}
 	logging.From(ctx).Debug("episodic record added", "id", rec.Id, "importance", rec.Importance)
 	return &lobslawv1.EpisodicAddResponse{Id: rec.Id}, nil
+}
+
+// Dream triggers one Dream/REM consolidation pass. Leader-only —
+// followers soft-skip with FailedPrecondition. When no Summarizer
+// is wired the pass still runs (score + prune + session log), but
+// Consolidated in the response will be 0.
+func (s *Service) Dream(ctx context.Context, _ *lobslawv1.DreamRequest) (*lobslawv1.DreamResponse, error) {
+	if s.dreamRunner == nil {
+		return nil, status.Error(codes.Unimplemented, "raft stack not wired on this node")
+	}
+	if s.raft != nil && !s.raft.IsLeader() {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"not the raft leader; retry at %s", s.raft.LeaderAddress())
+	}
+	result, err := s.dreamRunner.Run(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "dream: %v", err)
+	}
+	if result == nil {
+		return nil, status.Error(codes.FailedPrecondition, "not the raft leader")
+	}
+	return &lobslawv1.DreamResponse{
+		Consolidated: int32(result.Consolidated),
+		Pruned:       int32(result.Pruned),
+	}, nil
 }
 
 // Forget deletes source records matching the query, then cascades to
