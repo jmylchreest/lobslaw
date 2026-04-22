@@ -57,14 +57,15 @@ Each function can run independently or combined:
 
 | Function | Description | Persistence |
 |----------|-------------|-------------|
-| **Memory** | Vector embeddings + episodic + retention | Raft+Boltdb (encrypted) |
-| **Policy** | RBAC, rules, scheduled tasks, commitments, audit log | Raft+Boltdb (same group as Memory) |
-| **Compute** | LLM provider + tool execution + rclone mounts + sidecars + hooks | Ephemeral |
+| **Memory** | Vector embeddings + episodic + retention | Raft+bbolt (encrypted) |
+| **Policy** | RBAC, rules, scheduled tasks, commitments, audit log | Raft+bbolt (same group as Memory) |
+| **Compute** | LLM provider + tool execution + sidecars + hooks | Ephemeral |
 | **Gateway** | gRPC server + channel handlers + auth | Config only |
+| **Storage** | rclone/local/nfs mount lifecycle + unified Watcher | Mount config in Raft (cluster-wide) |
 
-**Storage is not a node type.** Shared storage is provided by rclone mounts owned by the compute node. The rclone subprocess is managed as part of compute-node lifecycle, jailed in its own Linux mount namespace, and agent loops run inside that namespace seeing `/cluster/store/{label}/` as normal directories.
+**Co-location requirement:** Memory-enabled nodes must also enable Storage so snapshot-export targets resolve locally. Single-agent mode (`--all`) enables all five; split deployments co-locate memory+storage on at least one node.
 
-**One Raft group** carries all cluster metadata: policy rules, scheduled tasks, commitments, node registry, audit log entries, episodic memory writes. Consolidating avoids juggling multiple elections and keeps the small/simple/efficient goal.
+**One Raft group** carries all cluster metadata: policy rules, scheduled tasks, commitments, node registry, audit log entries, episodic memory writes, and the cluster-wide storage mount config. Consolidating avoids juggling multiple elections and keeps the small/simple/efficient goal.
 
 ### Single Binary Model
 
@@ -74,12 +75,13 @@ lobslaw [flags]
   --policy.enabled=true
   --compute.enabled=true
   --gateway.enabled=true
+  --storage.enabled=true
 
 # Single agent (all on):
 lobslaw --all
 
-# Dedicated memory node:
-lobslaw --memory.enabled --compute.enabled=false ...
+# Dedicated memory node (must also enable storage for snapshot-export):
+lobslaw --memory --storage --compute=false --gateway=false ...
 
 # Cluster: N nodes each running different function combinations
 ```
@@ -87,18 +89,24 @@ lobslaw --memory.enabled --compute.enabled=false ...
 ### Data Flow
 
 ```
-Channel (Telegram/REST) → Gateway → Auth (JWT) → Policy Check → Agent Core
+Channel (Telegram/REST) → Gateway → Auth (JWT) → Policy Check → Agent Core (Compute)
                                                        ↓
                             ┌──────────────────────────┼──────────────────────────┐
                             ↓                          ↓                          ↓
                       Memory API                /cluster/store/            Hooks + Tools
-                   (Raft+Boltdb,             (rclone mount, namespace)    (sandbox, policy,
-                   encrypted values)                                        confirmation)
-                            ↓                          ↓
-                    Vector + Episodic             Skills
-                    + Retention                   (trusted,
-                    + Dream/REM                    sandboxed)
+                   (Raft+bbolt,              (local/nfs/rclone mount,     (sandbox, policy,
+                   encrypted values)          managed by Storage           confirmation)
+                            ↓                  function, namespace)
+                    Vector + Episodic              ↓
+                    + Retention                Skills + Plugins
+                    + Dream/REM                (trusted,
+                                                sandboxed)
+                            ↓
+                    Snapshot export to
+                    storage-backed target
 ```
+
+The Storage function's `Watch` API feeds change events to subscribers (skill registry, config loader, plugin loader) — fsnotify for local-origin writes, periodic re-scan for remote-origin writes.
 
 ---
 
@@ -241,9 +249,35 @@ Dream is a write-only activity — its own processing is not stored.
 
 Right-to-be-forgotten is first-class. The forget-cascade is what prevents data resurfacing as a "summary" after you asked for it gone.
 
-**rclone mounts (shared storage):** During compute-node init, before agent loops start, the compute node spawns rclone mount subprocesses for each configured storage backend. Each rclone subprocess runs inside its own Linux mount namespace (`unshare --mount`). Agent loops execute inside the same namespace and see `/cluster/store/{label}/` as normal directories.
+**Snapshot export:** Memory nodes write Raft snapshots periodically (default hourly) to a configured target resolved by the Storage function — typically `storage:r2-backup` or similar. This is why memory-enabled nodes must also enable Storage.
 
-`rclone crypt` is a first-class option on `[[storage.mounts]]` — contents are encrypted before they leave the host, protecting the backend bucket against anyone with bucket access.
+### Storage Node
+
+**Responsibility:** Manage filesystem mounts for this node. Backends: local bind, NFS, rclone. Exposes a unified change-detection `Watcher` API to subscribers (skill registry, config loader, plugin loader).
+
+**Mount types:**
+
+| Type | Implementation | POSIX | Use cases |
+|---|---|---|---|
+| `local:<path>` | bind mount via namespace | full | Local workspace, single-node dev, bind of host directory |
+| `nfs:<host:/path>` | `mount -t nfs` subprocess, jailed in namespace | nearly full (weaker locking) | Household-scale shared storage via NAS |
+| `rclone:<remote>:<path>` | rclone mount subprocess via FUSE | nearly full (no hard links; no atomic rename on object stores) | S3/R2/GCS/Azure/SFTP/WebDAV/etc — anything rclone supports |
+
+`rclone crypt` is a first-class option on `rclone:` mounts — contents are encrypted before they leave the host, protecting the backend bucket against anyone with bucket access.
+
+**Cluster-wide config:** `[[storage.mounts]]` entries are not per-node config — they live in the Raft group. Adding a mount via `AddMount` RPC (or a config reload on the leader) propagates to every storage-enabled node, which materialises the mount locally within its own mount namespace.
+
+**Change detection — unified Watcher:** Subscribers register interest in a path via `storage.Watch(path, opts)` and receive a stream of events. The Watcher uses a **hybrid**: fsnotify for local-origin writes + periodic re-scan for remote-origin writes. This does NOT rely on rclone's or NFS's FUSE/kernel notification behaviour for backend changes (which is unreliable — both typically only surface local writes). On subscription, the Watcher emits a synthetic `Initial` event per existing file so subscribers handle startup and runtime identically.
+
+| Backend | fsnotify | Periodic scan default | Net coverage |
+|---|---|---|---|
+| `local:` | yes | disabled | Complete — kernel sees every write |
+| `nfs:` | yes (local writes only) | 5m | Local writes instant + remote writes ≤ 5m |
+| `rclone:` | yes (local writes only) | 5m | Local writes instant + remote writes ≤ 5m |
+
+Operators can override `poll_interval` per-mount. rclone's own `--vfs-cache-poll-interval` is enabled on `rclone:` mounts for VFS cache consistency, but we don't depend on it for the event stream.
+
+**Layout:**
 
 ```
 /cluster/store/
@@ -254,12 +288,18 @@ Right-to-be-forgotten is first-class. The forget-cascade is what prevents data r
         handler.sh
   r2-backup/       ← rclone mount: R2 bucket (optionally crypt)
     archive/
+  household/       ← nfs mount: nas.local:/volume1/lobslaw
+    shared-workspace/
 
 /var/lobslaw/      ← local workspace (bind mount or container filesystem)
   workspace/
     tmp/
     cache/
 ```
+
+**Sandboxing:** every mount lives inside this node's own mount namespace (`unshare --mount`). Agent loops (and hook subprocesses and skill handlers) run inside the same namespace. Compromise of one mount cannot escape to the host filesystem.
+
+**Cross-cluster routing (deferred):** a node that lacks a specific mount cannot currently read files from a peer's mount. Cross-cluster storage routing/tunneling is post-MVP — see DEFERRED.md.
 
 ### Policy Node
 
@@ -312,7 +352,7 @@ The validated Claims struct does **not** carry the raw JWT — once validated, t
 
 ### Compute Node (Agent Core)
 
-**Responsibility:** LLM interaction, tool orchestration, agent loop execution, rclone mount lifecycle, sidecar management, hook dispatch.
+**Responsibility:** LLM interaction, tool orchestration, agent loop execution, sidecar management, hook dispatch. (Mount lifecycle is owned by the Storage function — see Storage Node above.)
 
 #### Agent Loops
 
@@ -1155,24 +1195,43 @@ target = "storage:r2-backup"       # reference to a [[storage.mounts]] label
 cadence = "1h"
 retention = "30d"
 
-# rclone mounts — each becomes /cluster/store/{label}/
-[[storage.mounts]]
-label = "shared"
-type = "s3"
-bucket = "lobslaw-data"
-endpoint = "https://s3.amazonaws.com"
-access_key_ref = "env:AWS_ACCESS_KEY_ID"
-secret_key_ref = "env:AWS_SECRET_ACCESS_KEY"
-crypt = true
-crypt_password_ref = "env:RCLONE_CRYPT_PASSWORD"
-crypt_salt_ref = "env:RCLONE_CRYPT_SALT"
+# Mounts — each becomes /cluster/store/{label}/.
+# Config lives cluster-wide in Raft; every storage-enabled node
+# materialises the mount locally. Types: local, nfs, rclone.
 
 [[storage.mounts]]
-label = "r2-backup"
-type = "r2"
-account = "abc123"
+label = "workspace"
+type  = "local"
+path  = "/var/lobslaw/workspace"
+
+[[storage.mounts]]
+label         = "household"
+type          = "nfs"
+server        = "nas.local"
+export        = "/volume1/lobslaw"
+poll_interval = "5m"            # scan for remote-origin writes
+
+[[storage.mounts]]
+label          = "shared"
+type           = "rclone"
+remote         = "s3"
+bucket         = "lobslaw-data"
+endpoint       = "https://s3.amazonaws.com"
+access_key_ref = "env:AWS_ACCESS_KEY_ID"
+secret_key_ref = "env:AWS_SECRET_ACCESS_KEY"
+crypt               = true
+crypt_password_ref  = "env:RCLONE_CRYPT_PASSWORD"
+crypt_salt_ref      = "env:RCLONE_CRYPT_SALT"
+poll_interval       = "5m"
+
+[[storage.mounts]]
+label          = "r2-backup"
+type           = "rclone"
+remote         = "r2"
+account        = "abc123"
 access_key_ref = "env:R2_ACCESS_KEY_ID"
 secret_key_ref = "env:R2_SECRET_ACCESS_KEY"
+poll_interval  = "5m"
 
 [policy]
 enabled = true
@@ -1347,7 +1406,10 @@ internal/
   mcp/             # MCP client for plugin-declared servers
   sandbox/         # Namespaces, seccomp, cgroups, nftables
   discovery/       # Seed/broadcast, mTLS peer identity
-  rclone/          # Mount lifecycle
+  storage/         # Storage function: mount lifecycle + unified Watcher
+    rclone/        # rclone subprocess management
+    local/         # bind mounts
+    nfs/           # kernel NFS mount subprocess
   audit/           # Hash-chained audit log
   logging/         # slog wrapper (named "logging" to avoid shadowing stdlib "log")
 
@@ -1472,6 +1534,11 @@ func WrapContext(blocks []ContextBlock) string   // adds trust delimiters
 - [ ] Cluster forms with 3 nodes; Raft leader elected; policy changes propagate
 - [ ] Scheduled tasks claimed singleton in a 3-compute-node cluster (no duplicate fires)
 - [ ] Inbound channel updates claimed singleton across multiple gateway nodes
+- [ ] Memory-enabled node refuses to start if storage is not also enabled on that node
+- [ ] `[[storage.mounts]]` added via API propagates via Raft to every storage-enabled node
+- [ ] `local:`, `nfs:`, `rclone:` mount types all materialise into the mount namespace
+- [ ] Storage Watcher emits synthetic Initial events on subscription
+- [ ] Remote-origin writes on nfs/rclone mounts surface via periodic scan within poll_interval
 
 ### Config
 

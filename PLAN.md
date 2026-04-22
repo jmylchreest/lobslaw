@@ -12,19 +12,25 @@ Lobslaw is a large, feature-rich project. This plan breaks implementation into o
 
 ```
 Phase 1: Foundation
-    └─ Phase 2: Cluster Core (Raft, mTLS, Discovery)
-            ├─ Phase 3: Memory Service
-            ├─ Phase 4: Tool Execution + Sandbox + Policy
-            └─ Phase 5: Agent Core + Provider Resolver (includes promptgen)
-                    ├─ Phase 6: Channels (REST, Telegram)
-                    ├─ Phase 7: Scheduler + Commitments + PlanService
-                    └─ Phase 10: SOUL + Personality
-                            └─ Phase 8: Skills + Plugins (agenda skill lands here)
-                                    └─ Phase 11: Audit + Hot-Reload
-                                            └─ Phase 12: Integration + Polish
+    └─ Phase 2: Cluster Core
+            ├─ 2.1 Proto generation
+            ├─ 2.2 mTLS + cluster bootstrap subcommands
+            ├─ 2.3 Raft FSM + bbolt
+            ├─ 2.4 gRPC Raft transport
+            ├─ 2.5 Discovery
+            └─ 2.6 Node lifecycle integration
+                    ├─ Phase 3: Memory Service
+                    ├─ Phase 4: Tool Execution + Sandbox + Policy
+                    └─ Phase 5: Agent Core + Provider Resolver (includes promptgen)
+                            ├─ Phase 6: Channels (REST, Telegram)
+                            ├─ Phase 7: Scheduler + Commitments + PlanService
+                            └─ Phase 10: SOUL + Personality
+                                    └─ Phase 8: Skills + Plugins (agenda skill lands here)
+                                            └─ Phase 11: Audit + Hot-Reload
+                                                    └─ Phase 12: Integration + Polish
 ```
 
-**Phase 9: Storage Mounts** (rclone) can run in parallel with Phase 3–5 since it has no dependencies on them.
+**Phase 9: Storage Function** (local/nfs/rclone mounts + unified Watcher) can run in parallel with Phase 3–5 once Phase 2.3 Raft FSM exists (needs the FSM for cluster-wide mount config propagation).
 
 ---
 
@@ -49,7 +55,7 @@ internal/
   mcp/
   sandbox/
   discovery/
-  rclone/
+  storage/                # storage function (was "rclone/")
   audit/
 pkg/
   types/                 # core interfaces and types
@@ -193,72 +199,13 @@ Ship in-tree:
 
 ## Phase 2: Cluster Core
 
-**Goal:** N nodes can discover each other, form a Raft group, and communicate over mTLS gRPC. Nodes can be added and removed while the cluster is running.
+**Goal:** N nodes can form a Raft group and communicate over mTLS gRPC. Nodes can join and leave while the cluster is running. CA material is an infrastructure concern — the main lobslaw binary never reads the CA private key.
 
-### 2.1 Raft + bbolt
+Split into six sub-phases, each landing as its own PR.
 
-Use `github.com/hashicorp/raft` + `github.com/hashicorp/raft-boltdb` (Raft log/stable store; ~300-LOC bbolt adapter) + `go.etcd.io/bbolt` (application state). Pure Go, no CGO. See aide decision `lobslaw-raft-library` for why hashicorp/raft over etcd-io/raft.
+### 2.1 Proto Generation
 
-**Single binary = single Raft node.** `memory` and `policy` functions share the same Raft group. Two bbolt files on disk:
-
-- `data-dir/raft.db` — Raft log + stable store, managed by `raft-boltdb`
-- `data-dir/state.db` — application state (vector records, episodic, policy rules, scheduled tasks, commitments, audit). `[]byte` values wrapped with nacl/secretbox using the key from `[memory.encryption.key_ref]`.
-
-This keeps Raft-append writes from contending with application-state writes on bbolt's single-writer lock.
-
-Key design:
-- One `*raft.Raft` instance per node
-- FSM (`raft.FSM`) dispatches `Apply` into per-record handlers: `PolicyRule`, `ScheduledTaskRecord`, `AgentCommitment`, `AuditEntry`, `VectorRecord`, `EpisodicRecord`
-- `raft.Snapshot` / `raft.Restore` serialise the whole `state.db` (bbolt `Tx.WriteTo`)
-- Membership changes via `raft.AddVoter` / `raft.RemoveServer` (hashicorp/raft handles joint consensus internally)
-- Snapshot export: write to configured storage target on `[memory.snapshot.cadence]`
-- **Single-node startup check:** if `memory.snapshot.target` is not set and this is a single-node cluster → fail at startup with clear message
-
-**No second port for Raft.** Transport rides the cluster's existing mTLS gRPC connection pool — see 2.1b.
-
-### 2.1b Custom gRPC Raft Transport
-
-`pkg/rafttransport/transport.go` implements hashicorp/raft's `raft.Transport` interface over gRPC, seeded from `github.com/Jille/raft-grpc-transport`.
-
-Proto:
-
-```protobuf
-service RaftTransport {
-  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
-  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
-  rpc InstallSnapshot(stream InstallSnapshotChunk) returns (InstallSnapshotResponse);
-  rpc TimeoutNow(TimeoutNowRequest) returns (TimeoutNowResponse);
-  rpc AppendEntriesPipeline(stream AppendEntriesRequest) returns (stream AppendEntriesResponse);
-}
-```
-
-Implementation: ~300–500 LOC.
-
-- `AppendEntries`, `RequestVote`, `TimeoutNow` — unary; marshal hashicorp/raft structs to proto, call over existing mTLS connection pool.
-- `AppendEntriesPipeline` — bidi stream for heartbeat/append pipelining.
-- `InstallSnapshot` — client streams `InstallSnapshotChunk` (8–64 KiB each) from the `io.Reader` hashicorp/raft provides; server reassembles and calls back into raft.
-
-Peer identity: take the gRPC peer's TLS cert SAN, use it as the `ServerID`. No separate Raft port.
-
-Option to start: use `Jille/raft-grpc-transport` verbatim for MVP, fork only if audit requires reading cert SAN into request context on the server side.
-
-**Raft port:** removed from config — Raft uses the main cluster gRPC port.
-
-### 2.2 mTLS Bootstrap
-
-Use `crypto/tls` + stdlib `google.golang.org/grpc/credentials`.
-
-**Bootstrap flow:**
-1. On first cluster startup (no CA cert exists at `[cluster.mtls.ca_cert]`): generate a self-signed CA cert, store it
-2. Generate a node cert signed by the CA, store it at `[cluster.mtls.node_cert]`
-3. Subsequent starts: load existing CA + node cert
-4. Every gRPC connection: verify peer cert against CA, reject if unknown
-
-This is complex enough to warrant its own `pkg/mtls/` package.
-
-### 2.3 Proto Generation
-
-Define all gRPC services in `pkg/proto/lobslaw.proto`:
+`pkg/proto/lobslaw.proto` defines every cluster gRPC service. Generate early so every subsequent sub-phase can fill in server/client code against the same types.
 
 ```protobuf
 service NodeService {
@@ -307,33 +254,146 @@ service AuditService {
   rpc Query(QueryRequest) returns (QueryResponse);
   rpc VerifyChain(VerifyChainRequest) returns (VerifyChainResponse);
 }
+
+service StorageService {
+  rpc AddMount(AddMountRequest) returns (AddMountResponse);
+  rpc RemoveMount(RemoveMountRequest) returns (RemoveMountResponse);
+  rpc ListMounts(ListMountsRequest) returns (ListMountsResponse);
+}
 ```
 
-Use `bufbuild/buf` — `buf.yaml` + `buf.gen.yaml` in repo root, `buf generate` in a Makefile target. Buf handles dep resolution, lint (`buf lint`), and breaking-change detection (`buf breaking`) out of the box — all of which we want in CI. No raw `protoc`.
+`pkg/proto/rafttransport.proto` is a separate file — the types won't be consumed by anyone except the raft-transport package:
 
-### 2.4 Discovery
+```protobuf
+service RaftTransport {
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
+  rpc InstallSnapshot(stream InstallSnapshotChunk) returns (InstallSnapshotResponse);
+  rpc TimeoutNow(TimeoutNowRequest) returns (TimeoutNowResponse);
+  rpc AppendEntriesPipeline(stream AppendEntriesRequest) returns (stream AppendEntriesResponse);
+}
+```
+
+Use `bufbuild/buf` — `buf.yaml` + `buf.gen.yaml` in repo root, `buf generate` via Makefile. `buf lint` + `buf breaking` run in CI per `lobslaw-proto-toolchain`.
+
+**Exit criteria:** `make proto` generates Go bindings. `go build ./...` passes with unimplemented server stubs wired in. `buf lint` is clean.
+
+### 2.2 mTLS + cluster bootstrap subcommands
+
+Per aide decision `lobslaw-cluster-bootstrap`: CA material is an infrastructure concern. Two one-shot subcommands plus the main-container contract.
+
+**`lobslaw cluster ca-init`** (one-shot):
+- Reads `[cluster.mtls] ca_cert` + `ca_key` paths from config.
+- If either file exists → refuse (no overwriting).
+- Generates self-signed CA cert (10-year validity by default).
+- Writes `ca.pem` + `ca-key.pem` to the configured paths.
+- Exits.
+
+**`lobslaw cluster sign-node`** (one-shot; designed as k8s initContainer or throwaway docker run):
+- Reads CA material from `[cluster.mtls] ca_cert` + `ca_key`.
+- Generates a per-node Ed25519 private key.
+- Creates a CSR for this node (SAN = `node_id` from env or flag).
+- Signs the CSR with the CA key.
+- Writes `node-cert.pem` + `node-key.pem` to the paths configured under `[cluster.mtls] node_cert` + `node_key`.
+- Also writes the public CA cert (`ca.pem`) to the same directory for the main container's use.
+- Exits.
+
+**Main `lobslaw` binary:**
+- Reads `ca_cert` (public), `node_cert`, `node_key` on startup.
+- Does NOT read `ca_key`. The field isn't even in the main Config struct — only the subcommand has it.
+- If `node_cert` is missing → fails fast with "run `lobslaw cluster sign-node` first (via initContainer)".
+- Verifies `node_cert` is signed by `ca_cert` (refuses stale certs from a different CA).
+- Configures gRPC `credentials.NewTLS(...)` with client auth `RequireAndVerifyClientCert` and the CA cert as the client CA pool.
+
+**Single-node dev convenience:** `[cluster.bootstrap] auto_init = true` collapses ca-init + sign-node into first-run auto-generation. Off by default. Main container refuses to `auto_init` unless this flag is set.
+
+**`pkg/mtls/`** is the package that implements cert loading, validation, and gRPC credentials construction. The subcommands also use it (specifically the CA-key-consuming helpers), keeping CA-handling in one place.
+
+**Exit criteria:** `lobslaw cluster ca-init` generates CA files. `lobslaw cluster sign-node` consumes CA key, produces per-node cert. Main binary starts with only node cert + CA public cert. Two binaries with certs signed by the same CA can mutual-TLS-handshake. A binary with a cert from a different CA is rejected.
+
+### 2.3 Raft FSM + bbolt setup
+
+Per aide decision `lobslaw-raft-library`: `hashicorp/raft` + `hashicorp/raft-boltdb` + `go.etcd.io/bbolt`. Pure Go, no CGO.
+
+**Storage layout** — two bbolt files:
+
+- `data-dir/raft.db` — Raft log + stable store, managed by `raft-boltdb` adapter (which is bbolt underneath)
+- `data-dir/state.db` — application state. `[]byte` values wrapped with nacl/secretbox using the key from `[memory.encryption.key_ref]`.
+
+Two files so Raft-append writes don't contend with application-state writes on bbolt's single-writer lock.
+
+**FSM implementation** (`internal/memory/fsm.go`):
+- One `raft.FSM` per node.
+- `Apply(*raft.Log) any` — unmarshals the log entry's typed payload and dispatches to per-record handlers for `PolicyRule`, `ScheduledTaskRecord`, `AgentCommitment`, `AuditEntry`, `VectorRecord`, `EpisodicRecord`, `StorageMountConfig`.
+- `Snapshot() (raft.FSMSnapshot, error)` — bbolt `Tx.WriteTo` dumps the entire `state.db` to an `io.Writer`. Cheap because bbolt's write transaction serialises cleanly.
+- `Restore(rc io.ReadCloser)` — replace `state.db` from the snapshot.
+
+**Single-node for this phase:** use hashicorp/raft's in-memory transport (`raft.NewInmemTransport`) so the FSM can be exercised without the gRPC transport existing yet. Phase 2.4 swaps in the real transport.
+
+**Startup invariants:**
+- If `memory.enabled` or `policy.enabled` → open Raft + both bbolt files.
+- `[memory.snapshot] target` must be set when the cluster has fewer than 3 voters → fail at startup with a clear message.
+- `memory.enabled` without `storage.enabled` on the same node → fail at startup ("enable --storage so snapshot-export targets are resolvable").
+
+**Exit criteria:** Single-node FSM applies PolicyRule/ScheduledTaskRecord/etc. and snapshot/restore work end-to-end. Tests use the in-memory transport.
+
+### 2.4 gRPC Raft Transport
+
+`pkg/rafttransport/` implements hashicorp/raft's `raft.Transport` interface over the cluster's existing mTLS gRPC pool — seeded from `github.com/Jille/raft-grpc-transport`.
+
+**Seed strategy:** use `Jille/raft-grpc-transport` as a dependency for MVP. Fork only if we need to read the gRPC peer's cert SAN into the request context for audit attribution (likely but not required in Phase 2). Either way, ~300–500 LOC of lobslaw-specific glue:
+
+- `AppendEntries`, `RequestVote`, `TimeoutNow` — unary; marshal hashicorp/raft structs to proto, call over existing mTLS connection pool.
+- `AppendEntriesPipeline` — bidi stream for heartbeat/append pipelining.
+- `InstallSnapshot` — client streams `InstallSnapshotChunk` (8–64 KiB each) from the `io.Reader` hashicorp/raft provides; server reassembles and calls back into raft.
+
+Peer identity: gRPC peer's TLS cert SAN is used as the `ServerID`. Advisory `NodeID` from `NodeInfo` doesn't participate in security.
+
+**gRPC interceptor stack** (installed at server construction, shared with all services):
+- slog request-ID propagation (preps for Phase 5 tracing)
+- OTel span wrapper (no-op exporter by default; real exporter wired in Phase 5)
+- panic recovery
+- per-RPC audit emit (deferred wiring to Phase 11, but the slot exists)
+
+**Exit criteria:** Swap the in-memory transport from 2.3 for this one, re-run the FSM tests, add a 3-node integration test in `_test.go` that forms a Raft cluster over gRPC and asserts quorum behaviour.
+
+### 2.5 Discovery
 
 `internal/discovery/discovery.go`:
 
-- Seed list: try connecting to each `host:raft_port` in `[discovery.seed_nodes]`
-- On success: register with `NodeService.Register`
-- UDP broadcast (optional, `[discovery.broadcast=true]`): send a UDP broadcast on `[discovery.broadcast_interface]`; other nodes listening respond with their gRPC address
+- **Seed list:** try connecting to each `host:port` in `[discovery.seed_nodes]` (cluster gRPC port, same as the server listens on — no separate Raft port). On connect, call `NodeService.Register`.
+- **UDP broadcast** (optional, `[discovery.broadcast=true]`): send a UDP broadcast on `[discovery.broadcast_interface]`; listeners respond with their gRPC address. For same-LAN auto-discovery.
 
-For MVP, implement seed list first. UDP broadcast is a follow-up.
+Seed list is MVP-scope and lands first. UDP broadcast lands in the same PR if time permits, otherwise post-MVP (`--broadcast` flag exists but functional implementation deferred).
 
-### 2.5 Node Lifecycle
+**Exit criteria:** Two binaries with seed-list entries for each other connect, `NodeService.Register` completes on both, `GetPeers` returns the other node.
 
-Main goroutine starts:
-1. Load config
-2. Set up logging
-3. If `memory.enabled`: open Boltdb, start Raft
-4. If `policy.enabled`: connect to Raft group
-5. If `compute.enabled`: start storage mounts (Phase 9), start agent loops (Phase 5)
-6. If `gateway.enabled`: start gRPC server, start channel handlers (Phase 6)
+### 2.6 Node Lifecycle Integration
 
-Graceful shutdown: drain all in-flight work, close Raft.
+Main goroutine startup sequence (`cmd/lobslaw/main.go`):
 
-**Exit criteria:** Two binaries on different ports form a 2-node Raft cluster. Killing one node doesn't crash the other. Restart of a node re-joins the cluster.
+1. Load config + set up logging (done in Phase 1).
+2. Load mTLS material (`pkg/mtls`); refuse to start if `node_cert` missing.
+3. Construct gRPC server with the full interceptor stack.
+4. If `memory.enabled` || `policy.enabled`: open both bbolt files, construct FSM, construct Raft with the gRPC transport from 2.4.
+5. If `memory.enabled` and `!storage.enabled`: fail ("storage required for snapshot-export on memory nodes").
+6. If `storage.enabled`: initialise storage function (Phase 9 — stubs for now).
+7. If `compute.enabled`: initialise compute placeholders (Phase 4–5).
+8. If `gateway.enabled`: bind gRPC listener + channel handlers (Phase 6 placeholders).
+9. Start discovery (Phase 2.5).
+10. Register each service's gRPC server against the main listener.
+
+**Graceful shutdown** on SIGINT/SIGTERM:
+- Drain in-flight RPCs (gRPC's graceful-stop).
+- `raft.Shutdown()` — transitions leader, blocks until complete.
+- Close bbolt files.
+- Cancel storage function context (unmounts).
+- Exit.
+
+**Exit criteria:**
+- Single-node cluster: starts, accepts RPCs, `AddRule` via PolicyService persists across restart.
+- 3-node cluster (three binaries on different ports, same CA): forms a Raft group via seed list, elects a leader, propagates a policy rule to all three followers, killing one leaves quorum healthy, restarting the killed node re-joins cleanly.
+- Memory+storage co-location enforced: `lobslaw --memory --compute=false --storage=false` refuses to start.
 
 ---
 
@@ -787,64 +847,144 @@ RTK ships as PreToolUse + PostToolUse hooks. When RTK is enabled in config (`[[h
 
 ---
 
-## Phase 9: Storage Mounts (rclone)
+## Phase 9: Storage Function
 
-**Goal:** rclone mounts appear at `/cluster/store/{label}/` inside a mount namespace.
+**Goal:** The storage function materialises cluster-wide mount config into local mounts at `/cluster/store/{label}/`, and exposes a unified `Watcher` API so subscribers (skills registry, config loader, plugin loader) react to file changes across all backend types.
 
-### 9.1 Mount Manager
+Per `lobslaw-storage-model`: three backend types — `local:`, `nfs:`, `rclone:`. Pure-Go S3 is explicitly not in scope (use cases are filesystem-oriented; S3 SDK isn't a filesystem).
 
-`internal/rclone/manager.go`:
+### 9.1 Mount abstraction
+
+`internal/storage/mount.go`:
 
 ```go
+type Mount interface {
+    Label() string
+    Mountpoint() string
+    Start(ctx context.Context) error    // materialise into mount namespace
+    Stop(ctx context.Context) error     // unmount + cleanup
+    Healthy() bool
+}
+
 type Manager struct {
-    mounts map[string]*rcloneMount
+    mounts map[string]Mount    // label → Mount
+    raft   *raft.Raft           // cluster-wide mount config source
 }
 
-type rcloneMount struct {
-    label    string
-    cfg      StorageMountConfig
-    namespace *os.Process  // unshare --mount process
-    rclone   *os.Process      // rclone mount daemon
+func (m *Manager) Start(ctx context.Context) error      // subscribe to Raft-backed config; start configured mounts
+func (m *Manager) AddMount(ctx context.Context, cfg StorageMountConfig) error   // writes config via Raft
+func (m *Manager) RemoveMount(ctx context.Context, label string) error
+func (m *Manager) List(ctx context.Context) []MountInfo
+```
+
+Config lives in Raft (the FSM from Phase 2.3 handles `StorageMountConfig` records). `AddMount` writes to Raft; every storage-enabled node's `Manager` observes the change and materialises the mount locally. `RemoveMount` triggers a drain on every node.
+
+### 9.2 `internal/storage/local/`
+
+Bind mount implementation:
+
+```go
+type LocalMount struct { ... }
+```
+
+- `Start`: `unshare --mount` + bind-mount `cfg.Path` at `/cluster/store/{label}`.
+- `Stop`: unmount.
+
+Simplest of the three. No subprocess.
+
+### 9.3 `internal/storage/nfs/`
+
+Kernel NFS mount via `mount -t nfs`:
+
+```go
+type NFSMount struct { ... }
+```
+
+- `Start`: inside new mount namespace, invoke `mount -t nfs <cfg.Server>:<cfg.Export> /cluster/store/{label}` with the operator's chosen nfsvers/sec options.
+- `Stop`: `umount`.
+
+Requires `CAP_SYS_ADMIN` or rootless-NFS capabilities in the container.
+
+### 9.4 `internal/storage/rclone/`
+
+rclone subprocess via FUSE:
+
+```go
+type RcloneMount struct { ... }
+```
+
+- `Start`:
+  1. `unshare --mount` to create a new mount namespace.
+  2. Inside namespace, `rclone mount {remote}:{bucket}/{path} /cluster/store/{label} --daemon --vfs-cache-mode full --vfs-cache-poll-interval=<poll_interval>`.
+  3. If `cfg.Crypt`: layer rclone's crypt backend per-mount.
+- `Stop`: signal rclone subprocess, wait, fusermount -u.
+
+rclone subprocess environment:
+- API keys resolved from `cfg.*_ref` via `config.ResolveSecret` before spawn.
+- Crypt password/salt from `cfg.CryptPasswordRef` + `cfg.CryptSaltRef`.
+- Extra env pass-through from `cfg.Env` (KEY=value lines).
+
+**FUSE prerequisites** (documented in DEPLOYMENT.md):
+- Container needs `/dev/fuse` and either `CAP_SYS_ADMIN` or user-namespace FUSE support.
+- Podman: `--device /dev/fuse --security-opt apparmor=unconfined`.
+- Docker: `--cap-add SYS_ADMIN` (or `--privileged`) + `--device /dev/fuse`.
+- K8s: `securityContext: { privileged: true }` or `capabilities: { add: ["SYS_ADMIN"] }` + device plugin.
+
+### 9.5 Unified Watcher
+
+`internal/storage/watcher.go`:
+
+```go
+type Event struct {
+    Path  string
+    Op    EventOp   // Initial | Create | Write | Remove | Rename
+    Stat  os.FileInfo
 }
 
-func (m *Manager) Mount(ctx context.Context, cfg StorageMountConfig) error
-func (m *Manager) Unmount(ctx context.Context, label string) error
+type WatchOpts struct {
+    Recursive    bool
+    PollInterval time.Duration   // 0 = use mount's default; negative = disable polling
+    Include      []string        // glob patterns
+    Exclude      []string
+}
+
+func (m *Manager) Watch(ctx context.Context, path string, opts WatchOpts) <-chan Event
 ```
 
-Spawn order:
-1. `unshare --mount` to create a new mount namespace
-2. Inside namespace: `rclone mount {type}:{bucket} /cluster/store/{label} --daemon`
-3. Keep the namespace alive as long as the rclone process lives
+Implementation runs two feeds concurrently per subscription:
 
-`unshare --mount` requires `CAP_SYS_ADMIN` or user namespace support. In rootless Podman/Docker, this works if the container is run with `--privileged` or `--security-opt seccomp=unconfined`. Document this in the README.
+1. **fsnotify**: registers a kernel watch on the path (works for all three backend types for *local-origin* writes — writes that pass through our mount's FUSE/kernel layer).
+2. **Periodic scan**: every `PollInterval`, walk the tree, `Stat` each file, diff against the last-known `path → (size, mtime)` map. Emit events for differences. Catches remote-origin writes that fsnotify misses on `nfs:` / `rclone:` mounts.
 
-### 9.2 Crypt Support
+On first subscription, the scanner emits a synthetic `Initial` event per existing file so subscribers handle startup and runtime uniformly.
 
-If `crypt = true` in the mount config, use rclone's crypt backend:
-```bash
-rclone mount {type}:{bucket} /cluster/store/{label} \
-  --overlay crypt \
-  --crypt-password "$CRYPT_PASSWORD" \
-  --crypt-salt "$CRYPT_SALT" \
-  --daemon
-```
+Events are deduplicated by `(path, op, mtime)` across the two feeds within a small window.
 
-Resolve `CRYPT_PASSWORD` and `CRYPT_SALT` from env vars at mount time.
+Default poll intervals:
+- `local:` — polling disabled (fsnotify is complete).
+- `nfs:` — 5 minutes (configurable per-mount).
+- `rclone:` — 5 minutes (configurable per-mount).
 
-### 9.3 Env Pass-Through
+### 9.6 Cluster-wide config via Raft
 
-The mount config's `env` TOML block is parsed as `KEY=value\n` lines. Each `KEY=value` is resolved: if `value` starts with `env:`, read that env var from the process environment, substitute.
+Adding a mount is a Raft write, not a per-node config change:
 
-The resolved env vars are set in the rclone subprocess's environment.
+- CLI: `lobslaw storage mount add --label=shared --type=rclone --remote=s3 --bucket=...` → calls `StorageService.AddMount` on any reachable node → written to Raft → every storage-enabled node observes the change and starts the mount locally.
+- Removing: `lobslaw storage mount remove --label=shared` → Raft-propagated unmount.
 
-### 9.4 FUSE in Docker/Podman
+`[[storage.mounts]]` entries in `config.toml` on the bootstrap node are a convenience for initial cluster seeding: on first startup, the bootstrap node writes each configured mount into Raft. On subsequent startups, the entries are ignored (Raft is the source of truth). Documented clearly.
 
-Document in `DEPLOYMENT.md`:
-- Container needs `CAP_SYS_ADMIN` or rootless FUSE (`rclone mount --allow-non-empty --allow-rootless`)
-- Podman: `--device /dev/fuse --security-opt apparmor=unconfined`
-- Docker: `--privileged` or a custom seccomp profile
+### 9.7 FUSE + namespace prerequisites
 
-**Exit criteria:** `[[storage.mounts]]` with S3 config → `/cluster/store/shared/` exists and is readable inside the container namespace. File written inside the namespace appears in S3. `crypt = true` → backend sees ciphertext only.
+Documented in `DEPLOYMENT.md` for each target environment. Kept as the primary operational constraint.
+
+**Exit criteria:**
+- `[[storage.mounts]]` with `type="local"` → `/cluster/store/{label}/` bind-mounts to a host directory inside the mount namespace.
+- `type="nfs"` → kernel NFS mount succeeds against a test NFS server.
+- `type="rclone"` + S3 config → files written to the mount appear in the S3 bucket.
+- `crypt=true` on rclone → backend bucket sees ciphertext.
+- `Watcher` emits `Initial` events for existing files; `Write` for local writes (via fsnotify); remote writes on nfs/rclone surface via scan within `poll_interval`.
+- 3-node cluster: `lobslaw storage mount add ...` on node 1 → mount appears on nodes 2 + 3 within the Raft apply latency.
 
 ---
 

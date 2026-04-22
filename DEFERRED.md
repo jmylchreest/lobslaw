@@ -2,6 +2,30 @@
 
 Items consciously deferred past MVP. Each has a short note on why it's deferred and what would trigger revisiting it.
 
+## Storage
+
+### Cross-cluster storage tunneling / routing
+
+A storage-enabled node materialises its own mounts locally. A compute-only node (no `storage` function enabled) cannot currently access mounts materialised on another node — it would need to ask a peer to proxy reads/writes.
+
+**Why deferred:** Complex (proxying FUSE operations over gRPC while preserving POSIX semantics), and the MVP deployment pattern is storage-everywhere (every node enables the storage function). The tunneling feature only matters when operators explicitly split storage away from compute.
+
+**Trigger to revisit:** First deployment where an operator wants a pure compute-only node that still needs filesystem paths under `/cluster/store/...` without local mounts.
+
+**How:** Add a `StorageService.Read` / `StorageService.Write` pair that proxies filesystem operations, plus a client-side FUSE mount on the compute-only node that calls those RPCs. ~2-3 weeks of careful work to get POSIX semantics right; probably a FUSE library is the cleanest path.
+
+---
+
+### Strict-security CA bootstrap (sign-RPC mode)
+
+MVP treats CA material as an infrastructure concern (per `lobslaw-cluster-bootstrap`) — every storage-enabled node's initContainer has the CA private key and self-signs. For tighter security, the CA key could live on one node running a `ClusterBootstrap.Join` gRPC; other nodes present a CSR + HMAC proof from a shared join secret.
+
+**Why deferred:** The infrastructure-concern model covers the single-tenant personal-scale threat model. Strict-security bootstrap adds a SPOF during join + HMAC handshake plumbing for marginal security gains at our scale.
+
+**Trigger to revisit:** First deployment where the CA private key must not leave a specific node (regulated environment, dedicated secrets vault, etc.).
+
+---
+
 ## Infrastructure / Workflow
 
 ### Verify SHA pins in `.github/workflows/*.yml`
