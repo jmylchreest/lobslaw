@@ -235,6 +235,68 @@ MVP ships hardcoded pricing defaults per provider.
 
 ---
 
+## Sandbox
+
+Phase 4.5 lands the sandbox *structure*: Policy type, Validate/Normalise, CanonicalizeAndContain / RequireSingleLink helpers, and Apply wiring that sets Linux namespaces + UID/GID mapping via `syscall.SysProcAttr`. Several deny-in-depth layers are deliberately left as structural-only so the config surface is stable but install is deferred.
+
+### NoNewPrivs enforcement
+
+Policy carries `NoNewPrivs` and Normalise defaults it to true when any sandboxing is enabled, but `syscall.SysProcAttr` in Go's stdlib does not expose the `NoNewPrivs` field. Go 1.23+ has `SysProcAttr.NoNewPrivs` on some builds; the module targets compatibility that doesn't assume it.
+
+**Why deferred:** Needs either (a) a cgo hop to call `prctl(PR_SET_NO_NEW_PRIVS, 1)` from the child-side `Pdeathsig`-style setup, (b) a wrapper `setpriv --no-new-privs` around every tool invocation, or (c) a minimum Go version bump once stdlib exposes it consistently.
+
+**Trigger to revisit:** Option (c) — bump minimum Go version to one that has `SysProcAttr.NoNewPrivs` across our supported build matrix. Wire it in Apply with a one-liner.
+
+---
+
+### seccomp BPF install
+
+`DefaultSeccompPolicy` carries a deny-list (ptrace, unshare, setns, pivot_root, mount/umount, init_module, kexec_load, bpf, keyctl, etc.) and Normalise applies it when sandboxing is enabled. The install that turns the list into a kernel-enforced filter is not wired.
+
+**Why deferred:** The BPF install needs `elastic/go-seccomp-bpf` (per `lobslaw-seccomp-library` decision) plus careful attention to the arch-specific syscall numbering and the fact that the filter must be installed on the child side *after* exec — cleanest integration is a small wrapper binary that installs the filter then execve's the real tool.
+
+**Trigger to revisit:** Phase 4.5.5 / hardening pass. The Policy config is already stable so no config migration is needed when this lands.
+
+**How:** Write `internal/sandbox/seccomplinux/install.go` using `elastic/go-seccomp-bpf`. Either (a) a tiny `lobslaw-sandbox-helper` binary invoked as argv[0] that installs the filter and execve's, or (b) post-fork / pre-exec install via a cgo hop.
+
+---
+
+### pivot_root / chroot into sandbox rootfs
+
+Apply sets `CLONE_NEWNS` so the subprocess has its own mount namespace, but it doesn't call `pivot_root` to relocate the rootfs. AllowedPaths / ReadOnlyPaths are carried by Policy but not bind-mounted.
+
+**Why deferred:** Building the sandbox rootfs correctly (bind-mount `/proc` into the new PID namespace, mount tmpfs on `/tmp`, set up `/dev` minimally, pivot away from host root) is materially more work than the namespace-clone itself. It's the right thing to do eventually but each layer of sandboxing after the namespace has diminishing returns for a personal-assistant threat model.
+
+**Trigger to revisit:** First deployment profile that includes untrusted tools (cluster-mode running community skills). Before that, the owner-only allowed-paths pattern is enough.
+
+**How:** A `buildSandboxRoot(policy) (rootfsDir, cleanup, error)` that prepares the hierarchy, then Apply invokes a helper child that calls pivot_root after setting up mounts. Similar shape to containerd's shim.
+
+---
+
+### cgroup v2 install (CPU / memory limits)
+
+Policy carries `CPUQuota` (millicpus) and `MemoryLimitMB`. Validate rejects negatives. Apply does not create or attach to a cgroup.
+
+**Why deferred:** Cgroup v2 needs (a) a delegated cgroup (systemd session, user slice), (b) writing `cpu.max` / `memory.max`, and (c) placing the subprocess's pid into `cgroup.procs` before exec. The moving parts are fine on bare Linux but flaky across WSL / older distros / rootless podman. Needs a careful probe + fallback.
+
+**Trigger to revisit:** First user report of a tool runaway. The `WaitDelay` kill path already bounds wall-clock.
+
+**How:** `internal/sandbox/cgroupv2/install.go` — detect `/sys/fs/cgroup/cgroup.controllers`, create a leaf cgroup under our slice, write limits, fork-exec tool with its pid written into `cgroup.procs`. Gate via runtime-detect; no-op with a log warning where cgroup v2 isn't available.
+
+---
+
+### nftables egress rules
+
+Policy carries `NetworkAllowCIDR`. When Apply creates `CLONE_NEWNET` the subprocess has an isolated network stack with only loopback — nothing outbound works. Allowing a specific CIDR requires bringing up a veth, adding a route, and installing nftables rules.
+
+**Why deferred:** Full network-namespace egress needs root (or CAP_NET_ADMIN) on the host to create the veth pair. It's a larger change than the rest of Layer A combined and the MVP policy for most tools is "no network at all" which the bare namespace already gives us.
+
+**Trigger to revisit:** First skill that legitimately needs network egress (e.g. a `web-fetch` tool) and should be constrained to a specific CIDR.
+
+**How:** Either a per-invocation veth + nftables install (needs a helper running as root) or an in-process SOCKS proxy that the subprocess MUST use (simpler, no root, but requires tool cooperation).
+
+---
+
 ## Dev Environment Notes
 
 ### `get-key` alias

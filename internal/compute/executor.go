@@ -14,6 +14,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -67,6 +68,14 @@ type ExecutorConfig struct {
 	// roots. This defeats symlink-chasing attacks where a tool's
 	// Path is replaced with a symlink pointing at /bin/rm.
 	AllowedPathRoots []string
+
+	// Sandbox, when non-nil, is applied to each subprocess via
+	// sandbox.Apply — Linux namespaces, UID/GID mapping, etc. On
+	// non-Linux platforms sandbox.Apply returns ErrUnsupportedPlatform
+	// for any non-empty policy, which surfaces as an Invoke error so
+	// operators don't silently run without the protections they asked
+	// for.
+	Sandbox *sandbox.Policy
 }
 
 // Executor runs tools through the compute-function pipeline:
@@ -206,6 +215,10 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	// process that inherited our pipes (e.g. sleep inside a shell)
 	// can't stall Wait().
 	cmd.WaitDelay = 500 * time.Millisecond
+
+	if err := sandbox.Apply(cmd, e.cfg.Sandbox); err != nil {
+		return nil, fmt.Errorf("sandbox: %w", err)
+	}
 
 	stdout := &cappedBuffer{cap: e.cfg.MaxOutputBytes}
 	stderr := &cappedBuffer{cap: e.cfg.MaxOutputBytes}
