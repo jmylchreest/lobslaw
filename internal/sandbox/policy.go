@@ -79,12 +79,18 @@ func (n NamespaceSet) Enabled() bool {
 	return n.User || n.Mount || n.PID || n.Network || n.UTS || n.IPC
 }
 
-// Normalise fills in sensible defaults for a Policy the caller has
-// opted into. Only triggers if some sandboxing is actually enabled —
-// a zero-value Policy stays zero-value (the "no sandbox" case).
+// Normalise fills in sensible defaults for enforcement layers the
+// caller has opted into. Only fires when the caller has asked for
+// active enforcement — NoNewPrivs, Landlock (AllowedPaths), or
+// explicit Seccomp rules. Namespaces and resource quotas alone are
+// orthogonal isolation mechanisms and don't auto-enable seccomp /
+// NoNewPrivs, so callers can test the namespace path without
+// dragging in the full reexec helper pipeline.
+//
+// A zero-value Policy stays zero-value (the "no sandbox" case).
 func (p *Policy) Normalise() {
-	sandboxEnabled := p.Namespaces.Enabled() || p.Seccomp.HasRules() || p.CPUQuota > 0 || p.MemoryLimitMB > 0
-	if !sandboxEnabled {
+	enforcementRequested := p.NoNewPrivs || len(p.AllowedPaths) > 0 || p.Seccomp.HasRules()
+	if !enforcementRequested {
 		return
 	}
 	if !p.NoNewPrivs {

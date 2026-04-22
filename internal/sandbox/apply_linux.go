@@ -11,28 +11,26 @@ import (
 )
 
 // Apply installs the Policy onto cmd's SysProcAttr. Sets namespace
-// clone flags, no_new_privs, and UID/GID mappings for the user
-// namespace.
+// clone flags, UID/GID mappings for the user namespace, and (when
+// enforcement is requested) rewrites cmd to reexec through the
+// sandbox helper subcommand.
 //
 // What's enforced today:
 //
 //   - CLONE_NEWUSER/NEWNS/NEWPID/NEWNET/NEWUTS/NEWIPC based on p.Namespaces
-//   - PR_SET_NO_NEW_PRIVS when p.NoNewPrivs is true
 //   - UidMappings/GidMappings (map the calling UID to root-inside-userns,
 //     the standard unprivileged pattern)
+//   - PR_SET_NO_NEW_PRIVS + Landlock + seccomp via the reexec helper
+//     — cmd is rewritten to invoke /proc/self/exe sandbox-exec, which
+//     installs these layers in the child post-fork pre-execve.
 //
 // Deferred (see DEFERRED.md):
 //
-//   - pivot_root into a per-sandbox directory (needs CAP_SYS_ADMIN
-//     unless we're already inside a user namespace with the cap)
-//   - bind-mounts for AllowedPaths + ReadOnlyPaths
+//   - pivot_root (superseded by Landlock)
 //   - cgroup v2 cpu.max and memory.max writes
 //   - nftables egress rules in the network namespace
-//   - seccomp BPF install (filter is built; install is deferred)
 //
-// Apply is a no-op when p is nil or p.Namespaces.Enabled() is false
-// AND NoNewPrivs is false — i.e. the fully-empty policy runs the
-// command with no special treatment.
+// Apply is a no-op when p is nil or all fields are zero.
 func Apply(cmd *exec.Cmd, p *Policy) error {
 	if p == nil {
 		return nil
@@ -66,15 +64,53 @@ func Apply(cmd *exec.Cmd, p *Policy) error {
 		}
 	}
 
-	// PR_SET_NO_NEW_PRIVS is not exposed by stdlib syscall.SysProcAttr.
-	// Wiring it properly needs either a setpriv(1) wrapper or a cgo
-	// pre-exec helper — tracked in DEFERRED.md. For now the user
-	// namespace is the primary defence against setuid escalation
-	// (inside a userns, setuid binaries don't gain real-host
-	// capabilities), so skipping no_new_privs doesn't leave the
-	// sandbox naked.
-	_ = p.NoNewPrivs
+	// Rewrite cmd to reexec through /proc/self/exe sandbox-exec when
+	// the policy asks for NoNewPrivs / Landlock / seccomp enforcement.
+	// The helper runs inside the namespaces set up above, then
+	// performs the three installs before execve'ing the real target.
+	if needsReexec(p) {
+		if err := rewriteForHelperReexec(cmd, p); err != nil {
+			return fmt.Errorf("rewrite for sandbox helper: %w", err)
+		}
+	}
 
+	return nil
+}
+
+// rewriteForHelperReexec mutates cmd so it invokes the running
+// binary's `sandbox-exec` subcommand rather than the original target
+// directly. The helper reads the Policy from env, installs kernel
+// enforcement, then execve's the original target so the caller sees
+// the expected argv.
+//
+// Expects cmd.Args[0] to match cmd.Path — the Executor builds commands
+// this way (via exec.CommandContext which sets Args[0] = name).
+func rewriteForHelperReexec(cmd *exec.Cmd, p *Policy) error {
+	encoded, err := EncodePolicy(p)
+	if err != nil {
+		return fmt.Errorf("encode policy: %w", err)
+	}
+	originalPath := cmd.Path
+	originalArgs := cmd.Args
+	if len(originalArgs) == 0 {
+		// Shouldn't happen — exec.Command always populates Args — but
+		// defend against a caller that manually cleared the slice.
+		originalArgs = []string{originalPath}
+	}
+
+	// /proc/self/exe always resolves to the current binary inode, so
+	// the helper runs with whatever build the parent was invoked from —
+	// no need to know the filesystem path to the lobslaw binary.
+	cmd.Path = "/proc/self/exe"
+	cmd.Args = append(
+		[]string{"lobslaw", HelperSubcommand, "--", originalPath},
+		originalArgs[1:]...,
+	)
+
+	if cmd.Env == nil {
+		cmd.Env = []string{}
+	}
+	cmd.Env = append(cmd.Env, PolicyEnvVar+"="+encoded)
 	return nil
 }
 

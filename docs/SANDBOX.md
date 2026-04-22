@@ -7,10 +7,10 @@ architecture looks the way it does.
 
 A sandboxed tool runs with **layered defences**, each a separate kernel mechanism:
 
-1. **User + PID + mount + (optionally) network namespace** — cheap isolation via `syscall.SysProcAttr.Cloneflags`. Already wired (Phase 4.5).
-2. **Path canonicalisation + containment** (`CanonicalizeAndContain`) — no symlink-out, no `..` traversal, no hardlink escape (`RequireSingleLink`). Already wired.
-3. **Policy validation** — `Policy.Validate` rejects relative paths, read-only-outside-allowed, negative quotas. Already wired.
-4. **`NoNewPrivs` + Landlock filesystem LSM + seccomp BPF deny-list** — layered enforcement. **Deferred to Phase 4.5.5 (helper binary).**
+1. **User + PID + mount + (optionally) network namespace** — cheap isolation via `syscall.SysProcAttr.Cloneflags`. Wired.
+2. **Path canonicalisation + containment** (`CanonicalizeAndContain`) — no symlink-out, no `..` traversal, no hardlink escape (`RequireSingleLink`). Wired.
+3. **Policy validation** — `Policy.Validate` rejects relative paths, read-only-outside-allowed, negative quotas. Wired.
+4. **`NoNewPrivs` + Landlock filesystem LSM + seccomp BPF deny-list** — layered enforcement via the `lobslaw sandbox-exec` reexec helper. **Wired (Phase 4.5.5).**
 5. **cgroup v2 CPU/memory limits** — deferred; `WaitDelay` already bounds wall-clock.
 6. **nftables egress control** — deferred; `CLONE_NEWNET` already isolates network by default.
 
@@ -71,15 +71,18 @@ The standard solution, used by runc / containerd / podman, is the **reexec helpe
 
 ```
 lobslaw (agent)
- └── fork + clone namespaces
-      └── /proc/self/exe sandbox-exec --policy=<base64 json> -- /real/tool [args…]
-           └── prctl(PR_SET_NO_NEW_PRIVS, 1)
-           └── landlock_restrict_self(rulesetFD, flags)
-           └── seccomp_install(BPF filter)
+ └── fork + clone namespaces (via SysProcAttr.Cloneflags)
+      └── /proc/self/exe sandbox-exec -- /real/tool [args…]
+           ├── LOBSLAW_SANDBOX_POLICY env → base64(JSON) Policy
+           ├── prctl(PR_SET_NO_NEW_PRIVS, 1)
+           ├── landlock_create_ruleset + add_rule + restrict_self
+           ├── seccomp(SECCOMP_SET_MODE_FILTER, …) with TSYNC
            └── execve(/real/tool, [args…])
 ```
 
-`lobslaw sandbox-exec` is a hidden subcommand of the main binary. The agent spawns itself with `sandbox-exec` as the first argument, which reads the serialised policy, performs the three installs, and then `execve`'s the actual tool. No separate binary to ship.
+`lobslaw sandbox-exec` is a hidden subcommand of the main binary. `sandbox.Apply` rewrites any `exec.Cmd` whose Policy carries an enforcement field (NoNewPrivs, AllowedPaths, or Seccomp.Deny) to invoke `/proc/self/exe sandbox-exec --` followed by the original target path + argv. The child reads the serialised policy from `$LOBSLAW_SANDBOX_POLICY`, performs the three installs, unsets the env var so the target doesn't inherit it, then `execve`'s the actual tool. No separate binary to ship.
+
+**Namespaces stay separate:** `Apply` applies CLONE_NEW* via `SysProcAttr.Cloneflags` directly — the helper isn't involved. Policies that only ask for namespaces (e.g. for lightweight tests) don't pay reexec cost. The helper rewrite is gated by `needsReexec` — effectively "does the policy have an enforcement field set".
 
 This exact technique is **also what the active Go proposal ([golang/go#68595](https://github.com/golang/go/issues/68595)) replicates** — it adds post-fork-pre-exec landlock + NoNewPrivs install directly to the runtime's `forkExec` path, so callers don't need a helper. Until that lands, we do it ourselves.
 

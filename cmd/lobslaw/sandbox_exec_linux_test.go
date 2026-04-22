@@ -39,13 +39,13 @@ func TestSandboxExecNoNewPrivsSetsProcStatus(t *testing.T) {
 	bin := buildHelperBinary(t)
 
 	policy := &sandbox.Policy{NoNewPrivs: true}
-	encoded, err := encodeSandboxPolicy(policy)
+	encoded, err := sandbox.EncodePolicy(policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "sandbox-exec", "--", "/bin/cat", "/proc/self/status")
-	cmd.Env = append(os.Environ(), envSandboxPolicy+"="+encoded)
+	cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/bin/cat", "/proc/self/status")
+	cmd.Env = append(os.Environ(), sandbox.PolicyEnvVar+"="+encoded)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -65,7 +65,7 @@ func TestSandboxExecNoNewPrivsSetsProcStatus(t *testing.T) {
 func TestSandboxExecWithoutNoNewPrivsLeavesProcStatusClear(t *testing.T) {
 	bin := buildHelperBinary(t)
 
-	cmd := exec.Command(bin, "sandbox-exec", "--", "/bin/cat", "/proc/self/status")
+	cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/bin/cat", "/proc/self/status")
 	// No LOBSLAW_SANDBOX_POLICY env — helper defaults to zero Policy.
 	cmd.Env = os.Environ()
 	var out bytes.Buffer
@@ -116,14 +116,14 @@ func TestSandboxExecLandlockBlocksOutsideAllowedPaths(t *testing.T) {
 		AllowedPaths:  []string{"/usr", workDir},
 		ReadOnlyPaths: []string{"/usr"},
 	}
-	encoded, err := encodeSandboxPolicy(policy)
+	encoded, err := sandbox.EncodePolicy(policy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	envPolicy := envSandboxPolicy + "=" + encoded
+	envPolicy := sandbox.PolicyEnvVar + "=" + encoded
 
 	t.Run("inside_allowed_reads", func(t *testing.T) {
-		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/cat", insideFile)
+		cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/usr/bin/cat", insideFile)
 		cmd.Env = append(os.Environ(), envPolicy)
 		var out bytes.Buffer
 		cmd.Stdout = &out
@@ -137,7 +137,7 @@ func TestSandboxExecLandlockBlocksOutsideAllowedPaths(t *testing.T) {
 	})
 
 	t.Run("outside_denied_with_eacces", func(t *testing.T) {
-		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/cat", "/etc/passwd")
+		cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/usr/bin/cat", "/etc/passwd")
 		cmd.Env = append(os.Environ(), envPolicy)
 		var out bytes.Buffer
 		cmd.Stdout = &out
@@ -192,7 +192,7 @@ func TestSandboxExecSeccompBlocksDeniedSyscall(t *testing.T) {
 		// Baseline: unshare --user succeeds unprivileged on modern
 		// Linux. If this fails, the system has unprivileged_userns_clone
 		// disabled and our seccomp test below is vacuous — skip.
-		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/unshare", "--user", "/bin/true")
+		cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/usr/bin/unshare", "--user", "/bin/true")
 		cmd.Env = os.Environ()
 		if err := cmd.Run(); err != nil {
 			t.Skipf("baseline unshare failed (system disables unprivileged userns?): %v", err)
@@ -204,12 +204,12 @@ func TestSandboxExecSeccompBlocksDeniedSyscall(t *testing.T) {
 			NoNewPrivs: true,
 			Seccomp:    sandbox.DefaultSeccompPolicy,
 		}
-		encoded, err := encodeSandboxPolicy(policy)
+		encoded, err := sandbox.EncodePolicy(policy)
 		if err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/unshare", "--user", "/bin/true")
-		cmd.Env = append(os.Environ(), envSandboxPolicy+"="+encoded)
+		cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/usr/bin/unshare", "--user", "/bin/true")
+		cmd.Env = append(os.Environ(), sandbox.PolicyEnvVar+"="+encoded)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
@@ -223,6 +223,69 @@ func TestSandboxExecSeccompBlocksDeniedSyscall(t *testing.T) {
 	})
 }
 
+// TestApplyEndToEndRewritesForHelperAndEnforces proves the full
+// parent-side integration: sandbox.Apply rewrites a cmd to reexec
+// through the helper, policy traverses the env var, and the target
+// binary actually sees enforced NoNewPrivs=1 in /proc/self/status.
+//
+// Distinct from the earlier unit tests on parseTargetInvocation:
+// those exercised the helper child in isolation, this one runs the
+// parent pipeline from sandbox.Apply(cmd, policy) end-to-end.
+func TestApplyEndToEndRewritesForHelperAndEnforces(t *testing.T) {
+	bin := buildHelperBinary(t)
+
+	policy := &sandbox.Policy{NoNewPrivs: true}
+
+	cmd := exec.Command("/bin/cat", "/proc/self/status")
+	cmd.Env = os.Environ()
+	if err := sandbox.Apply(cmd, policy); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// Apply rewrote cmd to use /proc/self/exe — but /proc/self/exe
+	// within `go test` resolves to the test binary, not lobslaw. Point
+	// cmd.Path at our freshly-built lobslaw binary so the reexec
+	// dispatches to dispatchSandboxExec.
+	cmd.Path = bin
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("rewritten cmd failed: %v\n--- output ---\n%s", err, out.String())
+	}
+
+	if !strings.Contains(out.String(), "\nNoNewPrivs:\t1\n") {
+		t.Errorf("expected NoNewPrivs=1 after Apply+reexec; got:\n%s", out.String())
+	}
+	// Proves the original argv reached the target: cat received its
+	// file arg and actually read /proc/self/status (rather than the
+	// helper eating the arg or the reexec clobbering argv).
+	if !strings.Contains(out.String(), "Name:\t") {
+		t.Errorf("expected /proc/self/status content (Name: line) in output:\n%s", out.String())
+	}
+}
+
+// TestApplyNoEnforcementFieldsDoesNotRewrite confirms policies that
+// only ask for namespaces/resource-limits don't trigger the reexec
+// helper — those layers apply via SysProcAttr directly, and going
+// through the helper would (a) add spawn latency and (b) break the
+// Apply contract for callers that explicitly don't want enforcement.
+func TestApplyNoEnforcementFieldsDoesNotRewrite(t *testing.T) {
+	t.Parallel()
+	policy := &sandbox.Policy{
+		Namespaces: sandbox.NamespaceSet{Mount: true},
+	}
+	cmd := exec.Command("/bin/true")
+	originalPath := cmd.Path
+	if err := sandbox.Apply(cmd, policy); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if cmd.Path != originalPath {
+		t.Errorf("namespaces-only policy shouldn't rewrite cmd.Path; got %q", cmd.Path)
+	}
+}
+
 // TestSandboxExecRejectsBadTarget verifies the helper surfaces a
 // clean error (not a crash / exec of something unexpected) when the
 // target isn't absolute. Runs the same binary but expects non-zero
@@ -230,7 +293,7 @@ func TestSandboxExecSeccompBlocksDeniedSyscall(t *testing.T) {
 func TestSandboxExecRejectsBadTarget(t *testing.T) {
 	bin := buildHelperBinary(t)
 
-	cmd := exec.Command(bin, "sandbox-exec", "--", "relative/path")
+	cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "relative/path")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()

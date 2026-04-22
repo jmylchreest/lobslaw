@@ -49,25 +49,51 @@ func TestPolicyValidateRejectsNegativeQuotas(t *testing.T) {
 	}
 }
 
-func TestPolicyNormaliseAppliesDefaultSeccomp(t *testing.T) {
+func TestPolicyNormaliseAppliesDefaultSeccompWhenEnforcementRequested(t *testing.T) {
 	t.Parallel()
-	p := &Policy{Namespaces: NamespaceSet{User: true}}
+	// Asking for NoNewPrivs is an active enforcement request, so
+	// Normalise fills in sensible seccomp defaults alongside it.
+	p := &Policy{NoNewPrivs: true}
 	p.Normalise()
 	if !p.Seccomp.HasRules() {
-		t.Error("Normalise should populate DefaultSeccompPolicy when Seccomp was zero")
+		t.Error("Normalise should populate DefaultSeccompPolicy when enforcement is requested")
 	}
-	// Spot-check: ptrace should always be in the default deny.
 	if !slices.Contains(p.Seccomp.Deny, "ptrace") {
 		t.Error("default seccomp deny should include ptrace")
 	}
 }
 
-func TestPolicyNormaliseForcesNoNewPrivsWhenSandboxed(t *testing.T) {
+func TestPolicyNormaliseFillsNoNewPrivsForLandlockOrSeccomp(t *testing.T) {
 	t.Parallel()
-	p := &Policy{Namespaces: NamespaceSet{User: true}}
+	// AllowedPaths → landlock, and landlock requires NoNewPrivs.
+	p := &Policy{AllowedPaths: []string{"/tmp/work"}}
 	p.Normalise()
 	if !p.NoNewPrivs {
-		t.Error("Normalise should set NoNewPrivs when any sandboxing is enabled")
+		t.Error("Landlock use should force NoNewPrivs=true via Normalise")
+	}
+
+	// Explicit Seccomp rules also imply NoNewPrivs.
+	q := &Policy{Seccomp: SeccompPolicy{Deny: []string{"ptrace"}}}
+	q.Normalise()
+	if !q.NoNewPrivs {
+		t.Error("explicit seccomp rules should force NoNewPrivs=true via Normalise")
+	}
+}
+
+func TestPolicyNormaliseNamespacesAloneDontForceEnforcement(t *testing.T) {
+	t.Parallel()
+	// Namespaces-only is a valid lightweight isolation mode. Normalise
+	// must not auto-enable the reexec-helper path (NoNewPrivs + seccomp)
+	// just because a caller asked for a user namespace — otherwise a
+	// policy that wanted *only* namespaces would break the helper-less
+	// Apply path.
+	p := &Policy{Namespaces: NamespaceSet{User: true, Mount: true}}
+	p.Normalise()
+	if p.NoNewPrivs {
+		t.Error("Namespaces-only policy should not auto-enable NoNewPrivs")
+	}
+	if p.Seccomp.HasRules() {
+		t.Error("Namespaces-only policy should not auto-populate seccomp")
 	}
 }
 

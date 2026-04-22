@@ -239,17 +239,23 @@ MVP ships hardcoded pricing defaults per provider.
 
 Phase 4.5 lands the sandbox *structure*: Policy type, Validate/Normalise, CanonicalizeAndContain / RequireSingleLink helpers, and Apply wiring that sets Linux namespaces + UID/GID mapping via `syscall.SysProcAttr`. Several deny-in-depth layers are deliberately left as structural-only so the config surface is stable but install is deferred.
 
-### Phase 4.5.5 hardening: NoNewPrivs + Landlock + seccomp BPF (reexec helper)
+### Phase 4.5.5 hardening: NoNewPrivs + Landlock + seccomp BPF — LANDED
 
-See [`docs/SANDBOX.md`](docs/SANDBOX.md) for the full architecture. Three enforcement layers that must run in the child process between `fork()` and `execve()`. Policy already carries the fields; the helper subcommand that actually installs them is not yet wired.
+Shipped 2026-04-22 across commits `feat(phase-4.5.5a..d)`. The reexec helper (`lobslaw sandbox-exec`) now installs all three kernel enforcement layers between `fork()` and `execve()`. See [`docs/SANDBOX.md`](docs/SANDBOX.md) for the architecture and upstream-tracking notes.
 
-**Why deferred as a batch:** All three share a single piece of infrastructure — a `lobslaw sandbox-exec` subcommand invoked via the reexec pattern. Building that helper well (policy serialisation across the exec boundary, tests that exercise actual kernel behaviour, compile-time guards for Linux-only) is ~400 LOC of careful work. The namespace + canonicalisation layers already block the majority of the threat model; these three upgrade it from "defence in layers" to "defence with teeth".
+`sandbox.Apply` rewrites any `exec.Cmd` whose Policy carries an enforcement field (NoNewPrivs, AllowedPaths, or Seccomp.Deny) to invoke `/proc/self/exe sandbox-exec --` through the helper child. Namespaces remain orthogonal — they apply via `SysProcAttr.Cloneflags` and don't pay reexec cost.
 
-**Upstream path:** [golang/go#68595](https://github.com/golang/go/issues/68595) proposes `SysProcAttr.UseLandlockRestrictSelf` — it would land Landlock + NoNewPrivs together in the runtime's `forkExec` path. Active CL at [go.dev/cl/745940](https://go-review.googlesource.com/c/go/+/745940) (updated 2026-04-16). Seccomp has no active proposal ([#3405](https://github.com/golang/go/issues/3405) is dormant).
+**Upstream tracking (still active):** [golang/go#68595](https://github.com/golang/go/issues/68595) would collapse Landlock + NoNewPrivs into `SysProcAttr` — when it lands we migrate per the plan in `docs/SANDBOX.md`. Seccomp stays in the helper indefinitely ([#3405](https://github.com/golang/go/issues/3405) is dormant).
 
-**Our plan (per `docs/SANDBOX.md`):** Implement the reexec helper now for all three, with the `sandbox.Policy` API shape matching the stdlib proposal. When #68595 lands, Landlock + NoNewPrivs collapse into `SysProcAttr` fields with no caller-visible change. Seccomp stays in the helper indefinitely.
+---
 
-**Trigger to revisit:** Phase 4.5.5 (scheduled). Independent of any upstream movement — we're not blocked on Go.
+### Windows build regression in `internal/discovery/broadcast.go`
+
+Cross-compile for `GOOS=windows GOARCH=amd64` fails on `syscall.SetsockoptInt(int(fd), ...)` at `internal/discovery/broadcast.go:209` — Windows `syscall.SetsockoptInt` takes `syscall.Handle`, not `int`. Pre-dates Phase 4.5.5 (came in with the Phase 2.6 UDP discovery work).
+
+**Why deferred:** lobslaw's target deployment is Linux (the whole sandbox stack is Linux-only). Windows is a "nice to have, don't regress". Fix is small: platform-split the file (`broadcast_unix.go` / `broadcast_windows.go`) or wrap via `golang.org/x/sys/windows`.
+
+**Trigger to revisit:** First request for Windows support, or when CI starts cross-compiling.
 
 ---
 
