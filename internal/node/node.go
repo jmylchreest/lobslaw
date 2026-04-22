@@ -121,8 +121,6 @@ func New(cfg Config) (*Node, error) {
 	}
 
 	registry := discovery.NewRegistry()
-	discSvc := discovery.NewService(registry, local, log, nil)
-	lobslawv1.RegisterNodeServiceServer(server, discSvc)
 
 	n := &Node{
 		cfg:          cfg,
@@ -130,20 +128,30 @@ func New(cfg Config) (*Node, error) {
 		listener:     listener,
 		server:       server,
 		registry:     registry,
-		discSvc:      discSvc,
 		shutdownOnce: make(chan struct{}),
 	}
 
-	// Wire the Raft stack iff we're running memory or policy.
+	// Wire the Raft stack iff we're running memory or policy. Services
+	// that need it (NodeService's AddMember, the minimal PolicyService)
+	// register after Raft is up so we don't RegisterService twice on
+	// the same gRPC server.
 	if needsRaft(cfg.Functions) {
 		if err := n.wireRaft(advertise); err != nil {
 			n.closePartial()
 			return nil, err
 		}
-		// Minimal PolicyService — Phase 4 replaces with the real engine.
 		n.policySvc = policy.NewService(n.raft)
 		lobslawv1.RegisterPolicyServiceServer(server, n.policySvc)
 	}
+
+	// NodeService is registered exactly once, with nil RaftMembership
+	// on non-Raft nodes so AddMember returns Unimplemented.
+	var raftMembership discovery.RaftMembership
+	if n.raft != nil {
+		raftMembership = n.raft
+	}
+	n.discSvc = discovery.NewService(registry, local, log, nil, raftMembership)
+	lobslawv1.RegisterNodeServiceServer(server, n.discSvc)
 
 	// Discovery client for seed-list exchange on Start.
 	n.discCli = discovery.NewClient(local, registry, n.dialer(), log)

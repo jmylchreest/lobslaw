@@ -112,7 +112,7 @@ func newTestNode(t *testing.T, id string) *testNode {
 	}
 
 	server := grpc.NewServer()
-	svc := discovery.NewService(registry, local, nil, nil)
+	svc := discovery.NewService(registry, local, nil, nil, nil)
 	lobslawv1.RegisterNodeServiceServer(server, svc)
 
 	return &testNode{

@@ -138,6 +138,20 @@ func (n *RaftNode) FSM() *FSM {
 	return n.fsm
 }
 
+// IsLeader reports whether this node currently holds Raft leadership.
+// Non-leader writes through raft.Apply return ErrNotLeader; callers
+// that want to be polite check IsLeader first and redirect.
+func (n *RaftNode) IsLeader() bool {
+	return n.Raft.State() == raft.Leader
+}
+
+// LeaderAddress returns the current leader's advertised address. Empty
+// during an election.
+func (n *RaftNode) LeaderAddress() raft.ServerAddress {
+	addr, _ := n.Raft.LeaderWithID()
+	return addr
+}
+
 // Apply serialises data through Raft consensus. Returns the FSM's
 // Apply return value on success.
 func (n *RaftNode) Apply(data []byte, timeout time.Duration) (any, error) {

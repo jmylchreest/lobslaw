@@ -24,6 +24,7 @@ const (
 	NodeService_Heartbeat_FullMethodName  = "/lobslaw.v1.NodeService/Heartbeat"
 	NodeService_GetPeers_FullMethodName   = "/lobslaw.v1.NodeService/GetPeers"
 	NodeService_Reload_FullMethodName     = "/lobslaw.v1.NodeService/Reload"
+	NodeService_AddMember_FullMethodName  = "/lobslaw.v1.NodeService/AddMember"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -35,6 +36,7 @@ type NodeServiceClient interface {
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	GetPeers(ctx context.Context, in *GetPeersRequest, opts ...grpc.CallOption) (*GetPeersResponse, error)
 	Reload(ctx context.Context, in *ReloadRequest, opts ...grpc.CallOption) (*ReloadResponse, error)
+	AddMember(ctx context.Context, in *AddMemberRequest, opts ...grpc.CallOption) (*AddMemberResponse, error)
 }
 
 type nodeServiceClient struct {
@@ -95,6 +97,16 @@ func (c *nodeServiceClient) Reload(ctx context.Context, in *ReloadRequest, opts 
 	return out, nil
 }
 
+func (c *nodeServiceClient) AddMember(ctx context.Context, in *AddMemberRequest, opts ...grpc.CallOption) (*AddMemberResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddMemberResponse)
+	err := c.cc.Invoke(ctx, NodeService_AddMember_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServiceServer is the server API for NodeService service.
 // All implementations should embed UnimplementedNodeServiceServer
 // for forward compatibility.
@@ -104,6 +116,7 @@ type NodeServiceServer interface {
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	GetPeers(context.Context, *GetPeersRequest) (*GetPeersResponse, error)
 	Reload(context.Context, *ReloadRequest) (*ReloadResponse, error)
+	AddMember(context.Context, *AddMemberRequest) (*AddMemberResponse, error)
 }
 
 // UnimplementedNodeServiceServer should be embedded to have
@@ -127,6 +140,9 @@ func (UnimplementedNodeServiceServer) GetPeers(context.Context, *GetPeersRequest
 }
 func (UnimplementedNodeServiceServer) Reload(context.Context, *ReloadRequest) (*ReloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Reload not implemented")
+}
+func (UnimplementedNodeServiceServer) AddMember(context.Context, *AddMemberRequest) (*AddMemberResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddMember not implemented")
 }
 func (UnimplementedNodeServiceServer) testEmbeddedByValue() {}
 
@@ -238,6 +254,24 @@ func _NodeService_Reload_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeService_AddMember_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddMemberRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).AddMember(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_AddMember_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).AddMember(ctx, req.(*AddMemberRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -264,6 +298,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Reload",
 			Handler:    _NodeService_Reload_Handler,
+		},
+		{
+			MethodName: "AddMember",
+			Handler:    _NodeService_AddMember_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

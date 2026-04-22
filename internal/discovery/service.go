@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/hashicorp/raft"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -11,6 +12,15 @@ import (
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
+
+// RaftMembership is the subset of RaftNode behaviour AddMember needs.
+// Kept as an interface so tests can supply a fake without pulling the
+// full Raft stack in.
+type RaftMembership interface {
+	IsLeader() bool
+	LeaderAddress() raft.ServerAddress
+	AddVoter(id raft.ServerID, addr raft.ServerAddress) error
+}
 
 // ReloadFunc is the hook Phase 11 hot-reload plugs into. Returns the
 // lists that go into ReloadResponse. If the Service was constructed
@@ -26,15 +36,27 @@ type Service struct {
 	local    types.NodeInfo
 	logger   *slog.Logger
 	reload   ReloadFunc
+
+	// raft is optional — non-nil when this node runs the memory or
+	// policy function. AddMember returns Unimplemented when it's nil.
+	raft RaftMembership
 }
 
-// NewService constructs the gRPC server-side implementation.
-// reload may be nil until Phase 11 wires it.
-func NewService(registry *Registry, local types.NodeInfo, logger *slog.Logger, reload ReloadFunc) *Service {
+// NewService constructs the gRPC server-side implementation. reload
+// may be nil until Phase 11 wires it. raftMembership may be nil on
+// nodes without Raft (compute-only, gateway-only), in which case
+// AddMember returns Unimplemented.
+func NewService(registry *Registry, local types.NodeInfo, logger *slog.Logger, reload ReloadFunc, raftMembership RaftMembership) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Service{registry: registry, local: local, logger: logger, reload: reload}
+	return &Service{
+		registry: registry,
+		local:    local,
+		logger:   logger,
+		reload:   reload,
+		raft:     raftMembership,
+	}
 }
 
 // Register adds the caller's node info to the local registry.
@@ -108,4 +130,36 @@ func (s *Service) Reload(ctx context.Context, req *lobslawv1.ReloadRequest) (*lo
 		RestartNeeded: restartNeeded,
 		Errors:        errs,
 	}, nil
+}
+
+// AddMember requests that the cluster add the given node as a voter.
+// Must be executed on the current leader — followers reply
+// FailedPrecondition with the leader's address so the caller retries.
+// Non-voting learners are future work; for now Voter=false is rejected.
+func (s *Service) AddMember(ctx context.Context, req *lobslawv1.AddMemberRequest) (*lobslawv1.AddMemberResponse, error) {
+	if s.raft == nil {
+		return nil, status.Error(codes.Unimplemented, "this node doesn't host the Raft group")
+	}
+	if req == nil || req.NodeId == "" || req.Address == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id and address are required")
+	}
+	if !req.Voter {
+		return nil, status.Error(codes.Unimplemented, "non-voting learners not yet supported")
+	}
+
+	if !s.raft.IsLeader() {
+		return &lobslawv1.AddMemberResponse{
+			Accepted:      false,
+			LeaderAddress: string(s.raft.LeaderAddress()),
+		}, nil
+	}
+
+	if err := s.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.Address)); err != nil {
+		return nil, status.Errorf(codes.Internal, "AddVoter: %v", err)
+	}
+	logging.From(ctx).Info("cluster member added",
+		"peer_id", req.NodeId,
+		"address", req.Address,
+	)
+	return &lobslawv1.AddMemberResponse{Accepted: true}, nil
 }
