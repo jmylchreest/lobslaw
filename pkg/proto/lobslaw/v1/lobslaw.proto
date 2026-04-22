@@ -429,3 +429,34 @@ message RemoveMountResponse {}
 
 message ListMountsRequest {}
 message ListMountsResponse { repeated StorageMount mounts = 1; }
+
+// -----------------------------------------------------------------------------
+// Raft log entry envelope
+// -----------------------------------------------------------------------------
+//
+// Every write that goes through Raft is wrapped in a LogEntry. The FSM's
+// Apply unmarshals the []byte log payload as LogEntry and dispatches on
+// op kind. Delete operations carry only the target id; all other ops
+// carry a typed payload.
+
+enum LogOp {
+  LOG_OP_UNSPECIFIED = 0;
+  LOG_OP_PUT = 1;
+  LOG_OP_DELETE = 2;
+}
+
+message LogEntry {
+  LogOp op = 1;
+  // Target record id for DELETE; same id also duplicates the record's
+  // id field for PUT (eases indexing without fully decoding the payload).
+  string id = 2;
+  oneof payload {
+    PolicyRule policy_rule = 10;
+    ScheduledTaskRecord scheduled_task = 11;
+    AgentCommitment commitment = 12;
+    AuditEntry audit_entry = 13;
+    VectorRecord vector_record = 14;
+    EpisodicRecord episodic_record = 15;
+    StorageMount storage_mount = 16;
+  }
+}
