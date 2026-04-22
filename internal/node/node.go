@@ -81,6 +81,7 @@ type Node struct {
 	raft      *memory.RaftNode
 
 	policySvc *policy.Service
+	memorySvc *memory.Service
 
 	shutdownOnce chan struct{}
 }
@@ -150,6 +151,9 @@ func New(cfg Config) (*Node, error) {
 		}
 		n.policySvc = policy.NewService(n.raft)
 		lobslawv1.RegisterPolicyServiceServer(server, n.policySvc)
+
+		n.memorySvc = memory.NewService(n.raft, n.store, log)
+		lobslawv1.RegisterMemoryServiceServer(server, n.memorySvc)
 	}
 
 	// NodeService is registered exactly once, with nil RaftMembership
@@ -279,6 +283,10 @@ func (n *Node) Registry() *discovery.Registry { return n.registry }
 // Policy returns the policy service (nil when memory/policy isn't on
 // this node). Exposed for test read-paths via GetRule.
 func (n *Node) Policy() *policy.Service { return n.policySvc }
+
+// Memory returns the MemoryService implementation. nil on nodes
+// without the memory/policy function.
+func (n *Node) Memory() *memory.Service { return n.memorySvc }
 
 // Raft returns the underlying RaftNode for tests that need to call
 // BootstrapCluster/AddVoter manually (multi-node test setup) or wait
