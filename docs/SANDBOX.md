@@ -283,7 +283,7 @@ Same-name override of a built-in is allowed; the loader logs it via `LoadResult.
 
 ### Load order + discovery
 
-`sandbox.LoadPolicyDir(dir)` (called at startup):
+`sandbox.LoadPolicyDir(dir, opts)` (called at startup):
 
 1. Load `_presets/*.toml` first → `RegisterPreset` each.
 2. Load top-level `*.toml` → `PolicySpec.ToPolicy()` for each.
@@ -291,6 +291,45 @@ Same-name override of a built-in is allowed; the loader logs it via `LoadResult.
 Ordering matters: tool policies in the same dir can reference presets defined in `_presets/`.
 
 Missing `dir` is a no-op — callers can unconditionally point the loader at a path without feature-detecting whether it exists.
+
+### Integrity check
+
+Every `.policy.toml` file is verified before parsing. Failed files are logged at `WARN` and land in `LoadResult.Rejected`; siblings that pass continue to load (one bad file never poisons the whole directory).
+
+| Check | Unix | Windows |
+|---|---|---|
+| **Owner UID** | Must match `LoadOptions.TrustedUID`. Default: `os.Geteuid()` — i.e., the agent's own UID. Set to `-1` to skip. | No-op (NTFS ACLs aren't inspected; protect the dir via filesystem permissions instead). |
+| **Mode mask** | File must NOT have any bit in `LoadOptions.RejectWritableMask`. Default: `0o022` — rejects group-writable and world-writable. | No-op. |
+| **Escape hatch** | `LoadOptions.SkipPermChecks = true` disables both checks (e.g. for k8s volume drivers that can't preserve Unix mode). | (Always-on — the check is already no-op on Windows.) |
+
+Threat model: an attacker with write access to the policy directory at its own UID could otherwise drop a permissive policy on next hot-reload. The UID check defeats that ("only files I or someone with my privileges authored are trusted"). Same well-trodden pattern as OpenSSH's `~/.ssh/config` check and sudo's `/etc/sudoers` check.
+
+### Hot-reload
+
+The `sandbox.Watcher` wraps `fsnotify` with a 250ms debounce. Start with a `*PolicySink` (satisfied by `compute.Registry`) and a `context.Context`:
+
+```go
+w := sandbox.NewWatcher(dir, registry, opts, 0) // 0 = default 250ms debounce
+w.Start(ctx)  // initial load + fsnotify subscribe
+// ... ctx cancellation stops the watcher
+```
+
+- Editor write-bursts (vim's write-swap-rename) coalesce into one reload.
+- Deleted files clear the per-tool policy via `SetPolicy(name, nil)` — the fleet default takes over again.
+- Rejected files (perm check fail) log at WARN but don't stop siblings.
+- Only tools the watcher previously loaded are mutated; skill-set policies remain untouched.
+
+Disable via `[sandbox] hot_reload_opt_out = true` when you want load-once-at-boot behaviour (air-gapped deployments, `--read-only` containers where the policy dir can't change).
+
+### Skill-bundled policies
+
+Skills ship a `policy.d/` subtree identical in shape to the operator's top-level one. The loader exposes `sandbox.LoadSkillPolicies(skillPolicyDir, ownedTools, sink, opts)` which wraps `LoadPolicyDir` with an **ownership guard**: a skill may only ship policies for tools it actually registers. Policies for tool names outside `ownedTools` are logged and rejected.
+
+Boot-time ordering ensures precedence — operator's authoritative policies always win:
+
+1. Skills install → `LoadSkillPolicies` per skill.
+2. Operator policy.d/ loads → `LoadPolicyDir` + apply to Registry. Overwrites any same-name entries.
+3. Hot-reload watcher subscribes to operator policy.d/ only (skills register their policies once at install, not continuously).
 
 ---
 
