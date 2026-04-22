@@ -4,6 +4,21 @@ Items consciously deferred past MVP. Each has a short note on why it's deferred 
 
 ## Infrastructure / Workflow
 
+### Verify SHA pins in `.github/workflows/*.yml`
+
+Phase 1.7 lands CI with SHAs pinned from training-data recall:
+- `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4.2.2)
+- `actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a9a` (v5.2.0)
+- `golangci/golangci-lint-action@a4f60bb28d35aeee14e6880718e0c85ff1882e64` (v7.0.0)
+
+**Why deferred:** SHAs should be verified against the actual published tag at the time of commit, not recalled. Per `gha-action-pinning` we want SHA pinning with version comment — the format is right but the SHA values need confirming on first CI run.
+
+**Trigger to revisit:** First CI run that reports a SHA mismatch, OR as part of routine dependency review (dependabot/renovate config).
+
+**How:** `gh api repos/{owner}/{repo}/git/ref/tags/{tag}` to fetch the authoritative SHA, update the workflow, re-commit. Can be automated via a renovate config with `pinDigests: true`.
+
+---
+
 ### Branch protection on `origin`
 
 Configure required checks + PR workflow per `gha-branch-protection` decision.
