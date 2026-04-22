@@ -170,6 +170,59 @@ func landlockSupported(t *testing.T) bool {
 	return int(r1) >= 1
 }
 
+// TestSandboxExecSeccompBlocksDeniedSyscall proves the seccomp BPF
+// filter is loaded and blocks syscalls in Policy.Seccomp.Deny at
+// the kernel level with EPERM. Uses /usr/bin/unshare because:
+//
+//   - it invokes the `unshare` syscall directly (one of the denies
+//     in DefaultSeccompPolicy — the test would fail if we ever
+//     removed it from the deny-list without updating both places)
+//   - failure is a clean "Operation not permitted" (EPERM) that's
+//     hard to produce by accident from any other cause
+//
+// Control: same invocation without seccomp succeeds — confirms the
+// test isn't passing because of some unrelated restriction.
+func TestSandboxExecSeccompBlocksDeniedSyscall(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/unshare"); err != nil {
+		t.Skipf("/usr/bin/unshare not available: %v", err)
+	}
+	bin := buildHelperBinary(t)
+
+	t.Run("control_no_seccomp_succeeds", func(t *testing.T) {
+		// Baseline: unshare --user succeeds unprivileged on modern
+		// Linux. If this fails, the system has unprivileged_userns_clone
+		// disabled and our seccomp test below is vacuous — skip.
+		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/unshare", "--user", "/bin/true")
+		cmd.Env = os.Environ()
+		if err := cmd.Run(); err != nil {
+			t.Skipf("baseline unshare failed (system disables unprivileged userns?): %v", err)
+		}
+	})
+
+	t.Run("with_seccomp_unshare_denied", func(t *testing.T) {
+		policy := &sandbox.Policy{
+			NoNewPrivs: true,
+			Seccomp:    sandbox.DefaultSeccompPolicy,
+		}
+		encoded, err := encodeSandboxPolicy(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(bin, "sandbox-exec", "--", "/usr/bin/unshare", "--user", "/bin/true")
+		cmd.Env = append(os.Environ(), envSandboxPolicy+"="+encoded)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		err = cmd.Run()
+		if err == nil {
+			t.Fatalf("SECURITY: unshare syscall succeeded with seccomp active:\n%s", out.String())
+		}
+		if !strings.Contains(strings.ToLower(out.String()), "operation not permitted") {
+			t.Errorf("expected EPERM from seccomp, got: %s", out.String())
+		}
+	})
+}
+
 // TestSandboxExecRejectsBadTarget verifies the helper surfaces a
 // clean error (not a crash / exec of something unexpected) when the
 // target isn't absolute. Runs the same binary but expects non-zero

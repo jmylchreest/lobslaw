@@ -8,6 +8,8 @@ import (
 	"slices"
 	"syscall"
 
+	seccomp "github.com/elastic/go-seccomp-bpf"
+	"github.com/elastic/go-seccomp-bpf/arch"
 	"github.com/landlock-lsm/go-landlock/landlock"
 	"golang.org/x/sys/unix"
 )
@@ -113,11 +115,62 @@ func installLandlock(p *Policy) error {
 	return landlock.V5.BestEffort().RestrictPaths(rules...)
 }
 
-// installSeccomp is stubbed out until Phase 4.5.5c wires the
-// elastic/go-seccomp-bpf library. No-op until then.
+// installSeccomp compiles the policy's Seccomp.Deny list into a
+// BPF filter and installs it via the seccomp() syscall. Every
+// denied syscall returns -EPERM (not SIGSYS) so well-behaved tools
+// that check errno can degrade gracefully rather than crash.
+//
+// Must be installed AFTER Landlock: once seccomp loads, a future
+// tightening of the deny-list could block the landlock_* syscalls
+// we'd need to finish the ruleset. No-op when Seccomp.Deny is empty.
+//
+// Arch-unknown syscall names (e.g. "umount" on x86_64, which only
+// has "umount2") are silently skipped — they can't be called by the
+// target anyway, so denying them is a no-op regardless.
 func installSeccomp(p *Policy) error {
-	_ = p
-	return nil
+	if !p.Seccomp.HasRules() {
+		return nil
+	}
+	names, err := filterKnownSyscalls(p.Seccomp.Deny)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	filter := seccomp.Filter{
+		NoNewPrivs: true,
+		Flag:       seccomp.FilterFlagTSync,
+		Policy: seccomp.Policy{
+			DefaultAction: seccomp.ActionAllow,
+			Syscalls: []seccomp.SyscallGroup{
+				{
+					Action: seccomp.ActionErrno,
+					Names:  names,
+				},
+			},
+		},
+	}
+	return seccomp.LoadFilter(filter)
+}
+
+// filterKnownSyscalls drops entries that the seccomp library's
+// per-arch syscall table doesn't recognise on the current arch.
+// Without this, Policy.Seccomp.Deny can't be a superset — e.g. the
+// default deny-list includes "umount" for i386 but x86_64 only has
+// "umount2".
+func filterKnownSyscalls(deny []string) ([]string, error) {
+	info, err := arch.GetInfo("")
+	if err != nil {
+		return nil, fmt.Errorf("seccomp: identify current arch: %w", err)
+	}
+	out := make([]string, 0, len(deny))
+	for _, name := range deny {
+		if _, ok := info.SyscallNames[name]; ok {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }
 
 // IsNoNewPrivsSet reads /proc/self/status and reports whether the

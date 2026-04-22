@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	github.com/Jille/raft-grpc-transport v1.6.1
+	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
 	github.com/jmylchreest/slog-logfilter v0.2.1
