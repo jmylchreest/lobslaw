@@ -249,16 +249,6 @@ Shipped 2026-04-22 across commits `feat(phase-4.5.5a..d)`. The reexec helper (`l
 
 ---
 
-### Windows build regression in `internal/discovery/broadcast.go`
-
-Cross-compile for `GOOS=windows GOARCH=amd64` fails on `syscall.SetsockoptInt(int(fd), ...)` at `internal/discovery/broadcast.go:209` — Windows `syscall.SetsockoptInt` takes `syscall.Handle`, not `int`. Pre-dates Phase 4.5.5 (came in with the Phase 2.6 UDP discovery work).
-
-**Why deferred:** lobslaw's target deployment is Linux (the whole sandbox stack is Linux-only). Windows is a "nice to have, don't regress". Fix is small: platform-split the file (`broadcast_unix.go` / `broadcast_windows.go`) or wrap via `golang.org/x/sys/windows`.
-
-**Trigger to revisit:** First request for Windows support, or when CI starts cross-compiling.
-
----
-
 ### pivot_root / chroot into sandbox rootfs — SUPERSEDED
 
 Originally planned as the filesystem-scoping mechanism. **Superseded by Landlock** (see above and `lobslaw-filesystem-sandbox` decision, 2026-04-22).

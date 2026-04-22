@@ -77,6 +77,17 @@ func Apply(cmd *exec.Cmd, p *Policy) error {
 	return nil
 }
 
+// needsReexec reports whether the Policy has enforcement fields set
+// that the reexec helper is responsible for — NoNewPrivs, Landlock
+// (AllowedPaths), or Seccomp. Namespaces alone don't require the
+// helper (they're applied via SysProcAttr.Cloneflags by Apply).
+func needsReexec(p *Policy) bool {
+	if p == nil {
+		return false
+	}
+	return p.NoNewPrivs || len(p.AllowedPaths) > 0 || p.Seccomp.HasRules()
+}
+
 // rewriteForHelperReexec mutates cmd so it invokes the running
 // binary's `sandbox-exec` subcommand rather than the original target
 // directly. The helper reads the Policy from env, installs kernel

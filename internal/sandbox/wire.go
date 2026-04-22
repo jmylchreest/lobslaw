@@ -49,13 +49,3 @@ func DecodePolicy(raw string) (*Policy, error) {
 	return &p, nil
 }
 
-// needsReexec reports whether the Policy has enforcement fields set
-// that the reexec helper is responsible for — NoNewPrivs, Landlock
-// (AllowedPaths), or Seccomp. Namespaces alone don't require the
-// helper (they're applied via SysProcAttr.Cloneflags by Apply).
-func needsReexec(p *Policy) bool {
-	if p == nil {
-		return false
-	}
-	return p.NoNewPrivs || len(p.AllowedPaths) > 0 || p.Seccomp.HasRules()
-}

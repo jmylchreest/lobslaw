@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"syscall"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -199,6 +198,8 @@ func (b *Broadcaster) runListener(ctx context.Context) {
 
 // enableBroadcast sets SO_BROADCAST on the underlying socket. Without
 // this, writes to 255.255.255.255 are rejected by the kernel on Linux.
+// The actual setsockopt call is platform-specific (fd type differs
+// between Unix and Windows); see broadcast_unix.go / broadcast_windows.go.
 func enableBroadcast(conn *net.UDPConn) error {
 	raw, err := conn.SyscallConn()
 	if err != nil {
@@ -206,7 +207,7 @@ func enableBroadcast(conn *net.UDPConn) error {
 	}
 	var inner error
 	err = raw.Control(func(fd uintptr) {
-		inner = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1)
+		inner = setSoBroadcast(fd)
 	})
 	if err != nil {
 		return err
