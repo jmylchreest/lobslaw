@@ -162,6 +162,196 @@ Caller-visible API of `sandbox.Policy` does not change.
 
 ---
 
+## Policy attachment: where Policies live
+
+A `sandbox.Policy` is a pure value type — no identity, no scope. Where it's attached is orthogonal:
+
+| Attach point | Where | Purpose |
+|---|---|---|
+| `ExecutorConfig.Sandbox` | `internal/compute/executor.go` | Fleet-wide default — applied to any tool without a specific policy |
+| `Registry.SetPolicy(name, *Policy)` | `internal/compute/registry.go` | Per-tool — the common case |
+| `InvokeRequest.Sandbox` *(future)* | `internal/compute/executor.go` | Per-invocation override — deferred until a caller needs it |
+
+`Executor.resolvePolicy` walks the chain: **tool-specific → fleet default → nil**. A nil Policy means "no sandbox" — `sandbox.Apply` is a no-op. A non-nil empty Policy (`&Policy{}`) short-circuits the chain, making it the way to say "this tool is explicitly unsandboxed even though the fleet sandboxes".
+
+---
+
+## Standard presets
+
+Every preset is **read-only by default**. Operators compose explicit `path:rw` overrides for paths a tool needs to write to — least-privilege posture means the operator has to say "yes I really want this writable".
+
+| Preset | Description | Paths |
+|---|---|---|
+| `system-libs` | OS executables + shared libraries (RO) | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` |
+| `system-certs` | TLS CA bundles for HTTPS (RO) | `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki` |
+| `dns` | DNS resolver + hosts file (RO) | `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/hosts` |
+| `tmp` | `/tmp` scratch space (**RW**) | `/tmp` |
+| `home-config` | User config dir (RO) | `~/.config` |
+| `git-config` | Git config + global hooks (RO) | `~/.gitconfig`, `~/.config/git` |
+| `ssh-keys` | SSH keys + known_hosts (RO) | `~/.ssh` |
+| `gpg-keys` | GPG keyring (RO) | `~/.gnupg` |
+| `aws-creds` | AWS credentials + config (RO) | `~/.aws` |
+
+Defined in code (`internal/sandbox/preset.go` → `BuiltinPresets`). Operators extend/override via `.policy.toml` files in `policy.d/_presets/`.
+
+### Path access notation: `path[:flags]`
+
+| Suffix | Access | Landlock rule kind |
+|---|---|---|
+| *(none)* | read-only | `RODirs` / `ROFiles` |
+| `:r` | read-only | `RODirs` / `ROFiles` |
+| `:rw` | read + write | `RWDirs` / `RWFiles` |
+| `:rx` | read + execute | `RODirs` (grants exec) |
+| `:rwx` | full access | `RWDirs` (grants exec) |
+
+Bare `w` or `x` without `r` is rejected — always a typo in practice.
+
+### Composition semantics
+
+Operating on the composed list of PathRules from all presets + inline paths:
+
+1. **`~` expansion** happens at compose time via `os.UserHomeDir()` (the agent's UID's home — single-tenant model).
+2. **Canonicalisation** via `filepath.EvalSymlinks`. Missing paths are silently dropped (matches landlock's `IgnoreIfMissing` posture).
+3. **Longest-realpath wins** for nested paths — handled by landlock itself at kernel-level per-path rule evaluation. `/usr/local/app` overrides `/usr` for files inside it.
+4. **Exact realpath duplicates** merge to the **most-permissive** access (RW beats R, RWX beats RW).
+
+Resolved rules are returned sorted longest-path-first so debug logs and iteration read "most-specific first".
+
+---
+
+## The `.policy.toml` file format
+
+Ship alongside skills or drop into `policy.d/`. Filename convention: stem = tool name.
+
+```
+/etc/lobslaw/policy.d/
+├── git.toml                 # applies to the "git" tool
+├── rsync.toml
+├── curl.toml
+└── _presets/                # optional operator preset overrides
+    ├── corp-certs.toml
+    └── my-code.toml
+```
+
+### Tool policy schema
+
+```toml
+# /etc/lobslaw/policy.d/git.toml
+name = "git"                       # must match filename stem (if set)
+description = "git operations with SSH/GPG/config access"
+
+# Compose from presets (built-in or operator-defined)
+presets = ["system-libs", "system-certs", "git-config", "ssh-keys", "dns"]
+
+# Inline path entries; path[:flags] format. Flags default to "r".
+paths = [
+    "~/code:rw",
+    "/tmp:rw",
+]
+
+no_new_privs = true                # strongly recommended
+network_allow_cidr = ["0.0.0.0/0"] # enforcement deferred (nftables)
+
+# Seccomp: either apply DefaultSeccompPolicy...
+seccomp_default = true
+# ...OR specify a custom deny list (mutually exclusive with above)
+# seccomp_deny = ["ptrace", "mount", "init_module"]
+
+[namespaces]
+user = true
+mount = true
+pid = true
+```
+
+### Preset override / extension schema
+
+```toml
+# /etc/lobslaw/policy.d/_presets/my-code.toml
+name = "my-code"                   # must match filename stem
+description = "My own source tree (RW)"
+paths = [
+    "/srv/code:rw",
+    "~/personal-projects:rw",
+]
+```
+
+Same-name override of a built-in is allowed; the loader logs it via `LoadResult.OverriddenBuiltins`.
+
+### Load order + discovery
+
+`sandbox.LoadPolicyDir(dir)` (called at startup):
+
+1. Load `_presets/*.toml` first → `RegisterPreset` each.
+2. Load top-level `*.toml` → `PolicySpec.ToPolicy()` for each.
+
+Ordering matters: tool policies in the same dir can reference presets defined in `_presets/`.
+
+Missing `dir` is a no-op — callers can unconditionally point at `/etc/lobslaw/policy.d` without feature-detecting.
+
+---
+
+## Recipes
+
+Minimal examples for common tools. All assume `no_new_privs = true` and `seccomp_default = true` are set.
+
+### `git` (read/write repo, SSH/GPG auth, HTTPS push)
+
+```toml
+name = "git"
+presets = ["system-libs", "system-certs", "dns", "git-config", "ssh-keys", "gpg-keys"]
+paths = ["~/code:rw", "/tmp:rw"]
+network_allow_cidr = ["0.0.0.0/0"]
+
+[namespaces]
+user = true
+mount = true
+```
+
+### `rsync` (backup to a mount)
+
+```toml
+name = "rsync"
+presets = ["system-libs", "system-certs", "dns"]
+paths = ["~/code:r", "/mnt/backup:rw", "/tmp:rw"]
+network_allow_cidr = ["10.0.0.0/8"]
+```
+
+### `curl` (fetch public URLs, no file writes)
+
+```toml
+name = "curl"
+presets = ["system-libs", "system-certs", "dns"]
+paths = ["/tmp:rw"]
+network_allow_cidr = ["0.0.0.0/0"]
+```
+
+### Owner-authored `bash` (unsandboxed — "I trust this")
+
+```toml
+name = "bash"
+# No presets, no paths, no enforcement fields → short-circuits the
+# fleet default and runs fully unsandboxed. Explicit override means
+# the operator owns the decision.
+```
+
+### Untrusted `run_python` skill (tight bounds)
+
+```toml
+name = "run_python"
+presets = ["system-libs"]
+paths = ["/var/lobslaw/workspace:rw", "/tmp:rw"]
+no_new_privs = true
+seccomp_default = true
+
+[namespaces]
+user = true
+mount = true
+pid = true
+network = true   # isolate — run_python gets no egress
+```
+
+---
+
 ## Why this deserves its own document
 
 It isn't obvious from reading `internal/sandbox/` alone why we:
