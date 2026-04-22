@@ -1,0 +1,24 @@
+# Build output
+/lobslaw
+/dist/
+
+# Coverage and profiling
+*.out
+*.prof
+*.test
+coverage.*
+
+# Local dev
+.env
+.envrc
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Data dirs (should only appear in local dev)
+/data/
+/var/
