@@ -23,17 +23,29 @@ type Client struct {
 	local    types.NodeInfo
 	registry *Registry
 	dial     Dialer
+	resolver Resolver
 	logger   *slog.Logger
 }
 
 // NewClient constructs a Client that writes learned peers into
-// registry and dials seeds via dialer.
+// registry and dials seeds via dialer. Seed entries may be plain
+// host:port or prefixed (srv:..., dns:...) — see ExpandSeeds.
 func NewClient(local types.NodeInfo, registry *Registry, dial Dialer, logger *slog.Logger) *Client {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Client{local: local, registry: registry, dial: dial, logger: logger}
+	return &Client{
+		local:    local,
+		registry: registry,
+		dial:     dial,
+		resolver: DefaultResolver,
+		logger:   logger,
+	}
 }
+
+// SetResolver overrides the DNS resolver used to expand srv:/dns:
+// seeds. Primarily for tests that inject a fake.
+func (c *Client) SetResolver(r Resolver) { c.resolver = r }
 
 // DialSeeds attempts to register with each seed in turn, folding the
 // peers they know about into the local registry. Partial success is
@@ -48,8 +60,15 @@ func (c *Client) DialSeeds(ctx context.Context, seeds []string, perDialTimeout t
 		perDialTimeout = 5 * time.Second
 	}
 
+	// Expand srv:/dns: prefixed entries via DNS. Plain host:port
+	// entries pass through unchanged.
+	expanded := ExpandSeeds(ctx, seeds, c.resolver, c.logger)
+	if len(expanded) == 0 {
+		return seeds, fmt.Errorf("no seed addresses after expansion (check srv:/dns: resolvability)")
+	}
+
 	var succeeded int
-	for _, addr := range seeds {
+	for _, addr := range expanded {
 		if err := c.dialOne(ctx, addr, perDialTimeout); err != nil {
 			logging.From(ctx).Warn("seed dial failed", "addr", addr, "err", err)
 			failed = append(failed, addr)
