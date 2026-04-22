@@ -154,9 +154,12 @@ type GatewayChannelConfig struct {
 }
 
 type DiscoveryConfig struct {
-	SeedNodes          []string `koanf:"seed_nodes"`
-	Broadcast          bool     `koanf:"broadcast"`
-	BroadcastInterface string   `koanf:"broadcast_interface"`
+	SeedNodes          []string      `koanf:"seed_nodes"`
+	Broadcast          bool          `koanf:"broadcast"`
+	BroadcastInterface string        `koanf:"broadcast_interface"`
+	BroadcastPort      int           `koanf:"broadcast_port"`     // default 7445
+	BroadcastAddress   string        `koanf:"broadcast_address"`  // default "255.255.255.255"
+	BroadcastInterval  time.Duration `koanf:"broadcast_interval"` // default 30s
 }
 
 type ClusterConfig struct {

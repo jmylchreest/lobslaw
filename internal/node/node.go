@@ -46,6 +46,13 @@ type Config struct {
 	// comes from replication). See lobslaw-single-node-durability.
 	SnapshotTarget string
 
+	// UDP broadcast auto-discovery. Leave Enabled=false for production
+	// clusters that use seed lists.
+	BroadcastEnabled    bool
+	BroadcastAddress    string        // e.g. "255.255.255.255:7445"
+	BroadcastListenAddr string        // e.g. ":7445"
+	BroadcastInterval   time.Duration // 0 = default 30s
+
 	Creds     *mtls.NodeCreds
 	MemoryKey crypto.Key // 32-byte key for state.db value encryption
 
@@ -62,9 +69,10 @@ type Node struct {
 	listener net.Listener
 	server   *grpc.Server
 
-	registry *discovery.Registry
-	discSvc  *discovery.Service
-	discCli  *discovery.Client
+	registry    *discovery.Registry
+	discSvc     *discovery.Service
+	discCli     *discovery.Client
+	broadcaster *discovery.Broadcaster
 
 	// Raft stack — non-nil when memory or policy function enabled.
 	store     *memory.Store
@@ -156,6 +164,24 @@ func New(cfg Config) (*Node, error) {
 	// Discovery client for seed-list exchange on Start.
 	n.discCli = discovery.NewClient(local, registry, n.dialer(), log)
 
+	// Optional UDP broadcast auto-discovery. Constructed here but
+	// only started from Start() so cancellation is scoped cleanly.
+	if cfg.BroadcastEnabled {
+		bc, err := discovery.NewBroadcaster(discovery.BroadcastConfig{
+			Address:    cfg.BroadcastAddress,
+			ListenAddr: cfg.BroadcastListenAddr,
+			Interval:   cfg.BroadcastInterval,
+			Local:      local,
+			Registry:   registry,
+			Logger:     log,
+		})
+		if err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("broadcast setup: %w", err)
+		}
+		n.broadcaster = bc
+	}
+
 	return n, nil
 }
 
@@ -183,6 +209,15 @@ func (n *Node) Start(ctx context.Context) error {
 		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, 5*time.Second); err != nil {
 			n.log.Warn("seed-list bootstrap incomplete", "err", err)
 		}
+	}
+
+	// Optional UDP broadcast. Runs until ctx is cancelled.
+	if n.broadcaster != nil {
+		go func() {
+			if err := n.broadcaster.Start(ctx); err != nil {
+				n.log.Warn("broadcast exited", "err", err)
+			}
+		}()
 	}
 
 	select {

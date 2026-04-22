@@ -255,18 +255,31 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 		listen = ":7443"
 	}
 
+	bcastPort := cfg.Discovery.BroadcastPort
+	if bcastPort == 0 {
+		bcastPort = 7445
+	}
+	bcastAddr := cfg.Discovery.BroadcastAddress
+	if bcastAddr == "" {
+		bcastAddr = "255.255.255.255"
+	}
+
 	return node.Config{
-		NodeID:         cfg.Node.ID,
-		Functions:      funcs,
-		ListenAddr:     listen,
-		AdvertiseAddr:  cfg.Cluster.AdvertiseAddr,
-		SeedNodes:      cfg.Discovery.SeedNodes,
-		DataDir:        cfg.Cluster.DataDir,
-		Bootstrap:      cfg.Cluster.InitialBootstrap,
-		SnapshotTarget: cfg.Memory.Snapshot.Target,
-		Creds:          creds,
-		MemoryKey:      memKey,
-		Logger:         logger,
+		NodeID:              cfg.Node.ID,
+		Functions:           funcs,
+		ListenAddr:          listen,
+		AdvertiseAddr:       cfg.Cluster.AdvertiseAddr,
+		SeedNodes:           cfg.Discovery.SeedNodes,
+		DataDir:             cfg.Cluster.DataDir,
+		Bootstrap:           cfg.Cluster.InitialBootstrap,
+		SnapshotTarget:      cfg.Memory.Snapshot.Target,
+		BroadcastEnabled:    cfg.Discovery.Broadcast,
+		BroadcastAddress:    fmt.Sprintf("%s:%d", bcastAddr, bcastPort),
+		BroadcastListenAddr: fmt.Sprintf(":%d", bcastPort),
+		BroadcastInterval:   cfg.Discovery.BroadcastInterval,
+		Creds:               creds,
+		MemoryKey:           memKey,
+		Logger:              logger,
 	}, nil
 }
 
