@@ -1335,7 +1335,7 @@ cmd/
     main.go
 
 internal/
-  agent/           # Compute node: LLM, tools, agent loop
+  compute/         # Compute node: LLM, tools, agent loop
   memory/          # Memory node: vector store, episodic, retention, forget, Raft
   policy/          # Policy node: RBAC, rules, risk tiers, confirmation
   gateway/         # Gateway: gRPC server, channel handlers, Channel.Prompt

@@ -69,7 +69,21 @@ func Load(opts LoadOptions) (*Config, error) {
 		return nil, fmt.Errorf("%w: unmarshal: %w", types.ErrInvalidConfig, err)
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// Validate checks required-key invariants that cross subsystem
+// boundaries and must hold before any node starts. Subsystem-
+// specific invariants (e.g. cert file existence, provider label
+// uniqueness) are validated by their owning packages.
+func (c *Config) Validate() error {
+	if c.Memory.Enabled && c.Memory.Encryption.KeyRef == "" {
+		return fmt.Errorf("%w: memory.enabled=true requires memory.encryption.key_ref (e.g. env:LOBSLAW_MEMORY_KEY)", types.ErrInvalidConfig)
+	}
+	return nil
 }
 
 func findConfigPath(explicit string) (string, error) {

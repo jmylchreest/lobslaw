@@ -129,6 +129,36 @@ func TestLoadMissingExplicitPath(t *testing.T) {
 	}
 }
 
+func TestLoadMissingMemoryKeyRef(t *testing.T) {
+	t.Parallel()
+	const cfgText = `
+[memory]
+enabled = true
+raft_port = 2380
+# memory.encryption.key_ref intentionally missing
+`
+	path := writeTempConfig(t, cfgText)
+	_, err := Load(LoadOptions{Path: path, SkipEnv: true})
+	if err == nil {
+		t.Fatal("expected error when memory is enabled without key_ref")
+	}
+	if !errors.Is(err, types.ErrInvalidConfig) {
+		t.Errorf("err = %v, want wraps ErrInvalidConfig", err)
+	}
+}
+
+func TestLoadMemoryDisabledNoKeyRefOK(t *testing.T) {
+	t.Parallel()
+	const cfgText = `
+[memory]
+enabled = false
+`
+	path := writeTempConfig(t, cfgText)
+	if _, err := Load(LoadOptions{Path: path, SkipEnv: true}); err != nil {
+		t.Errorf("memory disabled should not require key_ref, got %v", err)
+	}
+}
+
 func TestLoadNoFileEnvOnly(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chdir(dir); err != nil {
