@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -28,6 +29,27 @@ type Config struct {
 	Observability ObservabilityConfig `koanf:"observability"`
 	Logging       LoggingConfig       `koanf:"logging"`
 	ConfigOpts    ConfigOpts          `koanf:"config"`
+
+	// resolvedPath is the filesystem path Load resolved via
+	// findConfigPath. Empty when no config.toml was found (env-only
+	// mode). Not populated from any TOML source (koanf:"-") — filled
+	// in at Load time.
+	resolvedPath string `koanf:"-"`
+}
+
+// Path returns the filesystem path of the config file Load resolved.
+// Empty string when Load ran in env-only mode (no config.toml found).
+func (c *Config) Path() string { return c.resolvedPath }
+
+// Dir returns the directory containing the resolved config file.
+// Downstream code uses this to derive sibling paths (e.g. policy.d/)
+// without introducing a parallel env-var / discovery chain.
+// Empty string when Path is empty.
+func (c *Config) Dir() string {
+	if c.resolvedPath == "" {
+		return ""
+	}
+	return filepath.Dir(c.resolvedPath)
 }
 
 type NodeConfig struct {

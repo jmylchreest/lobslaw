@@ -70,6 +70,16 @@ func TestLoadFromExplicitPath(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
+	// Path / Dir are the hook for downstream code (sandbox policy_dir
+	// resolution) to locate sibling files without introducing a
+	// parallel env-var chain.
+	if cfg.Path() != path {
+		t.Errorf("Path() = %q, want %q", cfg.Path(), path)
+	}
+	if cfg.Dir() == "" {
+		t.Error("Dir() should be non-empty when Path() is set")
+	}
+
 	if cfg.Node.ID != "agent-1" {
 		t.Errorf("Node.ID = %q, want agent-1", cfg.Node.ID)
 	}
@@ -180,5 +190,38 @@ func TestLoadNoFileEnvOnly(t *testing.T) {
 	}
 	if cfg.Node.ID != "env-only-node" {
 		t.Errorf("Node.ID = %q, want env-only-node", cfg.Node.ID)
+	}
+	// Path()/Dir() should be empty when Load ran env-only — downstream
+	// discovery code uses this as the "fall back to CWD" signal.
+	if cfg.Path() != "" {
+		t.Errorf("env-only Load: Path() should be empty, got %q", cfg.Path())
+	}
+	if cfg.Dir() != "" {
+		t.Errorf("env-only Load: Dir() should be empty, got %q", cfg.Dir())
+	}
+}
+
+// TestLoadDoesNotFallBackToEtc guards the container-first posture:
+// /etc/lobslaw/config.toml was removed from the fallback chain per
+// the deployment model (containers use CWD or mounted volumes; dev
+// uses CWD or $XDG_CONFIG_HOME). A config at /etc is no longer
+// findable by default — ensures we don't regress if someone adds it
+// back.
+func TestLoadDoesNotFallBackToEtc(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	// Point $HOME / $XDG_CONFIG_HOME somewhere without a config so
+	// only a hypothetical /etc/lobslaw/config.toml could match.
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := Load(LoadOptions{})
+	if err != nil {
+		t.Fatalf("Load should succeed with no findable config: %v", err)
+	}
+	if cfg.Path() != "" {
+		t.Errorf("/etc/lobslaw should NOT be in the fallback chain; resolved to %q", cfg.Path())
 	}
 }

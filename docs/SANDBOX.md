@@ -221,10 +221,12 @@ Resolved rules are returned sorted longest-path-first so debug logs and iteratio
 
 ## The `.policy.toml` file format
 
-Ship alongside skills or drop into `policy.d/`. Filename convention: stem = tool name.
+Ship alongside skills or drop into `policy.d/` alongside your `config.toml`. Filename convention: stem = tool name.
+
+**Discovery model.** `policy.d/` lives **next to the resolved `config.toml`**, not at a system path. lobslaw is container-first, so the config root is typically the agent's working directory (`/app/data`, repo root in dev, or `~/.config/lobslaw/`). There is no `/etc/lobslaw/` assumption.
 
 ```
-/etc/lobslaw/policy.d/
+<config-dir>/policy.d/        # <config-dir> = filepath.Dir(config.toml)
 ├── git.toml                 # applies to the "git" tool
 ├── rsync.toml
 ├── curl.toml
@@ -233,10 +235,12 @@ Ship alongside skills or drop into `policy.d/`. Filename convention: stem = tool
     └── my-code.toml
 ```
 
+For example, if `config.toml` is at `/app/data/config.toml`, policies default to `/app/data/policy.d/`. Override via `[sandbox] policy_dir = "/some/other/path"` in `config.toml` when you need them non-colocated.
+
 ### Tool policy schema
 
 ```toml
-# /etc/lobslaw/policy.d/git.toml
+# <config-dir>/policy.d/git.toml
 name = "git"                       # must match filename stem (if set)
 description = "git operations with SSH/GPG/config access"
 
@@ -266,7 +270,7 @@ pid = true
 ### Preset override / extension schema
 
 ```toml
-# /etc/lobslaw/policy.d/_presets/my-code.toml
+# <config-dir>/policy.d/_presets/my-code.toml
 name = "my-code"                   # must match filename stem
 description = "My own source tree (RW)"
 paths = [
@@ -286,7 +290,7 @@ Same-name override of a built-in is allowed; the loader logs it via `LoadResult.
 
 Ordering matters: tool policies in the same dir can reference presets defined in `_presets/`.
 
-Missing `dir` is a no-op — callers can unconditionally point at `/etc/lobslaw/policy.d` without feature-detecting.
+Missing `dir` is a no-op — callers can unconditionally point the loader at a path without feature-detecting whether it exists.
 
 ---
 

@@ -29,7 +29,12 @@ type LoadOptions struct {
 
 // Load reads lobslaw configuration in priority order (highest wins):
 // opts.Path, $LOBSLAW_CONFIG, ./config.toml, $XDG_CONFIG_HOME/lobslaw/config.toml,
-// /etc/lobslaw/config.toml. Missing file is OK — env-only is valid.
+// $HOME/.config/lobslaw/config.toml. Missing file is OK — env-only is valid.
+//
+// System-wide paths like /etc/lobslaw/ are deliberately NOT in the
+// fallback chain: lobslaw is container-first, and in containers the
+// config root is the working directory or a mounted volume, not /etc.
+// Dev workflows use the CWD-relative or XDG paths.
 //
 // Env-var overrides use double underscore (__) as the section
 // separator and preserve single underscores inside keys:
@@ -70,6 +75,7 @@ func Load(opts LoadOptions) (*Config, error) {
 	if err := k.UnmarshalWithConf("", cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal: %w", types.ErrInvalidConfig, err)
 	}
+	cfg.resolvedPath = path
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -110,7 +116,6 @@ func findConfigPath(explicit string) (string, error) {
 	} else if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(home, ".config", "lobslaw", "config.toml"))
 	}
-	candidates = append(candidates, "/etc/lobslaw/config.toml")
 
 	for _, c := range candidates {
 		if _, err := os.Stat(c); err == nil {

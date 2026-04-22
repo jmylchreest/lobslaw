@@ -39,8 +39,8 @@ type LoadResult struct {
 // LoadPolicyDir walks dir and returns all discovered tool policies,
 // registering any operator preset overrides along the way. Safe to
 // call with a non-existent dir (returns empty result, no error) —
-// callers can unconditionally point the loader at, say, /etc/lobslaw/
-// policy.d without feature-detecting.
+// callers can unconditionally point the loader at the conventional
+// path without feature-detecting whether it exists.
 //
 // Processing order is intentional:
 //  1. _presets/*.toml → RegisterPreset (may override built-ins)
