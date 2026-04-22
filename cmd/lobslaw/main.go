@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	logfilter "github.com/jmylchreest/slog-logfilter"
+
 	"github.com/jmylchreest/lobslaw/internal/logging"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -116,6 +118,27 @@ func allFunctions() []types.NodeFunction {
 	}
 }
 
+// applyLogFilters translates config-file filter entries into
+// logfilter.LogFilter values and installs them via the library's
+// global API. A no-op when cfgFilters is empty.
+func applyLogFilters(cfgFilters []config.LogFilterConfig, logger *slog.Logger) {
+	if len(cfgFilters) == 0 {
+		return
+	}
+	filters := make([]logfilter.LogFilter, 0, len(cfgFilters))
+	for _, f := range cfgFilters {
+		filters = append(filters, logfilter.LogFilter{
+			Type:        f.Type,
+			Pattern:     f.Pattern,
+			Level:       f.Level,
+			OutputLevel: f.OutputLevel,
+			Enabled:     f.Enabled,
+		})
+	}
+	logfilter.SetFilters(filters)
+	logger.Info("log filters applied from config", "count", len(filters))
+}
+
 func main() {
 	// Subcommand dispatch: `lobslaw cluster <subcmd> ...` is handled
 	// before main-agent flag parsing so subcommands can own their own
@@ -146,6 +169,10 @@ func main() {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
 	}
+
+	// Apply any startup filters from [[logging.filters]]. Runtime
+	// filter mutation (via NodeService.Reload) lands in Phase 11.
+	applyLogFilters(cfg.Logging.Filters, logger)
 
 	funcs := resolveFunctions(f, cfg)
 	logger.Info("lobslaw starting",

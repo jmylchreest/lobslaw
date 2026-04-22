@@ -10,7 +10,10 @@ import (
 )
 
 func TestNewFormatJSON(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): logfilter.New uses a process-wide default handler
+	// (required for runtime filter mutation via the library's package-
+	// level API). Parallel tests would race over that global — we keep
+	// these serial instead.
 	var buf bytes.Buffer
 	logger := New(&buf, slog.LevelInfo, FormatJSON)
 	logger.Info("hello", "k", "v")
@@ -28,7 +31,10 @@ func TestNewFormatJSON(t *testing.T) {
 }
 
 func TestNewFormatText(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): logfilter.New uses a process-wide default handler
+	// (required for runtime filter mutation via the library's package-
+	// level API). Parallel tests would race over that global — we keep
+	// these serial instead.
 	var buf bytes.Buffer
 	logger := New(&buf, slog.LevelInfo, FormatText)
 	logger.Info("hello", "k", "v")
@@ -40,7 +46,10 @@ func TestNewFormatText(t *testing.T) {
 }
 
 func TestNewLevelFilter(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): logfilter.New uses a process-wide default handler
+	// (required for runtime filter mutation via the library's package-
+	// level API). Parallel tests would race over that global — we keep
+	// these serial instead.
 	var buf bytes.Buffer
 	logger := New(&buf, slog.LevelWarn, FormatJSON)
 	logger.Info("skipped")
@@ -55,7 +64,10 @@ func TestNewLevelFilter(t *testing.T) {
 }
 
 func TestAutoFormatNonTTY(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): logfilter.New uses a process-wide default handler
+	// (required for runtime filter mutation via the library's package-
+	// level API). Parallel tests would race over that global — we keep
+	// these serial instead.
 	var buf bytes.Buffer
 	logger := New(&buf, slog.LevelInfo, FormatAuto)
 	logger.Info("hi")
@@ -67,7 +79,10 @@ func TestAutoFormatNonTTY(t *testing.T) {
 }
 
 func TestWithComponent(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): logfilter.New uses a process-wide default handler
+	// (required for runtime filter mutation via the library's package-
+	// level API). Parallel tests would race over that global — we keep
+	// these serial instead.
 	var buf bytes.Buffer
 	base := New(&buf, slog.LevelInfo, FormatJSON)
 	child := WithComponent(base, "memory")
@@ -83,7 +98,10 @@ func TestWithComponent(t *testing.T) {
 }
 
 func TestContextAttachment(t *testing.T) {
-	t.Parallel()
+	// No t.Parallel(): logfilter.New uses a process-wide default handler
+	// (required for runtime filter mutation via the library's package-
+	// level API). Parallel tests would race over that global — we keep
+	// these serial instead.
 	var buf bytes.Buffer
 	logger := New(&buf, slog.LevelInfo, FormatJSON)
 

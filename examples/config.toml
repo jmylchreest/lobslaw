@@ -186,6 +186,25 @@ trusted_publishers = "./trusted_publishers.toml"
 tracing_exporter = "stdout"  # "otlp" | "stdout" | "none"
 # otlp_endpoint  = "http://localhost:4318"
 
+[logging]
+# Level + format can be left unset here and driven by --log-level /
+# --log-format flags instead. The interesting part is filters.
+# level  = "info"
+# format = "auto"
+
+# Uncomment to turn on debug logs only for a specific subsystem at
+# startup. Each filter is slog-logfilter's first-match-wins:
+#   type = "source:file"     pattern = "internal/memory/*"  → debug memory only
+#   type = "turn_id"         pattern = "01HXY*"             → debug one turn
+#   type = "source:function" pattern = "*Forget*"           → debug forget cascades
+# Runtime mutation lands in Phase 11 via NodeService.Reload.
+#
+# [[logging.filters]]
+# type    = "source:file"
+# pattern = "internal/memory/*"
+# level   = "debug"
+# enabled = true
+
 [config]
 # Hot-reload: fsnotify on config.toml + SOUL.md + skill manifests.
 watch       = true

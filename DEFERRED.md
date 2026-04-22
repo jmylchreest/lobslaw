@@ -26,6 +26,18 @@ MVP treats CA material as an infrastructure concern (per `lobslaw-cluster-bootst
 
 ---
 
+## Dependencies
+
+### slog-logfilter maintenance monitoring
+
+`github.com/jmylchreest/slog-logfilter` is a personal project (0 stars, 0 forks at adoption). It's the correct fit for lobslaw's runtime log-level + attribute-based filter needs, and the maintainer is the same person running this project — so day-to-day "is it maintained?" is yes.
+
+**Why tracked:** if the library ever goes dormant or needs changes we can't get upstream, we should vendor or fork it in-tree (e.g. `internal/logging/filter/`). Migration path is straightforward: the library's public API is narrow (Option functions + package-level filter mutators) and the integration in `internal/logging/log.go` is ~70 LOC.
+
+**Trigger to revisit:** upstream goes 6+ months without a commit AND we need a change, OR we hit a bug we can't patch upstream.
+
+---
+
 ## Infrastructure / Workflow
 
 ### Verify SHA pins in `.github/workflows/*.yml`

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	logfilter "github.com/jmylchreest/slog-logfilter"
 	"golang.org/x/term"
 )
 
@@ -17,24 +18,34 @@ const (
 	FormatText Format = "text"
 )
 
-// New returns a slog.Logger writing to w at the given level. Format
-// "auto" picks text when w is a TTY file, JSON otherwise.
+// New returns a filter-aware slog.Logger writing to w at the given
+// level. Format "auto" picks text when w is a TTY file, JSON otherwise.
+//
+// The returned logger uses the global filter handler from
+// github.com/jmylchreest/slog-logfilter so callers can mutate filters
+// at runtime via the library's package-level API (SetFilters,
+// AddFilter, SetLevel, etc.). This supports per-subsystem debug
+// enabling without a restart.
 func New(w io.Writer, level slog.Level, format Format) *slog.Logger {
-	return slog.New(pickHandler(w, level, format))
+	return logfilter.New(
+		logfilter.WithOutput(w),
+		logfilter.WithLevel(level),
+		logfilter.WithFormat(resolveFormat(w, format)),
+		logfilter.WithSource(true),
+	)
 }
 
-func pickHandler(w io.Writer, level slog.Level, format Format) slog.Handler {
-	opts := &slog.HandlerOptions{Level: level}
+func resolveFormat(w io.Writer, format Format) string {
 	switch format {
-	case FormatText:
-		return slog.NewTextHandler(w, opts)
 	case FormatJSON:
-		return slog.NewJSONHandler(w, opts)
+		return "json"
+	case FormatText:
+		return "text"
 	}
 	if f, ok := w.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		return slog.NewTextHandler(w, opts)
+		return "text"
 	}
-	return slog.NewJSONHandler(w, opts)
+	return "json"
 }
 
 // WithComponent returns a child logger tagged with component=name.

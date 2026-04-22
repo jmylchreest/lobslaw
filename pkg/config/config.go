@@ -26,6 +26,7 @@ type Config struct {
 	Audit         AuditConfig         `koanf:"audit"`
 	Skills        SkillsConfig        `koanf:"skills"`
 	Observability ObservabilityConfig `koanf:"observability"`
+	Logging       LoggingConfig       `koanf:"logging"`
 	ConfigOpts    ConfigOpts          `koanf:"config"`
 }
 
@@ -242,6 +243,26 @@ type SkillsConfig struct {
 type ObservabilityConfig struct {
 	TracingExporter string `koanf:"tracing_exporter"` // "otlp" | "stdout" | "none"
 	OTLPEndpoint    string `koanf:"otlp_endpoint,omitempty"`
+}
+
+// LoggingConfig covers static log settings plus a slice of
+// initial filters applied at startup (slog-logfilter). Runtime
+// mutation of filters happens via the logfilter package's API,
+// wired through NodeService.Reload in Phase 11.
+type LoggingConfig struct {
+	Level   string            `koanf:"level"`  // "debug" | "info" | "warn" | "error"; empty = use --log-level flag
+	Format  string            `koanf:"format"` // "auto" | "json" | "text"; empty = use --log-format flag
+	Filters []LogFilterConfig `koanf:"filters"`
+}
+
+// LogFilterConfig mirrors logfilter.LogFilter minus the ExpiresAt
+// field — temporary filters are set via the runtime API, not TOML.
+type LogFilterConfig struct {
+	Type        string `koanf:"type"`         // "<attr_name>" | "context:<key>" | "source:file" | "source:function"
+	Pattern     string `koanf:"pattern"`      // glob: exact, prefix*, *suffix, *contains*
+	Level       string `koanf:"level"`        // "debug" | "info" | "warn" | "error"
+	OutputLevel string `koanf:"output_level"` // optional — transform the output level when filter matches
+	Enabled     bool   `koanf:"enabled"`
 }
 
 type ConfigOpts struct {

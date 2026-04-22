@@ -6,6 +6,7 @@ require (
 	github.com/Jille/raft-grpc-transport v1.6.1
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
+	github.com/jmylchreest/slog-logfilter v0.2.1
 	github.com/knadh/koanf/parsers/toml/v2 v2.2.0
 	github.com/knadh/koanf/providers/env/v2 v2.0.0
 	github.com/knadh/koanf/providers/file v1.2.1
