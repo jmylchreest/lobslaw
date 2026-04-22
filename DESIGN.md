@@ -1315,13 +1315,15 @@ debounce_ms = 1500
 
 ### Environment Variable Mapping
 
-All config values available as env vars. Format:
+All config values available as env vars. Double underscore separates hierarchy levels; single underscores stay inside a key name:
 
-- Top-level keys: `LOBSLAW_SECTION_KEY`
-- Array elements: `LOBSLAW_SECTION_KEY_N` or `LOBSLAW_SECTION_KEY_LABEL`
-- Secret refs: `env:VAR_NAME` maps directly to env var name
+- `LOBSLAW__NODE__ID` → `node.id`
+- `LOBSLAW__MEMORY__RAFT_PORT` → `memory.raft_port`
+- `LOBSLAW__MEMORY__ENCRYPTION__KEY_REF` → `memory.encryption.key_ref`
+- Array elements: `LOBSLAW__SECTION__KEY__N` (zero-indexed) or use a TOML file for array-heavy config
+- Secret refs: values like `env:VAR_NAME` or `file:/path` are resolved at load time
 
-Env vars override TOML values. Secrets always come from env vars, never in config files.
+Env vars override TOML values. Secret values always come from `env:` or `file:` refs — literal plaintext secrets in config files are rejected.
 
 ---
 

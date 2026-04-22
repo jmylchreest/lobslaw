@@ -1,0 +1,104 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	koanfenv "github.com/knadh/koanf/providers/env/v2"
+	koanffile "github.com/knadh/koanf/providers/file"
+	koanftoml "github.com/knadh/koanf/parsers/toml/v2"
+	"github.com/knadh/koanf/v2"
+
+	"github.com/jmylchreest/lobslaw/pkg/types"
+)
+
+const (
+	envPrefix     = "LOBSLAW__" // prefix + section separator collapsed; no trailing-underscore pitfall
+	keyDelim      = "."
+	envSectionSep = "__"        // double underscore separates sections; single stays inside a key name
+)
+
+// LoadOptions controls how Load resolves its config source.
+type LoadOptions struct {
+	Path    string // explicit path; wins over all other sources
+	SkipEnv bool   // disable env-var overrides (tests)
+}
+
+// Load reads lobslaw configuration in priority order (highest wins):
+// opts.Path, $LOBSLAW_CONFIG, ./config.toml, $XDG_CONFIG_HOME/lobslaw/config.toml,
+// /etc/lobslaw/config.toml. Missing file is OK — env-only is valid.
+//
+// Env-var overrides use double underscore (__) as the section
+// separator and preserve single underscores inside keys:
+//   LOBSLAW__MEMORY__RAFT_PORT=9999          → memory.raft_port
+//   LOBSLAW__MEMORY__ENCRYPTION__KEY_REF=... → memory.encryption.key_ref
+// The prefix is lowercased and stripped; what remains is split on
+// __ into a hierarchy path.
+func Load(opts LoadOptions) (*Config, error) {
+	k := koanf.New(keyDelim)
+
+	path, err := findConfigPath(opts.Path)
+	if err != nil {
+		return nil, err
+	}
+	if path != "" {
+		if err := k.Load(koanffile.Provider(path), koanftoml.Parser()); err != nil {
+			return nil, fmt.Errorf("%w: read %s: %w", types.ErrInvalidConfig, path, err)
+		}
+	}
+
+	if !opts.SkipEnv {
+		if err := k.Load(koanfenv.Provider(".", koanfenv.Opt{
+			Prefix: envPrefix,
+			TransformFunc: func(key, value string) (string, any) {
+				key = strings.TrimPrefix(key, envPrefix)
+				key = strings.ToLower(key)
+				key = strings.ReplaceAll(key, envSectionSep, keyDelim)
+				return key, value
+			},
+		}), nil); err != nil {
+			return nil, fmt.Errorf("%w: env overlay: %w", types.ErrInvalidConfig, err)
+		}
+	}
+
+	cfg := &Config{}
+	if err := k.UnmarshalWithConf("", cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
+		return nil, fmt.Errorf("%w: unmarshal: %w", types.ErrInvalidConfig, err)
+	}
+
+	return cfg, nil
+}
+
+func findConfigPath(explicit string) (string, error) {
+	if explicit != "" {
+		if _, err := os.Stat(explicit); err != nil {
+			return "", fmt.Errorf("%w: config file %q: %w", types.ErrInvalidConfig, explicit, err)
+		}
+		return explicit, nil
+	}
+	if p := os.Getenv("LOBSLAW_CONFIG"); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			return "", fmt.Errorf("%w: LOBSLAW_CONFIG=%q: %w", types.ErrInvalidConfig, p, err)
+		}
+		return p, nil
+	}
+	candidates := []string{"./config.toml"}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		candidates = append(candidates, filepath.Join(xdg, "lobslaw", "config.toml"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".config", "lobslaw", "config.toml"))
+	}
+	candidates = append(candidates, "/etc/lobslaw/config.toml")
+
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: stat %s: %w", types.ErrInvalidConfig, c, err)
+		}
+	}
+	return "", nil
+}
