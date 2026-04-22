@@ -15,11 +15,12 @@ const (
 	FunctionPolicy  NodeFunction = "policy"
 	FunctionCompute NodeFunction = "compute"
 	FunctionGateway NodeFunction = "gateway"
+	FunctionStorage NodeFunction = "storage"
 )
 
 func (f NodeFunction) IsValid() bool {
 	switch f {
-	case FunctionMemory, FunctionPolicy, FunctionCompute, FunctionGateway:
+	case FunctionMemory, FunctionPolicy, FunctionCompute, FunctionGateway, FunctionStorage:
 		return true
 	}
 	return false

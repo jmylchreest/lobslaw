@@ -18,6 +18,9 @@ id = "agent-1"
 enabled = true
 raft_port = 2380
 
+[storage]
+enabled = true
+
 [memory.encryption]
 key_ref = "env:LOBSLAW_TEST_MEMORY_KEY"
 
@@ -135,6 +138,9 @@ func TestLoadMissingMemoryKeyRef(t *testing.T) {
 [memory]
 enabled = true
 raft_port = 2380
+
+[storage]
+enabled = true
 # memory.encryption.key_ref intentionally missing
 `
 	path := writeTempConfig(t, cfgText)

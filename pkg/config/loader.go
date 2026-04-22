@@ -85,6 +85,9 @@ func (c *Config) Validate() error {
 	if c.Memory.Enabled && c.Memory.Encryption.KeyRef == "" {
 		return fmt.Errorf("%w: memory.enabled=true requires memory.encryption.key_ref (e.g. env:LOBSLAW_MEMORY_KEY)", types.ErrInvalidConfig)
 	}
+	if c.Memory.Enabled && !c.Storage.Enabled {
+		return fmt.Errorf("%w: memory.enabled=true requires storage.enabled=true on the same node (snapshot-export targets resolve via local storage mounts)", types.ErrInvalidConfig)
+	}
 	return nil
 }
 

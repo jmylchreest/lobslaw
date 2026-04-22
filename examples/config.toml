@@ -123,6 +123,22 @@ seed_nodes          = []     # e.g. ["node2:9090", "node3:9090"]
 broadcast           = true
 broadcast_interface = "auto"
 
+[cluster]
+# Where the cluster-internal gRPC listener binds. All cluster services
+# (NodeService, MemoryService, PolicyService, RaftTransport, etc.) live
+# here under mTLS. Default: ":7443".
+listen_addr    = "0.0.0.0:7443"
+# What peers dial to reach this node. Empty = derive from listen_addr.
+# Set this to the pod IP or stable service DNS in k8s.
+# advertise_addr = ""
+# Where state.db, raft.db and snapshots/ live. Required if memory or
+# policy function is enabled.
+data_dir = "/var/lobslaw/data"
+# Set true on exactly one node of a new cluster on its first-ever
+# start (bootstraps raft as a single voter). Harmless on restarts —
+# raft silently ignores re-bootstrap once state exists.
+initial_bootstrap = false
+
 [cluster.mtls]
 # Public CA cert, node cert + node key. CA private key is NOT here —
 # it lives with the `lobslaw cluster sign-node` subcommand only

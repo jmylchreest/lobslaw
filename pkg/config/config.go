@@ -57,7 +57,8 @@ type DreamConfig struct {
 }
 
 type StorageConfig struct {
-	Mounts []StorageMountConfig `koanf:"mounts"`
+	Enabled bool                 `koanf:"enabled"`
+	Mounts  []StorageMountConfig `koanf:"mounts"`
 }
 
 type StorageMountConfig struct {
@@ -159,6 +160,26 @@ type DiscoveryConfig struct {
 }
 
 type ClusterConfig struct {
+	// ListenAddr is host:port for the cluster-internal gRPC listener.
+	// All cluster services (NodeService, MemoryService, PolicyService,
+	// RaftTransport, etc.) bind here under mTLS.
+	ListenAddr string `koanf:"listen_addr"`
+
+	// AdvertiseAddr is what peers dial to reach this node. Empty means
+	// derive from ListenAddr. k8s deployments set this to the pod IP or
+	// stable service DNS; docker-compose typically leaves it empty.
+	AdvertiseAddr string `koanf:"advertise_addr"`
+
+	// DataDir is where state.db + raft.db + snapshots/ live for
+	// memory/policy-enabled nodes.
+	DataDir string `koanf:"data_dir"`
+
+	// InitialBootstrap should be true on exactly one node of a new
+	// cluster (the first-ever start). hashicorp/raft returns
+	// ErrCantBootstrap silently on subsequent starts once state exists,
+	// so leaving this true on a restart is harmless.
+	InitialBootstrap bool `koanf:"initial_bootstrap"`
+
 	MTLS      MTLSConfig      `koanf:"mtls"`
 	Bootstrap BootstrapConfig `koanf:"bootstrap"`
 }

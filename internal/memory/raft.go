@@ -131,6 +131,13 @@ func (n *RaftNode) AddVoter(id raft.ServerID, addr raft.ServerAddress) error {
 	return future.Error()
 }
 
+// FSM returns the finite-state machine this Raft node is driving.
+// Exposed so read-path code (minimal PolicyService, tests) can access
+// the backing Store without going through raft.Apply.
+func (n *RaftNode) FSM() *FSM {
+	return n.fsm
+}
+
 // Apply serialises data through Raft consensus. Returns the FSM's
 // Apply return value on success.
 func (n *RaftNode) Apply(data []byte, timeout time.Duration) (any, error) {
