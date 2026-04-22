@@ -124,9 +124,18 @@ broadcast           = true
 broadcast_interface = "auto"
 
 [cluster.mtls]
-ca_cert   = "/etc/lobslaw/ca.pem"
-node_cert = "/etc/lobslaw/node.pem"
-node_key  = "/etc/lobslaw/node.key"
+# Public CA cert, node cert + node key. CA private key is NOT here —
+# it lives with the `lobslaw cluster sign-node` subcommand only
+# (typically mounted into a k8s initContainer or a one-shot podman run).
+ca_cert   = "/certs/ca.pem"
+node_cert = "/certs/node-cert.pem"
+node_key  = "/certs/node-key.pem"
+
+[cluster.bootstrap]
+# Single-node dev convenience: auto-generate CA + self-sign node cert
+# on first startup if they don't exist. Leave false for production;
+# production flows use `lobslaw cluster ca-init` + `cluster sign-node`.
+auto_init = false
 
 [soul]
 path  = "./SOUL.md"

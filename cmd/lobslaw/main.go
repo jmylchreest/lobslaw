@@ -117,6 +117,13 @@ func allFunctions() []types.NodeFunction {
 }
 
 func main() {
+	// Subcommand dispatch: `lobslaw cluster <subcmd> ...` is handled
+	// before main-agent flag parsing so subcommands can own their own
+	// flag sets and never touch the main Config.
+	if dispatchCluster(os.Args[1:]) {
+		return
+	}
+
 	var f flags
 	if err := parseFlags(os.Args[1:], &f); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

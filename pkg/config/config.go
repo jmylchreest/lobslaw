@@ -158,13 +158,23 @@ type DiscoveryConfig struct {
 }
 
 type ClusterConfig struct {
-	MTLS MTLSConfig `koanf:"mtls"`
+	MTLS      MTLSConfig      `koanf:"mtls"`
+	Bootstrap BootstrapConfig `koanf:"bootstrap"`
 }
 
+// MTLSConfig deliberately does NOT carry the CA private key path —
+// that field exists only on the `cluster sign-node` subcommand. The
+// main lobslaw binary cannot read the CA key.
 type MTLSConfig struct {
 	CACert   string `koanf:"ca_cert"`
 	NodeCert string `koanf:"node_cert"`
 	NodeKey  string `koanf:"node_key"`
+}
+
+// BootstrapConfig controls first-run CA auto-generation. Off by
+// default; single-node dev convenience only.
+type BootstrapConfig struct {
+	AutoInit bool `koanf:"auto_init"`
 }
 
 type SoulLoaderConfig struct {
