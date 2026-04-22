@@ -216,7 +216,7 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	// can't stall Wait().
 	cmd.WaitDelay = 500 * time.Millisecond
 
-	if err := sandbox.Apply(cmd, e.cfg.Sandbox); err != nil {
+	if err := sandbox.Apply(cmd, e.resolvePolicy(req.ToolName)); err != nil {
 		return nil, fmt.Errorf("sandbox: %w", err)
 	}
 
@@ -240,6 +240,24 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 		return result, fmt.Errorf("exec %q: %w", path, err)
 	}
 	return result, nil
+}
+
+// resolvePolicy picks the sandbox Policy for the given tool via the
+// fallback chain:
+//
+//  1. Tool-specific policy set on the Registry via SetPolicy.
+//  2. Fleet-wide default on ExecutorConfig.Sandbox.
+//  3. nil — no sandbox. sandbox.Apply is a no-op for a nil Policy.
+//
+// Deliberately separates the "tool has a policy" question from the
+// "apply a policy" question so the Executor stays thin — Apply
+// already handles nil gracefully, so resolvePolicy just returns
+// whatever the chain produces.
+func (e *Executor) resolvePolicy(toolName string) *sandbox.Policy {
+	if p := e.registry.PolicyFor(toolName); p != nil {
+		return p
+	}
+	return e.cfg.Sandbox
 }
 
 // policyAllow returns nil when policy allows the invocation. Returns

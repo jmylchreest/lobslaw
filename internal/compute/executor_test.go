@@ -14,6 +14,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -668,6 +669,88 @@ func TestSubstituteArgv(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- Per-tool sandbox policy fallback chain -----------------------------
+
+// TestExecutorResolvePolicyToolSpecificWinsOverFleetDefault confirms
+// the fallback chain priority: a tool-specific policy registered via
+// Registry.SetPolicy beats whatever ExecutorConfig.Sandbox carries.
+// This is the structural guarantee that lets operators say "tighten
+// shell_exec but leave git alone" without per-Executor splits.
+func TestExecutorResolvePolicyToolSpecificWinsOverFleetDefault(t *testing.T) {
+	t.Parallel()
+	fleet := &sandbox.Policy{NoNewPrivs: true, AllowedPaths: []string{"/usr"}}
+	tool := &sandbox.Policy{NoNewPrivs: true, AllowedPaths: []string{"/srv/repo"}}
+
+	env := newTestEnv(t, func(cfg *ExecutorConfig) { cfg.Sandbox = fleet })
+	if err := env.reg.Register(&types.ToolDef{
+		Name: "git", Path: "/usr/bin/git", RiskTier: types.RiskReversible,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env.reg.SetPolicy("git", tool)
+
+	got := env.executor.resolvePolicy("git")
+	if got == nil || len(got.AllowedPaths) != 1 || got.AllowedPaths[0] != "/srv/repo" {
+		t.Errorf("tool-specific policy should win; got %+v, want /srv/repo", got)
+	}
+}
+
+// TestExecutorResolvePolicyFallsThroughToFleet confirms an unset
+// per-tool policy falls through to the Executor default — operators
+// only need to override the tools they actually want to differ.
+func TestExecutorResolvePolicyFallsThroughToFleet(t *testing.T) {
+	t.Parallel()
+	fleet := &sandbox.Policy{NoNewPrivs: true, AllowedPaths: []string{"/usr"}}
+	env := newTestEnv(t, func(cfg *ExecutorConfig) { cfg.Sandbox = fleet })
+	if err := env.reg.Register(&types.ToolDef{
+		Name: "git", Path: "/usr/bin/git", RiskTier: types.RiskReversible,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := env.executor.resolvePolicy("git")
+	if got == nil || len(got.AllowedPaths) != 1 || got.AllowedPaths[0] != "/usr" {
+		t.Errorf("expected fleet default to surface; got %+v", got)
+	}
+}
+
+// TestExecutorResolvePolicyAllNilReturnsNil — the unsandboxed path,
+// which is the default until an operator opts in. sandbox.Apply is a
+// no-op for nil so the subprocess runs unrestricted.
+func TestExecutorResolvePolicyAllNilReturnsNil(t *testing.T) {
+	t.Parallel()
+	env := newTestEnv(t)
+	_ = env.reg.Register(&types.ToolDef{
+		Name: "git", Path: "/usr/bin/git", RiskTier: types.RiskReversible,
+	})
+	if got := env.executor.resolvePolicy("git"); got != nil {
+		t.Errorf("no policy anywhere → nil; got %+v", got)
+	}
+}
+
+// TestExecutorResolvePolicyEmptyToolPolicyShortCircuitsFleet documents
+// the "explicitly unsandboxed" path: a non-nil but empty Policy on the
+// tool stops the chain — fleet default does NOT apply. This is how
+// operators say "trust this specific tool" even though everything else
+// is sandboxed.
+func TestExecutorResolvePolicyEmptyToolPolicyShortCircuitsFleet(t *testing.T) {
+	t.Parallel()
+	fleet := &sandbox.Policy{NoNewPrivs: true}
+	env := newTestEnv(t, func(cfg *ExecutorConfig) { cfg.Sandbox = fleet })
+	_ = env.reg.Register(&types.ToolDef{
+		Name: "bash", Path: "/usr/bin/bash", RiskTier: types.RiskReversible,
+	})
+	env.reg.SetPolicy("bash", &sandbox.Policy{})
+
+	got := env.executor.resolvePolicy("bash")
+	if got == nil {
+		t.Fatal("empty Policy should short-circuit, not fall through")
+	}
+	if got.NoNewPrivs {
+		t.Errorf("empty tool Policy should NOT inherit fleet NoNewPrivs; got %+v", got)
 	}
 }
 
