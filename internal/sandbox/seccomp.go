@@ -12,7 +12,7 @@ package sandbox
 type SeccompPolicy struct {
 	// Deny is the list of syscall names the filter blocks. Names
 	// match Linux syscall nomenclature (e.g. "ptrace", "mount").
-	Deny []string
+	Deny []string `json:"deny,omitempty"`
 }
 
 // HasRules reports whether the policy carries any deny entries.

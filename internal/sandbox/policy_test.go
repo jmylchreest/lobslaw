@@ -1,6 +1,8 @@
 package sandbox
 
 import (
+	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
 )
@@ -122,5 +124,47 @@ func TestSeccompPolicyIsZero(t *testing.T) {
 	}
 	if (SeccompPolicy{Deny: []string{}}).IsZero() {
 		t.Error("explicit empty Deny should NOT report IsZero (caller wants no rules)")
+	}
+}
+
+// TestPolicyJSONRoundTrip guards the wire format used to ferry a
+// Policy across the exec boundary into the sandbox-exec helper. If
+// JSON tags drift, the helper process will mis-apply the policy.
+func TestPolicyJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+	original := Policy{
+		AllowedPaths:  []string{"/tmp/work", "/usr"},
+		ReadOnlyPaths: []string{"/usr"},
+		EnvWhitelist:  []string{"PATH", "HOME"},
+		CPUQuota:      2000,
+		MemoryLimitMB: 512,
+		Namespaces:    NamespaceSet{User: true, Mount: true, PID: true},
+		NoNewPrivs:    true,
+		Seccomp:       SeccompPolicy{Deny: []string{"ptrace", "mount"}},
+	}
+	blob, err := json.Marshal(&original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Policy
+	if err := json.Unmarshal(blob, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(original, got) {
+		t.Fatalf("round-trip mismatch\nwant: %+v\n got: %+v", original, got)
+	}
+}
+
+// TestPolicyJSONEmptyStaysCompact confirms a zero-value Policy
+// serialises to a small blob — important because we pass this
+// through an env var with a practical length limit.
+func TestPolicyJSONEmptyStaysCompact(t *testing.T) {
+	t.Parallel()
+	blob, err := json.Marshal(&Policy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(blob); got != "{}" {
+		t.Errorf("zero-value Policy should serialise to {}, got %q", got)
 	}
 }

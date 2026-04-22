@@ -14,53 +14,50 @@ import (
 // what's wired now vs. what's deferred — the struct reflects the
 // full design so config files stay forward-compatible.
 type Policy struct {
-	// AllowedPaths bind-mounted read-write into the sandbox. Anything
-	// else on the host filesystem is invisible. Paths must be
-	// absolute; pre-canonicalised by Validate.
-	AllowedPaths []string
+	// AllowedPaths are RW paths visible to the sandbox. Landlock
+	// enforces the restriction once Phase 4.5.5 lands. Paths must be
+	// absolute; verified by Validate.
+	AllowedPaths []string `json:"allowed_paths,omitempty"`
 
-	// ReadOnlyPaths subset of AllowedPaths bind-mounted read-only.
-	// Entries here MUST also appear in AllowedPaths. Verified by
-	// Validate.
-	ReadOnlyPaths []string
+	// ReadOnlyPaths subset of AllowedPaths restricted to read access.
+	// Every entry MUST appear in AllowedPaths. Verified by Validate.
+	ReadOnlyPaths []string `json:"read_only_paths,omitempty"`
 
 	// NetworkAllowCIDR is the list of egress destinations the tool
-	// may reach. An empty list means no outbound network. "0.0.0.0/0"
-	// allows everything (but still requires a network namespace with
-	// a working route, which Apply doesn't set up yet).
-	NetworkAllowCIDR []string
+	// may reach. Empty → no outbound network. Enforcement via
+	// nftables is deferred.
+	NetworkAllowCIDR []string `json:"network_allow_cidr,omitempty"`
 
-	// DangerousCmdsDeny is a hard deny-list applied before argv
-	// substitution. Exact string match against the joined argv. Used
-	// for operator-override tools whose allowed_paths include "*".
-	DangerousCmdsDeny []string
+	// DangerousCmdsDeny hard deny-list applied before argv
+	// substitution. Exact string match against the joined argv.
+	DangerousCmdsDeny []string `json:"dangerous_cmds_deny,omitempty"`
 
-	// EnvWhitelist names env vars visible to the subprocess. Empty
-	// → subprocess sees no env. The executor already enforces this
-	// via buildEnv; Policy just carries the config through.
-	EnvWhitelist []string
+	// EnvWhitelist names env vars visible to the subprocess. Empty →
+	// empty env. Enforced by the executor's buildEnv, not the sandbox.
+	EnvWhitelist []string `json:"env_whitelist,omitempty"`
 
-	// CPUQuota in millicpus (2000 = 2 cores). 0 = unlimited.
-	// Enforced via cgroup v2 cpu.max — install deferred.
-	CPUQuota int
+	// CPUQuota in millicpus (2000 = 2 cores). 0 = unlimited. Enforced
+	// via cgroup v2 cpu.max — install deferred.
+	CPUQuota int `json:"cpu_quota,omitempty"`
 
 	// MemoryLimitMB in mebibytes. 0 = unlimited. Enforced via
 	// cgroup v2 memory.max — install deferred.
-	MemoryLimitMB int
+	MemoryLimitMB int `json:"memory_limit_mb,omitempty"`
 
 	// Namespaces selects which Linux namespaces to create for the
-	// subprocess. Each field maps to a CLONE_NEW* flag. User namespace
-	// enables unprivileged operation of the others on most kernels.
-	Namespaces NamespaceSet
+	// subprocess. Maps to CLONE_NEW* flags. User namespace enables
+	// unprivileged operation of the others on most modern kernels.
+	Namespaces NamespaceSet `json:"namespaces,omitzero"`
 
 	// NoNewPrivs sets PR_SET_NO_NEW_PRIVS on the subprocess. Blocks
-	// set-uid binaries and capability elevation. Strongly recommended.
-	// Default: true (see Normalise).
-	NoNewPrivs bool
+	// setuid binaries and capability elevation. Required by Landlock
+	// (the install sets it automatically). Default true when any
+	// sandboxing is enabled; see Normalise.
+	NoNewPrivs bool `json:"no_new_privs,omitempty"`
 
-	// Seccomp policy. Zero value = DefaultDenyList applied. Install
-	// itself is deferred.
-	Seccomp SeccompPolicy
+	// Seccomp policy. Zero value → DefaultSeccompPolicy applied by
+	// Normalise when sandboxing is enabled.
+	Seccomp SeccompPolicy `json:"seccomp,omitzero"`
 }
 
 // NamespaceSet selects CLONE_NEW* flags. User namespace is the gate —
@@ -68,12 +65,12 @@ type Policy struct {
 // unprivileged processes can create user namespaces, which enables
 // the others without root.
 type NamespaceSet struct {
-	User    bool
-	Mount   bool
-	PID     bool
-	Network bool
-	UTS     bool
-	IPC     bool
+	User    bool `json:"user,omitempty"`
+	Mount   bool `json:"mount,omitempty"`
+	PID     bool `json:"pid,omitempty"`
+	Network bool `json:"network,omitempty"`
+	UTS     bool `json:"uts,omitempty"`
+	IPC     bool `json:"ipc,omitempty"`
 }
 
 // Enabled reports whether any namespace flag is set — a cheap

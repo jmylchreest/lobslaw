@@ -152,6 +152,14 @@ func applyLogFilters(cfgFilters []config.LogFilterConfig, logger *slog.Logger) {
 }
 
 func main() {
+	// Hidden reexec subcommand: when the parent agent spawns a sandboxed
+	// tool, it invokes /proc/self/exe with "sandbox-exec" as the first
+	// arg. Dispatched before any config / logging / node setup so the
+	// helper child stays small and deterministic.
+	if dispatchSandboxExec(os.Args[1:]) {
+		return
+	}
+
 	// Subcommand dispatch: `lobslaw cluster <subcmd> ...` is handled
 	// before main-agent flag parsing so subcommands can own their own
 	// flag sets and never touch the main Config.
