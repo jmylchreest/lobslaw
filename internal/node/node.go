@@ -39,6 +39,13 @@ type Config struct {
 	// raft.ErrCantBootstrap.
 	Bootstrap bool
 
+	// SnapshotTarget is a reference like "storage:r2-backup" to a
+	// target that receives periodic Raft snapshots. Required when the
+	// Memory function is enabled unless SeedNodes is non-empty
+	// (meaning this node will join a multi-node cluster where durability
+	// comes from replication). See lobslaw-single-node-durability.
+	SnapshotTarget string
+
 	Creds     *mtls.NodeCreds
 	MemoryKey crypto.Key // 32-byte key for state.db value encryption
 
@@ -312,6 +319,15 @@ func validateConfig(cfg Config) error {
 	}
 	if has(cfg.Functions, types.FunctionMemory) && !has(cfg.Functions, types.FunctionStorage) {
 		return errors.New("node.Config: memory function requires storage function on the same node")
+	}
+	// Durability check: a memory-enabled node running alone with no
+	// external snapshot target is one disk failure away from total
+	// amnesia. Require EITHER a snapshot target OR seed nodes (which
+	// mean this node joins a multi-node cluster where replication
+	// provides durability).
+	if has(cfg.Functions, types.FunctionMemory) && cfg.SnapshotTarget == "" && len(cfg.SeedNodes) == 0 {
+		return errors.New("node.Config: memory-enabled nodes without seeds must configure memory.snapshot.target " +
+			"(a single-node cluster with no off-cluster backup risks total data loss on disk failure)")
 	}
 	return nil
 }

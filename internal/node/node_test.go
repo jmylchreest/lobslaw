@@ -23,6 +23,15 @@ import (
 
 // signNodeCert generates CA + one signed node cert into tmp; returns
 // the Creds ready to hand to node.New.
+func mustKey(t *testing.T) crypto.Key {
+	t.Helper()
+	k, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
 func signNodeCert(t *testing.T, tmp, nodeID string) *mtls.NodeCreds {
 	t.Helper()
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
@@ -113,6 +122,17 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 				Functions:  []types.NodeFunction{types.FunctionMemory},
 			},
 		},
+		{
+			name: "memory with no snapshot target and no seeds",
+			cfg: node.Config{
+				NodeID:     "n",
+				ListenAddr: "127.0.0.1:0",
+				Creds:      creds,
+				DataDir:    t.TempDir(),
+				Functions:  []types.NodeFunction{types.FunctionMemory, types.FunctionStorage},
+				MemoryKey:  mustKey(t),
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,13 +168,14 @@ func TestSingleNodeStartAndPolicyRoundTrip(t *testing.T) {
 	// Boot #1: bootstrap a fresh cluster, apply one rule, shut down.
 	runApply := func(cfgOverride func(*node.Config)) *lobslawv1.PolicyRule {
 		cfg := node.Config{
-			NodeID:     nodeID,
-			Functions:  []types.NodeFunction{types.FunctionMemory, types.FunctionPolicy, types.FunctionStorage},
-			ListenAddr: "127.0.0.1:0",
-			DataDir:    dataDir,
-			Bootstrap:  true,
-			Creds:      creds,
-			MemoryKey:  memoryKey,
+			NodeID:         nodeID,
+			Functions:      []types.NodeFunction{types.FunctionMemory, types.FunctionPolicy, types.FunctionStorage},
+			ListenAddr:     "127.0.0.1:0",
+			DataDir:        dataDir,
+			Bootstrap:      true,
+			SnapshotTarget: "storage:test-backup",
+			Creds:          creds,
+			MemoryKey:      memoryKey,
 		}
 		if cfgOverride != nil {
 			cfgOverride(&cfg)
@@ -232,13 +253,14 @@ func TestSingleNodeStartAndPolicyRoundTrip(t *testing.T) {
 	// Boot #2: same data-dir, no bootstrap (raft.ErrCantBootstrap is
 	// silently swallowed). The rule must be visible via GetRule.
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionMemory, types.FunctionPolicy, types.FunctionStorage},
-		ListenAddr: "127.0.0.1:0",
-		DataDir:    dataDir,
-		Bootstrap:  true, // harmless on restart thanks to ErrCantBootstrap handling
-		Creds:      creds,
-		MemoryKey:  memoryKey,
+		NodeID:         nodeID,
+		Functions:      []types.NodeFunction{types.FunctionMemory, types.FunctionPolicy, types.FunctionStorage},
+		ListenAddr:     "127.0.0.1:0",
+		DataDir:        dataDir,
+		Bootstrap:      true, // harmless on restart thanks to ErrCantBootstrap handling
+		SnapshotTarget: "storage:test-backup",
+		Creds:          creds,
+		MemoryKey:      memoryKey,
 	}
 	n2, err := node.New(cfg)
 	if err != nil {

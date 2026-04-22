@@ -256,16 +256,17 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 	}
 
 	return node.Config{
-		NodeID:        cfg.Node.ID,
-		Functions:     funcs,
-		ListenAddr:    listen,
-		AdvertiseAddr: cfg.Cluster.AdvertiseAddr,
-		SeedNodes:     cfg.Discovery.SeedNodes,
-		DataDir:       cfg.Cluster.DataDir,
-		Bootstrap:     cfg.Cluster.InitialBootstrap,
-		Creds:         creds,
-		MemoryKey:     memKey,
-		Logger:        logger,
+		NodeID:         cfg.Node.ID,
+		Functions:      funcs,
+		ListenAddr:     listen,
+		AdvertiseAddr:  cfg.Cluster.AdvertiseAddr,
+		SeedNodes:      cfg.Discovery.SeedNodes,
+		DataDir:        cfg.Cluster.DataDir,
+		Bootstrap:      cfg.Cluster.InitialBootstrap,
+		SnapshotTarget: cfg.Memory.Snapshot.Target,
+		Creds:          creds,
+		MemoryKey:      memKey,
+		Logger:         logger,
 	}, nil
 }
 
