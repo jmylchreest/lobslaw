@@ -1513,10 +1513,17 @@ func (x *DreamResponse) GetPruned() int32 {
 }
 
 type ForgetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
-	Before        *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=before,proto3" json:"before,omitempty"`
-	Tags          []string               `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Query  string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
+	Before *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=before,proto3" json:"before,omitempty"`
+	Tags   []string               `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty"`
+	// Explicit record IDs to forget. When non-empty, bypasses the
+	// query/before/tags scan and deletes these IDs directly (with the
+	// existing cascade-via-SourceIDs semantics). Lets clients compose
+	// Search→preview→Forget pipelines without a dedicated "forget by
+	// similarity" RPC. At least one of query/before/tags/ids must be
+	// set — the handler still refuses to forget everything.
+	Ids           []string `protobuf:"bytes,4,rep,name=ids,proto3" json:"ids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1568,6 +1575,13 @@ func (x *ForgetRequest) GetBefore() *timestamppb.Timestamp {
 func (x *ForgetRequest) GetTags() []string {
 	if x != nil {
 		return x.Tags
+	}
+	return nil
+}
+
+func (x *ForgetRequest) GetIds() []string {
+	if x != nil {
+		return x.Ids
 	}
 	return nil
 }
@@ -1624,6 +1638,216 @@ func (x *ForgetResponse) GetConsolidationsReforged() int32 {
 	return 0
 }
 
+// FindClusters groups near-duplicate VectorRecords for the Dream-
+// time merge flow. O(n²) pairwise cosine over the vector bucket,
+// union-find connected components. Intentionally no LLM — the
+// Adjudicator (LLM layer) takes the clusters and decides what to
+// do with each. Scope and retention filters keep ephemeral session
+// records out of the long-term merge path.
+type FindClustersRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Threshold       float32                `protobuf:"fixed32,1,opt,name=threshold,proto3" json:"threshold,omitempty"`                                  // minimum pairwise cosine, e.g. 0.88
+	MinClusterSize  int32                  `protobuf:"varint,2,opt,name=min_cluster_size,json=minClusterSize,proto3" json:"min_cluster_size,omitempty"` // default 2 (skip singletons)
+	MaxClusterSize  int32                  `protobuf:"varint,3,opt,name=max_cluster_size,json=maxClusterSize,proto3" json:"max_cluster_size,omitempty"` // default 10 (split giant CCs)
+	ScopeFilter     string                 `protobuf:"bytes,4,opt,name=scope_filter,json=scopeFilter,proto3" json:"scope_filter,omitempty"`             // only records in this scope
+	RetentionFilter string                 `protobuf:"bytes,5,opt,name=retention_filter,json=retentionFilter,proto3" json:"retention_filter,omitempty"` // e.g. "long-term"
+	Before          *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=before,proto3" json:"before,omitempty"`
+	Limit           int32                  `protobuf:"varint,7,opt,name=limit,proto3" json:"limit,omitempty"` // cap returned cluster count
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FindClustersRequest) Reset() {
+	*x = FindClustersRequest{}
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FindClustersRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FindClustersRequest) ProtoMessage() {}
+
+func (x *FindClustersRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FindClustersRequest.ProtoReflect.Descriptor instead.
+func (*FindClustersRequest) Descriptor() ([]byte, []int) {
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *FindClustersRequest) GetThreshold() float32 {
+	if x != nil {
+		return x.Threshold
+	}
+	return 0
+}
+
+func (x *FindClustersRequest) GetMinClusterSize() int32 {
+	if x != nil {
+		return x.MinClusterSize
+	}
+	return 0
+}
+
+func (x *FindClustersRequest) GetMaxClusterSize() int32 {
+	if x != nil {
+		return x.MaxClusterSize
+	}
+	return 0
+}
+
+func (x *FindClustersRequest) GetScopeFilter() string {
+	if x != nil {
+		return x.ScopeFilter
+	}
+	return ""
+}
+
+func (x *FindClustersRequest) GetRetentionFilter() string {
+	if x != nil {
+		return x.RetentionFilter
+	}
+	return ""
+}
+
+func (x *FindClustersRequest) GetBefore() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Before
+	}
+	return nil
+}
+
+func (x *FindClustersRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type FindClustersResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Clusters      []*Cluster             `protobuf:"bytes,1,rep,name=clusters,proto3" json:"clusters,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FindClustersResponse) Reset() {
+	*x = FindClustersResponse{}
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FindClustersResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FindClustersResponse) ProtoMessage() {}
+
+func (x *FindClustersResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FindClustersResponse.ProtoReflect.Descriptor instead.
+func (*FindClustersResponse) Descriptor() ([]byte, []int) {
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *FindClustersResponse) GetClusters() []*Cluster {
+	if x != nil {
+		return x.Clusters
+	}
+	return nil
+}
+
+type Cluster struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // stable hash of sorted member IDs
+	Records       []*VectorRecord        `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"`
+	MinSimilarity float32                `protobuf:"fixed32,3,opt,name=min_similarity,json=minSimilarity,proto3" json:"min_similarity,omitempty"` // worst pairwise within cluster
+	AvgSimilarity float32                `protobuf:"fixed32,4,opt,name=avg_similarity,json=avgSimilarity,proto3" json:"avg_similarity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Cluster) Reset() {
+	*x = Cluster{}
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Cluster) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Cluster) ProtoMessage() {}
+
+func (x *Cluster) ProtoReflect() protoreflect.Message {
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Cluster.ProtoReflect.Descriptor instead.
+func (*Cluster) Descriptor() ([]byte, []int) {
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *Cluster) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Cluster) GetRecords() []*VectorRecord {
+	if x != nil {
+		return x.Records
+	}
+	return nil
+}
+
+func (x *Cluster) GetMinSimilarity() float32 {
+	if x != nil {
+		return x.MinSimilarity
+	}
+	return 0
+}
+
+func (x *Cluster) GetAvgSimilarity() float32 {
+	if x != nil {
+		return x.AvgSimilarity
+	}
+	return 0
+}
+
 type PolicyRule struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -1640,7 +1864,7 @@ type PolicyRule struct {
 
 func (x *PolicyRule) Reset() {
 	*x = PolicyRule{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[29]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1652,7 +1876,7 @@ func (x *PolicyRule) String() string {
 func (*PolicyRule) ProtoMessage() {}
 
 func (x *PolicyRule) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[29]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1665,7 +1889,7 @@ func (x *PolicyRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyRule.ProtoReflect.Descriptor instead.
 func (*PolicyRule) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{29}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *PolicyRule) GetId() string {
@@ -1735,7 +1959,7 @@ type Condition struct {
 
 func (x *Condition) Reset() {
 	*x = Condition{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[30]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +1971,7 @@ func (x *Condition) String() string {
 func (*Condition) ProtoMessage() {}
 
 func (x *Condition) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[30]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +1984,7 @@ func (x *Condition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Condition.ProtoReflect.Descriptor instead.
 func (*Condition) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{30}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *Condition) GetKey() string {
@@ -1799,7 +2023,7 @@ type Claims struct {
 
 func (x *Claims) Reset() {
 	*x = Claims{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[31]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1811,7 +2035,7 @@ func (x *Claims) String() string {
 func (*Claims) ProtoMessage() {}
 
 func (x *Claims) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[31]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1824,7 +2048,7 @@ func (x *Claims) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Claims.ProtoReflect.Descriptor instead.
 func (*Claims) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{31}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *Claims) GetUserId() string {
@@ -1887,7 +2111,7 @@ type EvaluateRequest struct {
 
 func (x *EvaluateRequest) Reset() {
 	*x = EvaluateRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[32]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1899,7 +2123,7 @@ func (x *EvaluateRequest) String() string {
 func (*EvaluateRequest) ProtoMessage() {}
 
 func (x *EvaluateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[32]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1912,7 +2136,7 @@ func (x *EvaluateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateRequest.ProtoReflect.Descriptor instead.
 func (*EvaluateRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{32}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *EvaluateRequest) GetClaims() *Claims {
@@ -1947,7 +2171,7 @@ type EvaluateResponse struct {
 
 func (x *EvaluateResponse) Reset() {
 	*x = EvaluateResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[33]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1959,7 +2183,7 @@ func (x *EvaluateResponse) String() string {
 func (*EvaluateResponse) ProtoMessage() {}
 
 func (x *EvaluateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[33]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1972,7 +2196,7 @@ func (x *EvaluateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvaluateResponse.ProtoReflect.Descriptor instead.
 func (*EvaluateResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{33}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *EvaluateResponse) GetEffect() string {
@@ -2004,7 +2228,7 @@ type SyncRulesRequest struct {
 
 func (x *SyncRulesRequest) Reset() {
 	*x = SyncRulesRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[34]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2016,7 +2240,7 @@ func (x *SyncRulesRequest) String() string {
 func (*SyncRulesRequest) ProtoMessage() {}
 
 func (x *SyncRulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[34]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2029,7 +2253,7 @@ func (x *SyncRulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncRulesRequest.ProtoReflect.Descriptor instead.
 func (*SyncRulesRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{34}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{37}
 }
 
 type SyncRulesResponse struct {
@@ -2041,7 +2265,7 @@ type SyncRulesResponse struct {
 
 func (x *SyncRulesResponse) Reset() {
 	*x = SyncRulesResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[35]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2053,7 +2277,7 @@ func (x *SyncRulesResponse) String() string {
 func (*SyncRulesResponse) ProtoMessage() {}
 
 func (x *SyncRulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[35]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2066,7 +2290,7 @@ func (x *SyncRulesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncRulesResponse.ProtoReflect.Descriptor instead.
 func (*SyncRulesResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{35}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SyncRulesResponse) GetRules() []*PolicyRule {
@@ -2085,7 +2309,7 @@ type AddRuleRequest struct {
 
 func (x *AddRuleRequest) Reset() {
 	*x = AddRuleRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[36]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2097,7 +2321,7 @@ func (x *AddRuleRequest) String() string {
 func (*AddRuleRequest) ProtoMessage() {}
 
 func (x *AddRuleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[36]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2110,7 +2334,7 @@ func (x *AddRuleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddRuleRequest.ProtoReflect.Descriptor instead.
 func (*AddRuleRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{36}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *AddRuleRequest) GetRule() *PolicyRule {
@@ -2129,7 +2353,7 @@ type AddRuleResponse struct {
 
 func (x *AddRuleResponse) Reset() {
 	*x = AddRuleResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[37]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2141,7 +2365,7 @@ func (x *AddRuleResponse) String() string {
 func (*AddRuleResponse) ProtoMessage() {}
 
 func (x *AddRuleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[37]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2154,7 +2378,7 @@ func (x *AddRuleResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddRuleResponse.ProtoReflect.Descriptor instead.
 func (*AddRuleResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{37}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *AddRuleResponse) GetId() string {
@@ -2177,7 +2401,7 @@ type RequestConfirmationRequest struct {
 
 func (x *RequestConfirmationRequest) Reset() {
 	*x = RequestConfirmationRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[38]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2189,7 +2413,7 @@ func (x *RequestConfirmationRequest) String() string {
 func (*RequestConfirmationRequest) ProtoMessage() {}
 
 func (x *RequestConfirmationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[38]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2202,7 +2426,7 @@ func (x *RequestConfirmationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestConfirmationRequest.ProtoReflect.Descriptor instead.
 func (*RequestConfirmationRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{38}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *RequestConfirmationRequest) GetUser() string {
@@ -2251,7 +2475,7 @@ type RequestConfirmationResponse struct {
 
 func (x *RequestConfirmationResponse) Reset() {
 	*x = RequestConfirmationResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[39]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2263,7 +2487,7 @@ func (x *RequestConfirmationResponse) String() string {
 func (*RequestConfirmationResponse) ProtoMessage() {}
 
 func (x *RequestConfirmationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[39]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2276,7 +2500,7 @@ func (x *RequestConfirmationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestConfirmationResponse.ProtoReflect.Descriptor instead.
 func (*RequestConfirmationResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{39}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *RequestConfirmationResponse) GetApproved() bool {
@@ -2314,7 +2538,7 @@ type ToolDef struct {
 
 func (x *ToolDef) Reset() {
 	*x = ToolDef{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[40]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2326,7 +2550,7 @@ func (x *ToolDef) String() string {
 func (*ToolDef) ProtoMessage() {}
 
 func (x *ToolDef) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[40]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2339,7 +2563,7 @@ func (x *ToolDef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDef.ProtoReflect.Descriptor instead.
 func (*ToolDef) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{40}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ToolDef) GetName() string {
@@ -2396,7 +2620,7 @@ type InvokeToolRequest struct {
 
 func (x *InvokeToolRequest) Reset() {
 	*x = InvokeToolRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[41]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2408,7 +2632,7 @@ func (x *InvokeToolRequest) String() string {
 func (*InvokeToolRequest) ProtoMessage() {}
 
 func (x *InvokeToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[41]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2421,7 +2645,7 @@ func (x *InvokeToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeToolRequest.ProtoReflect.Descriptor instead.
 func (*InvokeToolRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{41}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *InvokeToolRequest) GetTool() string {
@@ -2464,7 +2688,7 @@ type InvokeToolResponse struct {
 
 func (x *InvokeToolResponse) Reset() {
 	*x = InvokeToolResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[42]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2476,7 +2700,7 @@ func (x *InvokeToolResponse) String() string {
 func (*InvokeToolResponse) ProtoMessage() {}
 
 func (x *InvokeToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[42]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2489,7 +2713,7 @@ func (x *InvokeToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeToolResponse.ProtoReflect.Descriptor instead.
 func (*InvokeToolResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{42}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *InvokeToolResponse) GetExitCode() int32 {
@@ -2528,7 +2752,7 @@ type ListToolsRequest struct {
 
 func (x *ListToolsRequest) Reset() {
 	*x = ListToolsRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[43]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2540,7 +2764,7 @@ func (x *ListToolsRequest) String() string {
 func (*ListToolsRequest) ProtoMessage() {}
 
 func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[43]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2553,7 +2777,7 @@ func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListToolsRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{43}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{46}
 }
 
 type ListToolsResponse struct {
@@ -2565,7 +2789,7 @@ type ListToolsResponse struct {
 
 func (x *ListToolsResponse) Reset() {
 	*x = ListToolsResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[44]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2577,7 +2801,7 @@ func (x *ListToolsResponse) String() string {
 func (*ListToolsResponse) ProtoMessage() {}
 
 func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[44]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2590,7 +2814,7 @@ func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListToolsResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{44}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *ListToolsResponse) GetTools() []*ToolDef {
@@ -2613,7 +2837,7 @@ type ProcessMessageRequest struct {
 
 func (x *ProcessMessageRequest) Reset() {
 	*x = ProcessMessageRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[45]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2625,7 +2849,7 @@ func (x *ProcessMessageRequest) String() string {
 func (*ProcessMessageRequest) ProtoMessage() {}
 
 func (x *ProcessMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[45]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2638,7 +2862,7 @@ func (x *ProcessMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessMessageRequest.ProtoReflect.Descriptor instead.
 func (*ProcessMessageRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{45}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ProcessMessageRequest) GetClaims() *Claims {
@@ -2688,7 +2912,7 @@ type ProcessMessageResponse struct {
 
 func (x *ProcessMessageResponse) Reset() {
 	*x = ProcessMessageResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[46]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2700,7 +2924,7 @@ func (x *ProcessMessageResponse) String() string {
 func (*ProcessMessageResponse) ProtoMessage() {}
 
 func (x *ProcessMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[46]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2713,7 +2937,7 @@ func (x *ProcessMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProcessMessageResponse.ProtoReflect.Descriptor instead.
 func (*ProcessMessageResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{46}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ProcessMessageResponse) GetText() string {
@@ -2755,7 +2979,7 @@ type HandleUpdateRequest struct {
 
 func (x *HandleUpdateRequest) Reset() {
 	*x = HandleUpdateRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[47]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2767,7 +2991,7 @@ func (x *HandleUpdateRequest) String() string {
 func (*HandleUpdateRequest) ProtoMessage() {}
 
 func (x *HandleUpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[47]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2780,7 +3004,7 @@ func (x *HandleUpdateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HandleUpdateRequest.ProtoReflect.Descriptor instead.
 func (*HandleUpdateRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{47}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *HandleUpdateRequest) GetChannel() string {
@@ -2813,7 +3037,7 @@ type HandleUpdateResponse struct {
 
 func (x *HandleUpdateResponse) Reset() {
 	*x = HandleUpdateResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[48]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2825,7 +3049,7 @@ func (x *HandleUpdateResponse) String() string {
 func (*HandleUpdateResponse) ProtoMessage() {}
 
 func (x *HandleUpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[48]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2838,7 +3062,7 @@ func (x *HandleUpdateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HandleUpdateResponse.ProtoReflect.Descriptor instead.
 func (*HandleUpdateResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{48}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *HandleUpdateResponse) GetAccepted() bool {
@@ -2861,7 +3085,7 @@ type PromptRequest struct {
 
 func (x *PromptRequest) Reset() {
 	*x = PromptRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[49]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2873,7 +3097,7 @@ func (x *PromptRequest) String() string {
 func (*PromptRequest) ProtoMessage() {}
 
 func (x *PromptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[49]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2886,7 +3110,7 @@ func (x *PromptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptRequest.ProtoReflect.Descriptor instead.
 func (*PromptRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{49}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *PromptRequest) GetChannel() string {
@@ -2934,7 +3158,7 @@ type PromptResponse struct {
 
 func (x *PromptResponse) Reset() {
 	*x = PromptResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[50]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2946,7 +3170,7 @@ func (x *PromptResponse) String() string {
 func (*PromptResponse) ProtoMessage() {}
 
 func (x *PromptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[50]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2959,7 +3183,7 @@ func (x *PromptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptResponse.ProtoReflect.Descriptor instead.
 func (*PromptResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{50}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *PromptResponse) GetChosenOption() string {
@@ -2993,7 +3217,7 @@ type AgentCommitment struct {
 
 func (x *AgentCommitment) Reset() {
 	*x = AgentCommitment{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[51]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3005,7 +3229,7 @@ func (x *AgentCommitment) String() string {
 func (*AgentCommitment) ProtoMessage() {}
 
 func (x *AgentCommitment) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[51]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3018,7 +3242,7 @@ func (x *AgentCommitment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCommitment.ProtoReflect.Descriptor instead.
 func (*AgentCommitment) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{51}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *AgentCommitment) GetId() string {
@@ -3102,7 +3326,7 @@ type ScheduledTaskRecord struct {
 
 func (x *ScheduledTaskRecord) Reset() {
 	*x = ScheduledTaskRecord{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[52]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3114,7 +3338,7 @@ func (x *ScheduledTaskRecord) String() string {
 func (*ScheduledTaskRecord) ProtoMessage() {}
 
 func (x *ScheduledTaskRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[52]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3127,7 +3351,7 @@ func (x *ScheduledTaskRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScheduledTaskRecord.ProtoReflect.Descriptor instead.
 func (*ScheduledTaskRecord) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{52}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ScheduledTaskRecord) GetId() string {
@@ -3213,7 +3437,7 @@ type InFlightWork struct {
 
 func (x *InFlightWork) Reset() {
 	*x = InFlightWork{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[53]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3225,7 +3449,7 @@ func (x *InFlightWork) String() string {
 func (*InFlightWork) ProtoMessage() {}
 
 func (x *InFlightWork) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[53]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3238,7 +3462,7 @@ func (x *InFlightWork) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InFlightWork.ProtoReflect.Descriptor instead.
 func (*InFlightWork) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{53}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *InFlightWork) GetId() string {
@@ -3287,7 +3511,7 @@ type CheckBack struct {
 
 func (x *CheckBack) Reset() {
 	*x = CheckBack{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[54]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3299,7 +3523,7 @@ func (x *CheckBack) String() string {
 func (*CheckBack) ProtoMessage() {}
 
 func (x *CheckBack) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[54]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3312,7 +3536,7 @@ func (x *CheckBack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckBack.ProtoReflect.Descriptor instead.
 func (*CheckBack) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{54}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *CheckBack) GetId() string {
@@ -3346,7 +3570,7 @@ type GetPlanRequest struct {
 
 func (x *GetPlanRequest) Reset() {
 	*x = GetPlanRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[55]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3358,7 +3582,7 @@ func (x *GetPlanRequest) String() string {
 func (*GetPlanRequest) ProtoMessage() {}
 
 func (x *GetPlanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[55]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3371,7 +3595,7 @@ func (x *GetPlanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlanRequest.ProtoReflect.Descriptor instead.
 func (*GetPlanRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{55}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *GetPlanRequest) GetWindow() *durationpb.Duration {
@@ -3401,7 +3625,7 @@ type GetPlanResponse struct {
 
 func (x *GetPlanResponse) Reset() {
 	*x = GetPlanResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[56]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3413,7 +3637,7 @@ func (x *GetPlanResponse) String() string {
 func (*GetPlanResponse) ProtoMessage() {}
 
 func (x *GetPlanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[56]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3426,7 +3650,7 @@ func (x *GetPlanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPlanResponse.ProtoReflect.Descriptor instead.
 func (*GetPlanResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{56}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *GetPlanResponse) GetWindow() *durationpb.Duration {
@@ -3473,7 +3697,7 @@ type AddCommitmentRequest struct {
 
 func (x *AddCommitmentRequest) Reset() {
 	*x = AddCommitmentRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[57]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3485,7 +3709,7 @@ func (x *AddCommitmentRequest) String() string {
 func (*AddCommitmentRequest) ProtoMessage() {}
 
 func (x *AddCommitmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[57]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3498,7 +3722,7 @@ func (x *AddCommitmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddCommitmentRequest.ProtoReflect.Descriptor instead.
 func (*AddCommitmentRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{57}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *AddCommitmentRequest) GetCommitment() *AgentCommitment {
@@ -3517,7 +3741,7 @@ type AddCommitmentResponse struct {
 
 func (x *AddCommitmentResponse) Reset() {
 	*x = AddCommitmentResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[58]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3529,7 +3753,7 @@ func (x *AddCommitmentResponse) String() string {
 func (*AddCommitmentResponse) ProtoMessage() {}
 
 func (x *AddCommitmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[58]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3542,7 +3766,7 @@ func (x *AddCommitmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddCommitmentResponse.ProtoReflect.Descriptor instead.
 func (*AddCommitmentResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{58}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *AddCommitmentResponse) GetId() string {
@@ -3561,7 +3785,7 @@ type CancelCommitmentRequest struct {
 
 func (x *CancelCommitmentRequest) Reset() {
 	*x = CancelCommitmentRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[59]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3573,7 +3797,7 @@ func (x *CancelCommitmentRequest) String() string {
 func (*CancelCommitmentRequest) ProtoMessage() {}
 
 func (x *CancelCommitmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[59]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3586,7 +3810,7 @@ func (x *CancelCommitmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelCommitmentRequest.ProtoReflect.Descriptor instead.
 func (*CancelCommitmentRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{59}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *CancelCommitmentRequest) GetId() string {
@@ -3604,7 +3828,7 @@ type CancelCommitmentResponse struct {
 
 func (x *CancelCommitmentResponse) Reset() {
 	*x = CancelCommitmentResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[60]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3616,7 +3840,7 @@ func (x *CancelCommitmentResponse) String() string {
 func (*CancelCommitmentResponse) ProtoMessage() {}
 
 func (x *CancelCommitmentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[60]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3629,7 +3853,7 @@ func (x *CancelCommitmentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelCommitmentResponse.ProtoReflect.Descriptor instead.
 func (*CancelCommitmentResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{60}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{63}
 }
 
 type AuditEntry struct {
@@ -3650,7 +3874,7 @@ type AuditEntry struct {
 
 func (x *AuditEntry) Reset() {
 	*x = AuditEntry{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[61]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3662,7 +3886,7 @@ func (x *AuditEntry) String() string {
 func (*AuditEntry) ProtoMessage() {}
 
 func (x *AuditEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[61]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3675,7 +3899,7 @@ func (x *AuditEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEntry.ProtoReflect.Descriptor instead.
 func (*AuditEntry) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{61}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *AuditEntry) GetId() string {
@@ -3757,7 +3981,7 @@ type AppendRequest struct {
 
 func (x *AppendRequest) Reset() {
 	*x = AppendRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[62]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3769,7 +3993,7 @@ func (x *AppendRequest) String() string {
 func (*AppendRequest) ProtoMessage() {}
 
 func (x *AppendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[62]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3782,7 +4006,7 @@ func (x *AppendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendRequest.ProtoReflect.Descriptor instead.
 func (*AppendRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{62}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *AppendRequest) GetEntry() *AuditEntry {
@@ -3801,7 +4025,7 @@ type AppendResponse struct {
 
 func (x *AppendResponse) Reset() {
 	*x = AppendResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[63]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3813,7 +4037,7 @@ func (x *AppendResponse) String() string {
 func (*AppendResponse) ProtoMessage() {}
 
 func (x *AppendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[63]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3826,7 +4050,7 @@ func (x *AppendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendResponse.ProtoReflect.Descriptor instead.
 func (*AppendResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{63}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *AppendResponse) GetId() string {
@@ -3851,7 +4075,7 @@ type QueryRequest struct {
 
 func (x *QueryRequest) Reset() {
 	*x = QueryRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[64]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3863,7 +4087,7 @@ func (x *QueryRequest) String() string {
 func (*QueryRequest) ProtoMessage() {}
 
 func (x *QueryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[64]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3876,7 +4100,7 @@ func (x *QueryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryRequest.ProtoReflect.Descriptor instead.
 func (*QueryRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{64}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *QueryRequest) GetActorScope() string {
@@ -3937,7 +4161,7 @@ type QueryResponse struct {
 
 func (x *QueryResponse) Reset() {
 	*x = QueryResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[65]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3949,7 +4173,7 @@ func (x *QueryResponse) String() string {
 func (*QueryResponse) ProtoMessage() {}
 
 func (x *QueryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[65]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3962,7 +4186,7 @@ func (x *QueryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryResponse.ProtoReflect.Descriptor instead.
 func (*QueryResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{65}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *QueryResponse) GetEntries() []*AuditEntry {
@@ -3981,7 +4205,7 @@ type VerifyChainRequest struct {
 
 func (x *VerifyChainRequest) Reset() {
 	*x = VerifyChainRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[66]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3993,7 +4217,7 @@ func (x *VerifyChainRequest) String() string {
 func (*VerifyChainRequest) ProtoMessage() {}
 
 func (x *VerifyChainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[66]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4006,7 +4230,7 @@ func (x *VerifyChainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyChainRequest.ProtoReflect.Descriptor instead.
 func (*VerifyChainRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{66}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *VerifyChainRequest) GetSink() string {
@@ -4027,7 +4251,7 @@ type VerifyChainResponse struct {
 
 func (x *VerifyChainResponse) Reset() {
 	*x = VerifyChainResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[67]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4039,7 +4263,7 @@ func (x *VerifyChainResponse) String() string {
 func (*VerifyChainResponse) ProtoMessage() {}
 
 func (x *VerifyChainResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[67]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4052,7 +4276,7 @@ func (x *VerifyChainResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerifyChainResponse.ProtoReflect.Descriptor instead.
 func (*VerifyChainResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{67}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *VerifyChainResponse) GetOk() bool {
@@ -4094,7 +4318,7 @@ type StorageMount struct {
 
 func (x *StorageMount) Reset() {
 	*x = StorageMount{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[68]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4106,7 +4330,7 @@ func (x *StorageMount) String() string {
 func (*StorageMount) ProtoMessage() {}
 
 func (x *StorageMount) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[68]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4119,7 +4343,7 @@ func (x *StorageMount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageMount.ProtoReflect.Descriptor instead.
 func (*StorageMount) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{68}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *StorageMount) GetLabel() string {
@@ -4201,7 +4425,7 @@ type AddMountRequest struct {
 
 func (x *AddMountRequest) Reset() {
 	*x = AddMountRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[69]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4213,7 +4437,7 @@ func (x *AddMountRequest) String() string {
 func (*AddMountRequest) ProtoMessage() {}
 
 func (x *AddMountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[69]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4226,7 +4450,7 @@ func (x *AddMountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddMountRequest.ProtoReflect.Descriptor instead.
 func (*AddMountRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{69}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *AddMountRequest) GetMount() *StorageMount {
@@ -4244,7 +4468,7 @@ type AddMountResponse struct {
 
 func (x *AddMountResponse) Reset() {
 	*x = AddMountResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[70]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4256,7 +4480,7 @@ func (x *AddMountResponse) String() string {
 func (*AddMountResponse) ProtoMessage() {}
 
 func (x *AddMountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[70]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4269,7 +4493,7 @@ func (x *AddMountResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddMountResponse.ProtoReflect.Descriptor instead.
 func (*AddMountResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{70}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{73}
 }
 
 type RemoveMountRequest struct {
@@ -4281,7 +4505,7 @@ type RemoveMountRequest struct {
 
 func (x *RemoveMountRequest) Reset() {
 	*x = RemoveMountRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[71]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4293,7 +4517,7 @@ func (x *RemoveMountRequest) String() string {
 func (*RemoveMountRequest) ProtoMessage() {}
 
 func (x *RemoveMountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[71]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4306,7 +4530,7 @@ func (x *RemoveMountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveMountRequest.ProtoReflect.Descriptor instead.
 func (*RemoveMountRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{71}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *RemoveMountRequest) GetLabel() string {
@@ -4324,7 +4548,7 @@ type RemoveMountResponse struct {
 
 func (x *RemoveMountResponse) Reset() {
 	*x = RemoveMountResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[72]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4336,7 +4560,7 @@ func (x *RemoveMountResponse) String() string {
 func (*RemoveMountResponse) ProtoMessage() {}
 
 func (x *RemoveMountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[72]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4349,7 +4573,7 @@ func (x *RemoveMountResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveMountResponse.ProtoReflect.Descriptor instead.
 func (*RemoveMountResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{72}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{75}
 }
 
 type ListMountsRequest struct {
@@ -4360,7 +4584,7 @@ type ListMountsRequest struct {
 
 func (x *ListMountsRequest) Reset() {
 	*x = ListMountsRequest{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[73]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4372,7 +4596,7 @@ func (x *ListMountsRequest) String() string {
 func (*ListMountsRequest) ProtoMessage() {}
 
 func (x *ListMountsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[73]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4385,7 +4609,7 @@ func (x *ListMountsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMountsRequest.ProtoReflect.Descriptor instead.
 func (*ListMountsRequest) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{73}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{76}
 }
 
 type ListMountsResponse struct {
@@ -4397,7 +4621,7 @@ type ListMountsResponse struct {
 
 func (x *ListMountsResponse) Reset() {
 	*x = ListMountsResponse{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[74]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4409,7 +4633,7 @@ func (x *ListMountsResponse) String() string {
 func (*ListMountsResponse) ProtoMessage() {}
 
 func (x *ListMountsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[74]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4422,7 +4646,7 @@ func (x *ListMountsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMountsResponse.ProtoReflect.Descriptor instead.
 func (*ListMountsResponse) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{74}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ListMountsResponse) GetMounts() []*StorageMount {
@@ -4454,7 +4678,7 @@ type LogEntry struct {
 
 func (x *LogEntry) Reset() {
 	*x = LogEntry{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[75]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4466,7 +4690,7 @@ func (x *LogEntry) String() string {
 func (*LogEntry) ProtoMessage() {}
 
 func (x *LogEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[75]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4479,7 +4703,7 @@ func (x *LogEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
 func (*LogEntry) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{75}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *LogEntry) GetOp() LogOp {
@@ -4716,14 +4940,30 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\fDreamRequest\"K\n" +
 	"\rDreamResponse\x12\"\n" +
 	"\fconsolidated\x18\x01 \x01(\x05R\fconsolidated\x12\x16\n" +
-	"\x06pruned\x18\x02 \x01(\x05R\x06pruned\"m\n" +
+	"\x06pruned\x18\x02 \x01(\x05R\x06pruned\"\x7f\n" +
 	"\rForgetRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x122\n" +
 	"\x06before\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x06before\x12\x12\n" +
-	"\x04tags\x18\x03 \x03(\tR\x04tags\"r\n" +
+	"\x04tags\x18\x03 \x03(\tR\x04tags\x12\x10\n" +
+	"\x03ids\x18\x04 \x03(\tR\x03ids\"r\n" +
 	"\x0eForgetResponse\x12'\n" +
 	"\x0frecords_removed\x18\x01 \x01(\x05R\x0erecordsRemoved\x127\n" +
-	"\x17consolidations_reforged\x18\x02 \x01(\x05R\x16consolidationsReforged\"\xeb\x01\n" +
+	"\x17consolidations_reforged\x18\x02 \x01(\x05R\x16consolidationsReforged\"\x9f\x02\n" +
+	"\x13FindClustersRequest\x12\x1c\n" +
+	"\tthreshold\x18\x01 \x01(\x02R\tthreshold\x12(\n" +
+	"\x10min_cluster_size\x18\x02 \x01(\x05R\x0eminClusterSize\x12(\n" +
+	"\x10max_cluster_size\x18\x03 \x01(\x05R\x0emaxClusterSize\x12!\n" +
+	"\fscope_filter\x18\x04 \x01(\tR\vscopeFilter\x12)\n" +
+	"\x10retention_filter\x18\x05 \x01(\tR\x0fretentionFilter\x122\n" +
+	"\x06before\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\x06before\x12\x14\n" +
+	"\x05limit\x18\a \x01(\x05R\x05limit\"G\n" +
+	"\x14FindClustersResponse\x12/\n" +
+	"\bclusters\x18\x01 \x03(\v2\x13.lobslaw.v1.ClusterR\bclusters\"\x9b\x01\n" +
+	"\aCluster\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
+	"\arecords\x18\x02 \x03(\v2\x18.lobslaw.v1.VectorRecordR\arecords\x12%\n" +
+	"\x0emin_similarity\x18\x03 \x01(\x02R\rminSimilarity\x12%\n" +
+	"\x0eavg_similarity\x18\x04 \x01(\x02R\ravgSimilarity\"\xeb\x01\n" +
 	"\n" +
 	"PolicyRule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
@@ -4983,14 +5223,15 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\tHeartbeat\x12\x1c.lobslaw.v1.HeartbeatRequest\x1a\x1d.lobslaw.v1.HeartbeatResponse\x12E\n" +
 	"\bGetPeers\x12\x1b.lobslaw.v1.GetPeersRequest\x1a\x1c.lobslaw.v1.GetPeersResponse\x12?\n" +
 	"\x06Reload\x12\x19.lobslaw.v1.ReloadRequest\x1a\x1a.lobslaw.v1.ReloadResponse\x12H\n" +
-	"\tAddMember\x12\x1c.lobslaw.v1.AddMemberRequest\x1a\x1d.lobslaw.v1.AddMemberResponse2\x9e\x03\n" +
+	"\tAddMember\x12\x1c.lobslaw.v1.AddMemberRequest\x1a\x1d.lobslaw.v1.AddMemberResponse2\xf1\x03\n" +
 	"\rMemoryService\x12<\n" +
 	"\x05Store\x12\x18.lobslaw.v1.StoreRequest\x1a\x19.lobslaw.v1.StoreResponse\x12?\n" +
 	"\x06Recall\x12\x19.lobslaw.v1.RecallRequest\x1a\x1a.lobslaw.v1.RecallResponse\x12?\n" +
 	"\x06Search\x12\x19.lobslaw.v1.SearchRequest\x1a\x1a.lobslaw.v1.SearchResponse\x12N\n" +
 	"\vEpisodicAdd\x12\x1e.lobslaw.v1.EpisodicAddRequest\x1a\x1f.lobslaw.v1.EpisodicAddResponse\x12<\n" +
 	"\x05Dream\x12\x18.lobslaw.v1.DreamRequest\x1a\x19.lobslaw.v1.DreamResponse\x12?\n" +
-	"\x06Forget\x12\x19.lobslaw.v1.ForgetRequest\x1a\x1a.lobslaw.v1.ForgetResponse2\xcc\x02\n" +
+	"\x06Forget\x12\x19.lobslaw.v1.ForgetRequest\x1a\x1a.lobslaw.v1.ForgetResponse\x12Q\n" +
+	"\fFindClusters\x12\x1f.lobslaw.v1.FindClustersRequest\x1a .lobslaw.v1.FindClustersResponse2\xcc\x02\n" +
 	"\rPolicyService\x12E\n" +
 	"\bEvaluate\x12\x1b.lobslaw.v1.EvaluateRequest\x1a\x1c.lobslaw.v1.EvaluateResponse\x12H\n" +
 	"\tSyncRules\x12\x1c.lobslaw.v1.SyncRulesRequest\x1a\x1d.lobslaw.v1.SyncRulesResponse\x12B\n" +
@@ -5034,7 +5275,7 @@ func file_lobslaw_v1_lobslaw_proto_rawDescGZIP() []byte {
 }
 
 var file_lobslaw_v1_lobslaw_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_lobslaw_v1_lobslaw_proto_msgTypes = make([]protoimpl.MessageInfo, 85)
+var file_lobslaw_v1_lobslaw_proto_msgTypes = make([]protoimpl.MessageInfo, 88)
 var file_lobslaw_v1_lobslaw_proto_goTypes = []any{
 	(LogOp)(0),                          // 0: lobslaw.v1.LogOp
 	(*NodeInfo)(nil),                    // 1: lobslaw.v1.NodeInfo
@@ -5066,192 +5307,200 @@ var file_lobslaw_v1_lobslaw_proto_goTypes = []any{
 	(*DreamResponse)(nil),               // 27: lobslaw.v1.DreamResponse
 	(*ForgetRequest)(nil),               // 28: lobslaw.v1.ForgetRequest
 	(*ForgetResponse)(nil),              // 29: lobslaw.v1.ForgetResponse
-	(*PolicyRule)(nil),                  // 30: lobslaw.v1.PolicyRule
-	(*Condition)(nil),                   // 31: lobslaw.v1.Condition
-	(*Claims)(nil),                      // 32: lobslaw.v1.Claims
-	(*EvaluateRequest)(nil),             // 33: lobslaw.v1.EvaluateRequest
-	(*EvaluateResponse)(nil),            // 34: lobslaw.v1.EvaluateResponse
-	(*SyncRulesRequest)(nil),            // 35: lobslaw.v1.SyncRulesRequest
-	(*SyncRulesResponse)(nil),           // 36: lobslaw.v1.SyncRulesResponse
-	(*AddRuleRequest)(nil),              // 37: lobslaw.v1.AddRuleRequest
-	(*AddRuleResponse)(nil),             // 38: lobslaw.v1.AddRuleResponse
-	(*RequestConfirmationRequest)(nil),  // 39: lobslaw.v1.RequestConfirmationRequest
-	(*RequestConfirmationResponse)(nil), // 40: lobslaw.v1.RequestConfirmationResponse
-	(*ToolDef)(nil),                     // 41: lobslaw.v1.ToolDef
-	(*InvokeToolRequest)(nil),           // 42: lobslaw.v1.InvokeToolRequest
-	(*InvokeToolResponse)(nil),          // 43: lobslaw.v1.InvokeToolResponse
-	(*ListToolsRequest)(nil),            // 44: lobslaw.v1.ListToolsRequest
-	(*ListToolsResponse)(nil),           // 45: lobslaw.v1.ListToolsResponse
-	(*ProcessMessageRequest)(nil),       // 46: lobslaw.v1.ProcessMessageRequest
-	(*ProcessMessageResponse)(nil),      // 47: lobslaw.v1.ProcessMessageResponse
-	(*HandleUpdateRequest)(nil),         // 48: lobslaw.v1.HandleUpdateRequest
-	(*HandleUpdateResponse)(nil),        // 49: lobslaw.v1.HandleUpdateResponse
-	(*PromptRequest)(nil),               // 50: lobslaw.v1.PromptRequest
-	(*PromptResponse)(nil),              // 51: lobslaw.v1.PromptResponse
-	(*AgentCommitment)(nil),             // 52: lobslaw.v1.AgentCommitment
-	(*ScheduledTaskRecord)(nil),         // 53: lobslaw.v1.ScheduledTaskRecord
-	(*InFlightWork)(nil),                // 54: lobslaw.v1.InFlightWork
-	(*CheckBack)(nil),                   // 55: lobslaw.v1.CheckBack
-	(*GetPlanRequest)(nil),              // 56: lobslaw.v1.GetPlanRequest
-	(*GetPlanResponse)(nil),             // 57: lobslaw.v1.GetPlanResponse
-	(*AddCommitmentRequest)(nil),        // 58: lobslaw.v1.AddCommitmentRequest
-	(*AddCommitmentResponse)(nil),       // 59: lobslaw.v1.AddCommitmentResponse
-	(*CancelCommitmentRequest)(nil),     // 60: lobslaw.v1.CancelCommitmentRequest
-	(*CancelCommitmentResponse)(nil),    // 61: lobslaw.v1.CancelCommitmentResponse
-	(*AuditEntry)(nil),                  // 62: lobslaw.v1.AuditEntry
-	(*AppendRequest)(nil),               // 63: lobslaw.v1.AppendRequest
-	(*AppendResponse)(nil),              // 64: lobslaw.v1.AppendResponse
-	(*QueryRequest)(nil),                // 65: lobslaw.v1.QueryRequest
-	(*QueryResponse)(nil),               // 66: lobslaw.v1.QueryResponse
-	(*VerifyChainRequest)(nil),          // 67: lobslaw.v1.VerifyChainRequest
-	(*VerifyChainResponse)(nil),         // 68: lobslaw.v1.VerifyChainResponse
-	(*StorageMount)(nil),                // 69: lobslaw.v1.StorageMount
-	(*AddMountRequest)(nil),             // 70: lobslaw.v1.AddMountRequest
-	(*AddMountResponse)(nil),            // 71: lobslaw.v1.AddMountResponse
-	(*RemoveMountRequest)(nil),          // 72: lobslaw.v1.RemoveMountRequest
-	(*RemoveMountResponse)(nil),         // 73: lobslaw.v1.RemoveMountResponse
-	(*ListMountsRequest)(nil),           // 74: lobslaw.v1.ListMountsRequest
-	(*ListMountsResponse)(nil),          // 75: lobslaw.v1.ListMountsResponse
-	(*LogEntry)(nil),                    // 76: lobslaw.v1.LogEntry
-	nil,                                 // 77: lobslaw.v1.ReloadResponse.ErrorsEntry
-	nil,                                 // 78: lobslaw.v1.VectorRecord.MetadataEntry
-	nil,                                 // 79: lobslaw.v1.InvokeToolRequest.ParamsEntry
-	nil,                                 // 80: lobslaw.v1.ProcessMessageRequest.MetadataEntry
-	nil,                                 // 81: lobslaw.v1.ProcessMessageResponse.MetadataEntry
-	nil,                                 // 82: lobslaw.v1.HandleUpdateRequest.HeadersEntry
-	nil,                                 // 83: lobslaw.v1.AgentCommitment.ParamsEntry
-	nil,                                 // 84: lobslaw.v1.ScheduledTaskRecord.ParamsEntry
-	nil,                                 // 85: lobslaw.v1.StorageMount.OptionsEntry
-	(*timestamppb.Timestamp)(nil),       // 86: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),         // 87: google.protobuf.Duration
+	(*FindClustersRequest)(nil),         // 30: lobslaw.v1.FindClustersRequest
+	(*FindClustersResponse)(nil),        // 31: lobslaw.v1.FindClustersResponse
+	(*Cluster)(nil),                     // 32: lobslaw.v1.Cluster
+	(*PolicyRule)(nil),                  // 33: lobslaw.v1.PolicyRule
+	(*Condition)(nil),                   // 34: lobslaw.v1.Condition
+	(*Claims)(nil),                      // 35: lobslaw.v1.Claims
+	(*EvaluateRequest)(nil),             // 36: lobslaw.v1.EvaluateRequest
+	(*EvaluateResponse)(nil),            // 37: lobslaw.v1.EvaluateResponse
+	(*SyncRulesRequest)(nil),            // 38: lobslaw.v1.SyncRulesRequest
+	(*SyncRulesResponse)(nil),           // 39: lobslaw.v1.SyncRulesResponse
+	(*AddRuleRequest)(nil),              // 40: lobslaw.v1.AddRuleRequest
+	(*AddRuleResponse)(nil),             // 41: lobslaw.v1.AddRuleResponse
+	(*RequestConfirmationRequest)(nil),  // 42: lobslaw.v1.RequestConfirmationRequest
+	(*RequestConfirmationResponse)(nil), // 43: lobslaw.v1.RequestConfirmationResponse
+	(*ToolDef)(nil),                     // 44: lobslaw.v1.ToolDef
+	(*InvokeToolRequest)(nil),           // 45: lobslaw.v1.InvokeToolRequest
+	(*InvokeToolResponse)(nil),          // 46: lobslaw.v1.InvokeToolResponse
+	(*ListToolsRequest)(nil),            // 47: lobslaw.v1.ListToolsRequest
+	(*ListToolsResponse)(nil),           // 48: lobslaw.v1.ListToolsResponse
+	(*ProcessMessageRequest)(nil),       // 49: lobslaw.v1.ProcessMessageRequest
+	(*ProcessMessageResponse)(nil),      // 50: lobslaw.v1.ProcessMessageResponse
+	(*HandleUpdateRequest)(nil),         // 51: lobslaw.v1.HandleUpdateRequest
+	(*HandleUpdateResponse)(nil),        // 52: lobslaw.v1.HandleUpdateResponse
+	(*PromptRequest)(nil),               // 53: lobslaw.v1.PromptRequest
+	(*PromptResponse)(nil),              // 54: lobslaw.v1.PromptResponse
+	(*AgentCommitment)(nil),             // 55: lobslaw.v1.AgentCommitment
+	(*ScheduledTaskRecord)(nil),         // 56: lobslaw.v1.ScheduledTaskRecord
+	(*InFlightWork)(nil),                // 57: lobslaw.v1.InFlightWork
+	(*CheckBack)(nil),                   // 58: lobslaw.v1.CheckBack
+	(*GetPlanRequest)(nil),              // 59: lobslaw.v1.GetPlanRequest
+	(*GetPlanResponse)(nil),             // 60: lobslaw.v1.GetPlanResponse
+	(*AddCommitmentRequest)(nil),        // 61: lobslaw.v1.AddCommitmentRequest
+	(*AddCommitmentResponse)(nil),       // 62: lobslaw.v1.AddCommitmentResponse
+	(*CancelCommitmentRequest)(nil),     // 63: lobslaw.v1.CancelCommitmentRequest
+	(*CancelCommitmentResponse)(nil),    // 64: lobslaw.v1.CancelCommitmentResponse
+	(*AuditEntry)(nil),                  // 65: lobslaw.v1.AuditEntry
+	(*AppendRequest)(nil),               // 66: lobslaw.v1.AppendRequest
+	(*AppendResponse)(nil),              // 67: lobslaw.v1.AppendResponse
+	(*QueryRequest)(nil),                // 68: lobslaw.v1.QueryRequest
+	(*QueryResponse)(nil),               // 69: lobslaw.v1.QueryResponse
+	(*VerifyChainRequest)(nil),          // 70: lobslaw.v1.VerifyChainRequest
+	(*VerifyChainResponse)(nil),         // 71: lobslaw.v1.VerifyChainResponse
+	(*StorageMount)(nil),                // 72: lobslaw.v1.StorageMount
+	(*AddMountRequest)(nil),             // 73: lobslaw.v1.AddMountRequest
+	(*AddMountResponse)(nil),            // 74: lobslaw.v1.AddMountResponse
+	(*RemoveMountRequest)(nil),          // 75: lobslaw.v1.RemoveMountRequest
+	(*RemoveMountResponse)(nil),         // 76: lobslaw.v1.RemoveMountResponse
+	(*ListMountsRequest)(nil),           // 77: lobslaw.v1.ListMountsRequest
+	(*ListMountsResponse)(nil),          // 78: lobslaw.v1.ListMountsResponse
+	(*LogEntry)(nil),                    // 79: lobslaw.v1.LogEntry
+	nil,                                 // 80: lobslaw.v1.ReloadResponse.ErrorsEntry
+	nil,                                 // 81: lobslaw.v1.VectorRecord.MetadataEntry
+	nil,                                 // 82: lobslaw.v1.InvokeToolRequest.ParamsEntry
+	nil,                                 // 83: lobslaw.v1.ProcessMessageRequest.MetadataEntry
+	nil,                                 // 84: lobslaw.v1.ProcessMessageResponse.MetadataEntry
+	nil,                                 // 85: lobslaw.v1.HandleUpdateRequest.HeadersEntry
+	nil,                                 // 86: lobslaw.v1.AgentCommitment.ParamsEntry
+	nil,                                 // 87: lobslaw.v1.ScheduledTaskRecord.ParamsEntry
+	nil,                                 // 88: lobslaw.v1.StorageMount.OptionsEntry
+	(*timestamppb.Timestamp)(nil),       // 89: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),         // 90: google.protobuf.Duration
 }
 var file_lobslaw_v1_lobslaw_proto_depIdxs = []int32{
-	86, // 0: lobslaw.v1.HealthStatus.last_seen:type_name -> google.protobuf.Timestamp
+	89, // 0: lobslaw.v1.HealthStatus.last_seen:type_name -> google.protobuf.Timestamp
 	3,  // 1: lobslaw.v1.HealthStatus.components:type_name -> lobslaw.v1.ComponentHealth
 	1,  // 2: lobslaw.v1.RegisterRequest.node:type_name -> lobslaw.v1.NodeInfo
 	2,  // 3: lobslaw.v1.HeartbeatRequest.health:type_name -> lobslaw.v1.HealthStatus
 	1,  // 4: lobslaw.v1.GetPeersResponse.peers:type_name -> lobslaw.v1.NodeInfo
-	77, // 5: lobslaw.v1.ReloadResponse.errors:type_name -> lobslaw.v1.ReloadResponse.ErrorsEntry
-	78, // 6: lobslaw.v1.VectorRecord.metadata:type_name -> lobslaw.v1.VectorRecord.MetadataEntry
-	86, // 7: lobslaw.v1.VectorRecord.created_at:type_name -> google.protobuf.Timestamp
-	86, // 8: lobslaw.v1.EpisodicRecord.timestamp:type_name -> google.protobuf.Timestamp
+	80, // 5: lobslaw.v1.ReloadResponse.errors:type_name -> lobslaw.v1.ReloadResponse.ErrorsEntry
+	81, // 6: lobslaw.v1.VectorRecord.metadata:type_name -> lobslaw.v1.VectorRecord.MetadataEntry
+	89, // 7: lobslaw.v1.VectorRecord.created_at:type_name -> google.protobuf.Timestamp
+	89, // 8: lobslaw.v1.EpisodicRecord.timestamp:type_name -> google.protobuf.Timestamp
 	16, // 9: lobslaw.v1.StoreRequest.record:type_name -> lobslaw.v1.VectorRecord
 	16, // 10: lobslaw.v1.RecallResponse.record:type_name -> lobslaw.v1.VectorRecord
 	16, // 11: lobslaw.v1.SearchResponse.hits:type_name -> lobslaw.v1.VectorRecord
 	17, // 12: lobslaw.v1.EpisodicAddRequest.record:type_name -> lobslaw.v1.EpisodicRecord
-	86, // 13: lobslaw.v1.ForgetRequest.before:type_name -> google.protobuf.Timestamp
-	31, // 14: lobslaw.v1.PolicyRule.conditions:type_name -> lobslaw.v1.Condition
-	86, // 15: lobslaw.v1.Claims.expires_at:type_name -> google.protobuf.Timestamp
-	86, // 16: lobslaw.v1.Claims.issued_at:type_name -> google.protobuf.Timestamp
-	32, // 17: lobslaw.v1.EvaluateRequest.claims:type_name -> lobslaw.v1.Claims
-	30, // 18: lobslaw.v1.SyncRulesResponse.rules:type_name -> lobslaw.v1.PolicyRule
-	30, // 19: lobslaw.v1.AddRuleRequest.rule:type_name -> lobslaw.v1.PolicyRule
-	87, // 20: lobslaw.v1.RequestConfirmationRequest.timeout:type_name -> google.protobuf.Duration
-	79, // 21: lobslaw.v1.InvokeToolRequest.params:type_name -> lobslaw.v1.InvokeToolRequest.ParamsEntry
-	32, // 22: lobslaw.v1.InvokeToolRequest.claims:type_name -> lobslaw.v1.Claims
-	41, // 23: lobslaw.v1.ListToolsResponse.tools:type_name -> lobslaw.v1.ToolDef
-	32, // 24: lobslaw.v1.ProcessMessageRequest.claims:type_name -> lobslaw.v1.Claims
-	80, // 25: lobslaw.v1.ProcessMessageRequest.metadata:type_name -> lobslaw.v1.ProcessMessageRequest.MetadataEntry
-	81, // 26: lobslaw.v1.ProcessMessageResponse.metadata:type_name -> lobslaw.v1.ProcessMessageResponse.MetadataEntry
-	82, // 27: lobslaw.v1.HandleUpdateRequest.headers:type_name -> lobslaw.v1.HandleUpdateRequest.HeadersEntry
-	87, // 28: lobslaw.v1.PromptRequest.timeout:type_name -> google.protobuf.Duration
-	86, // 29: lobslaw.v1.AgentCommitment.due_at:type_name -> google.protobuf.Timestamp
-	83, // 30: lobslaw.v1.AgentCommitment.params:type_name -> lobslaw.v1.AgentCommitment.ParamsEntry
-	84, // 31: lobslaw.v1.ScheduledTaskRecord.params:type_name -> lobslaw.v1.ScheduledTaskRecord.ParamsEntry
-	86, // 32: lobslaw.v1.ScheduledTaskRecord.created_at:type_name -> google.protobuf.Timestamp
-	86, // 33: lobslaw.v1.ScheduledTaskRecord.last_run:type_name -> google.protobuf.Timestamp
-	86, // 34: lobslaw.v1.ScheduledTaskRecord.next_run:type_name -> google.protobuf.Timestamp
-	86, // 35: lobslaw.v1.InFlightWork.last_progress:type_name -> google.protobuf.Timestamp
-	86, // 36: lobslaw.v1.CheckBack.scheduled_for:type_name -> google.protobuf.Timestamp
-	87, // 37: lobslaw.v1.GetPlanRequest.window:type_name -> google.protobuf.Duration
-	87, // 38: lobslaw.v1.GetPlanResponse.window:type_name -> google.protobuf.Duration
-	52, // 39: lobslaw.v1.GetPlanResponse.commitments:type_name -> lobslaw.v1.AgentCommitment
-	53, // 40: lobslaw.v1.GetPlanResponse.scheduled_tasks:type_name -> lobslaw.v1.ScheduledTaskRecord
-	54, // 41: lobslaw.v1.GetPlanResponse.in_flight:type_name -> lobslaw.v1.InFlightWork
-	55, // 42: lobslaw.v1.GetPlanResponse.check_back_threads:type_name -> lobslaw.v1.CheckBack
-	52, // 43: lobslaw.v1.AddCommitmentRequest.commitment:type_name -> lobslaw.v1.AgentCommitment
-	86, // 44: lobslaw.v1.AuditEntry.timestamp:type_name -> google.protobuf.Timestamp
-	62, // 45: lobslaw.v1.AppendRequest.entry:type_name -> lobslaw.v1.AuditEntry
-	86, // 46: lobslaw.v1.QueryRequest.since:type_name -> google.protobuf.Timestamp
-	86, // 47: lobslaw.v1.QueryRequest.until:type_name -> google.protobuf.Timestamp
-	62, // 48: lobslaw.v1.QueryResponse.entries:type_name -> lobslaw.v1.AuditEntry
-	85, // 49: lobslaw.v1.StorageMount.options:type_name -> lobslaw.v1.StorageMount.OptionsEntry
-	87, // 50: lobslaw.v1.StorageMount.poll_interval:type_name -> google.protobuf.Duration
-	69, // 51: lobslaw.v1.AddMountRequest.mount:type_name -> lobslaw.v1.StorageMount
-	69, // 52: lobslaw.v1.ListMountsResponse.mounts:type_name -> lobslaw.v1.StorageMount
-	0,  // 53: lobslaw.v1.LogEntry.op:type_name -> lobslaw.v1.LogOp
-	30, // 54: lobslaw.v1.LogEntry.policy_rule:type_name -> lobslaw.v1.PolicyRule
-	53, // 55: lobslaw.v1.LogEntry.scheduled_task:type_name -> lobslaw.v1.ScheduledTaskRecord
-	52, // 56: lobslaw.v1.LogEntry.commitment:type_name -> lobslaw.v1.AgentCommitment
-	62, // 57: lobslaw.v1.LogEntry.audit_entry:type_name -> lobslaw.v1.AuditEntry
-	16, // 58: lobslaw.v1.LogEntry.vector_record:type_name -> lobslaw.v1.VectorRecord
-	17, // 59: lobslaw.v1.LogEntry.episodic_record:type_name -> lobslaw.v1.EpisodicRecord
-	69, // 60: lobslaw.v1.LogEntry.storage_mount:type_name -> lobslaw.v1.StorageMount
-	4,  // 61: lobslaw.v1.NodeService.Register:input_type -> lobslaw.v1.RegisterRequest
-	6,  // 62: lobslaw.v1.NodeService.Deregister:input_type -> lobslaw.v1.DeregisterRequest
-	8,  // 63: lobslaw.v1.NodeService.Heartbeat:input_type -> lobslaw.v1.HeartbeatRequest
-	10, // 64: lobslaw.v1.NodeService.GetPeers:input_type -> lobslaw.v1.GetPeersRequest
-	12, // 65: lobslaw.v1.NodeService.Reload:input_type -> lobslaw.v1.ReloadRequest
-	14, // 66: lobslaw.v1.NodeService.AddMember:input_type -> lobslaw.v1.AddMemberRequest
-	18, // 67: lobslaw.v1.MemoryService.Store:input_type -> lobslaw.v1.StoreRequest
-	20, // 68: lobslaw.v1.MemoryService.Recall:input_type -> lobslaw.v1.RecallRequest
-	22, // 69: lobslaw.v1.MemoryService.Search:input_type -> lobslaw.v1.SearchRequest
-	24, // 70: lobslaw.v1.MemoryService.EpisodicAdd:input_type -> lobslaw.v1.EpisodicAddRequest
-	26, // 71: lobslaw.v1.MemoryService.Dream:input_type -> lobslaw.v1.DreamRequest
-	28, // 72: lobslaw.v1.MemoryService.Forget:input_type -> lobslaw.v1.ForgetRequest
-	33, // 73: lobslaw.v1.PolicyService.Evaluate:input_type -> lobslaw.v1.EvaluateRequest
-	35, // 74: lobslaw.v1.PolicyService.SyncRules:input_type -> lobslaw.v1.SyncRulesRequest
-	37, // 75: lobslaw.v1.PolicyService.AddRule:input_type -> lobslaw.v1.AddRuleRequest
-	39, // 76: lobslaw.v1.PolicyService.RequestConfirmation:input_type -> lobslaw.v1.RequestConfirmationRequest
-	42, // 77: lobslaw.v1.AgentService.InvokeTool:input_type -> lobslaw.v1.InvokeToolRequest
-	44, // 78: lobslaw.v1.AgentService.ListTools:input_type -> lobslaw.v1.ListToolsRequest
-	46, // 79: lobslaw.v1.AgentService.ProcessMessage:input_type -> lobslaw.v1.ProcessMessageRequest
-	48, // 80: lobslaw.v1.ChannelService.HandleUpdate:input_type -> lobslaw.v1.HandleUpdateRequest
-	50, // 81: lobslaw.v1.ChannelService.Prompt:input_type -> lobslaw.v1.PromptRequest
-	56, // 82: lobslaw.v1.PlanService.GetPlan:input_type -> lobslaw.v1.GetPlanRequest
-	58, // 83: lobslaw.v1.PlanService.AddCommitment:input_type -> lobslaw.v1.AddCommitmentRequest
-	60, // 84: lobslaw.v1.PlanService.CancelCommitment:input_type -> lobslaw.v1.CancelCommitmentRequest
-	63, // 85: lobslaw.v1.AuditService.Append:input_type -> lobslaw.v1.AppendRequest
-	65, // 86: lobslaw.v1.AuditService.Query:input_type -> lobslaw.v1.QueryRequest
-	67, // 87: lobslaw.v1.AuditService.VerifyChain:input_type -> lobslaw.v1.VerifyChainRequest
-	70, // 88: lobslaw.v1.StorageService.AddMount:input_type -> lobslaw.v1.AddMountRequest
-	72, // 89: lobslaw.v1.StorageService.RemoveMount:input_type -> lobslaw.v1.RemoveMountRequest
-	74, // 90: lobslaw.v1.StorageService.ListMounts:input_type -> lobslaw.v1.ListMountsRequest
-	5,  // 91: lobslaw.v1.NodeService.Register:output_type -> lobslaw.v1.RegisterResponse
-	7,  // 92: lobslaw.v1.NodeService.Deregister:output_type -> lobslaw.v1.DeregisterResponse
-	9,  // 93: lobslaw.v1.NodeService.Heartbeat:output_type -> lobslaw.v1.HeartbeatResponse
-	11, // 94: lobslaw.v1.NodeService.GetPeers:output_type -> lobslaw.v1.GetPeersResponse
-	13, // 95: lobslaw.v1.NodeService.Reload:output_type -> lobslaw.v1.ReloadResponse
-	15, // 96: lobslaw.v1.NodeService.AddMember:output_type -> lobslaw.v1.AddMemberResponse
-	19, // 97: lobslaw.v1.MemoryService.Store:output_type -> lobslaw.v1.StoreResponse
-	21, // 98: lobslaw.v1.MemoryService.Recall:output_type -> lobslaw.v1.RecallResponse
-	23, // 99: lobslaw.v1.MemoryService.Search:output_type -> lobslaw.v1.SearchResponse
-	25, // 100: lobslaw.v1.MemoryService.EpisodicAdd:output_type -> lobslaw.v1.EpisodicAddResponse
-	27, // 101: lobslaw.v1.MemoryService.Dream:output_type -> lobslaw.v1.DreamResponse
-	29, // 102: lobslaw.v1.MemoryService.Forget:output_type -> lobslaw.v1.ForgetResponse
-	34, // 103: lobslaw.v1.PolicyService.Evaluate:output_type -> lobslaw.v1.EvaluateResponse
-	36, // 104: lobslaw.v1.PolicyService.SyncRules:output_type -> lobslaw.v1.SyncRulesResponse
-	38, // 105: lobslaw.v1.PolicyService.AddRule:output_type -> lobslaw.v1.AddRuleResponse
-	40, // 106: lobslaw.v1.PolicyService.RequestConfirmation:output_type -> lobslaw.v1.RequestConfirmationResponse
-	43, // 107: lobslaw.v1.AgentService.InvokeTool:output_type -> lobslaw.v1.InvokeToolResponse
-	45, // 108: lobslaw.v1.AgentService.ListTools:output_type -> lobslaw.v1.ListToolsResponse
-	47, // 109: lobslaw.v1.AgentService.ProcessMessage:output_type -> lobslaw.v1.ProcessMessageResponse
-	49, // 110: lobslaw.v1.ChannelService.HandleUpdate:output_type -> lobslaw.v1.HandleUpdateResponse
-	51, // 111: lobslaw.v1.ChannelService.Prompt:output_type -> lobslaw.v1.PromptResponse
-	57, // 112: lobslaw.v1.PlanService.GetPlan:output_type -> lobslaw.v1.GetPlanResponse
-	59, // 113: lobslaw.v1.PlanService.AddCommitment:output_type -> lobslaw.v1.AddCommitmentResponse
-	61, // 114: lobslaw.v1.PlanService.CancelCommitment:output_type -> lobslaw.v1.CancelCommitmentResponse
-	64, // 115: lobslaw.v1.AuditService.Append:output_type -> lobslaw.v1.AppendResponse
-	66, // 116: lobslaw.v1.AuditService.Query:output_type -> lobslaw.v1.QueryResponse
-	68, // 117: lobslaw.v1.AuditService.VerifyChain:output_type -> lobslaw.v1.VerifyChainResponse
-	71, // 118: lobslaw.v1.StorageService.AddMount:output_type -> lobslaw.v1.AddMountResponse
-	73, // 119: lobslaw.v1.StorageService.RemoveMount:output_type -> lobslaw.v1.RemoveMountResponse
-	75, // 120: lobslaw.v1.StorageService.ListMounts:output_type -> lobslaw.v1.ListMountsResponse
-	91, // [91:121] is the sub-list for method output_type
-	61, // [61:91] is the sub-list for method input_type
-	61, // [61:61] is the sub-list for extension type_name
-	61, // [61:61] is the sub-list for extension extendee
-	0,  // [0:61] is the sub-list for field type_name
+	89, // 13: lobslaw.v1.ForgetRequest.before:type_name -> google.protobuf.Timestamp
+	89, // 14: lobslaw.v1.FindClustersRequest.before:type_name -> google.protobuf.Timestamp
+	32, // 15: lobslaw.v1.FindClustersResponse.clusters:type_name -> lobslaw.v1.Cluster
+	16, // 16: lobslaw.v1.Cluster.records:type_name -> lobslaw.v1.VectorRecord
+	34, // 17: lobslaw.v1.PolicyRule.conditions:type_name -> lobslaw.v1.Condition
+	89, // 18: lobslaw.v1.Claims.expires_at:type_name -> google.protobuf.Timestamp
+	89, // 19: lobslaw.v1.Claims.issued_at:type_name -> google.protobuf.Timestamp
+	35, // 20: lobslaw.v1.EvaluateRequest.claims:type_name -> lobslaw.v1.Claims
+	33, // 21: lobslaw.v1.SyncRulesResponse.rules:type_name -> lobslaw.v1.PolicyRule
+	33, // 22: lobslaw.v1.AddRuleRequest.rule:type_name -> lobslaw.v1.PolicyRule
+	90, // 23: lobslaw.v1.RequestConfirmationRequest.timeout:type_name -> google.protobuf.Duration
+	82, // 24: lobslaw.v1.InvokeToolRequest.params:type_name -> lobslaw.v1.InvokeToolRequest.ParamsEntry
+	35, // 25: lobslaw.v1.InvokeToolRequest.claims:type_name -> lobslaw.v1.Claims
+	44, // 26: lobslaw.v1.ListToolsResponse.tools:type_name -> lobslaw.v1.ToolDef
+	35, // 27: lobslaw.v1.ProcessMessageRequest.claims:type_name -> lobslaw.v1.Claims
+	83, // 28: lobslaw.v1.ProcessMessageRequest.metadata:type_name -> lobslaw.v1.ProcessMessageRequest.MetadataEntry
+	84, // 29: lobslaw.v1.ProcessMessageResponse.metadata:type_name -> lobslaw.v1.ProcessMessageResponse.MetadataEntry
+	85, // 30: lobslaw.v1.HandleUpdateRequest.headers:type_name -> lobslaw.v1.HandleUpdateRequest.HeadersEntry
+	90, // 31: lobslaw.v1.PromptRequest.timeout:type_name -> google.protobuf.Duration
+	89, // 32: lobslaw.v1.AgentCommitment.due_at:type_name -> google.protobuf.Timestamp
+	86, // 33: lobslaw.v1.AgentCommitment.params:type_name -> lobslaw.v1.AgentCommitment.ParamsEntry
+	87, // 34: lobslaw.v1.ScheduledTaskRecord.params:type_name -> lobslaw.v1.ScheduledTaskRecord.ParamsEntry
+	89, // 35: lobslaw.v1.ScheduledTaskRecord.created_at:type_name -> google.protobuf.Timestamp
+	89, // 36: lobslaw.v1.ScheduledTaskRecord.last_run:type_name -> google.protobuf.Timestamp
+	89, // 37: lobslaw.v1.ScheduledTaskRecord.next_run:type_name -> google.protobuf.Timestamp
+	89, // 38: lobslaw.v1.InFlightWork.last_progress:type_name -> google.protobuf.Timestamp
+	89, // 39: lobslaw.v1.CheckBack.scheduled_for:type_name -> google.protobuf.Timestamp
+	90, // 40: lobslaw.v1.GetPlanRequest.window:type_name -> google.protobuf.Duration
+	90, // 41: lobslaw.v1.GetPlanResponse.window:type_name -> google.protobuf.Duration
+	55, // 42: lobslaw.v1.GetPlanResponse.commitments:type_name -> lobslaw.v1.AgentCommitment
+	56, // 43: lobslaw.v1.GetPlanResponse.scheduled_tasks:type_name -> lobslaw.v1.ScheduledTaskRecord
+	57, // 44: lobslaw.v1.GetPlanResponse.in_flight:type_name -> lobslaw.v1.InFlightWork
+	58, // 45: lobslaw.v1.GetPlanResponse.check_back_threads:type_name -> lobslaw.v1.CheckBack
+	55, // 46: lobslaw.v1.AddCommitmentRequest.commitment:type_name -> lobslaw.v1.AgentCommitment
+	89, // 47: lobslaw.v1.AuditEntry.timestamp:type_name -> google.protobuf.Timestamp
+	65, // 48: lobslaw.v1.AppendRequest.entry:type_name -> lobslaw.v1.AuditEntry
+	89, // 49: lobslaw.v1.QueryRequest.since:type_name -> google.protobuf.Timestamp
+	89, // 50: lobslaw.v1.QueryRequest.until:type_name -> google.protobuf.Timestamp
+	65, // 51: lobslaw.v1.QueryResponse.entries:type_name -> lobslaw.v1.AuditEntry
+	88, // 52: lobslaw.v1.StorageMount.options:type_name -> lobslaw.v1.StorageMount.OptionsEntry
+	90, // 53: lobslaw.v1.StorageMount.poll_interval:type_name -> google.protobuf.Duration
+	72, // 54: lobslaw.v1.AddMountRequest.mount:type_name -> lobslaw.v1.StorageMount
+	72, // 55: lobslaw.v1.ListMountsResponse.mounts:type_name -> lobslaw.v1.StorageMount
+	0,  // 56: lobslaw.v1.LogEntry.op:type_name -> lobslaw.v1.LogOp
+	33, // 57: lobslaw.v1.LogEntry.policy_rule:type_name -> lobslaw.v1.PolicyRule
+	56, // 58: lobslaw.v1.LogEntry.scheduled_task:type_name -> lobslaw.v1.ScheduledTaskRecord
+	55, // 59: lobslaw.v1.LogEntry.commitment:type_name -> lobslaw.v1.AgentCommitment
+	65, // 60: lobslaw.v1.LogEntry.audit_entry:type_name -> lobslaw.v1.AuditEntry
+	16, // 61: lobslaw.v1.LogEntry.vector_record:type_name -> lobslaw.v1.VectorRecord
+	17, // 62: lobslaw.v1.LogEntry.episodic_record:type_name -> lobslaw.v1.EpisodicRecord
+	72, // 63: lobslaw.v1.LogEntry.storage_mount:type_name -> lobslaw.v1.StorageMount
+	4,  // 64: lobslaw.v1.NodeService.Register:input_type -> lobslaw.v1.RegisterRequest
+	6,  // 65: lobslaw.v1.NodeService.Deregister:input_type -> lobslaw.v1.DeregisterRequest
+	8,  // 66: lobslaw.v1.NodeService.Heartbeat:input_type -> lobslaw.v1.HeartbeatRequest
+	10, // 67: lobslaw.v1.NodeService.GetPeers:input_type -> lobslaw.v1.GetPeersRequest
+	12, // 68: lobslaw.v1.NodeService.Reload:input_type -> lobslaw.v1.ReloadRequest
+	14, // 69: lobslaw.v1.NodeService.AddMember:input_type -> lobslaw.v1.AddMemberRequest
+	18, // 70: lobslaw.v1.MemoryService.Store:input_type -> lobslaw.v1.StoreRequest
+	20, // 71: lobslaw.v1.MemoryService.Recall:input_type -> lobslaw.v1.RecallRequest
+	22, // 72: lobslaw.v1.MemoryService.Search:input_type -> lobslaw.v1.SearchRequest
+	24, // 73: lobslaw.v1.MemoryService.EpisodicAdd:input_type -> lobslaw.v1.EpisodicAddRequest
+	26, // 74: lobslaw.v1.MemoryService.Dream:input_type -> lobslaw.v1.DreamRequest
+	28, // 75: lobslaw.v1.MemoryService.Forget:input_type -> lobslaw.v1.ForgetRequest
+	30, // 76: lobslaw.v1.MemoryService.FindClusters:input_type -> lobslaw.v1.FindClustersRequest
+	36, // 77: lobslaw.v1.PolicyService.Evaluate:input_type -> lobslaw.v1.EvaluateRequest
+	38, // 78: lobslaw.v1.PolicyService.SyncRules:input_type -> lobslaw.v1.SyncRulesRequest
+	40, // 79: lobslaw.v1.PolicyService.AddRule:input_type -> lobslaw.v1.AddRuleRequest
+	42, // 80: lobslaw.v1.PolicyService.RequestConfirmation:input_type -> lobslaw.v1.RequestConfirmationRequest
+	45, // 81: lobslaw.v1.AgentService.InvokeTool:input_type -> lobslaw.v1.InvokeToolRequest
+	47, // 82: lobslaw.v1.AgentService.ListTools:input_type -> lobslaw.v1.ListToolsRequest
+	49, // 83: lobslaw.v1.AgentService.ProcessMessage:input_type -> lobslaw.v1.ProcessMessageRequest
+	51, // 84: lobslaw.v1.ChannelService.HandleUpdate:input_type -> lobslaw.v1.HandleUpdateRequest
+	53, // 85: lobslaw.v1.ChannelService.Prompt:input_type -> lobslaw.v1.PromptRequest
+	59, // 86: lobslaw.v1.PlanService.GetPlan:input_type -> lobslaw.v1.GetPlanRequest
+	61, // 87: lobslaw.v1.PlanService.AddCommitment:input_type -> lobslaw.v1.AddCommitmentRequest
+	63, // 88: lobslaw.v1.PlanService.CancelCommitment:input_type -> lobslaw.v1.CancelCommitmentRequest
+	66, // 89: lobslaw.v1.AuditService.Append:input_type -> lobslaw.v1.AppendRequest
+	68, // 90: lobslaw.v1.AuditService.Query:input_type -> lobslaw.v1.QueryRequest
+	70, // 91: lobslaw.v1.AuditService.VerifyChain:input_type -> lobslaw.v1.VerifyChainRequest
+	73, // 92: lobslaw.v1.StorageService.AddMount:input_type -> lobslaw.v1.AddMountRequest
+	75, // 93: lobslaw.v1.StorageService.RemoveMount:input_type -> lobslaw.v1.RemoveMountRequest
+	77, // 94: lobslaw.v1.StorageService.ListMounts:input_type -> lobslaw.v1.ListMountsRequest
+	5,  // 95: lobslaw.v1.NodeService.Register:output_type -> lobslaw.v1.RegisterResponse
+	7,  // 96: lobslaw.v1.NodeService.Deregister:output_type -> lobslaw.v1.DeregisterResponse
+	9,  // 97: lobslaw.v1.NodeService.Heartbeat:output_type -> lobslaw.v1.HeartbeatResponse
+	11, // 98: lobslaw.v1.NodeService.GetPeers:output_type -> lobslaw.v1.GetPeersResponse
+	13, // 99: lobslaw.v1.NodeService.Reload:output_type -> lobslaw.v1.ReloadResponse
+	15, // 100: lobslaw.v1.NodeService.AddMember:output_type -> lobslaw.v1.AddMemberResponse
+	19, // 101: lobslaw.v1.MemoryService.Store:output_type -> lobslaw.v1.StoreResponse
+	21, // 102: lobslaw.v1.MemoryService.Recall:output_type -> lobslaw.v1.RecallResponse
+	23, // 103: lobslaw.v1.MemoryService.Search:output_type -> lobslaw.v1.SearchResponse
+	25, // 104: lobslaw.v1.MemoryService.EpisodicAdd:output_type -> lobslaw.v1.EpisodicAddResponse
+	27, // 105: lobslaw.v1.MemoryService.Dream:output_type -> lobslaw.v1.DreamResponse
+	29, // 106: lobslaw.v1.MemoryService.Forget:output_type -> lobslaw.v1.ForgetResponse
+	31, // 107: lobslaw.v1.MemoryService.FindClusters:output_type -> lobslaw.v1.FindClustersResponse
+	37, // 108: lobslaw.v1.PolicyService.Evaluate:output_type -> lobslaw.v1.EvaluateResponse
+	39, // 109: lobslaw.v1.PolicyService.SyncRules:output_type -> lobslaw.v1.SyncRulesResponse
+	41, // 110: lobslaw.v1.PolicyService.AddRule:output_type -> lobslaw.v1.AddRuleResponse
+	43, // 111: lobslaw.v1.PolicyService.RequestConfirmation:output_type -> lobslaw.v1.RequestConfirmationResponse
+	46, // 112: lobslaw.v1.AgentService.InvokeTool:output_type -> lobslaw.v1.InvokeToolResponse
+	48, // 113: lobslaw.v1.AgentService.ListTools:output_type -> lobslaw.v1.ListToolsResponse
+	50, // 114: lobslaw.v1.AgentService.ProcessMessage:output_type -> lobslaw.v1.ProcessMessageResponse
+	52, // 115: lobslaw.v1.ChannelService.HandleUpdate:output_type -> lobslaw.v1.HandleUpdateResponse
+	54, // 116: lobslaw.v1.ChannelService.Prompt:output_type -> lobslaw.v1.PromptResponse
+	60, // 117: lobslaw.v1.PlanService.GetPlan:output_type -> lobslaw.v1.GetPlanResponse
+	62, // 118: lobslaw.v1.PlanService.AddCommitment:output_type -> lobslaw.v1.AddCommitmentResponse
+	64, // 119: lobslaw.v1.PlanService.CancelCommitment:output_type -> lobslaw.v1.CancelCommitmentResponse
+	67, // 120: lobslaw.v1.AuditService.Append:output_type -> lobslaw.v1.AppendResponse
+	69, // 121: lobslaw.v1.AuditService.Query:output_type -> lobslaw.v1.QueryResponse
+	71, // 122: lobslaw.v1.AuditService.VerifyChain:output_type -> lobslaw.v1.VerifyChainResponse
+	74, // 123: lobslaw.v1.StorageService.AddMount:output_type -> lobslaw.v1.AddMountResponse
+	76, // 124: lobslaw.v1.StorageService.RemoveMount:output_type -> lobslaw.v1.RemoveMountResponse
+	78, // 125: lobslaw.v1.StorageService.ListMounts:output_type -> lobslaw.v1.ListMountsResponse
+	95, // [95:126] is the sub-list for method output_type
+	64, // [64:95] is the sub-list for method input_type
+	64, // [64:64] is the sub-list for extension type_name
+	64, // [64:64] is the sub-list for extension extendee
+	0,  // [0:64] is the sub-list for field type_name
 }
 
 func init() { file_lobslaw_v1_lobslaw_proto_init() }
@@ -5259,7 +5508,7 @@ func file_lobslaw_v1_lobslaw_proto_init() {
 	if File_lobslaw_v1_lobslaw_proto != nil {
 		return
 	}
-	file_lobslaw_v1_lobslaw_proto_msgTypes[75].OneofWrappers = []any{
+	file_lobslaw_v1_lobslaw_proto_msgTypes[78].OneofWrappers = []any{
 		(*LogEntry_PolicyRule)(nil),
 		(*LogEntry_ScheduledTask)(nil),
 		(*LogEntry_Commitment)(nil),
@@ -5274,7 +5523,7 @@ func file_lobslaw_v1_lobslaw_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lobslaw_v1_lobslaw_proto_rawDesc), len(file_lobslaw_v1_lobslaw_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   85,
+			NumMessages:   88,
 			NumExtensions: 0,
 			NumServices:   8,
 		},

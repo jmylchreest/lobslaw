@@ -309,12 +309,13 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	MemoryService_Store_FullMethodName       = "/lobslaw.v1.MemoryService/Store"
-	MemoryService_Recall_FullMethodName      = "/lobslaw.v1.MemoryService/Recall"
-	MemoryService_Search_FullMethodName      = "/lobslaw.v1.MemoryService/Search"
-	MemoryService_EpisodicAdd_FullMethodName = "/lobslaw.v1.MemoryService/EpisodicAdd"
-	MemoryService_Dream_FullMethodName       = "/lobslaw.v1.MemoryService/Dream"
-	MemoryService_Forget_FullMethodName      = "/lobslaw.v1.MemoryService/Forget"
+	MemoryService_Store_FullMethodName        = "/lobslaw.v1.MemoryService/Store"
+	MemoryService_Recall_FullMethodName       = "/lobslaw.v1.MemoryService/Recall"
+	MemoryService_Search_FullMethodName       = "/lobslaw.v1.MemoryService/Search"
+	MemoryService_EpisodicAdd_FullMethodName  = "/lobslaw.v1.MemoryService/EpisodicAdd"
+	MemoryService_Dream_FullMethodName        = "/lobslaw.v1.MemoryService/Dream"
+	MemoryService_Forget_FullMethodName       = "/lobslaw.v1.MemoryService/Forget"
+	MemoryService_FindClusters_FullMethodName = "/lobslaw.v1.MemoryService/FindClusters"
 )
 
 // MemoryServiceClient is the client API for MemoryService service.
@@ -327,6 +328,11 @@ type MemoryServiceClient interface {
 	EpisodicAdd(ctx context.Context, in *EpisodicAddRequest, opts ...grpc.CallOption) (*EpisodicAddResponse, error)
 	Dream(ctx context.Context, in *DreamRequest, opts ...grpc.CallOption) (*DreamResponse, error)
 	Forget(ctx context.Context, in *ForgetRequest, opts ...grpc.CallOption) (*ForgetResponse, error)
+	// FindClusters — deterministic near-duplicate detection for the
+	// Dream-time consolidation merge flow. Pure math (pairwise cosine
+	// + union-find); no LLM. See docs/MEMORY.md for the composition
+	// pattern with the Adjudicator LLM interface.
+	FindClusters(ctx context.Context, in *FindClustersRequest, opts ...grpc.CallOption) (*FindClustersResponse, error)
 }
 
 type memoryServiceClient struct {
@@ -397,6 +403,16 @@ func (c *memoryServiceClient) Forget(ctx context.Context, in *ForgetRequest, opt
 	return out, nil
 }
 
+func (c *memoryServiceClient) FindClusters(ctx context.Context, in *FindClustersRequest, opts ...grpc.CallOption) (*FindClustersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FindClustersResponse)
+	err := c.cc.Invoke(ctx, MemoryService_FindClusters_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MemoryServiceServer is the server API for MemoryService service.
 // All implementations should embed UnimplementedMemoryServiceServer
 // for forward compatibility.
@@ -407,6 +423,11 @@ type MemoryServiceServer interface {
 	EpisodicAdd(context.Context, *EpisodicAddRequest) (*EpisodicAddResponse, error)
 	Dream(context.Context, *DreamRequest) (*DreamResponse, error)
 	Forget(context.Context, *ForgetRequest) (*ForgetResponse, error)
+	// FindClusters — deterministic near-duplicate detection for the
+	// Dream-time consolidation merge flow. Pure math (pairwise cosine
+	// + union-find); no LLM. See docs/MEMORY.md for the composition
+	// pattern with the Adjudicator LLM interface.
+	FindClusters(context.Context, *FindClustersRequest) (*FindClustersResponse, error)
 }
 
 // UnimplementedMemoryServiceServer should be embedded to have
@@ -433,6 +454,9 @@ func (UnimplementedMemoryServiceServer) Dream(context.Context, *DreamRequest) (*
 }
 func (UnimplementedMemoryServiceServer) Forget(context.Context, *ForgetRequest) (*ForgetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Forget not implemented")
+}
+func (UnimplementedMemoryServiceServer) FindClusters(context.Context, *FindClustersRequest) (*FindClustersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FindClusters not implemented")
 }
 func (UnimplementedMemoryServiceServer) testEmbeddedByValue() {}
 
@@ -562,6 +586,24 @@ func _MemoryService_Forget_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MemoryService_FindClusters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FindClustersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).FindClusters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_FindClusters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).FindClusters(ctx, req.(*FindClustersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MemoryService_ServiceDesc is the grpc.ServiceDesc for MemoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -592,6 +634,10 @@ var MemoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Forget",
 			Handler:    _MemoryService_Forget_Handler,
+		},
+		{
+			MethodName: "FindClusters",
+			Handler:    _MemoryService_FindClusters_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -200,9 +200,9 @@ func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lo
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
-	if req.Query == "" && req.Before == nil && len(req.Tags) == 0 {
+	if req.Query == "" && req.Before == nil && len(req.Tags) == 0 && len(req.Ids) == 0 {
 		return nil, status.Error(codes.InvalidArgument,
-			"at least one filter (query, before, tags) required — refusing to forget everything")
+			"at least one filter (query, before, tags, ids) required — refusing to forget everything")
 	}
 	if s.raft != nil && !s.raft.IsLeader() {
 		return nil, status.Errorf(codes.FailedPrecondition,
@@ -214,9 +214,24 @@ func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lo
 		before = req.Before.AsTime()
 	}
 
-	matched, err := forgetScan(s.store, req.Query, before, req.Tags)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "forget scan: %v", err)
+	// Build the matched-set. Explicit ids are accepted as-is (caller
+	// already decided what to delete); query/tags/before feed the scan.
+	// Both paths can coexist: pass ids for explicit additions plus a
+	// query for broader matches, for instance.
+	matched := make(map[string]struct{}, len(req.Ids))
+	for _, id := range req.Ids {
+		if id != "" {
+			matched[id] = struct{}{}
+		}
+	}
+	if req.Query != "" || req.Before != nil || len(req.Tags) > 0 {
+		scanned, err := forgetScan(s.store, req.Query, before, req.Tags)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "forget scan: %v", err)
+		}
+		for id := range scanned {
+			matched[id] = struct{}{}
+		}
 	}
 
 	swept, err := forgetCascade(s.store, matched)

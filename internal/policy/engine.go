@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -35,8 +36,13 @@ type ConditionEvaluator func(ctx context.Context, cond types.Condition) (bool, e
 // store. Reads hit the local store (no Raft round-trip), so an Engine
 // is cheap to construct and safe to share across goroutines.
 type Engine struct {
-	store      *memory.Store
-	logger     *slog.Logger
+	store  *memory.Store
+	logger *slog.Logger
+	// evalMu guards evaluators — RegisterCondition can be called after
+	// NewEngine (e.g. when new condition types register lazily at
+	// plugin-load), and Evaluate reads evaluators concurrently from
+	// any goroutine that processes a tool invocation.
+	evalMu     sync.RWMutex
 	evaluators map[string]ConditionEvaluator
 }
 
@@ -55,8 +61,22 @@ func NewEngine(store *memory.Store, logger *slog.Logger) *Engine {
 
 // RegisterCondition installs an evaluator for a condition type.
 // Overwrites any previously-registered evaluator for the same key.
+// Safe to call concurrently with Evaluate.
 func (e *Engine) RegisterCondition(key string, fn ConditionEvaluator) {
+	e.evalMu.Lock()
+	defer e.evalMu.Unlock()
 	e.evaluators[key] = fn
+}
+
+// lookupEvaluator is the read-guarded counterpart. Returns the
+// evaluator or (nil, false) if not registered. Holding the mutex
+// while calling the evaluator would serialise every policy check,
+// so callers copy the function value out first.
+func (e *Engine) lookupEvaluator(key string) (ConditionEvaluator, bool) {
+	e.evalMu.RLock()
+	defer e.evalMu.RUnlock()
+	fn, ok := e.evaluators[key]
+	return fn, ok
 }
 
 // Evaluate runs the policy decision for (action, resource) in the
@@ -142,7 +162,7 @@ func (e *Engine) loadRules() ([]types.PolicyRule, error) {
 // past the check.
 func (e *Engine) conditionsHold(ctx context.Context, conds []types.Condition) (bool, error) {
 	for _, c := range conds {
-		fn, ok := e.evaluators[c.Key]
+		fn, ok := e.lookupEvaluator(c.Key)
 		if !ok {
 			return false, fmt.Errorf("no evaluator for condition key %q", c.Key)
 		}

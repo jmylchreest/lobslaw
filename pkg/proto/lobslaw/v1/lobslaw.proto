@@ -94,6 +94,11 @@ service MemoryService {
   rpc EpisodicAdd(EpisodicAddRequest) returns (EpisodicAddResponse);
   rpc Dream(DreamRequest) returns (DreamResponse);
   rpc Forget(ForgetRequest) returns (ForgetResponse);
+  // FindClusters — deterministic near-duplicate detection for the
+  // Dream-time consolidation merge flow. Pure math (pairwise cosine
+  // + union-find); no LLM. See docs/MEMORY.md for the composition
+  // pattern with the Adjudicator LLM interface.
+  rpc FindClusters(FindClustersRequest) returns (FindClustersResponse);
 }
 
 message VectorRecord {
@@ -147,10 +152,42 @@ message ForgetRequest {
   string query = 1;
   google.protobuf.Timestamp before = 2;
   repeated string tags = 3;
+  // Explicit record IDs to forget. When non-empty, bypasses the
+  // query/before/tags scan and deletes these IDs directly (with the
+  // existing cascade-via-SourceIDs semantics). Lets clients compose
+  // Search→preview→Forget pipelines without a dedicated "forget by
+  // similarity" RPC. At least one of query/before/tags/ids must be
+  // set — the handler still refuses to forget everything.
+  repeated string ids = 4;
 }
 message ForgetResponse {
   int32 records_removed = 1;
   int32 consolidations_reforged = 2;
+}
+
+// FindClusters groups near-duplicate VectorRecords for the Dream-
+// time merge flow. O(n²) pairwise cosine over the vector bucket,
+// union-find connected components. Intentionally no LLM — the
+// Adjudicator (LLM layer) takes the clusters and decides what to
+// do with each. Scope and retention filters keep ephemeral session
+// records out of the long-term merge path.
+message FindClustersRequest {
+  float threshold = 1;            // minimum pairwise cosine, e.g. 0.88
+  int32 min_cluster_size = 2;     // default 2 (skip singletons)
+  int32 max_cluster_size = 3;     // default 10 (split giant CCs)
+  string scope_filter = 4;        // only records in this scope
+  string retention_filter = 5;    // e.g. "long-term"
+  google.protobuf.Timestamp before = 6;
+  int32 limit = 7;                // cap returned cluster count
+}
+message FindClustersResponse {
+  repeated Cluster clusters = 1;
+}
+message Cluster {
+  string id = 1;                            // stable hash of sorted member IDs
+  repeated VectorRecord records = 2;
+  float min_similarity = 3;                 // worst pairwise within cluster
+  float avg_similarity = 4;
 }
 
 // -----------------------------------------------------------------------------
