@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -46,6 +45,64 @@ func mkBudget(t *testing.T, caps BudgetCaps) *TurnBudget {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// echoBinary finds a system echo binary (/bin/echo or /usr/bin/echo).
+// Previous versions of these tests wrote a shell script to tempdir
+// then immediately execed it — race-prone on some filesystems (the
+// fs cache may not expose the new executable mode bits in time).
+// Using a pre-existing system binary removes that variable entirely.
+// Skips the test on platforms without either path (Windows, minimal
+// containers) rather than failing on irrelevant environments.
+func echoBinary(t *testing.T) string {
+	t.Helper()
+	for _, p := range []string{"/bin/echo", "/usr/bin/echo"} {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+			return p
+		}
+	}
+	t.Skip("no system /bin/echo or /usr/bin/echo available (Windows or minimal container?)")
+	return ""
+}
+
+// registerEchoTool registers an "echo" tool backed by the system
+// echo binary. Used across several tests that need a deterministic,
+// fast subprocess that prints its first argument.
+func registerEchoTool(t *testing.T, env *agentEnv) {
+	t.Helper()
+	path := echoBinary(t)
+	if err := env.reg.Register(&types.ToolDef{
+		Name:         "echo",
+		Path:         path,
+		ArgvTemplate: []string{"{msg}"},
+		RiskTier:     types.RiskReversible,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// registerNoopTool registers a zero-output tool backed by /bin/true
+// (or equivalent). Used by tests that want a tool that succeeds
+// without caring about output.
+func registerNoopTool(t *testing.T, env *agentEnv, name string) {
+	t.Helper()
+	var path string
+	for _, p := range []string{"/bin/true", "/usr/bin/true"} {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+			path = p
+			break
+		}
+	}
+	if path == "" {
+		t.Skip("no /bin/true equivalent available")
+	}
+	if err := env.reg.Register(&types.ToolDef{
+		Name:     name,
+		Path:     path,
+		RiskTier: types.RiskReversible,
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestNewAgentRequiresProvider(t *testing.T) {
@@ -128,21 +185,7 @@ func TestRunToolCallLoopToolCallRoundTrip(t *testing.T) {
 		MockResponse{Content: "the tool said hi"},
 	)
 
-	// Register an echo tool that runs /bin/echo.
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "echo.sh")
-	script := "#!/bin/sh\necho \"$1\"\n"
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := env.reg.Register(&types.ToolDef{
-		Name:         "echo",
-		Path:         scriptPath,
-		ArgvTemplate: []string{"{msg}"},
-		RiskTier:     types.RiskReversible,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	registerEchoTool(t, env)
 
 	resp, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
 		Message:      "say hi",
@@ -160,11 +203,16 @@ func TestRunToolCallLoopToolCallRoundTrip(t *testing.T) {
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("want 1 tool call; got %d", len(resp.ToolCalls))
 	}
-	if resp.ToolCalls[0].ToolName != "echo" {
-		t.Errorf("tool call name: %q", resp.ToolCalls[0].ToolName)
+	inv := resp.ToolCalls[0]
+	if inv.ToolName != "echo" {
+		t.Errorf("tool call name: %q", inv.ToolName)
 	}
-	if !strings.Contains(resp.ToolCalls[0].Output, "hi") {
-		t.Errorf("tool output should contain 'hi': %q", resp.ToolCalls[0].Output)
+	if !strings.Contains(inv.Output, "hi") {
+		// Rich diagnostic: if this ever flakes again we want to
+		// know exactly why — exit code, any invocation error, and
+		// the actual captured output.
+		t.Errorf("tool output should contain 'hi': output=%q exit=%d err=%q",
+			inv.Output, inv.ExitCode, inv.Error)
 	}
 	if env.mock.CallCount() != 2 {
 		t.Errorf("expected 2 LLM calls; got %d", env.mock.CallCount())
@@ -183,15 +231,7 @@ func TestRunToolCallLoopToolResultFedBackAsToolRole(t *testing.T) {
 		MockResponse{Content: "done"},
 	)
 
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "echo.sh")
-	_ = os.WriteFile(scriptPath, []byte("#!/bin/sh\necho \"$1\"\n"), 0o755)
-	_ = env.reg.Register(&types.ToolDef{
-		Name:         "echo",
-		Path:         scriptPath,
-		ArgvTemplate: []string{"{msg}"},
-		RiskTier:     types.RiskReversible,
-	})
+	registerEchoTool(t, env)
 
 	_, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
 		Message: "go",
@@ -238,12 +278,7 @@ func TestRunToolCallLoopBudgetZeroCapsMeanUnlimited(t *testing.T) {
 		MockResponse{Content: "done"},
 	)
 
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "echo.sh")
-	_ = os.WriteFile(scriptPath, []byte("#!/bin/sh\necho noop\n"), 0o755)
-	_ = env.reg.Register(&types.ToolDef{
-		Name: "echo", Path: scriptPath, RiskTier: types.RiskReversible,
-	})
+	registerNoopTool(t, env, "echo")
 
 	resp, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
 		Message: "do something",
@@ -273,12 +308,7 @@ func TestRunToolCallLoopBudgetCapOfOneConfirmsOnSecondCall(t *testing.T) {
 			{ID: "2", Name: "echo", Arguments: `{}`},
 		}},
 	)
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "echo.sh")
-	_ = os.WriteFile(scriptPath, []byte("#!/bin/sh\necho\n"), 0o755)
-	_ = env.reg.Register(&types.ToolDef{
-		Name: "echo", Path: scriptPath, RiskTier: types.RiskReversible,
-	})
+	registerNoopTool(t, env, "echo")
 
 	resp, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
 		Claims: &types.Claims{UserID: "alice", Scope: "*"},
@@ -313,12 +343,7 @@ func TestRunToolCallLoopMaxToolLoopsProtectsInfiniteLoop(t *testing.T) {
 		MaxToolLoops: 3,
 	})
 
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "noop.sh")
-	_ = os.WriteFile(scriptPath, []byte("#!/bin/sh\n"), 0o755)
-	_ = env.reg.Register(&types.ToolDef{
-		Name: "noop", Path: scriptPath, RiskTier: types.RiskReversible,
-	})
+	registerNoopTool(t, env, "noop")
 
 	_, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
 		Claims: &types.Claims{UserID: "alice", Scope: "*"},

@@ -86,8 +86,40 @@ func seedAllowAll(t *testing.T, store *memory.Store) {
 func writeScript(t *testing.T, dir, name, script string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+	// os.WriteFile can race with subsequent execve — on some
+	// filesystems (certain tmpfs variants, CoW overlays) the
+	// executable mode bits or the file contents themselves may not
+	// be visible to an immediate child process. Use the more
+	// paranoid pattern:
+	//   1. OpenFile with 0o700 mode explicitly.
+	//   2. Write + Sync to force the fs to durable state.
+	//   3. Close + Chmod again (defensive — some fs caches drop
+	//      the open-time mode when Sync'd).
+	//   4. Stat + verify executable bit on the returned inode.
+	f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o700)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := f.WriteString("#!/bin/sh\n" + script + "\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("writeScript: %q has no executable bits after Chmod (fs race?)", p)
 	}
 	return p
 }
