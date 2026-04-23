@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 
@@ -152,8 +154,11 @@ type Node struct {
 	storageSvc   *storage.Service
 	storageMgr   *storage.Manager
 	skillRegistry *skills.Registry
-	soul          *soul.Soul
-	skillAdapter  *skills.AgentAdapter
+	// Soul is held behind an atomic pointer so the config watcher
+	// can hot-swap SOUL.md edits without racing readers. Callers
+	// go through the Soul() accessor; never read soul directly.
+	soul         atomic.Pointer[soul.Soul]
+	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
 	toolRegistry *compute.Registry
@@ -264,9 +269,9 @@ func New(cfg Config) (*Node, error) {
 		listener:     listener,
 		server:       server,
 		registry:     registry,
-		soul:         loadedSoul,
 		shutdownOnce: make(chan struct{}),
 	}
+	n.soul.Store(loadedSoul)
 
 	// Wire the Raft stack iff we're running memory or policy. Services
 	// that need it (NodeService's AddMember, the minimal PolicyService)
@@ -489,6 +494,15 @@ func (n *Node) Start(ctx context.Context) error {
 		}
 	}
 
+	// Config hot-reload watcher. Watches SOUL.md for edits and swaps
+	// the atomic Soul pointer — subsystems reading via n.Soul() see
+	// the new baseline on their next Load. config.toml watching is
+	// follow-up work (it requires coordinating subsystem-specific
+	// swap handlers).
+	if n.cfg.SoulPath != "" {
+		go n.runSoulWatcher(ctx)
+	}
+
 	// Optional UDP broadcast. Runs until ctx is cancelled.
 	if n.broadcaster != nil {
 		go func() {
@@ -682,7 +696,7 @@ func (n *Node) SkillRegistry() *skills.Registry { return n.skillRegistry }
 // DefaultSoul fills in when no config path was supplied or the
 // file was missing. Callers can safely read Soul().Config without
 // nil-checking.
-func (n *Node) Soul() *soul.Soul { return n.soul }
+func (n *Node) Soul() *soul.Soul { return n.soul.Load() }
 
 // -- internal helpers --
 
@@ -795,6 +809,33 @@ func (n *Node) wireAudit(ctx context.Context) error {
 // nil after New; a zero-sink configuration returns a log that no-ops
 // on Append so callers don't need to nil-check.
 func (n *Node) Audit() *audit.AuditLog { return n.auditLog }
+
+// runSoulWatcher blocks until ctx is cancelled, reloading SOUL.md
+// on edits. Parse / validation errors are logged and the live Soul
+// pointer is left unchanged — a corrupt edit does not downgrade
+// personality to DefaultSoul mid-session.
+func (n *Node) runSoulWatcher(ctx context.Context) {
+	err := config.Watch(ctx, config.WatchOptions{
+		Paths:  []string{n.cfg.SoulPath},
+		Logger: n.log,
+	}, func(_ []fsnotify.Event) {
+		loaded, err := soul.LoadOrDefault(n.cfg.SoulPath)
+		if err != nil {
+			n.log.Warn("soul hot-reload: parse failed; keeping previous",
+				"path", n.cfg.SoulPath, "err", err)
+			return
+		}
+		n.soul.Store(loaded)
+		n.log.Info("soul hot-reloaded",
+			"path", n.cfg.SoulPath,
+			"name", loaded.Config.Name,
+			"min_trust_tier", loaded.Config.MinTrustTier,
+		)
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		n.log.Warn("soul watcher exited", "err", err)
+	}
+}
 
 func (n *Node) dialer() discovery.Dialer {
 	return func(ctx context.Context, addr string) (*grpc.ClientConn, error) {
@@ -925,7 +966,7 @@ func (n *Node) wireCompute() error {
 		// Soul's MinTrustTier floor. ValidateProviderTier is a no-op
 		// when the soul hasn't declared a floor (DefaultSoul does
 		// not), so deployments without a SOUL.md are unaffected.
-		if err := soul.ValidateProviderTier(n.soul, soul.ProviderTrustTier{
+		if err := soul.ValidateProviderTier(n.Soul(), soul.ProviderTrustTier{
 			Label:     first.Label,
 			TrustTier: first.TrustTier,
 		}); err != nil {

@@ -914,6 +914,85 @@ func TestNodeSoulDefaultsWhenNoPath(t *testing.T) {
 	}
 }
 
+// TestNodeSoulHotReload — edit SOUL.md while the node runs and the
+// running n.Soul() must return the new baseline without a restart.
+func TestNodeSoulHotReload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("hot-reload waits on fsnotify; skipped in -short")
+	}
+
+	tmp := t.TempDir()
+	soulPath := filepath.Join(tmp, "SOUL.md")
+	_ = os.WriteFile(soulPath, []byte(`---
+name: original
+scope: default
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 5
+  sarcasm: 2
+  humor: 3
+---
+`), 0o644)
+
+	nodeID := "soul-reload"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	n, err := node.New(node.Config{
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
+		SoulPath:    soulPath,
+	})
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if got := n.Soul().Config.Name; got != "original" {
+		t.Fatalf("pre-reload name=%q; want original", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	// Let the watcher register the parent dir before we edit.
+	time.Sleep(200 * time.Millisecond)
+
+	if err := os.WriteFile(soulPath, []byte(`---
+name: reloaded
+scope: default
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 5
+  sarcasm: 2
+  humor: 3
+---
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if n.Soul().Config.Name == "reloaded" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := n.Soul().Config.Name; got != "reloaded" {
+		cancel()
+		<-done
+		t.Fatalf("post-reload name=%q; want reloaded", got)
+	}
+
+	cancel()
+	<-done
+}
+
 // TestNodeMinTrustTierRejectsUnderflowProvider — the provider-tier
 // boot guard refuses a public-tier provider against a Soul that
 // demands private. Boot fails with a descriptive error mentioning
