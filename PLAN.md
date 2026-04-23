@@ -445,7 +445,21 @@ Given a query (and optional `before` timestamp):
 3. Delete the matched sources AND every consolidated record whose sources intersect the matched set — aggressive-sweep per aide decision `lobslaw-forget-cascade`. The next dream run rebuilds consolidations from surviving sources.
 4. Write audit log entry
 
-### 3.4 Retention Enforcement
+### 3.4 Near-duplicate consolidation merge (LANDED)
+
+See `docs/MEMORY.md` + aide decision `lobslaw-memory-merge-architecture` for the why. Shipped as four commits (`feat(phase-3.4a..d)`) on 2026-04-23:
+
+- **3.4a**: `ForgetRequest.ids []string` — clients compose `Search → preview → Forget(ids)` instead of a dedicated semantic-forget RPC.
+- **3.4b**: `FindClusters` RPC — pairwise cosine + union-find over the vector bucket. Pure math, no LLM. Retention/scope/before filters. O(n²), fine at personal scale (< ~100k records).
+- **3.4c**: `Adjudicator` interface in `internal/memory/adjudicate.go`. Four verdicts (KeepDistinct / Merge / Conflict / Supersedes). `AlwaysKeepDistinctAdjudicator` stub is the boot-default — nothing merges until Phase 5 replaces it with an LLM-backed impl.
+- **3.4d**: `DreamRunner.mergePhase` — after summarise + prune, runs FindClusters → AdjudicateMerge per cluster → execute verdict. Failure paths are conservative: LLM error → treat as KeepDistinct, never destroy.
+
+**Phase 5 follow-ons (Agent Core):**
+- Replace `AlwaysKeepDistinctAdjudicator` with an LLM-backed impl (`DreamRunner.SetAdjudicator`).
+- Add a `Reranker` interface alongside `Summarizer` / `Adjudicator` for hot-path LLM-filtered recall. Agent loop composes `Search → Rerank → inject top-N into system prompt`.
+- Phase 6 can add a user-facing "forget by topic" flow that composes `Search → client-side preview → Forget(ids)` — no new server-side RPC needed.
+
+### 3.5 Retention Enforcement
 
 - User turn on channel → `RetentionEpisodic`
 - Tool output → `RetentionSession`
@@ -453,7 +467,7 @@ Given a query (and optional `before` timestamp):
 - Dream consolidation → inherits highest retention of sources
 - Pruning: `session` records pruned aggressively (every 100 turns or on conversation close); `episodic` only pruned by dream threshold; `long-term` never auto-pruned
 
-**Exit criteria:** Can store and recall vectors. Can search and get semantically similar results. Dream consolidation runs and produces summaries. Forget cascade removes records and consolidated summaries.
+**Exit criteria:** Can store and recall vectors. Can search and get semantically similar results. Dream consolidation runs and produces summaries. Forget cascade removes records and consolidated summaries. FindClusters returns near-duplicates; merge phase runs with safe default stub.
 
 ---
 
