@@ -50,7 +50,7 @@ type PolicySpec struct {
 	// SeccompDeny being non-empty.
 	SeccompDefault bool `koanf:"seccomp_default"`
 
-	// Namespaces selects CLONE_NEW* flags. See docs/SANDBOX.md for
+	// Namespaces selects CLONE_NEW* flags. See docs/dev/SANDBOX.md for
 	// which fit which use cases.
 	Namespaces NamespaceSpec `koanf:"namespaces"`
 }

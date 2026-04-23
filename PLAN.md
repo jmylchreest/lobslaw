@@ -447,7 +447,7 @@ Given a query (and optional `before` timestamp):
 
 ### 3.4 Near-duplicate consolidation merge (LANDED)
 
-See `docs/MEMORY.md` + aide decision `lobslaw-memory-merge-architecture` for the why. Shipped as four commits (`feat(phase-3.4a..d)`) on 2026-04-23:
+See `docs/dev/MEMORY.md` + aide decision `lobslaw-memory-merge-architecture` for the why. Shipped as four commits (`feat(phase-3.4a..d)`) on 2026-04-23:
 
 - **3.4a**: `ForgetRequest.ids []string` — clients compose `Search → preview → Forget(ids)` instead of a dedicated semantic-forget RPC.
 - **3.4b**: `FindClusters` RPC — pairwise cosine + union-find over the vector bucket. Pure math, no LLM. Retention/scope/before filters. O(n²), fine at personal scale (< ~100k records).

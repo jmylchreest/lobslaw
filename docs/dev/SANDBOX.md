@@ -69,15 +69,25 @@ Three of the above enforcement steps (**NoNewPrivs, Landlock, seccomp**) have th
 
 The standard solution, used by runc / containerd / podman, is the **reexec helper pattern**:
 
-```
-lobslaw (agent)
- └── fork + clone namespaces (via SysProcAttr.Cloneflags)
-      └── /proc/self/exe sandbox-exec -- /real/tool [args…]
-           ├── LOBSLAW_SANDBOX_POLICY env → base64(JSON) Policy
-           ├── prctl(PR_SET_NO_NEW_PRIVS, 1)
-           ├── landlock_create_ruleset + add_rule + restrict_self
-           ├── seccomp(SECCOMP_SET_MODE_FILTER, …) with TSYNC
-           └── execve(/real/tool, [args…])
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Parent as lobslaw (agent)
+  participant Fork as fork'd child
+  participant Helper as sandbox-exec<br/>(same binary, hidden subcmd)
+  participant Kernel as Linux kernel
+  participant Target as target tool
+
+  Parent->>Parent: sandbox.Apply rewrites cmd<br/>cmd.Path = /proc/self/exe<br/>argv = ["lobslaw", "sandbox-exec", "--", "/real/tool", "args..."]<br/>env += LOBSLAW_SANDBOX_POLICY=<b64>
+  Parent->>Fork: clone(Cloneflags: CLONE_NEWUSER|NEWNS|NEWPID|...)
+  Note over Fork,Kernel: UID/GID mappings written<br/>by parent before child resumes
+  Fork->>Helper: execve(/proc/self/exe sandbox-exec ...)
+  Helper->>Helper: Decode policy from env,<br/>unset LOBSLAW_SANDBOX_POLICY
+  Helper->>Kernel: prctl(PR_SET_NO_NEW_PRIVS, 1)
+  Helper->>Kernel: landlock_create_ruleset + add_rule + restrict_self
+  Helper->>Kernel: seccomp(SET_MODE_FILTER, TSYNC, &bpf)
+  Helper->>Target: execve(/real/tool, args, env)
+  Note over Target: Tool runs with all<br/>kernel enforcement active
 ```
 
 `lobslaw sandbox-exec` is a hidden subcommand of the main binary. `sandbox.Apply` rewrites any `exec.Cmd` whose Policy carries an enforcement field (NoNewPrivs, AllowedPaths, or Seccomp.Deny) to invoke `/proc/self/exe sandbox-exec --` followed by the original target path + argv. The child reads the serialised policy from `$LOBSLAW_SANDBOX_POLICY`, performs the three installs, unsets the env var so the target doesn't inherit it, then `execve`'s the actual tool. No separate binary to ship.

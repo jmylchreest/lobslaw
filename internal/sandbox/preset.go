@@ -187,7 +187,7 @@ func init() {
 // BuiltinPresets is the catalogue shipped in-binary. The set is
 // deliberately conservative — every preset is read-only by default;
 // operators compose with explicit `path:rw` overrides for paths a
-// tool needs to write to. See docs/SANDBOX.md for recipes.
+// tool needs to write to. See docs/dev/SANDBOX.md for recipes.
 var BuiltinPresets = []Preset{
 	{
 		Name:        "system-libs",
@@ -267,7 +267,7 @@ var BuiltinPresets = []Preset{
 // the composed list of canonicalised PathRules suitable for the
 // landlock install.
 //
-// Composition rules per design (`docs/SANDBOX.md`):
+// Composition rules per design (`docs/dev/SANDBOX.md`):
 //
 //   - `~` expands to the agent's home dir at compose-time via
 //     os.UserHomeDir() — single-tenant model, no per-user resolution.

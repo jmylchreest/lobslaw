@@ -12,6 +12,52 @@ Every node needs to reach at least one other node to join the cluster. Three way
 
 Pick based on your topology — see the matrix below.
 
+## Discovery + join sequence
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Node as node.Node
+  participant Disc as discovery.Service
+  participant DNS as DNS resolver
+  participant UDP as UDP broadcast
+  participant Seed as Existing peer
+
+  Node->>Disc: Start(ctx, seeds, broadcastCfg)
+
+  par Seed list (always first)
+    loop each seed
+      alt literal host:port
+        Disc->>Seed: gRPC dial (mTLS)
+      else srv:<name>
+        Disc->>DNS: LookupSRV(name)
+        DNS-->>Disc: [host:port, ...]
+        loop each answer
+          Disc->>Seed: gRPC dial (mTLS)
+        end
+      else dns:<name>
+        Disc->>DNS: LookupHost(name)
+        DNS-->>Disc: [A records]
+        loop each IP
+          Disc->>Seed: gRPC dial (mTLS)
+        end
+      end
+    end
+  and UDP broadcast (optional, L2 only)
+    Disc->>UDP: periodic announce (255.255.255.255:port)
+    UDP-->>Disc: other nodes' announces arrive
+    loop each announce
+      Disc->>Seed: gRPC dial (mTLS) if new
+    end
+  end
+
+  Seed-->>Disc: NodeInfo (peer list)
+  Disc->>Node: PeerRegistry populated
+  Node->>Seed: NodeService.AddMember(self) (if joining)
+  Seed-->>Node: ConfChange committed via Raft
+  Note over Node: Node is now a voting member
+```
+
 ---
 
 ## Seed list

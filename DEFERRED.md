@@ -241,11 +241,11 @@ Phase 4.5 lands the sandbox *structure*: Policy type, Validate/Normalise, Canoni
 
 ### Phase 4.5.5 hardening: NoNewPrivs + Landlock + seccomp BPF — LANDED
 
-Shipped 2026-04-22 across commits `feat(phase-4.5.5a..d)`. The reexec helper (`lobslaw sandbox-exec`) now installs all three kernel enforcement layers between `fork()` and `execve()`. See [`docs/SANDBOX.md`](docs/SANDBOX.md) for the architecture and upstream-tracking notes.
+Shipped 2026-04-22 across commits `feat(phase-4.5.5a..d)`. The reexec helper (`lobslaw sandbox-exec`) now installs all three kernel enforcement layers between `fork()` and `execve()`. See [`docs/dev/SANDBOX.md`](docs/dev/SANDBOX.md) for the architecture and upstream-tracking notes.
 
 `sandbox.Apply` rewrites any `exec.Cmd` whose Policy carries an enforcement field (NoNewPrivs, AllowedPaths, or Seccomp.Deny) to invoke `/proc/self/exe sandbox-exec --` through the helper child. Namespaces remain orthogonal — they apply via `SysProcAttr.Cloneflags` and don't pay reexec cost.
 
-**Upstream tracking (still active):** [golang/go#68595](https://github.com/golang/go/issues/68595) would collapse Landlock + NoNewPrivs into `SysProcAttr` — when it lands we migrate per the plan in `docs/SANDBOX.md`. Seccomp stays in the helper indefinitely ([#3405](https://github.com/golang/go/issues/3405) is dormant).
+**Upstream tracking (still active):** [golang/go#68595](https://github.com/golang/go/issues/68595) would collapse Landlock + NoNewPrivs into `SysProcAttr` — when it lands we migrate per the plan in `docs/dev/SANDBOX.md`. Seccomp stays in the helper indefinitely ([#3405](https://github.com/golang/go/issues/3405) is dormant).
 
 ---
 

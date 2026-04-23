@@ -15,7 +15,7 @@ import (
 
 // Default bounds for FindClusters callers who leave the request
 // fields at zero. Chosen to match the behaviour described in
-// docs/MEMORY.md's "Dream-time merge flow" section.
+// docs/dev/MEMORY.md's "Dream-time merge flow" section.
 const (
 	defaultClusterThreshold = 0.88
 	defaultMinClusterSize   = 2

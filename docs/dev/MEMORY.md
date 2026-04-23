@@ -128,6 +128,10 @@ The second stage of two-stage RAG. Vector `Search` is high-recall/cheap (cosine 
 
 ---
 
+## Flow diagrams
+
+Full sequence diagrams for the Dream cycle (with Phase 2 merge) and Forget cascade live in [ARCHITECTURE.md](ARCHITECTURE.md) since they span component boundaries. The composition workflows below describe the same flows in caller-side code.
+
 ## Composition workflows
 
 ### Hot-path recall (Phase 5)
