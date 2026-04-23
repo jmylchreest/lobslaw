@@ -71,12 +71,15 @@ func Parse(raw []byte, path string) (*Soul, error) {
 	}, nil
 }
 
-// LoadOrDefault tries Load; on ErrNotFound returns a baseline
-// SoulConfig with safe defaults and an empty body. Any other error
-// propagates. Callers that want "use SOUL.md if present, otherwise
-// run as a neutral assistant" route through this rather than
-// branching on os.IsNotExist themselves.
+// LoadOrDefault tries Load; on ErrNotFound OR an empty path
+// returns a baseline SoulConfig with safe defaults and an empty
+// body. Any other error propagates. Callers that want "use SOUL.md
+// if present, otherwise run as a neutral assistant" route through
+// this rather than branching on os.IsNotExist themselves.
 func LoadOrDefault(path string) (*Soul, error) {
+	if path == "" {
+		return DefaultSoul(), nil
+	}
 	s, err := Load(path)
 	if err == nil {
 		return s, nil

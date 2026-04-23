@@ -840,6 +840,171 @@ func TestNodeStorageServiceReplicatesAndReconciles(t *testing.T) {
 	}
 }
 
+// TestNodeSoulLoadedIntoBoot — a node constructed with a SoulPath
+// pointing at a real SOUL.md surfaces it via Soul(). The default
+// fallback is covered separately; this test pins the happy path.
+func TestNodeSoulLoadedIntoBoot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping soul boot integration in short mode")
+	}
+
+	tmp := t.TempDir()
+	soulPath := filepath.Join(tmp, "SOUL.md")
+	_ = os.WriteFile(soulPath, []byte(`---
+name: testbot
+scope: default
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 7
+  sarcasm: 2
+  humor: 3
+---
+
+freeform body for testbot.
+`), 0o644)
+
+	nodeID := "soul-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
+		SoulPath:   soulPath,
+	}
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if n.Soul() == nil {
+		t.Fatal("Soul() nil after boot")
+	}
+	if n.Soul().Config.Name != "testbot" {
+		t.Errorf("soul name: %q", n.Soul().Config.Name)
+	}
+}
+
+// TestNodeSoulDefaultsWhenNoPath — no SoulPath → node.Soul()
+// returns DefaultSoul rather than nil, so downstream consumers
+// never have to nil-check.
+func TestNodeSoulDefaultsWhenNoPath(t *testing.T) {
+	t.Parallel()
+	nodeID := "no-soul"
+	creds := signNodeCert(t, t.TempDir(), nodeID)
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
+	}
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if n.Soul() == nil {
+		t.Fatal("Soul() nil — should be DefaultSoul")
+	}
+	if n.Soul().Config.Name != "assistant" {
+		t.Errorf("default name: %q", n.Soul().Config.Name)
+	}
+}
+
+// TestNodeMinTrustTierRejectsUnderflowProvider — the provider-tier
+// boot guard refuses a public-tier provider against a Soul that
+// demands private. Boot fails with a descriptive error mentioning
+// both the provider name and the Soul's floor.
+func TestNodeMinTrustTierRejectsUnderflowProvider(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	soulPath := filepath.Join(tmp, "SOUL.md")
+	_ = os.WriteFile(soulPath, []byte(`---
+name: strict
+scope: default
+min_trust_tier: private
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 5
+  sarcasm: 2
+  humor: 3
+---
+`), 0o644)
+
+	nodeID := "strict-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		Compute: config.ComputeConfig{
+			Providers: []config.ProviderConfig{
+				{Label: "public-llm", TrustTier: types.TrustPublic, Endpoint: "https://example.com", APIKeyRef: "env:NOPE", Model: "m"},
+			},
+		},
+		SoulPath: soulPath,
+	}
+	_, err := node.New(cfg)
+	if err == nil {
+		t.Fatal("below-floor provider should fail node.New")
+	}
+	if !strings.Contains(err.Error(), "below soul floor") {
+		t.Errorf("error should name the floor; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "public-llm") {
+		t.Errorf("error should name the provider; got %v", err)
+	}
+}
+
+// TestNodeMinTrustTierPassesWhenProviderMeetsFloor — a private-
+// tier provider is accepted against a private floor.
+func TestNodeMinTrustTierPassesWhenProviderMeetsFloor(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	soulPath := filepath.Join(tmp, "SOUL.md")
+	_ = os.WriteFile(soulPath, []byte(`---
+name: strict
+scope: default
+min_trust_tier: private
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 5
+  sarcasm: 2
+  humor: 3
+---
+`), 0o644)
+
+	nodeID := "strict-ok-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		Compute: config.ComputeConfig{
+			Providers: []config.ProviderConfig{
+				{Label: "private-llm", TrustTier: types.TrustPrivate, Endpoint: "https://example.com", APIKeyRef: "env:NOPE", Model: "m"},
+			},
+		},
+		APIKeyResolver: func(ref string) (string, error) {
+			return "test-key", nil
+		},
+		SoulPath: soulPath,
+	}
+	_, err := node.New(cfg)
+	if err != nil {
+		t.Errorf("private provider should satisfy private floor; got %v", err)
+	}
+}
+
 // TestNodeSchedulerDreamHandlerRegistered proves the fix for the
 // Phase-7 wiring gap: an operator scheduling a memory:dream task
 // actually reaches the memory DreamRunner rather than the

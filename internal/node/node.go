@@ -22,6 +22,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/internal/skills"
+	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 	storagelocal "github.com/jmylchreest/lobslaw/internal/storage/local"
 	storagenfs "github.com/jmylchreest/lobslaw/internal/storage/nfs"
@@ -95,6 +96,12 @@ type Config struct {
 	// run in anonymous mode unless they explicitly require auth).
 	Auth config.AuthConfig
 
+	// SoulPath points at the SOUL.md to load at boot. Empty →
+	// soul.DefaultSoul is used. Missing-file also falls back to
+	// DefaultSoul (not an error — a node without a SOUL.md runs as
+	// a neutral assistant).
+	SoulPath string
+
 	// Gateway carries the channel-config shape from config.toml. Only
 	// consulted when FunctionGateway is enabled AND cfg.Gateway.Enabled
 	// (otherwise the node skips gateway wiring entirely).
@@ -137,6 +144,7 @@ type Node struct {
 	storageSvc   *storage.Service
 	storageMgr   *storage.Manager
 	skillRegistry *skills.Registry
+	soul          *soul.Soul
 	skillAdapter  *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -190,6 +198,21 @@ func New(cfg Config) (*Node, error) {
 		return nil, err
 	}
 
+	// Soul is loaded before any subsystem that might consume it.
+	// LoadOrDefault turns missing-file into DefaultSoul rather than
+	// an error — a node without a SOUL.md runs as a neutral
+	// assistant. Genuine parse / validation errors propagate so a
+	// corrupt SOUL.md doesn't silently downgrade the personality.
+	loadedSoul, err := soul.LoadOrDefault(cfg.SoulPath)
+	if err != nil {
+		return nil, fmt.Errorf("soul: %w", err)
+	}
+	log.Info("soul loaded",
+		"path", cfg.SoulPath,
+		"name", loadedSoul.Config.Name,
+		"min_trust_tier", loadedSoul.Config.MinTrustTier,
+	)
+
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return nil, fmt.Errorf("listen on %q: %w", cfg.ListenAddr, err)
@@ -227,6 +250,7 @@ func New(cfg Config) (*Node, error) {
 		listener:     listener,
 		server:       server,
 		registry:     registry,
+		soul:         loadedSoul,
 		shutdownOnce: make(chan struct{}),
 	}
 
@@ -626,6 +650,12 @@ func (n *Node) StorageService() *storage.Service { return n.storageSvc }
 // directly; production uses Storage-mounted skills via Watch.
 func (n *Node) SkillRegistry() *skills.Registry { return n.skillRegistry }
 
+// Soul returns the loaded SOUL.md as a *soul.Soul. Never nil —
+// DefaultSoul fills in when no config path was supplied or the
+// file was missing. Callers can safely read Soul().Config without
+// nil-checking.
+func (n *Node) Soul() *soul.Soul { return n.soul }
+
 // -- internal helpers --
 
 func (n *Node) wireRaft(advertise string) error {
@@ -789,6 +819,16 @@ func (n *Node) wireCompute() error {
 		n.llmProvider = n.cfg.LLMProvider
 	case len(n.cfg.Compute.Providers) > 0:
 		first := n.cfg.Compute.Providers[0]
+		// Trust-tier guard: refuse to construct a client below the
+		// Soul's MinTrustTier floor. ValidateProviderTier is a no-op
+		// when the soul hasn't declared a floor (DefaultSoul does
+		// not), so deployments without a SOUL.md are unaffected.
+		if err := soul.ValidateProviderTier(n.soul, soul.ProviderTrustTier{
+			Label:     first.Label,
+			TrustTier: first.TrustTier,
+		}); err != nil {
+			return err
+		}
 		apiKey, err := n.resolveAPIKey(first.APIKeyRef)
 		if err != nil {
 			return fmt.Errorf("api key for provider %q: %w", first.Label, err)
