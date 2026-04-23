@@ -1,0 +1,81 @@
+# syntax=docker/dockerfile:1.7
+#
+# Tools sidecar — Alpine base with the common subprocess runtimes a
+# compute node invokes inside the skill sandbox: busybox (shell +
+# coreutils), git, python3, bash, jq, curl. Ships the same lobslaw
+# binary as the core image so you can run either image as the node
+# entrypoint; the tools are here for the skill invoker's subprocess
+# execs, not for interactive use.
+#
+# Deployment patterns:
+#
+#   - Single image per node: run this image; gets lobslaw + tools.
+#     Larger (~90MB) but operationally simpler.
+#
+#   - Sidecar pattern: run `lobslaw:core` as the main container and
+#     bind-mount this image's filesystem layers into the sandbox
+#     (shared PID / mount namespaces via podman or k8s
+#     ephemeralContainers). Smaller main surface, but the sandbox
+#     exec path needs to see /usr/bin/* from here.
+#
+# Operators who want additional tools in the sandbox (rtk, ripgrep,
+# node, rust toolchain, etc.) extend this image with their own
+# RUN apk add / COPY steps on top.
+
+ARG GO_VERSION=1.26
+
+# ---- Build stage ---------------------------------------------------
+FROM golang:${GO_VERSION}-alpine AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+ARG VERSION=dev
+ARG COMMIT=unknown
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
+        -trimpath \
+        -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
+        -o /out/lobslaw \
+        ./cmd/lobslaw
+
+# ---- Runtime stage -------------------------------------------------
+FROM alpine:3.20
+
+# busybox is already in the alpine base (sh, coreutils-ish). Add the
+# runtimes the skill invoker exec()s into, plus common dev CLIs that
+# user-authored skills rely on.
+#
+# ca-certificates: outbound HTTPS (same reason as distroless).
+# tzdata: scheduler timezone parsing.
+# Other packages cover typical Phase 8 skill runtimes.
+RUN apk add --no-cache \
+        ca-certificates \
+        tzdata \
+        bash \
+        git \
+        python3 \
+        py3-pip \
+        jq \
+        curl \
+        openssh-client
+
+# Non-root runtime user — matches the distroless nonroot UID/GID so
+# shared volumes mounted from a distroless-based peer have consistent
+# permissions.
+RUN addgroup -g 65532 -S lobslaw && \
+    adduser -u 65532 -S -G lobslaw -h /lobslaw lobslaw
+
+COPY --from=build /out/lobslaw /usr/local/bin/lobslaw
+
+USER lobslaw:lobslaw
+WORKDIR /lobslaw
+
+EXPOSE 7443 8443 7445/udp
+
+ENTRYPOINT ["/usr/local/bin/lobslaw"]

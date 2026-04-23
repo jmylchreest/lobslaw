@@ -1,0 +1,30 @@
+.git/
+.github/
+.aide/
+.claude/
+.vscode/
+.idea/
+
+# Build artefacts
+dist/
+build/
+bin/
+out/
+
+# Docker files themselves (kept out of build context)
+Dockerfile*
+.dockerignore
+
+# Local dev state
+*.log
+.env
+.env.*
+!.env.example
+
+# Tests and fixtures (Go omits *_test.go from builds anyway, but
+# keeping the build context small speeds BuildKit uploads)
+**/testdata/
+
+# Docs — binaries don't need them, operators read them out-of-band
+*.md
+docs/
