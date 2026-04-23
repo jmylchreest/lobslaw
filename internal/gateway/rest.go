@@ -60,6 +60,11 @@ type RESTConfig struct {
 	// (anything reachable from the public internet) set this true.
 	RequireAuth bool
 
+	// Telegram, when non-nil, mounts the Telegram webhook handler
+	// at /telegram on the same mux. Shares the server's TLS + port
+	// so operators don't need a second listener.
+	Telegram *TelegramHandler
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -108,6 +113,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/v1/messages", s.handleMessages)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
+	if s.cfg.Telegram != nil {
+		mux.Handle("/telegram", s.cfg.Telegram)
+	}
 
 	ln, err := net.Listen("tcp", s.cfg.Addr)
 	if err != nil {
