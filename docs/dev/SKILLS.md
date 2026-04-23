@@ -225,6 +225,16 @@ Skill errors (missing storage label, sandbox install failure, invoker config err
 
 ---
 
+## RTK integration
+
+RTK (Rust Token Killer) compresses tool output and decorates prompts to cut token cost on routine dev operations. Because it already speaks the Claude-Code hook protocol (JSON request on stdin, JSON response on stdout) and lobslaw adopted that same protocol in `internal/hooks`, no RTK-specific Go code is needed — it's a pure-config integration.
+
+Drop the entries from `examples/hooks.rtk.toml` into your `config.toml` and restart the node. RTK fires on every `PreToolUse` / `PostToolUse` event, runs outside the tool's sandbox (it's a hook, not a tool), and returns its decision in the usual hook response shape.
+
+Short timeouts are intentional: a stuck RTK shouldn't block tool dispatch. The hooks dispatcher treats a timed-out hook as approve-through so a mis-installed RTK can't wedge the agent.
+
+---
+
 ## What's shipped vs deferred
 
 | Item | Status |
@@ -235,6 +245,7 @@ Skill errors (missing storage label, sandbox install failure, invoker config err
 | Storage-label env vars | ✅ shipped |
 | **Sandbox integration** (Landlock/seccomp/ns per manifest) | ✅ shipped (8b.2) |
 | **Agent integration** (skills as tool-registry entries) | ✅ shipped (8c) |
+| **RTK hooks example** (config-only, uses existing hooks system) | ✅ shipped (8f) |
 | **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ⬜ Phase 8d |
 | **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ⬜ Phase 8e |
 | **RTK hooks** (config-only PreToolUse/PostToolUse integration) | ⬜ Phase 8f |

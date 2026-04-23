@@ -1,0 +1,40 @@
+# RTK (Rust Token Killer) integration example
+# ============================================
+#
+# RTK ships as a subprocess that fires on PreToolUse + PostToolUse,
+# compressing tool output + decorating prompts to reduce token spend
+# on routine dev operations. Drop these entries under [[hooks]] in
+# your lobslaw config.toml alongside other hook subscriptions.
+#
+# Why this works without RTK-specific Go code: the existing hooks
+# system in internal/hooks dispatches PreToolUse/PostToolUse to any
+# subprocess that obeys the hook stdio protocol (JSON request on
+# stdin, JSON response on stdout). RTK already speaks that protocol
+# — it was designed for Claude Code's hook convention, which
+# lobslaw adopted directly. See docs/dev/SKILLS.md "RTK" section.
+#
+# Prerequisites:
+#   - rtk installed on $PATH (install: https://github.com/rtk-xs/claude)
+#   - rtk --version reports 0.3.0 or newer (earlier versions have a
+#     minor stdio race on fast tool invocations)
+#
+# Safety:
+#   - RTK runs OUTSIDE the tool's sandbox. It's a pre/post hook, not
+#     a tool itself. Pin it to a known-good version and audit updates.
+
+[[hooks.PreToolUse]]
+command = "rtk"
+args    = ["hook", "pre"]
+# timeout short by design — a stuck RTK shouldn't block tool dispatch
+timeout_seconds = 3
+
+[[hooks.PostToolUse]]
+command = "rtk"
+args    = ["hook", "post"]
+timeout_seconds = 5
+
+# Optional: scope to specific tools. Uncomment + adjust.
+# [[hooks.PreToolUse]]
+# command = "rtk"
+# args    = ["hook", "pre"]
+# match   = { tool = "bash" }       # only wrap bash invocations
