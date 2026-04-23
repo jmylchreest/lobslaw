@@ -30,6 +30,7 @@ var (
 type flags struct {
 	showVersion bool
 	configPath  string
+	envPath     string
 	policyDirs  []string
 	logLevel    string
 	logFormat   string
@@ -45,6 +46,7 @@ func parseFlags(args []string, out *flags) error {
 	fs := flag.NewFlagSet("lobslaw", flag.ContinueOnError)
 	fs.BoolVar(&out.showVersion, "version", false, "print version and exit")
 	fs.StringVar(&out.configPath, "config", "", "path to config.toml (overrides default lookup)")
+	fs.StringVar(&out.envPath, "env", "", "path to .env file (overrides default lookup: $LOBSLAW_ENV, ./.env, $XDG_CONFIG_HOME/lobslaw/.env, ~/.config/lobslaw/.env)")
 	// --policy-dir is repeatable so operators can layer multiple
 	// sources on the CLI; later entries override earlier per the
 	// Registry's last-write-wins semantics (matches git config's
@@ -197,6 +199,14 @@ func main() {
 
 	logger := logging.New(os.Stderr, parseLogLevel(f.logLevel), logging.Format(f.logFormat))
 	slog.SetDefault(logger)
+
+	// Load any .env file before config so config's env:VAR secret
+	// references pick up values supplied via .env. Missing .env is
+	// a no-op; syntax errors are loud.
+	if err := config.LoadDotenv(f.envPath); err != nil {
+		logger.Error("load .env", "error", err)
+		os.Exit(1)
+	}
 
 	cfg, err := config.Load(config.LoadOptions{Path: f.configPath})
 	if err != nil {
