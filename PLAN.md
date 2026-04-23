@@ -590,6 +590,20 @@ Events to support (MVP): `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Sessi
 
 **Goal:** The core agent loop that processes messages, calls LLM providers, and dispatches tools.
 
+**Status: landed (2026-04-23).** See `docs/dev/AGENT.md` for architecture + flow diagrams.
+
+**Build order (deviated from original numbering — leaves first):**
+
+1. **5.1 Provider Resolver** — pure config logic, no deps. Lands first so downstream can reference the ResolveDecision shape.
+2. **5.5a promptgen section builders** + **5.5b bootstrap loader** — also pure, no deps. Deliberately ahead of LLM plumbing per external review recommendation; deterministic tests validate both in isolation.
+3. **5.2b Mock LLM Provider** + `LLMProvider` interface — the interface ships with the mock so 5.2 is built against a test-validated contract shape.
+4. **5.2 Real LLM Client** — OpenAI-compatible HTTP; builds on the 5.2b interface.
+5. **5.2c Cost Accounting** — baked-in pricing table + `EstimateCost`; consumed by Budget + agent loop.
+6. **5.3 Turn Budget** — per-turn cap enforcement; composes with 5.2c.
+7. **5.4 Agent Loop** — composition site for every piece above. `promptgen.Generate()` (deferred from 5.5b) lands here.
+
+All items carry mermaid flow/sequence diagrams per `lobslaw-documentation-diagrams`.
+
 ### 5.1 Provider Resolver
 
 `internal/compute/resolver.go`:

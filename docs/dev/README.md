@@ -16,7 +16,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Sandbox | [SANDBOX.md](SANDBOX.md) | Namespaces, Landlock, seccomp, reexec helper, policy.d |
 | Policy engine | *(tbd — linked from MEMORY.md + SANDBOX.md for now)* | Rule walk, conditions, evaluator injection |
 | Executor | *(tbd)* | Tool invocation pipeline, env whitelist, capped output |
-| Agent loop | *(tbd — Phase 5)* | RunToolCallLoop, resolver, promptgen, budget |
+| Agent loop | [AGENT.md](AGENT.md) | RunToolCallLoop, resolver, promptgen, LLM client, budget |
 
 ## Conventions
 

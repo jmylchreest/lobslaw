@@ -127,7 +127,7 @@ Any subset of functions (`memory`, `policy`, `compute`, `gateway`, `storage`) ca
 | 2 | Cluster core (node.Node, Raft, discovery, gRPC) | [DISCOVERY.md](DISCOVERY.md) |
 | 3 | Memory service (Store/Recall/Search/Forget, Dream, consolidation merge) | [MEMORY.md](MEMORY.md) |
 | 4 | Tool execution (Registry, Policy, Hooks, Executor, Sandbox) | [SANDBOX.md](SANDBOX.md) |
-| 5 | **In progress** — Agent Core + Provider Resolver | [AGENT.md](AGENT.md) (TBD) |
+| 5 | Agent Core + Provider Resolver + promptgen + LLM client + budget | [AGENT.md](AGENT.md) |
 | 6+ | Channels, Scheduler, Skills, Storage, SOUL, Audit, Polish | see PLAN.md |
 
 ---
