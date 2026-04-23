@@ -139,7 +139,8 @@ Any subset of functions (`memory`, `policy`, `compute`, `gateway`, `storage`) ca
 | 7 | Scheduler + PlanService + CAS-claim cluster coordination + built-in agent:turn handler | [SCHEDULER.md](SCHEDULER.md) |
 | 9 | Storage (Manager + Watcher + local/nfs/rclone backends + StorageService gRPC) | [STORAGE.md](STORAGE.md) |
 | 8 | Skills (manifest parsing, registry, python/bash invoker, sandbox integration, agent dispatch, plugin CLI, MCP client, ed25519 signing, RTK hooks) | [SKILLS.md](SKILLS.md) |
-| 10+ | SOUL, Audit, Polish | see PLAN.md |
+| 10 | SOUL (loader, dynamic adjustment with LLM/regex classifier + cooldown + persist, lingua-go language detection, min-trust-tier validation) | internal/soul |
+| 11+ | Audit, Polish | see PLAN.md |
 
 ---
 

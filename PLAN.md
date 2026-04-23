@@ -1055,7 +1055,20 @@ Documented in `DEPLOYMENT.md` for each target environment. Kept as the primary o
 
 ---
 
-## Phase 10: SOUL + Personality
+## Phase 10: SOUL + Personality — **shipped**
+
+`internal/soul` ships:
+
+- **10.1 Loader.** `Load` / `LoadOrDefault` / `Parse` — YAML frontmatter → `types.SoulConfig`, freeform markdown body preserved, CRLF-tolerant, defaults applied for sparse files. Validation rejects out-of-range emotive dimensions + unknown emoji_usage / classifier values.
+- **10.2 Dynamic adjustment.** `Classifier` interface split: `RegexClassifier` (offline) + `LLMClassifier` (fast-tier callback with regex fallback on error or unparseable response). `Adjuster.Apply` → cooldown check → ±3-from-baseline clamp → file persist (preserves markdown body, in-memory rollback on disk write failure). `CooldownRemaining(dimension)` for UI surfaces.
+- **10.3 Language detection.** `LinguaDetector` wraps pemistahl/lingua-go with a 10-language default preload; `NullDetector` for detect=false; lowercased ISO 639-1 output matching BCP 47.
+- **10.4 Min-trust-tier enforcement.** `ValidateProviderTier(soul, provider)` returns a descriptive error when the configured LLM provider falls below `SoulConfig.MinTrustTier`. Intended for boot-time agent construction (per-turn resolver integration is future Phase 5 work that wasn't finished).
+
+Follow-ups past Phase 10:
+
+- Per-turn resolver integration: today the Soul trust floor is a boot-time guard, not a per-turn hook that would let the agent dynamically switch providers if the Soul's floor changed mid-session.
+- Feedback reason surfacing on the originating channel — `ApplyResult.Reason` is populated; wiring it into REST / Telegram responses is a channel-layer extension.
+- Culture / nationality overlays on the system prompt — fields exist on `SoulConfig` but the prompt builder that reads them hasn't grown these branches yet.
 
 ### 10.1 SOUL.md Loader
 
