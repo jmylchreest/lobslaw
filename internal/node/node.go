@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 
+	"github.com/jmylchreest/lobslaw/internal/audit"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
@@ -107,6 +108,13 @@ type Config struct {
 	// (otherwise the node skips gateway wiring entirely).
 	Gateway config.GatewayConfig
 
+	// Audit configures the tamper-evident log. Both sinks can be
+	// disabled (no-op log); enabling both gives defence-in-depth
+	// where tampering one side fails the cross-sink VerifyChain.
+	// Raft sink requires the Raft stack (memory/policy function);
+	// config silently drops Raft sink on non-Raft nodes.
+	Audit config.AuditConfig
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate
@@ -175,6 +183,12 @@ type Node struct {
 	gatewaySrv      *gateway.Server
 	telegramHandler *gateway.TelegramHandler
 	promptRegistry  *gateway.PromptRegistry
+
+	// Audit log coordinator and gRPC surface. Present whenever at
+	// least one sink is enabled; nil otherwise (operator explicitly
+	// turned both off).
+	auditLog *audit.AuditLog
+	auditSvc *audit.Service
 
 	shutdownOnce chan struct{}
 }
@@ -354,6 +368,15 @@ func New(cfg Config) (*Node, error) {
 			return nil, fmt.Errorf("skills adapter: %w", err)
 		}
 		n.skillAdapter = adapter
+	}
+
+	// Audit log + gRPC surface. Runs independently of which functions
+	// are enabled — a Compute-only node can still ship a local JSONL
+	// of its outbound tool invocations even without Raft. Raft sink
+	// is only honoured on nodes that host the Raft stack.
+	if err := n.wireAudit(context.Background()); err != nil {
+		n.closePartial()
+		return nil, fmt.Errorf("audit: %w", err)
 	}
 
 	// Wire the Compute stack iff this node runs the Compute function.
@@ -548,6 +571,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			n.log.Warn("storage shutdown", "err", err)
 		}
 	}
+	if n.auditLog != nil {
+		if err := n.auditLog.Close(); err != nil {
+			n.log.Warn("audit log close", "err", err)
+		}
+	}
 	if n.raft != nil {
 		if err := n.raft.Shutdown(); err != nil {
 			n.log.Warn("raft shutdown", "err", err)
@@ -693,6 +721,80 @@ func (n *Node) wireRaft(advertise string) error {
 	n.raft = rNode
 	return nil
 }
+
+// wireAudit constructs the AuditLog coordinator and registers the
+// AuditService on the gRPC server. Silently no-ops when both sinks
+// are disabled in config — the log object is still created (so
+// callers can Append to a nil-sink log without special-casing) but
+// no gRPC service is registered to avoid confusing clients with a
+// service that will never produce results.
+func (n *Node) wireAudit(ctx context.Context) error {
+	var sinks []audit.AuditSink
+
+	if n.cfg.Audit.Local.Enabled {
+		path := n.cfg.Audit.Local.Path
+		if path == "" {
+			path = filepath.Join(n.cfg.DataDir, "audit", "audit.jsonl")
+		}
+		ls, err := audit.NewLocalSink(audit.LocalConfig{
+			Path:      path,
+			MaxSizeMB: n.cfg.Audit.Local.MaxSizeMB,
+			MaxFiles:  n.cfg.Audit.Local.MaxFiles,
+		})
+		if err != nil {
+			return fmt.Errorf("local sink: %w", err)
+		}
+		sinks = append(sinks, ls)
+	}
+
+	if n.cfg.Audit.Raft.Enabled {
+		if n.raft == nil || n.store == nil {
+			n.log.Warn("audit: raft sink requested but node doesn't host Raft; skipping")
+		} else {
+			rs, err := audit.NewRaftSink(audit.RaftConfig{
+				Raft:  n.raft,
+				Store: n.store,
+			})
+			if err != nil {
+				return fmt.Errorf("raft sink: %w", err)
+			}
+			sinks = append(sinks, rs)
+		}
+	}
+
+	log, err := audit.NewAuditLog(ctx, audit.Config{
+		Sinks:  sinks,
+		Logger: n.log,
+	})
+	if err != nil {
+		return fmt.Errorf("coordinator: %w", err)
+	}
+	n.auditLog = log
+
+	if len(sinks) == 0 {
+		n.log.Info("audit: no sinks configured — log is a no-op")
+		return nil
+	}
+
+	svc, err := audit.NewService(log)
+	if err != nil {
+		return fmt.Errorf("service: %w", err)
+	}
+	n.auditSvc = svc
+	lobslawv1.RegisterAuditServiceServer(n.server, svc)
+
+	sinkNames := make([]string, len(sinks))
+	for i, s := range sinks {
+		sinkNames[i] = s.Name()
+	}
+	n.log.Info("audit wired", "sinks", sinkNames)
+	return nil
+}
+
+// Audit returns the AuditLog coordinator for the node. Always non-
+// nil after New; a zero-sink configuration returns a log that no-ops
+// on Append so callers don't need to nil-check.
+func (n *Node) Audit() *audit.AuditLog { return n.auditLog }
 
 func (n *Node) dialer() discovery.Dialer {
 	return func(ctx context.Context, addr string) (*grpc.ClientConn, error) {

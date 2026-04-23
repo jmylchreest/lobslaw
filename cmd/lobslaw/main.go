@@ -185,6 +185,9 @@ func main() {
 	if dispatchPlugin(os.Args[1:]) {
 		return
 	}
+	if dispatchAudit(os.Args[1:]) {
+		return
+	}
 
 	var f flags
 	if err := parseFlags(os.Args[1:], &f); err != nil {
@@ -328,6 +331,7 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 		Hooks:               cfg.Hooks,
 		Auth:                cfg.Auth,
 		Gateway:             cfg.Gateway,
+		Audit:               cfg.Audit,
 		SoulPath:            cfg.Soul.Path,
 		Logger:              logger,
 	}, nil
