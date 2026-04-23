@@ -138,7 +138,8 @@ Any subset of functions (`memory`, `policy`, `compute`, `gateway`, `storage`) ca
 | 6 | REST + Telegram channels + confirmation prompts + JWT (HS256 + JWKS RS256/EdDSA) | [GATEWAY.md](GATEWAY.md) |
 | 7 | Scheduler + PlanService + CAS-claim cluster coordination + built-in agent:turn handler | [SCHEDULER.md](SCHEDULER.md) |
 | 9 | Storage (Manager + Watcher + local/nfs/rclone backends + StorageService gRPC) | [STORAGE.md](STORAGE.md) |
-| 8, 10+ | Skills, SOUL, Audit, Polish | see PLAN.md |
+| 8a+8b | Skills (manifest parsing, registry, python/bash invoker); sandbox integration + plugin CLI + MCP deferred | [SKILLS.md](SKILLS.md) |
+| 10+ | SOUL, Audit, Polish | see PLAN.md |
 
 ---
 

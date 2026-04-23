@@ -20,6 +20,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Gateway (channels) | [GATEWAY.md](GATEWAY.md) | REST server, Telegram webhook, confirmation prompts, JWT validator |
 | Scheduler | [SCHEDULER.md](SCHEDULER.md) | Sleep-until-due loop, CAS claim, PlanService, built-in agent:turn handler |
 | Storage | [STORAGE.md](STORAGE.md) | Mount Manager + Watcher, local/nfs/rclone backends, StorageService gRPC |
+| Skills | [SKILLS.md](SKILLS.md) | Manifest-driven user skills, registry + invoker (python/bash), sandbox integration pending |
 
 ## Conventions
 
