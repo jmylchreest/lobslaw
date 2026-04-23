@@ -30,19 +30,34 @@ type Registry struct {
 	// candidates tracks every version from every source so removal
 	// can fall back to the next-highest rather than losing the name.
 	candidates map[string][]*Skill
-	log        *slog.Logger
+	// preferSigned flips winner-selection to break version ties in
+	// favour of signed manifests. Set by NewRegistryWithPolicy under
+	// SigningPrefer.
+	preferSigned bool
+	log          *slog.Logger
 }
 
 // NewRegistry constructs an empty registry with the given logger.
-// Nil logger → slog.Default().
+// Nil logger → slog.Default(). Equivalent to NewRegistryWithPolicy
+// under SigningOff — no preference between signed + unsigned.
 func NewRegistry(log *slog.Logger) *Registry {
+	return NewRegistryWithPolicy(log, SigningOff)
+}
+
+// NewRegistryWithPolicy wires the signing policy into the registry
+// so winner-selection can break version ties in favour of signed
+// candidates when the operator wants it. SigningOff and
+// SigningRequire both leave the tiebreaker unchanged (under Require
+// every candidate is signed; under Off signatures are decoration).
+func NewRegistryWithPolicy(log *slog.Logger, policy SigningPolicy) *Registry {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Registry{
-		byName:     make(map[string]*Skill),
-		candidates: make(map[string][]*Skill),
-		log:        log,
+		byName:       make(map[string]*Skill),
+		candidates:   make(map[string][]*Skill),
+		preferSigned: policy == SigningPrefer,
+		log:          log,
 	}
 }
 
@@ -123,9 +138,10 @@ func (r *Registry) List() []*Skill {
 }
 
 // recomputeWinnerLocked picks the highest-semver candidate for
-// name. Ties broken by lexicographic ManifestDir — deterministic so
-// two replicas with identical config pick the same winner. Caller
-// must hold r.mu.
+// name. Ties (same semver) broken by: signed-beats-unsigned when
+// preferSigned is on, else lexicographic ManifestDir. Either
+// tiebreaker is deterministic so two replicas with identical config
+// pick the same winner. Caller must hold r.mu.
 func (r *Registry) recomputeWinnerLocked(name string) {
 	list := r.candidates[name]
 	if len(list) == 0 {
@@ -134,15 +150,30 @@ func (r *Registry) recomputeWinnerLocked(name string) {
 	}
 	best := list[0]
 	for _, c := range list[1:] {
-		if compareVersion(c.Manifest.Version, best.Manifest.Version) > 0 {
-			best = c
-			continue
-		}
-		if compareVersion(c.Manifest.Version, best.Manifest.Version) == 0 && c.ManifestDir < best.ManifestDir {
+		if r.candidateBeats(c, best) {
 			best = c
 		}
 	}
 	r.byName[name] = best
+}
+
+// candidateBeats returns true when c should replace best under the
+// registry's current policy. Order of preference:
+//   1. Higher semver wins.
+//   2. When semver ties AND preferSigned is on, signed beats unsigned.
+//   3. Same-signing, same-version: lexicographic ManifestDir.
+func (r *Registry) candidateBeats(c, best *Skill) bool {
+	cmp := compareVersion(c.Manifest.Version, best.Manifest.Version)
+	if cmp > 0 {
+		return true
+	}
+	if cmp < 0 {
+		return false
+	}
+	if r.preferSigned && c.IsSigned != best.IsSigned {
+		return c.IsSigned
+	}
+	return c.ManifestDir < best.ManifestDir
 }
 
 // compareVersion compares two semver strings, tolerating missing
@@ -172,11 +203,19 @@ func semverize(v string) string {
 	return "v" + v
 }
 
-// Scan walks root for "*/manifest.yaml" and Puts each parsed skill
-// into the registry. Returns a slice of parse errors so callers
-// can surface a summary; skills that failed parsing are simply
-// absent from the registry.
+// Scan walks root for "*/manifest.yaml" and Puts each parsed skill.
+// Equivalent to ScanWithPolicy(root, SigningOff, nil) — see that
+// function for the signature-aware form.
 func (r *Registry) Scan(root string) []error {
+	return r.ScanWithPolicy(root, SigningOff, nil)
+}
+
+// ScanWithPolicy is the production scan entry point: every skill
+// subdir under root is parsed with the given policy + verifier.
+// Rejections from ParseWithPolicy (missing-required-signature,
+// invalid-signature) surface as errors; the skill stays
+// unregistered and its next-highest candidate retains the name.
+func (r *Registry) ScanWithPolicy(root string, policy SigningPolicy, verifier *Verifier) []error {
 	var errs []error
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -187,11 +226,9 @@ func (r *Registry) Scan(root string) []error {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		skill, err := Parse(dir)
+		skill, err := ParseWithPolicy(dir, policy, verifier)
 		if err != nil {
 			if _, statErr := os.Stat(filepath.Join(dir, "manifest.yaml")); os.IsNotExist(statErr) {
-				// Directory without a manifest — not every subdir under
-				// the skills root is a skill. Quiet skip.
 				continue
 			}
 			r.log.Warn("skills: parse failed", "dir", dir, "err", err)

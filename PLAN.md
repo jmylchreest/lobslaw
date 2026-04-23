@@ -844,7 +844,7 @@ The `skill:agenda` user-facing skill — which renders `PlanService.GetPlan` out
 - **8d Plugin install CLI.** `lobslaw plugin install/enable/disable/list/import` including clawhub ref resolution, manifest-tree approval prompt, SHA recording. Whole CLI subsystem.
 - **8e MCP client.** Stdio JSON-RPC to `.mcp.json`-declared servers, `initialize` / `tools/list` / `tools/call` with tool-registry conversion. Streaming responses out of scope for first shipment.
 - **8f RTK hooks.** Shipped — `examples/hooks.rtk.toml` with drop-in `[[hooks.PreToolUse]]` + `[[hooks.PostToolUse]]` config + a SKILLS.md section on the integration. No Go code needed; RTK already speaks the hook protocol.
-- **8g Signature verification.** Minisign signatures, `skills.require_signed` flag, SHA-pinning with re-prompt on change.
+- **8g Signature verification.** Shipped. Tri-state `skills.signing_policy` = `off | prefer | require`, not a boolean — captures the ecosystem reality that many skills ship unsigned. Ed25519 detached signatures (`manifest.yaml.sig` next to each manifest); trusted publishers loaded from a minimal text file. Registry winner-selection uses IsSigned as a tiebreaker under `prefer`. See SKILLS.md "Manifest signing" section.
 - Go + WASM runtimes for the Invoker (python + bash suffice for MVP).
 
 ### 8.1 Skill Registry

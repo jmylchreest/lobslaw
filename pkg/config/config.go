@@ -314,8 +314,21 @@ type AuditLocalConfig struct {
 }
 
 type SkillsConfig struct {
-	RequireSigned     bool   `koanf:"require_signed"`
+	// SigningPolicy gates manifest signatures: "off" | "prefer" |
+	// "require". Empty / unrecognised → "prefer" (accept both but
+	// break version ties in favour of signed). Matches the
+	// tri-state skills.SigningPolicy.
+	SigningPolicy string `koanf:"signing_policy"`
+
+	// TrustedPublishers is the path to a text file with one
+	// "publisher-name base64-ed25519-pubkey" entry per line.
+	// Loaded at boot; changes require a config reload.
 	TrustedPublishers string `koanf:"trusted_publishers"`
+
+	// RequireSigned retained for backward-compat with older configs.
+	// When true (and SigningPolicy empty) the effective policy is
+	// SigningRequire. Prefer SigningPolicy for new configs.
+	RequireSigned bool `koanf:"require_signed"`
 }
 
 type ObservabilityConfig struct {

@@ -225,6 +225,49 @@ Skill errors (missing storage label, sandbox install failure, invoker config err
 
 ---
 
+## Manifest signing
+
+Ed25519 detached signatures, operator-configurable policy. The config flag lives under `[skills]`:
+
+```toml
+[skills]
+signing_policy      = "prefer"                    # off | prefer | require
+trusted_publishers  = "/etc/lobslaw/publishers"   # file path
+```
+
+**Three-state policy, not a boolean.** Most community skills ship unsigned; requiring signatures would exclude them entirely, while ignoring signatures loses the safety benefit for skills that DO ship signed.
+
+| Policy | Unsigned manifest | Signed (valid) | Signed (invalid / wrong key) |
+|---|---|---|---|
+| `off` | accepted, `IsSigned=false` | accepted, `IsSigned=false` (verification never runs) | accepted, `IsSigned=false` |
+| `prefer` | accepted, `IsSigned=false` | accepted, `IsSigned=true`, `SignedBy=<key name>` | **rejected** (tamper signal) |
+| `require` | **rejected** | accepted, `IsSigned=true` | **rejected** |
+
+Under `prefer`, the registry's winner-selection uses IsSigned as a tiebreaker: when two candidates share a semver, the signed one wins. Higher semver still beats lower regardless — signing is only a tiebreaker, not an override.
+
+### Publisher key format
+
+`trusted_publishers` points at a text file:
+
+```
+# one publisher per line
+lobslaw-core       Zq3N8X4rT2aQ8m4yL7e6vJh5CpR9wK1sX0fN3tB2uV4=
+community-pack-a   5XbMvQ2tGh9rP3cL8kN7wA1eF6yB4sZ0uK2dJ5nT8=
+```
+
+Format is deliberately minimal — no TOML nesting, no JSON schema — because trust roots should be human-auditable at a glance. Blank lines and `#` comments are supported.
+
+### Signing the manifest
+
+Publishers use any ed25519 tool (`signify`, `minisign --raw`, `openssl pkeyutl`) to sign `manifest.yaml` and drop the result next to it as `manifest.yaml.sig`. Both raw-binary and base64-encoded signature files are accepted so editors and CI pipelines don't need to agree on a format.
+
+Example with openssl:
+```bash
+openssl pkeyutl -sign -inkey privkey.pem -rawin -in manifest.yaml > manifest.yaml.sig
+```
+
+---
+
 ## RTK integration
 
 RTK (Rust Token Killer) compresses tool output and decorates prompts to cut token cost on routine dev operations. Because it already speaks the Claude-Code hook protocol (JSON request on stdin, JSON response on stdout) and lobslaw adopted that same protocol in `internal/hooks`, no RTK-specific Go code is needed — it's a pure-config integration.
@@ -246,6 +289,7 @@ Short timeouts are intentional: a stuck RTK shouldn't block tool dispatch. The h
 | **Sandbox integration** (Landlock/seccomp/ns per manifest) | ✅ shipped (8b.2) |
 | **Agent integration** (skills as tool-registry entries) | ✅ shipped (8c) |
 | **RTK hooks example** (config-only, uses existing hooks system) | ✅ shipped (8f) |
+| **Signature verification** (tri-state policy + ed25519) | ✅ shipped (8g) |
 | **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ⬜ Phase 8d |
 | **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ⬜ Phase 8e |
 | **RTK hooks** (config-only PreToolUse/PostToolUse integration) | ⬜ Phase 8f |

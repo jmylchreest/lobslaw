@@ -60,24 +60,51 @@ type Manifest struct {
 }
 
 // Skill is the registered form — manifest + resolved disk paths +
-// SHA of the manifest file. SHA lets the registry detect
-// content-identical republishes (no event) vs actual changes
-// (reload + notify subscribers).
+// SHA of the manifest file + signature-verification result. SHA
+// lets the registry detect content-identical republishes (no event)
+// vs actual changes (reload + notify subscribers). IsSigned +
+// SignedBy let the registry prefer signed candidates during
+// winner-selection and audit logs show who signed what.
 type Skill struct {
 	Manifest    Manifest
 	ManifestDir string // absolute path to the directory containing manifest.yaml
 	HandlerPath string // absolute path to the handler script
 	SHA256      string // hex-encoded manifest-file digest
+
+	// IsSigned is true iff a valid ed25519 signature by a trusted
+	// publisher accompanied the manifest. Under SigningOff this is
+	// always false (we never verify); under SigningPrefer /
+	// SigningRequire it reflects the actual verification outcome.
+	IsSigned bool
+
+	// SignedBy is the operator-assigned name of the key that signed
+	// this manifest. Empty when IsSigned is false.
+	SignedBy string
 }
 
 // Name returns the skill's name. Convenience for registry callers.
 func (s *Skill) Name() string { return s.Manifest.Name }
 
-// Parse reads manifest.yaml from dir, validates the shape, and
-// resolves the handler path. Returns an error for any validation
-// failure — rather than a partially-populated Skill — so callers
-// can't accidentally act on a half-registered skill.
+// Parse reads manifest.yaml from dir without signature checks. Kept
+// as the ergonomic default for tests and for deployments running
+// SigningOff. For signature-aware parsing use ParseWithPolicy.
 func Parse(dir string) (*Skill, error) {
+	return ParseWithPolicy(dir, SigningOff, nil)
+}
+
+// ParseWithPolicy is the production entry point. SigningOff ignores
+// signatures. SigningPrefer verifies when present — missing is
+// fine, invalid rejects (indicates tampering / broken publish).
+// SigningRequire rejects both missing and invalid. verifier may be
+// nil only under SigningOff.
+func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Skill, error) {
+	if !policy.IsValid() {
+		return nil, fmt.Errorf("skills: unsupported signing policy %q", policy)
+	}
+	if policy != SigningOff && verifier == nil {
+		return nil, fmt.Errorf("skills: policy %q requires a Verifier", policy)
+	}
+
 	dir = filepath.Clean(dir)
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("skills: manifest dir %q must be absolute", dir)
@@ -108,12 +135,36 @@ func Parse(dir string) (*Skill, error) {
 	}
 
 	sum := sha256.Sum256(raw)
-	return &Skill{
+	skill := &Skill{
 		Manifest:    m,
 		ManifestDir: dir,
 		HandlerPath: handler,
 		SHA256:      hex.EncodeToString(sum[:]),
-	}, nil
+	}
+
+	if policy == SigningOff {
+		return skill, nil
+	}
+
+	sig, err := readSignature(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("skills: %q: %w", manifestPath, err)
+	}
+
+	if sig == nil {
+		if policy == SigningRequire {
+			return nil, fmt.Errorf("skills: %q: signature required but manifest.yaml.sig missing", manifestPath)
+		}
+		return skill, nil
+	}
+
+	signer, ok := verifier.Verify(raw, sig)
+	if !ok {
+		return nil, fmt.Errorf("skills: %q: signature present but did not verify against any trusted key", manifestPath)
+	}
+	skill.IsSigned = true
+	skill.SignedBy = signer
+	return skill, nil
 }
 
 // validateManifest applies the manifest-shape invariants. Listed
