@@ -18,17 +18,36 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// TelegramConfig configures the Telegram webhook handler.
+// TelegramMode picks between inbound webhooks and outbound long-
+// polling. Poll mode is the right default for personal deployments
+// behind NAT — the bot makes outbound-only calls to the Telegram
+// API, no public HTTPS endpoint required. Webhook mode is still
+// supported for public cloud deployments where setWebhook is
+// operationally preferable.
+type TelegramMode string
+
+const (
+	TelegramModeWebhook TelegramMode = "webhook"
+	TelegramModePoll    TelegramMode = "poll"
+)
+
+// TelegramConfig configures the Telegram channel — either as an
+// inbound webhook receiver or an outbound long-poll client.
 type TelegramConfig struct {
 	// BotToken is the full Telegram Bot API token. Resolved from
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
 
+	// Mode picks between webhook (inbound, default) and poll
+	// (outbound). Empty → webhook for back-compat with Phase 6e
+	// deployments.
+	Mode TelegramMode
+
 	// WebhookSecret is the random token supplied to Telegram via
 	// setWebhook(secret_token=...). Every inbound update carries it
 	// in the X-Telegram-Bot-Api-Secret-Token header; we reject any
-	// request where it doesn't match. Per PLAN.md this avoids the
-	// "token in URL path" variant that leaks secrets into access logs.
+	// request where it doesn't match. Required in webhook mode,
+	// ignored in poll mode.
 	WebhookSecret string
 
 	// UserIDScopes maps Telegram user IDs to lobslaw security
@@ -149,8 +168,15 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	if cfg.BotToken == "" {
 		return nil, errors.New("telegram: BotToken required")
 	}
-	if cfg.WebhookSecret == "" {
-		return nil, errors.New("telegram: WebhookSecret required (use setWebhook secret_token)")
+	if cfg.Mode == "" {
+		cfg.Mode = TelegramModeWebhook
+	}
+	if cfg.Mode == TelegramModeWebhook && cfg.WebhookSecret == "" {
+		return nil, errors.New("telegram: WebhookSecret required in webhook mode (use setWebhook secret_token) — or set mode=poll")
+	}
+	if cfg.Mode != TelegramModeWebhook && cfg.Mode != TelegramModePoll {
+		return nil, fmt.Errorf("telegram: unknown mode %q; want %q or %q",
+			cfg.Mode, TelegramModeWebhook, TelegramModePoll)
 	}
 	if agent == nil {
 		return nil, errors.New("telegram: agent required")
@@ -208,25 +234,7 @@ func (h *TelegramHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-
-	// Update-ID dedup. Telegram retries on network error; a retry
-	// after the first successful handling would invoke the agent
-	// twice for the same user message. Entries expire after 5
-	// minutes so the cache doesn't grow unboundedly.
-	if !h.firstSeen(up.UpdateID) {
-		h.log.Info("telegram: duplicate update ignored", "update_id", up.UpdateID)
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	switch {
-	case up.Message != nil && up.Message.Text != "":
-		h.handleMessage(r.Context(), up.Message)
-	case up.CallbackQuery != nil:
-		h.handleCallbackQuery(r.Context(), up.CallbackQuery)
-	default:
-		h.log.Debug("telegram: unsupported update shape", "update_id", up.UpdateID)
-	}
+	h.dispatchUpdate(r.Context(), &up)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -598,4 +606,208 @@ func usernameOf(u *tgUser) string {
 		return ""
 	}
 	return strings.TrimSpace(u.Username)
+}
+
+// Mode returns the handler's active mode. Used by the gateway to
+// decide whether to mount the webhook route or start the poll loop.
+func (h *TelegramHandler) Mode() TelegramMode { return h.cfg.Mode }
+
+// dispatchUpdate is the post-decode path shared by the webhook
+// ServeHTTP and the poll loop. Dedup + update-shape dispatch live
+// here so both transports behave identically.
+func (h *TelegramHandler) dispatchUpdate(ctx context.Context, up *tgUpdate) {
+	if !h.firstSeen(up.UpdateID) {
+		h.log.Info("telegram: duplicate update ignored", "update_id", up.UpdateID)
+		return
+	}
+	switch {
+	case up.Message != nil && up.Message.Text != "":
+		h.handleMessage(ctx, up.Message)
+	case up.CallbackQuery != nil:
+		h.handleCallbackQuery(ctx, up.CallbackQuery)
+	default:
+		h.log.Debug("telegram: unsupported update shape", "update_id", up.UpdateID)
+	}
+}
+
+// pollDefaults tune the long-poll loop. Chosen to balance Telegram
+// API etiquette (long-poll timeout 25s = a quarter of their 60s
+// server-side max) against backoff behaviour on flaky networks.
+const (
+	pollLongTimeout   = 25 * time.Second
+	pollInitialBackoff = 1 * time.Second
+	pollMaxBackoff     = 30 * time.Second
+	pollBackoffFactor  = 1.8
+)
+
+// tgGetUpdatesResp is the response shape for the Bot API getUpdates
+// endpoint: {ok, result, description}.
+type tgGetUpdatesResp struct {
+	OK          bool       `json:"ok"`
+	Result      []tgUpdate `json:"result"`
+	Description string     `json:"description,omitempty"`
+	ErrorCode   int        `json:"error_code,omitempty"`
+}
+
+// RunLongPoll blocks on the getUpdates loop until ctx is cancelled.
+// Only valid in poll mode; returns an error immediately otherwise.
+//
+// Algorithm mirrors openclaw/openclaw's polling session:
+//   1. loop getUpdates(offset=next, timeout=25s) — Telegram holds
+//      the connection until updates arrive or the timeout expires
+//   2. for each update: advance offset, dispatch through the same
+//      path the webhook uses (dispatchUpdate)
+//   3. on transport error: exponential backoff 1s→30s (factor 1.8)
+//   4. on HTTP 409 Conflict: a webhook is registered — call
+//      deleteWebhook, then resume. Telegram refuses getUpdates while
+//      a webhook is live, so this recovers the stuck state.
+//
+// Offset is kept in-memory only. A restart re-calls getUpdates with
+// offset=0, which returns everything Telegram has buffered
+// (< 24h retention). Duplicates are caught by the shared firstSeen
+// cache downstream.
+func (h *TelegramHandler) RunLongPoll(ctx context.Context) error {
+	if h.cfg.Mode != TelegramModePoll {
+		return fmt.Errorf("telegram: RunLongPoll called with mode=%q", h.cfg.Mode)
+	}
+	h.log.Info("telegram: long-poll loop starting")
+
+	var (
+		nextOffset int64
+		backoff    = pollInitialBackoff
+	)
+	for {
+		if ctx.Err() != nil {
+			h.log.Info("telegram: long-poll loop exiting", "reason", ctx.Err())
+			return nil
+		}
+
+		updates, newOffset, err := h.getUpdates(ctx, nextOffset, pollLongTimeout)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil
+			}
+			if isWebhookConflict(err) {
+				h.log.Warn("telegram: getUpdates 409 (webhook still registered); deleting webhook")
+				if delErr := h.deleteWebhook(ctx); delErr != nil {
+					h.log.Warn("telegram: deleteWebhook failed", "err", delErr)
+				}
+				// Don't sleep — jump straight back to getUpdates.
+				continue
+			}
+			h.log.Warn("telegram: getUpdates error; backing off",
+				"err", err, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
+		backoff = pollInitialBackoff
+
+		for i := range updates {
+			h.dispatchUpdate(ctx, &updates[i])
+		}
+		if newOffset > nextOffset {
+			nextOffset = newOffset
+		}
+	}
+}
+
+// getUpdates calls the Bot API's getUpdates with the supplied offset
+// and long-poll timeout. Returns the decoded updates and the offset
+// to pass on the next call (lastUpdateID + 1).
+func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout time.Duration) ([]tgUpdate, int64, error) {
+	body := map[string]any{
+		"timeout": int(timeout.Seconds()),
+	}
+	if offset > 0 {
+		body["offset"] = offset
+	}
+	buf, _ := json.Marshal(body)
+
+	// The HTTP client's own timeout must exceed the long-poll
+	// timeout — otherwise we cancel the request before Telegram
+	// gets a chance to reply.
+	reqCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("%s/bot%s/getUpdates", h.base, h.cfg.BotToken)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(buf))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil, 0, errWebhookConflict
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, 0, fmt.Errorf("getUpdates: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var decoded tgGetUpdatesResp
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, 0, fmt.Errorf("getUpdates: decode: %w", err)
+	}
+	if !decoded.OK {
+		return nil, 0, fmt.Errorf("getUpdates: telegram said ok=false: %s", decoded.Description)
+	}
+	var maxID int64
+	for _, u := range decoded.Result {
+		if u.UpdateID > maxID {
+			maxID = u.UpdateID
+		}
+	}
+	var next int64
+	if maxID > 0 {
+		next = maxID + 1
+	}
+	return decoded.Result, next, nil
+}
+
+// errWebhookConflict signals a 409 from getUpdates — Telegram
+// refuses getUpdates while a webhook is registered. Handled inside
+// RunLongPoll by calling deleteWebhook.
+var errWebhookConflict = errors.New("telegram: getUpdates returned 409 (webhook conflict)")
+
+func isWebhookConflict(err error) bool { return errors.Is(err, errWebhookConflict) }
+
+// deleteWebhook clears any registered webhook so getUpdates works.
+// No-op if no webhook is set.
+func (h *TelegramHandler) deleteWebhook(ctx context.Context) error {
+	url := fmt.Sprintf("%s/bot%s/deleteWebhook", h.base, h.cfg.BotToken)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("deleteWebhook: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func nextBackoff(current time.Duration) time.Duration {
+	next := time.Duration(float64(current) * pollBackoffFactor)
+	if next > pollMaxBackoff {
+		return pollMaxBackoff
+	}
+	return next
 }

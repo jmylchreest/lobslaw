@@ -1319,16 +1319,26 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 	if botToken == "" {
 		return nil, fmt.Errorf("bot_token_ref %q resolved to empty — required for Telegram", ch.BotTokenRef)
 	}
-	webhookSecret, err := n.resolveChannelSecret(ch.SecretTokenRef)
-	if err != nil {
-		return nil, fmt.Errorf("secret_token_ref %q: %w", ch.SecretTokenRef, err)
+
+	mode := gateway.TelegramMode(ch.Mode)
+	if mode == "" {
+		mode = gateway.TelegramModeWebhook
 	}
-	if webhookSecret == "" {
-		return nil, fmt.Errorf("secret_token_ref %q resolved to empty — required for Telegram webhook", ch.SecretTokenRef)
+
+	var webhookSecret string
+	if mode == gateway.TelegramModeWebhook {
+		webhookSecret, err = n.resolveChannelSecret(ch.SecretTokenRef)
+		if err != nil {
+			return nil, fmt.Errorf("secret_token_ref %q: %w", ch.SecretTokenRef, err)
+		}
+		if webhookSecret == "" {
+			return nil, fmt.Errorf("secret_token_ref %q resolved to empty — required for Telegram webhook (or set mode=\"poll\")", ch.SecretTokenRef)
+		}
 	}
 
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
 		BotToken:         botToken,
+		Mode:             mode,
 		WebhookSecret:    webhookSecret,
 		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
 		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),

@@ -140,7 +140,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/v1/messages", s.handleMessages)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
-	if s.cfg.Telegram != nil {
+	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
 		mux.Handle("/telegram", s.cfg.Telegram)
 	}
 	if s.cfg.Prompts != nil {
@@ -166,6 +166,19 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	s.log.Info("rest server listening", "addr", ln.Addr().String(), "tls", s.cfg.TLSCert != "")
+
+	// Telegram long-poll runs alongside the HTTP server in poll
+	// mode. The loop exits cleanly when ctx is cancelled; failures
+	// inside it log + keep retrying (bounded backoff), so we don't
+	// propagate them to errCh — a flaky Telegram API shouldn't
+	// take down the whole gateway.
+	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModePoll {
+		go func() {
+			if err := s.cfg.Telegram.RunLongPoll(ctx); err != nil {
+				s.log.Warn("telegram long-poll exited", "err", err)
+			}
+		}()
+	}
 
 	errCh := make(chan error, 1)
 	go func() {

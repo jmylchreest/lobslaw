@@ -168,7 +168,12 @@ type GatewayConfig struct {
 }
 
 type GatewayChannelConfig struct {
-	Type           string `koanf:"type"`
+	Type string `koanf:"type"`
+	// Mode picks "webhook" (default) or "poll" for telegram. Poll
+	// mode needs no inbound network — right default for personal
+	// deployments behind NAT. secret_token_ref is only required in
+	// webhook mode.
+	Mode           string `koanf:"mode,omitempty"`
 	BotTokenRef    string `koanf:"bot_token_ref,omitempty"`
 	SecretTokenRef string `koanf:"secret_token_ref,omitempty"`
 	TLSCert        string `koanf:"tls_cert,omitempty"`

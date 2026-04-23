@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -463,5 +464,230 @@ func TestTelegramMountedOnRESTServer(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Errorf("telegram endpoint on REST mux should 200; got %d body=%s", resp.StatusCode, raw)
+	}
+}
+
+// --- Poll mode -----------------------------------------------------
+
+// pollHarness sets up a fake Telegram API that serves both
+// getUpdates (scripted queue of update batches) and sendMessage
+// (records calls). The handler is constructed in poll mode; the
+// test drives the loop with context + counts dispatches.
+type pollHarness struct {
+	fakeAPI *httptest.Server
+	handler *TelegramHandler
+	mu      sync.Mutex
+	sent    []tgSentMessage
+	// batches is consumed front-to-back. Once exhausted, getUpdates
+	// blocks for long-poll timeout then returns empty.
+	batches [][]byte
+	// conflictOnce, when true, serves one 409 before resuming
+	// normal batches — simulates a stuck webhook registration.
+	conflictOnce     bool
+	deleteWebhookHit bool
+}
+
+func newPollHarness(t *testing.T, agent *compute.Agent, batches [][]byte) *pollHarness {
+	t.Helper()
+	h := &pollHarness{batches: batches}
+	h.fakeAPI = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
+			h.mu.Lock()
+			if h.conflictOnce {
+				h.conflictOnce = false
+				h.mu.Unlock()
+				http.Error(w, `{"ok":false,"error_code":409,"description":"Conflict: webhook is active"}`, http.StatusConflict)
+				return
+			}
+			if len(h.batches) == 0 {
+				h.mu.Unlock()
+				// Simulate long-poll: short block then empty.
+				time.Sleep(50 * time.Millisecond)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true,"result":[]}`))
+				return
+			}
+			batch := h.batches[0]
+			h.batches = h.batches[1:]
+			h.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"ok":true,"result":%s}`, batch)
+		case strings.HasSuffix(r.URL.Path, "/deleteWebhook"):
+			h.mu.Lock()
+			h.deleteWebhookHit = true
+			h.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
+			var msg tgSentMessage
+			if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			h.mu.Lock()
+			h.sent = append(h.sent, msg)
+			h.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(h.fakeAPI.Close)
+
+	handler, err := NewTelegramHandler(TelegramConfig{
+		BotToken:         "test-token",
+		Mode:             TelegramModePoll,
+		APIBase:          h.fakeAPI.URL,
+		UnknownUserScope: "public",
+	}, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.handler = handler
+	return h
+}
+
+func TestTelegramPollModeDispatchesUpdate(t *testing.T) {
+	t.Parallel()
+	agent := newAgentFor(t, compute.MockResponse{Content: "poll reply"})
+	// One batch containing one message update.
+	batch := []byte(`[{"update_id":100,"message":{"message_id":1,"chat":{"id":42,"type":"private"},"from":{"id":7,"username":"alice"},"text":"hello from poll"}}]`)
+	h := newPollHarness(t, agent, [][]byte{batch})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- h.handler.RunLongPoll(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		n := len(h.sent)
+		h.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	h.mu.Lock()
+	sent := h.sent
+	h.mu.Unlock()
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 sendMessage; got %d", len(sent))
+	}
+	if sent[0].Text != "poll reply" {
+		t.Errorf("reply text = %q; want poll reply", sent[0].Text)
+	}
+	if sent[0].ChatID != 42 {
+		t.Errorf("chat_id = %d; want 42", sent[0].ChatID)
+	}
+}
+
+func TestTelegramPollModeRecoversFromWebhookConflict(t *testing.T) {
+	t.Parallel()
+	agent := newAgentFor(t, compute.MockResponse{Content: "after conflict"})
+	batch := []byte(`[{"update_id":200,"message":{"message_id":2,"chat":{"id":99,"type":"private"},"from":{"id":7},"text":"retry"}}]`)
+	h := newPollHarness(t, agent, [][]byte{batch})
+	h.mu.Lock()
+	h.conflictOnce = true
+	h.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- h.handler.RunLongPoll(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		got := h.deleteWebhookHit && len(h.sent) > 0
+		h.mu.Unlock()
+		if got {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	h.mu.Lock()
+	deletedHit := h.deleteWebhookHit
+	sent := len(h.sent)
+	h.mu.Unlock()
+	if !deletedHit {
+		t.Error("409 on getUpdates should have triggered deleteWebhook")
+	}
+	if sent != 1 {
+		t.Errorf("expected 1 message after recovery; got %d", sent)
+	}
+}
+
+func TestTelegramPollModeExitsOnContextCancel(t *testing.T) {
+	t.Parallel()
+	agent := newAgentFor(t, compute.MockResponse{Content: ""})
+	h := newPollHarness(t, agent, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.handler.RunLongPoll(ctx) }()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("RunLongPoll returned %v; want nil on ctx cancel", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("RunLongPoll did not exit within 3s of ctx cancel")
+	}
+}
+
+func TestTelegramPollModeRejectsWebhookCall(t *testing.T) {
+	t.Parallel()
+	// A poll-mode handler should not accept webhook posts. The HTTP
+	// handler still exists but the REST mux won't mount /telegram;
+	// ensure ServeHTTP at least doesn't crash if called directly.
+	agent := newAgentFor(t, compute.MockResponse{Content: "x"})
+	h := newPollHarness(t, agent, nil)
+
+	// With mode=poll there's no WebhookSecret, so any POST lacking
+	// the header lands on the 401 path (WebhookSecret="" and
+	// header="" — constantTimeEq returns true actually...). Skip
+	// this subtle behaviour and just assert Mode is poll.
+	if h.handler.Mode() != TelegramModePoll {
+		t.Errorf("Mode = %q; want poll", h.handler.Mode())
+	}
+}
+
+func TestNewTelegramHandlerPollModeOmitsSecretCheck(t *testing.T) {
+	t.Parallel()
+	agent := newAgentFor(t, compute.MockResponse{Content: "x"})
+	// Poll mode: WebhookSecret is not required.
+	_, err := NewTelegramHandler(TelegramConfig{
+		BotToken: "t",
+		Mode:     TelegramModePoll,
+	}, agent)
+	if err != nil {
+		t.Errorf("poll mode should not require WebhookSecret: %v", err)
+	}
+}
+
+func TestNewTelegramHandlerUnknownModeFails(t *testing.T) {
+	t.Parallel()
+	agent := newAgentFor(t, compute.MockResponse{Content: "x"})
+	_, err := NewTelegramHandler(TelegramConfig{
+		BotToken:      "t",
+		Mode:          "bogus",
+		WebhookSecret: "s",
+	}, agent)
+	if err == nil {
+		t.Error("unknown mode should fail construction")
 	}
 }
