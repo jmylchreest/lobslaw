@@ -21,6 +21,8 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/storage"
+	storagelocal "github.com/jmylchreest/lobslaw/internal/storage/local"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -129,6 +131,8 @@ type Node struct {
 	policySvc *policy.Service
 	memorySvc *memory.Service
 	planSvc   *plan.Service
+	storageSvc *storage.Service
+	storageMgr *storage.Manager
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
 	toolRegistry *compute.Registry
@@ -256,6 +260,41 @@ func New(cfg Config) (*Node, error) {
 			return nil, fmt.Errorf("scheduler: %w", err)
 		}
 		n.scheduler = sched
+
+		// Storage service piggybacks on the Raft stack — every voter
+		// serves ListMounts from its local replica, AddMount /
+		// RemoveMount propagate via Apply, and the FSM change hook
+		// drives a Reconcile on every touch of the storage_mounts
+		// bucket.
+		if has(cfg.Functions, types.FunctionStorage) {
+			mgr := storage.NewManager()
+			svc, err := storage.NewService(storage.ServiceConfig{
+				Raft:    n.raft,
+				Store:   n.store,
+				FSM:     n.fsm,
+				Manager: mgr,
+				Factories: map[string]storage.BackendFactory{
+					"local": storagelocal.Factory,
+				},
+				Logger: n.log,
+			})
+			if err != nil {
+				n.closePartial()
+				return nil, fmt.Errorf("storage: %w", err)
+			}
+			n.storageMgr = mgr
+			n.storageSvc = svc
+			lobslawv1.RegisterStorageServiceServer(server, svc)
+
+			// Wake the reconciler on every replicated change. Initial
+			// boot-time reconcile runs from Start so we don't block
+			// New on a potentially-slow Apply backlog.
+			n.fsm.SetStorageChangeCallback(func() {
+				if rerr := svc.Reconcile(context.Background()); rerr != nil {
+					n.log.Warn("storage: reconcile failed", "err", rerr)
+				}
+			})
+		}
 	}
 
 	// Wire the Compute stack iff this node runs the Compute function.
@@ -388,6 +427,17 @@ func (n *Node) Start(ctx context.Context) error {
 		}()
 	}
 
+	// Initial storage reconcile. Catches the case where the cluster
+	// already has storage_mounts entries from prior sessions — the
+	// FSM change hook fires only on new writes, not on existing
+	// state. Non-fatal if it errors; the FSM hook will retry on the
+	// next write and operators can re-issue AddMount to nudge.
+	if n.storageSvc != nil {
+		if err := n.storageSvc.Reconcile(ctx); err != nil {
+			n.log.Warn("storage: initial reconcile failed", "err", err)
+		}
+	}
+
 	// Gateway HTTP server, when wired. Runs until ctx is cancelled;
 	// a failure to bind surfaces through errCh so we fail the whole
 	// node (a gateway-enabled node that couldn't bind its channel
@@ -434,6 +484,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		n.server.Stop()
 	}
 
+	if n.storageMgr != nil {
+		for _, err := range n.storageMgr.StopAll(ctx) {
+			n.log.Warn("storage shutdown", "err", err)
+		}
+	}
 	if n.raft != nil {
 		if err := n.raft.Shutdown(); err != nil {
 			n.log.Warn("raft shutdown", "err", err)
@@ -510,6 +565,15 @@ func planServiceOrNil(svc *plan.Service) gateway.PlanService {
 // host Raft; otherwise used by the plan + (future) skill layers to
 // register HandlerRef → function mappings.
 func (n *Node) Scheduler() *scheduler.Scheduler { return n.scheduler }
+
+// Storage returns the local storage Manager. Nil when the node
+// doesn't run FunctionStorage. Skill + plugin layers use this to
+// Resolve labels + subscribe via the Watcher.
+func (n *Node) Storage() *storage.Manager { return n.storageMgr }
+
+// StorageService returns the gRPC-facing StorageService for tests
+// that want to drive AddMount/RemoveMount programmatically.
+func (n *Node) StorageService() *storage.Service { return n.storageSvc }
 
 // -- internal helpers --
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/node"
+	"github.com/jmylchreest/lobslaw/internal/storage"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
@@ -723,6 +724,113 @@ func TestNodeSchedulerFiresCommitmentAfterBoot(t *testing.T) {
 	}
 	if atomic.LoadInt32(&fired) != 1 {
 		t.Errorf("handler fired %d times; want 1", atomic.LoadInt32(&fired))
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned: %v", err)
+	}
+}
+
+// TestNodeStorageServiceReplicatesAndReconciles is the Phase 9 exit
+// criterion at node level: boot with FunctionStorage, AddMount via
+// the gRPC service, verify the local Manager.Resolve picks up the
+// new mount through the FSM callback → Reconcile path.
+func TestNodeStorageServiceReplicatesAndReconciles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping storage boot integration in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "storage-boot-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	memoryKey := mustKey(t)
+
+	// Create a real directory the local-backend mount will resolve to.
+	mountSource := filepath.Join(tmp, "mount-source")
+	if err := os.Mkdir(mountSource, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := node.Config{
+		NodeID: nodeID,
+		Functions: []types.NodeFunction{
+			types.FunctionMemory, types.FunctionPolicy,
+			types.FunctionStorage,
+		},
+		ListenAddr:     "127.0.0.1:0",
+		DataDir:        filepath.Join(tmp, "data"),
+		Bootstrap:      true,
+		SnapshotTarget: "storage:test-backup",
+		Creds:          creds,
+		MemoryKey:      memoryKey,
+	}
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if n.Storage() == nil || n.StorageService() == nil {
+		t.Fatal("Storage() / StorageService() nil despite FunctionStorage enabled")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	if err := n.Raft().WaitForLeader(5 * time.Second); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("WaitForLeader: %v", err)
+	}
+
+	_, err = n.StorageService().AddMount(ctx, &lobslawv1.AddMountRequest{
+		Mount: &lobslawv1.StorageMount{
+			Label: "shared",
+			Type:  "local",
+			Path:  mountSource,
+		},
+	})
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("AddMount: %v", err)
+	}
+
+	// Poll for the reconciler to pick it up.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if p, err := n.Storage().Resolve("shared"); err == nil && p != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	p, err := n.Storage().Resolve("shared")
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("Resolve after AddMount: %v", err)
+	}
+	resolvedSource, _ := filepath.EvalSymlinks(mountSource)
+	if p != resolvedSource {
+		t.Errorf("Resolve path: got %q want %q", p, resolvedSource)
+	}
+
+	// Remove + verify the local Manager drops the label.
+	if _, err := n.StorageService().RemoveMount(ctx, &lobslawv1.RemoveMountRequest{Label: "shared"}); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("RemoveMount: %v", err)
+	}
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := n.Storage().Resolve("shared"); err == storage.ErrNotFound {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := n.Storage().Resolve("shared"); err != storage.ErrNotFound {
+		t.Errorf("after RemoveMount: %v", err)
 	}
 
 	cancel()

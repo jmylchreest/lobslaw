@@ -31,6 +31,11 @@ type FSM struct {
 	// scheduler wake on remote-originated writes without polling.
 	// Nil-safe; Scheduler wires this at construction.
 	schedulerChange func()
+
+	// storageChange is fired after every successful apply that
+	// touched storage_mounts. Lets the storage Service reconcile
+	// the local Manager with the replicated config.
+	storageChange func()
 }
 
 // NewFSM wraps a Store as a Raft FSM.
@@ -47,6 +52,17 @@ func (f *FSM) SetSchedulerChangeCallback(cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.schedulerChange = cb
+}
+
+// SetStorageChangeCallback registers a callback that fires after
+// each FSM.Apply that touches BucketStorageMounts. Used by the
+// storage Service to reconcile the local Manager with the
+// replicated config. Same nil-safety and non-blocking rules as
+// SetSchedulerChangeCallback.
+func (f *FSM) SetStorageChangeCallback(cb func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.storageChange = cb
 }
 
 // Store returns the underlying store. Intended for read-path code;
@@ -78,14 +94,19 @@ func (f *FSM) Apply(l *raft.Log) any {
 		return fmt.Errorf("unknown log op: %v", entry.Op)
 	}
 
-	// Fire scheduler wake if the touched bucket is one the scheduler
+	// Fire change hooks if the touched bucket is one a subsystem
 	// watches AND the apply itself succeeded (returning an error
 	// leaves the store unchanged, so there's nothing to recompute).
-	if f.schedulerChange != nil {
-		if err, ok := result.(error); !ok || err == nil {
-			if bucket, _, berr := bucketAndPayload(&entry); berr == nil {
-				if bucket == BucketScheduledTasks || bucket == BucketCommitments {
+	if err, ok := result.(error); !ok || err == nil {
+		if bucket, _, berr := bucketAndPayload(&entry); berr == nil {
+			switch bucket {
+			case BucketScheduledTasks, BucketCommitments:
+				if f.schedulerChange != nil {
 					f.schedulerChange()
+				}
+			case BucketStorageMounts:
+				if f.storageChange != nil {
+					f.storageChange()
 				}
 			}
 		}
