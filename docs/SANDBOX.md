@@ -221,12 +221,32 @@ Resolved rules are returned sorted longest-path-first so debug logs and iteratio
 
 ## The `.policy.toml` file format
 
-Ship alongside skills or drop into `policy.d/` alongside your `config.toml`. Filename convention: stem = tool name.
+Ship alongside skills or drop into a `policy.d/` directory. Filename convention: stem = tool name.
 
-**Discovery model.** `policy.d/` lives **next to the resolved `config.toml`**, not at a system path. lobslaw is container-first, so the config root is typically the agent's working directory (`/app/data`, repo root in dev, or `~/.config/lobslaw/`). There is no `/etc/lobslaw/` assumption.
+### Discovery model — multi-directory with layered precedence
+
+**Policy directories are a list, not a single path.** The loader merges all of them with "later wins" semantics so operators can layer sources the way `git config` layers system/global/local.
+
+**Default discovery** (when nothing is specified, in load order — earliest is lowest priority):
+
+1. `$XDG_CONFIG_HOME/lobslaw/policy.d/` (or `~/.config/lobslaw/policy.d/`) — user-global
+2. `<config-dir>/policy.d/` — derived from resolved `config.toml`
+3. `<cwd>/policy.d/` — workspace-local
+
+Duplicates are collapsed via `EvalSymlinks` (common in dev where `configDir == cwd`). Missing directories are skipped silently.
+
+**Explicit lists skip the defaults entirely** — standard CLI ergonomics (*"if I set `--policy-dir`, don't sneak in extras"*). Three ways to set an explicit list, in precedence order:
+
+| Source | How |
+|---|---|
+| **CLI (highest)** | `--policy-dir <path>` repeatable: `lobslaw --policy-dir /corp/defaults --policy-dir /srv/project/policy.d` |
+| **Config** | `[sandbox] policy_dirs = ["/corp/defaults", "/srv/project/policy.d"]` — array of strings |
+| **Env** | `LOBSLAW__SANDBOX__POLICY_DIRS=/corp/defaults,/srv/project/policy.d` |
+
+Whichever is set at the highest-precedence layer wins and replaces the lower layers entirely. Within a single source, list order is load order; later dirs override earlier on same-tool conflicts.
 
 ```
-<config-dir>/policy.d/        # <config-dir> = filepath.Dir(config.toml)
+<policy-dir>/
 ├── git.toml                 # applies to the "git" tool
 ├── rsync.toml
 ├── curl.toml
@@ -235,7 +255,7 @@ Ship alongside skills or drop into `policy.d/` alongside your `config.toml`. Fil
     └── my-code.toml
 ```
 
-For example, if `config.toml` is at `/app/data/config.toml`, policies default to `/app/data/policy.d/`. Override via `[sandbox] policy_dir = "/some/other/path"` in `config.toml` when you need them non-colocated.
+Example: in a container at `/app/data` with user-config at `~/.config/lobslaw/policy.d/`, the default merge loads both; a site-wide `git.toml` in user-config can define baseline permissions, and a per-workspace `git.toml` in `/app/data/policy.d/` overrides specific entries.
 
 ### Tool policy schema
 

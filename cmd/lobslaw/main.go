@@ -14,6 +14,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/logging"
 	"github.com/jmylchreest/lobslaw/internal/node"
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
@@ -29,6 +30,7 @@ var (
 type flags struct {
 	showVersion bool
 	configPath  string
+	policyDirs  []string
 	logLevel    string
 	logFormat   string
 	all         bool
@@ -43,6 +45,18 @@ func parseFlags(args []string, out *flags) error {
 	fs := flag.NewFlagSet("lobslaw", flag.ContinueOnError)
 	fs.BoolVar(&out.showVersion, "version", false, "print version and exit")
 	fs.StringVar(&out.configPath, "config", "", "path to config.toml (overrides default lookup)")
+	// --policy-dir is repeatable so operators can layer multiple
+	// sources on the CLI; later entries override earlier per the
+	// Registry's last-write-wins semantics (matches git config's
+	// system/global/local layering).
+	fs.Func("policy-dir", "policy.d directory (repeatable; later overrides earlier)",
+		func(v string) error {
+			if v == "" {
+				return nil
+			}
+			out.policyDirs = append(out.policyDirs, v)
+			return nil
+		})
 	fs.StringVar(&out.logLevel, "log-level", "info", "log level: debug|info|warn|error")
 	fs.StringVar(&out.logFormat, "log-format", "auto", "log format: auto|json|text")
 	fs.BoolVar(&out.all, "all", false, "enable all node functions")
@@ -194,6 +208,16 @@ func main() {
 	// filter mutation (via NodeService.Reload) lands in Phase 11.
 	applyLogFilters(cfg.Logging.Filters, logger)
 
+	// Resolve the effective list of policy directories the node
+	// will watch once Phase 5 wires compute.Registry into the boot
+	// path. Log it now so operators can verify precedence without
+	// having to wait for actual tool invocations to surface the
+	// chosen paths.
+	policyDirs := resolvePolicyDirs(f.policyDirs, cfg)
+	logger.Info("sandbox policy dirs resolved",
+		"dirs", policyDirs,
+		"source", policyDirsSource(f.policyDirs, cfg))
+
 	funcs := resolveFunctions(f, cfg)
 	logger.Info("lobslaw starting",
 		"version", Version,
@@ -298,4 +322,41 @@ func containsFn(fns []types.NodeFunction, target types.NodeFunction) bool {
 		}
 	}
 	return false
+}
+
+// resolvePolicyDirs implements the sandbox policy.d discovery chain
+// at process start. Precedence (later overrides earlier when both
+// are present — same "last write wins" as Registry.SetPolicy):
+//
+//  1. Default discovery    — ~/.config/lobslaw/policy.d,
+//                            <configDir>/policy.d, <cwd>/policy.d
+//  2. Config file's policy_dirs  — replaces #1 entirely if set
+//  3. CLI --policy-dir (repeated) — replaces #1 and #2 if set
+//
+// Explicit sources replace rather than merge with defaults because
+// "if I set --policy-dir, don't sneak in extras" is the universal
+// CLI-ergonomics expectation.
+func resolvePolicyDirs(cliDirs []string, cfg *config.Config) []string {
+	switch {
+	case len(cliDirs) > 0:
+		return sandbox.DiscoverPolicyDirs(cliDirs, cfg.Dir())
+	case len(cfg.Sandbox.PolicyDirs) > 0:
+		return sandbox.DiscoverPolicyDirs(cfg.Sandbox.PolicyDirs, cfg.Dir())
+	default:
+		return sandbox.DiscoverPolicyDirs(nil, cfg.Dir())
+	}
+}
+
+// policyDirsSource returns a short label describing where the
+// effective policy_dirs list came from — handy in startup logs so
+// operators can see "was my --policy-dir actually used?".
+func policyDirsSource(cliDirs []string, cfg *config.Config) string {
+	switch {
+	case len(cliDirs) > 0:
+		return "cli"
+	case len(cfg.Sandbox.PolicyDirs) > 0:
+		return "config"
+	default:
+		return "default-discovery"
+	}
 }
