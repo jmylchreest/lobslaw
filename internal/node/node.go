@@ -441,7 +441,7 @@ func New(cfg Config) (*Node, error) {
 	if n.raft != nil {
 		raftMembership = n.raft
 	}
-	n.discSvc = discovery.NewService(registry, local, log, nil, raftMembership)
+	n.discSvc = discovery.NewService(registry, local, log, n.reloadSections, raftMembership)
 	lobslawv1.RegisterNodeServiceServer(server, n.discSvc)
 
 	// Discovery client for seed-list exchange on Start.
@@ -809,6 +809,61 @@ func (n *Node) wireAudit(ctx context.Context) error {
 // nil after New; a zero-sink configuration returns a log that no-ops
 // on Append so callers don't need to nil-check.
 func (n *Node) Audit() *audit.AuditLog { return n.auditLog }
+
+// Discovery returns the NodeService implementation. Tests call
+// Reload / GetPeers directly through this rather than dialing the
+// gRPC listener.
+func (n *Node) Discovery() *discovery.Service { return n.discSvc }
+
+// ReloadableSection names what NodeService.Reload knows how to
+// dispatch. Kept as named constants so the CLI + docs don't drift
+// from the switch below.
+const (
+	ReloadSoul = "soul"
+)
+
+// allReloadable lists sections reloaded when the caller passes an
+// empty section list.
+var allReloadable = []string{ReloadSoul}
+
+// reloadSections is the ReloadFunc handed to discovery.Service. It
+// dispatches per-section: known sections reload in place; unknown
+// sections land in the errors map; sections that this node can't
+// hot-reload (none today, but the plumbing is here) go into
+// restartNeeded so the caller knows a full restart is required.
+//
+// Empty `sections` means "reload everything reloadable on this
+// node." Reload is intentionally per-node — config.toml lives on
+// disk per node, so cluster-wide reload is the caller orchestrating
+// a Reload RPC against every peer.
+func (n *Node) reloadSections(_ context.Context, sections []string) (reloaded, restartNeeded []string, errs map[string]string) {
+	errs = map[string]string{}
+	if len(sections) == 0 {
+		sections = allReloadable
+	}
+	for _, section := range sections {
+		switch section {
+		case ReloadSoul:
+			if n.cfg.SoulPath == "" {
+				errs[section] = "no SoulPath configured; nothing to reload"
+				continue
+			}
+			loaded, err := soul.LoadOrDefault(n.cfg.SoulPath)
+			if err != nil {
+				errs[section] = err.Error()
+				continue
+			}
+			n.soul.Store(loaded)
+			reloaded = append(reloaded, section)
+			n.log.Info("reload: soul replaced",
+				"name", loaded.Config.Name,
+				"path", n.cfg.SoulPath)
+		default:
+			errs[section] = "unknown section"
+		}
+	}
+	return reloaded, restartNeeded, errs
+}
 
 // runSoulWatcher blocks until ctx is cancelled, reloading SOUL.md
 // on edits. Parse / validation errors are logged and the live Soul

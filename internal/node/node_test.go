@@ -1383,3 +1383,151 @@ func TestNodeSchedulerAgentTurnHandler(t *testing.T) {
 		t.Fatalf("Start returned: %v", err)
 	}
 }
+
+// TestNodeReloadSoul — NodeService.Reload("soul") re-reads SOUL.md
+// and swaps the live pointer without touching any other subsystem.
+func TestNodeReloadSoul(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	soulPath := filepath.Join(tmp, "SOUL.md")
+	_ = os.WriteFile(soulPath, []byte(`---
+name: before
+scope: default
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 5
+  sarcasm: 2
+  humor: 3
+---
+`), 0o644)
+
+	nodeID := "reload-rpc"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	n, err := node.New(node.Config{
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
+		SoulPath:    soulPath,
+	})
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if got := n.Soul().Config.Name; got != "before" {
+		t.Fatalf("pre-reload name=%q", got)
+	}
+
+	_ = os.WriteFile(soulPath, []byte(`---
+name: after
+scope: default
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 5
+  sarcasm: 2
+  humor: 3
+---
+`), 0o644)
+
+	resp, err := n.Discovery().Reload(context.Background(), &lobslawv1.ReloadRequest{
+		Sections: []string{"soul"},
+	})
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if len(resp.Reloaded) != 1 || resp.Reloaded[0] != "soul" {
+		t.Errorf("Reloaded = %v; want [soul]", resp.Reloaded)
+	}
+	if len(resp.Errors) != 0 {
+		t.Errorf("Errors = %v; want empty", resp.Errors)
+	}
+	if got := n.Soul().Config.Name; got != "after" {
+		t.Errorf("post-reload name=%q; want after", got)
+	}
+}
+
+// TestNodeReloadUnknownSection — unknown sections land in errs and
+// don't trip the handler.
+func TestNodeReloadUnknownSection(t *testing.T) {
+	t.Parallel()
+	nodeID := "reload-unknown"
+	creds := signNodeCert(t, t.TempDir(), nodeID)
+	n, err := node.New(node.Config{
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := n.Discovery().Reload(context.Background(), &lobslawv1.ReloadRequest{
+		Sections: []string{"does-not-exist"},
+	})
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if _, ok := resp.Errors["does-not-exist"]; !ok {
+		t.Errorf("expected error entry for unknown section; got %+v", resp.Errors)
+	}
+	if len(resp.Reloaded) != 0 {
+		t.Errorf("Reloaded = %v; want empty", resp.Reloaded)
+	}
+}
+
+// TestNodeReloadEmptySectionsReloadsAll — empty sections means
+// "reload everything reloadable." Today that's just soul; the test
+// pins the semantics so a future section addition shows up.
+func TestNodeReloadEmptySectionsReloadsAll(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	soulPath := filepath.Join(tmp, "SOUL.md")
+	_ = os.WriteFile(soulPath, []byte(`---
+name: alltest
+scope: default
+emotive_style:
+  emoji_usage: minimal
+  excitement: 5
+  formality: 5
+  directness: 5
+  sarcasm: 2
+  humor: 3
+---
+`), 0o644)
+
+	nodeID := "reload-all"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	n, err := node.New(node.Config{
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
+		SoulPath:    soulPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := n.Discovery().Reload(context.Background(), &lobslawv1.ReloadRequest{})
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if len(resp.Reloaded) == 0 {
+		t.Errorf("empty sections should reload all; got empty response")
+	}
+	found := false
+	for _, s := range resp.Reloaded {
+		if s == "soul" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("soul missing from reloaded=%v", resp.Reloaded)
+	}
+}
