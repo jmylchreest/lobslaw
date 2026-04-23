@@ -5,32 +5,75 @@ import (
 	"path/filepath"
 )
 
-// DiscoverPolicyDir resolves the conventional `policy.d/` directory
-// alongside the agent's config. Discovery order:
+// DiscoverPolicyDirs resolves the list of policy directories to
+// load, in load order (later wins — matches last-write-wins
+// precedence when the loader applies policies to the Registry).
 //
-//  1. If explicit is non-empty, use it verbatim.
-//  2. If configDir is non-empty, return filepath.Join(configDir, "policy.d").
-//  3. Fall back to "./policy.d" relative to CWD.
+// If explicit is non-empty, the caller specified directories
+// explicitly (via config.toml's policy_dirs = [], env var, or
+// --policy-dir flag) and we return those verbatim — no default
+// discovery. This matches standard CLI ergonomics: "if I set
+// --policy-dir, don't also use the implicit defaults."
 //
-// Callers pass the resolved config file's directory (Config.Dir()
-// from pkg/config) as configDir. When config.toml wasn't found (env-
-// only mode), configDir is "" and we use the CWD fallback — typical
-// in containers where the agent runs with $LOBSLAW_CONFIG unset and
-// policies sit next to the binary.
+// Otherwise, the default list is built in precedence order
+// (earliest = lowest priority, analogous to git's system/global/
+// local layering):
 //
-// Always returns a path; whether it exists is not checked here —
-// LoadPolicyDir treats a missing path as a no-op so the caller can
-// unconditionally plumb the result through.
-func DiscoverPolicyDir(explicit, configDir string) string {
-	if explicit != "" {
-		return explicit
+//  1. ~/.config/lobslaw/policy.d    — user-global
+//  2. <configDir>/policy.d          — where resolved config.toml lives
+//  3. <cwd>/policy.d                — workspace-local
+//
+// Entries resolving to the same canonical path (via EvalSymlinks)
+// are de-duplicated; the first occurrence wins so the list order
+// stays stable when, say, configDir==cwd (common in dev).
+//
+// Missing directories are kept in the list — LoadPolicyDirs treats
+// each missing dir as a no-op so callers don't have to stat-check
+// before plumbing the list through.
+func DiscoverPolicyDirs(explicit []string, configDir string) []string {
+	if len(explicit) > 0 {
+		return dedupByRealpath(explicit)
+	}
+
+	candidates := make([]string, 0, 3)
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		candidates = append(candidates, filepath.Join(xdg, "lobslaw", "policy.d"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".config", "lobslaw", "policy.d"))
 	}
 	if configDir != "" {
-		return filepath.Join(configDir, "policy.d")
+		candidates = append(candidates, filepath.Join(configDir, "policy.d"))
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "./policy.d"
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(cwd, "policy.d"))
+	} else {
+		candidates = append(candidates, "./policy.d")
 	}
-	return filepath.Join(cwd, "policy.d")
+
+	return dedupByRealpath(candidates)
 }
+
+// dedupByRealpath removes duplicates while preserving order. Entries
+// that successfully canonicalise (path exists, symlinks resolve) are
+// compared by realpath; entries that can't be canonicalised are
+// compared by their literal string. First occurrence wins.
+func dedupByRealpath(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		key := p
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			key = real
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+

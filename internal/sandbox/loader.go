@@ -92,6 +92,41 @@ type LoadResult struct {
 	Rejected []string
 }
 
+// LoadPolicyDirs is the multi-directory variant of LoadPolicyDir.
+// Each directory is loaded in order; the resulting LoadResults are
+// merged with "later wins" semantics — the rule the Registry already
+// follows via last-write-wins SetPolicy, so precedence at the loader
+// matches precedence at the sink.
+//
+// Merge rules:
+//
+//   - Policies map: a later tool policy for the same name overwrites
+//     the earlier one. If you want "operator overrides user-global,"
+//     put operator's dir later in the list.
+//   - Preset registrations: later RegisterPreset calls shadow earlier
+//     ones (same as single-dir mode, just repeated). OverriddenBuiltins
+//     in the final result lists every such shadow across all dirs.
+//   - PresetsLoaded / Rejected: unioned (operators get a full
+//     accounting of what happened).
+//
+// Missing directories are no-ops, consistent with LoadPolicyDir.
+func LoadPolicyDirs(dirs []string, opts LoadOptions) (*LoadResult, error) {
+	merged := &LoadResult{Policies: map[string]*Policy{}}
+	for _, dir := range dirs {
+		r, err := LoadPolicyDir(dir, opts)
+		if err != nil {
+			return merged, fmt.Errorf("load policy dir %q: %w", dir, err)
+		}
+		for name, policy := range r.Policies {
+			merged.Policies[name] = policy
+		}
+		merged.PresetsLoaded = append(merged.PresetsLoaded, r.PresetsLoaded...)
+		merged.OverriddenBuiltins = append(merged.OverriddenBuiltins, r.OverriddenBuiltins...)
+		merged.Rejected = append(merged.Rejected, r.Rejected...)
+	}
+	return merged, nil
+}
+
 // LoadPolicyDir walks dir and returns all discovered tool policies,
 // registering any operator preset overrides along the way. Safe to
 // call with a non-existent dir (returns empty result, no error) —

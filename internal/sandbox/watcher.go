@@ -31,10 +31,15 @@ const DefaultDebounce = 250 * time.Millisecond
 // time; back-to-back events within the debounce window coalesce
 // into a single reload firing at window-end.
 //
+// Accepts a list of directories and watches all of them (plus any
+// _presets/ subdir under each). Any event in any dir triggers a
+// full re-merge via LoadPolicyDirs — "later dir wins" semantics
+// remain stable across reloads.
+//
 // Lifecycle: NewWatcher → Start(ctx) → cancel ctx to stop. Stop is
 // also callable to wind down without a ctx.
 type Watcher struct {
-	dir      string
+	dirs     []string
 	sink     PolicySink
 	opts     LoadOptions
 	logger   *slog.Logger
@@ -48,11 +53,18 @@ type Watcher struct {
 	knownTools map[string]struct{}
 }
 
-// NewWatcher constructs a ready-to-Start Watcher. Doesn't touch the
+// NewWatcher constructs a ready-to-Start Watcher for a single dir.
+// Kept as a thin convenience wrapper over NewWatcherMulti for
+// callers that don't need multi-dir semantics.
+func NewWatcher(dir string, sink PolicySink, opts LoadOptions, debounce time.Duration) *Watcher {
+	return NewWatcherMulti([]string{dir}, sink, opts, debounce)
+}
+
+// NewWatcherMulti is the multi-dir constructor. Doesn't touch the
 // filesystem or start any goroutines — Start does that. opts is
 // applied to each reload with the same semantics as a direct call
-// to LoadPolicyDir.
-func NewWatcher(dir string, sink PolicySink, opts LoadOptions, debounce time.Duration) *Watcher {
+// to LoadPolicyDirs.
+func NewWatcherMulti(dirs []string, sink PolicySink, opts LoadOptions, debounce time.Duration) *Watcher {
 	if debounce <= 0 {
 		debounce = DefaultDebounce
 	}
@@ -60,7 +72,7 @@ func NewWatcher(dir string, sink PolicySink, opts LoadOptions, debounce time.Dur
 		opts.Logger = slog.Default()
 	}
 	return &Watcher{
-		dir:        dir,
+		dirs:       append([]string(nil), dirs...),
 		sink:       sink,
 		opts:       opts,
 		logger:     opts.Logger,
@@ -85,18 +97,27 @@ func (w *Watcher) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fsnotify new: %w", err)
 	}
-	if err := fw.Add(w.dir); err != nil {
-		_ = fw.Close()
-		return fmt.Errorf("watch %q: %w", w.dir, err)
-	}
-	// The _presets subdir is watched separately because fsnotify
-	// doesn't recurse on Linux. Missing is OK — operators might not
-	// use presets at all.
-	presetsDir := filepath.Join(w.dir, PresetSubdir)
-	if _, err := os.Stat(presetsDir); err == nil {
-		if err := fw.Add(presetsDir); err != nil {
-			w.logger.Warn("sandbox watcher: couldn't watch presets subdir",
-				"path", presetsDir, "error", err)
+	// Subscribe to every configured dir + its _presets subdir.
+	// Missing dirs are skipped (LoadPolicyDirs handles them as no-ops
+	// at load time, but fsnotify.Add fails hard on missing paths).
+	for _, dir := range w.dirs {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			w.logger.Info("sandbox watcher: skipping missing policy dir",
+				"path", dir)
+			continue
+		}
+		if err := fw.Add(dir); err != nil {
+			w.logger.Warn("sandbox watcher: couldn't watch dir",
+				"path", dir, "error", err)
+			continue
+		}
+		// _presets subdir — fsnotify doesn't recurse on Linux.
+		presetsDir := filepath.Join(dir, PresetSubdir)
+		if _, err := os.Stat(presetsDir); err == nil {
+			if err := fw.Add(presetsDir); err != nil {
+				w.logger.Warn("sandbox watcher: couldn't watch presets subdir",
+					"path", presetsDir, "error", err)
+			}
 		}
 	}
 
@@ -151,7 +172,7 @@ func (w *Watcher) loop(ctx context.Context, fw *fsnotify.Watcher) {
 		case <-fire:
 			if _, err := w.reloadNow(); err != nil {
 				w.logger.Error("sandbox watcher: reload failed",
-					"dir", w.dir, "error", err)
+					"dirs", w.dirs, "error", err)
 			}
 		}
 	}
@@ -165,7 +186,7 @@ func (w *Watcher) loop(ctx context.Context, fw *fsnotify.Watcher) {
 // Concurrency: Start/loop guarantees reloads are serial (one timer
 // slot), so this method takes the mutex only to protect knownTools.
 func (w *Watcher) reloadNow() (*LoadResult, error) {
-	result, err := LoadPolicyDir(w.dir, w.opts)
+	result, err := LoadPolicyDirs(w.dirs, w.opts)
 	if err != nil {
 		return nil, err
 	}

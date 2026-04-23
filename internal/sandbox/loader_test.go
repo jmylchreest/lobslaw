@@ -403,6 +403,128 @@ func TestLoadPolicyDirRejectionIsPerFileNotFatal(t *testing.T) {
 
 func runtime_GOOS() string { return runtime.GOOS }
 
+// --- Multi-dir LoadPolicyDirs tests -------------------------------------
+
+// TestLoadPolicyDirsLaterWinsForSameToolName is the core merge rule:
+// when two dirs ship policies for the same tool, the later dir's
+// policy wins. Matches Registry.SetPolicy's last-write semantics so
+// precedence at the loader aligns with precedence at the sink.
+func TestLoadPolicyDirsLaterWinsForSameToolName(t *testing.T) {
+	t.Parallel()
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	writePolicyFile(t, filepath.Join(dirA, "git.toml"), `
+name = "git"
+description = "from dirA"
+paths = ["/tmp:rw"]
+`)
+	writePolicyFile(t, filepath.Join(dirB, "git.toml"), `
+name = "git"
+description = "from dirB (should win)"
+paths = ["/var/tmp:rw"]
+`)
+
+	result, err := LoadPolicyDirs([]string{dirA, dirB}, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := result.Policies["git"]
+	if !ok {
+		t.Fatal("git policy missing from merged result")
+	}
+	if !slices.Contains(p.AllowedPaths, "/var/tmp") {
+		t.Errorf("expected dirB's /var/tmp in merged policy; got %v", p.AllowedPaths)
+	}
+}
+
+// TestLoadPolicyDirsDisjointToolNamesUnion — policies for different
+// tools in different dirs both surface. This is the common case
+// (user-global defines some tools, workspace defines others).
+func TestLoadPolicyDirsDisjointToolNamesUnion(t *testing.T) {
+	t.Parallel()
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	writePolicyFile(t, filepath.Join(dirA, "git.toml"), `
+name = "git"
+paths = ["/tmp:rw"]
+`)
+	writePolicyFile(t, filepath.Join(dirB, "rsync.toml"), `
+name = "rsync"
+paths = ["/tmp:rw"]
+`)
+
+	result, err := LoadPolicyDirs([]string{dirA, dirB}, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Policies["git"]; !ok {
+		t.Error("git policy missing")
+	}
+	if _, ok := result.Policies["rsync"]; !ok {
+		t.Error("rsync policy missing")
+	}
+}
+
+// TestLoadPolicyDirsEmptyList returns an empty result without error.
+// Useful for operators who turn off discovery entirely.
+func TestLoadPolicyDirsEmptyList(t *testing.T) {
+	t.Parallel()
+	result, err := LoadPolicyDirs(nil, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Policies) != 0 {
+		t.Errorf("empty list should yield no policies; got %v", result.Policies)
+	}
+}
+
+// TestLoadPolicyDirsMissingDirIsNoOp — any dir that doesn't exist
+// is skipped silently; other dirs in the list still load.
+func TestLoadPolicyDirsMissingDirIsNoOp(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writePolicyFile(t, filepath.Join(dir, "git.toml"), `
+name = "git"
+paths = ["/tmp:rw"]
+`)
+	result, err := LoadPolicyDirs([]string{"/no/such/dir", dir}, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.Policies["git"]; !ok {
+		t.Error("present-dir's policy should still load")
+	}
+}
+
+// TestLoadPolicyDirsUnionsRejected — per-file rejections across all
+// dirs aggregate into result.Rejected so operators see the full
+// accounting in one place.
+func TestLoadPolicyDirsUnionsRejected(t *testing.T) {
+	if runtime_GOOS() == "windows" {
+		t.Skip("mode-bit checks don't apply on Windows")
+	}
+	t.Parallel()
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	badA := filepath.Join(dirA, "bad-a.toml")
+	badB := filepath.Join(dirB, "bad-b.toml")
+	writePolicyFile(t, badA, `name = "bad-a"`+"\n"+`paths = ["/tmp:rw"]`)
+	writePolicyFile(t, badB, `name = "bad-b"`+"\n"+`paths = ["/tmp:rw"]`)
+	_ = os.Chmod(badA, 0o666)
+	_ = os.Chmod(badB, 0o666)
+
+	result, err := LoadPolicyDirs([]string{dirA, dirB}, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(result.Rejected, "bad-a") {
+		t.Errorf("bad-a missing from Rejected; got %v", result.Rejected)
+	}
+	if !slices.Contains(result.Rejected, "bad-b") {
+		t.Errorf("bad-b missing from Rejected; got %v", result.Rejected)
+	}
+}
+
 func TestLoadPolicyDirIgnoresUnderscorePrefixedFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

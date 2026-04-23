@@ -260,11 +260,15 @@ type SandboxConfig struct {
 	CPUQuota           int      `koanf:"cpu_quota"`
 	MemoryLimitMB      int      `koanf:"memory_limit_mb"`
 
-	// PolicyDir overrides the conventional
-	// `<config-dir>/policy.d/` discovery. Leave empty in almost all
-	// cases — the loader derives the default from the resolved
-	// config.toml's directory (or CWD in env-only mode).
-	PolicyDir string `koanf:"policy_dir"`
+	// PolicyDirs overrides the default policy.d discovery chain.
+	// Leave empty in almost all cases — the loader derives a sensible
+	// default (user-global → config-dir → cwd). When set, the caller
+	// is explicit and the defaults are NOT merged in: this is the
+	// "if I set --policy-dir, don't sneak in extras" behaviour.
+	// Order matters: later dirs override earlier ones on same-tool
+	// conflicts. A single string in the array is equivalent to the
+	// old `policy_dir` key.
+	PolicyDirs []string `koanf:"policy_dirs"`
 
 	// SkipPermChecks bypasses the policy-file integrity check. Use
 	// only in environments where Unix mode/UID semantics aren't
