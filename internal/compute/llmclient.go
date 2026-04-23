@@ -136,7 +136,7 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 	if err != nil {
 		return nil, fmt.Errorf("llm: http do: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	rawBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
