@@ -95,6 +95,7 @@ type Executor struct {
 	registry *Registry
 	policy   *policy.Engine
 	hooks    *hooks.Dispatcher
+	builtins *Builtins
 	cfg      ExecutorConfig
 	logger   *slog.Logger
 }
@@ -117,6 +118,12 @@ func NewExecutor(r *Registry, p *policy.Engine, h *hooks.Dispatcher, cfg Executo
 	}
 	return &Executor{registry: r, policy: p, hooks: h, cfg: cfg, logger: logger}
 }
+
+// SetBuiltins wires an in-process handler registry. Tools whose
+// Path starts with "builtin:" dispatch through this registry
+// instead of exec.CommandContext. Nil disables builtin dispatch
+// (any builtin: tool invocation becomes ErrToolPathInvalid).
+func (e *Executor) SetBuiltins(b *Builtins) { e.builtins = b }
 
 // Sentinel errors surfaced by Invoke so callers can branch.
 var (
@@ -145,22 +152,13 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 		return nil, fmt.Errorf("tool %q is sidecar-only; direct invocation not yet supported", tool.Name)
 	}
 
-	resolvedPath, err := resolveToolPath(tool.Path, e.cfg.AllowedPathRoots)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %q: %v", ErrToolPathInvalid, tool.Path, err)
-	}
-
-	argv, err := substituteArgv(tool.ArgvTemplate, req.Params)
-	if err != nil {
-		return nil, err
-	}
-
-	// Policy gate. tool:exec is the action; resource is the tool name.
+	// Policy + PreToolUse hook fire the same way for both builtin
+	// and subprocess tools — the dispatch target differs, but the
+	// authorization and hook surface stays uniform so rtk-style
+	// hooks see every invocation.
 	if err := e.policyAllow(ctx, req.Claims, "tool:exec", tool.Name); err != nil {
 		return nil, err
 	}
-
-	// PreToolUse hook.
 	if e.hooks != nil {
 		preResp, err := e.hooks.Dispatch(ctx, types.HookPreToolUse, hooks.Payload{
 			"session_id":  req.TurnID,
@@ -172,11 +170,26 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 		if err != nil {
 			return nil, err
 		}
-		// Future: handle preResp.Decision == modify to substitute argv.
 		_ = preResp
 	}
 
-	result, err := e.runSubprocess(ctx, req, resolvedPath, argv)
+	var (
+		result *InvokeResult
+		err    error
+	)
+	if name, isBuiltin := isBuiltinPath(tool.Path); isBuiltin {
+		result, err = e.runBuiltin(ctx, req, name)
+	} else {
+		resolvedPath, rerr := resolveToolPath(tool.Path, e.cfg.AllowedPathRoots)
+		if rerr != nil {
+			return nil, fmt.Errorf("%w: %q: %v", ErrToolPathInvalid, tool.Path, rerr)
+		}
+		argv, aerr := substituteArgv(tool.ArgvTemplate, req.Params)
+		if aerr != nil {
+			return nil, aerr
+		}
+		result, err = e.runSubprocess(ctx, req, resolvedPath, argv)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +210,34 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	}
 
 	return result, nil
+}
+
+// runBuiltin dispatches to an in-process handler resolved via the
+// Builtins registry. Hooks still fire around this call (caller
+// side), but there's no exec, no sandbox, no stderr stream —
+// errors go back to the agent as a non-zero exit code + the error
+// string in stderr so the agent can reason about them the same way
+// it reasons about a subprocess failure.
+func (e *Executor) runBuiltin(ctx context.Context, req InvokeRequest, name string) (*InvokeResult, error) {
+	if e.builtins == nil {
+		return nil, fmt.Errorf("%w: builtin scheme requires SetBuiltins", ErrToolPathInvalid)
+	}
+	fn, ok := e.builtins.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("%w: builtin %q not registered", ErrToolPathInvalid, name)
+	}
+	stdout, exitCode, err := fn(ctx, req.Params)
+	if err != nil {
+		return &InvokeResult{
+			ExitCode: exitCode,
+			Stdout:   stdout,
+			Stderr:   []byte(err.Error()),
+		}, nil
+	}
+	return &InvokeResult{
+		ExitCode: exitCode,
+		Stdout:   stdout,
+	}, nil
 }
 
 // runSubprocess performs the actual exec. Environment is built from

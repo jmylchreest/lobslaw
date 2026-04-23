@@ -991,6 +991,22 @@ func (n *Node) wireCompute() error {
 	n.toolRegistry = compute.NewRegistry()
 	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
 
+	// Stdlib builtins: cheap Go-native tools every node ships with
+	// (current_time today, more to follow). Register the handlers
+	// into the Builtins registry and the ToolDefs into the exec
+	// Registry so the LLM sees them in its function-calling list.
+	// Failures here are config bugs, not runtime — bubble up.
+	builtins := compute.NewBuiltins()
+	if err := compute.RegisterStdlibBuiltins(builtins); err != nil {
+		return fmt.Errorf("builtins: %w", err)
+	}
+	n.executor.SetBuiltins(builtins)
+	for _, t := range compute.StdlibToolDefs() {
+		if err := n.toolRegistry.Register(t); err != nil {
+			return fmt.Errorf("register stdlib tool %q: %w", t.Name, err)
+		}
+	}
+
 	// Wire the skill registry's PolicySink so skill-bundled policy.d/
 	// subtrees apply to the tool registry during scan. Order matters:
 	// skills scanned BEFORE operator's policy.d load means
