@@ -12,10 +12,13 @@ import (
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
+	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -56,6 +59,28 @@ type Config struct {
 	Creds     *mtls.NodeCreds
 	MemoryKey crypto.Key // 32-byte key for state.db value encryption
 
+	// Compute function configuration. Consumed only when
+	// types.FunctionCompute is in Functions. Nil / zero values are
+	// valid — a Compute-enabled node with no providers simply
+	// builds an Agent that can't make LLM calls (useful for tests).
+	Compute config.ComputeConfig
+
+	// Hooks is the event-to-hook-configs map for the dispatcher.
+	// Typically populated from config.Hooks.
+	Hooks config.HooksConfig
+
+	// APIKeyResolver resolves a ProviderConfig.APIKeyRef into a
+	// plaintext API key. Nil → config.ResolveSecret is used as the
+	// default. Injectable for tests that don't want to touch
+	// env/file/secret stores.
+	APIKeyResolver func(string) (string, error)
+
+	// LLMProvider overrides the default LLMClient built from the
+	// resolver's top provider. When set, the node uses this
+	// provider directly (used by integration tests to inject a
+	// MockProvider without touching the real HTTP path).
+	LLMProvider compute.LLMProvider
+
 	Logger *slog.Logger
 }
 
@@ -82,6 +107,15 @@ type Node struct {
 
 	policySvc *policy.Service
 	memorySvc *memory.Service
+
+	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
+	toolRegistry *compute.Registry
+	hooksDisp    *hooks.Dispatcher
+	policyEngine *policy.Engine
+	resolver     *compute.Resolver
+	llmProvider  compute.LLMProvider
+	executor     *compute.Executor
+	agent        *compute.Agent
 
 	shutdownOnce chan struct{}
 }
@@ -154,6 +188,18 @@ func New(cfg Config) (*Node, error) {
 
 		n.memorySvc = memory.NewService(n.raft, n.store, log)
 		lobslawv1.RegisterMemoryServiceServer(server, n.memorySvc)
+	}
+
+	// Wire the Compute stack iff this node runs the Compute function.
+	// Depends on the Raft stack above when policy/memory are on the
+	// same node — otherwise the Executor's policy engine runs against
+	// a local-only store (accepted for single-node deployments where
+	// policy function is split off).
+	if has(cfg.Functions, types.FunctionCompute) {
+		if err := n.wireCompute(); err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("compute: %w", err)
+		}
 	}
 
 	// NodeService is registered exactly once, with nil RaftMembership
@@ -293,6 +339,20 @@ func (n *Node) Memory() *memory.Service { return n.memorySvc }
 // for leadership.
 func (n *Node) Raft() *memory.RaftNode { return n.raft }
 
+// Agent returns the constructed agent loop, or nil when the Compute
+// function isn't enabled on this node. Channel handlers (REST,
+// Telegram) call this and surface "agent not available" when nil.
+func (n *Node) Agent() *compute.Agent { return n.agent }
+
+// ToolRegistry returns the Compute-function tool registry, or nil
+// when the function isn't enabled. Callers register tools into it
+// at node startup (skills + plugins; manual Register for tests).
+func (n *Node) ToolRegistry() *compute.Registry { return n.toolRegistry }
+
+// Resolver returns the provider resolver for the Compute stack.
+// Nil when Compute isn't enabled or no providers are configured.
+func (n *Node) Resolver() *compute.Resolver { return n.resolver }
+
 // -- internal helpers --
 
 func (n *Node) wireRaft(advertise string) error {
@@ -394,4 +454,109 @@ func has(fns []types.NodeFunction, target types.NodeFunction) bool {
 		}
 	}
 	return false
+}
+
+// wireCompute constructs the Compute-function stack: Registry,
+// Executor (with policy engine + hooks + sandbox), Resolver, LLM
+// provider, and Agent. Runs after the Raft stack is up because
+// policy.Engine needs memory.Store for rule reads.
+//
+// The LLM provider is either the one injected via Config.LLMProvider
+// (tests, mock deployments) or a real LLMClient built from the
+// resolver's first provider. A Compute-enabled node with no providers
+// configured gets an Agent without a provider — calling it yields
+// ErrNoLLMProvider at RunToolCallLoop time, which is fine: the node
+// still accepts messages but reports the config gap.
+func (n *Node) wireCompute() error {
+	// hooks.Dispatcher from config.Hooks. NewDispatcher expects the
+	// keyed-by-event map shape; the config's HooksConfig already
+	// matches modulo a string→HookEvent conversion.
+	hookEvents := make(map[types.HookEvent][]types.HookConfig, len(n.cfg.Hooks))
+	for evtName, hs := range n.cfg.Hooks {
+		hookEvents[types.HookEvent(evtName)] = hs
+	}
+	n.hooksDisp = hooks.NewDispatcher(hookEvents, n.log)
+
+	// policy.Engine reads rules from the memory store. When policy
+	// function is on another node, we skip engine wiring and the
+	// Executor runs without policy gating (equivalent to default-
+	// allow; deployments wanting strict policy must run the policy
+	// function locally).
+	if n.store != nil {
+		n.policyEngine = policy.NewEngine(n.store, n.log)
+	}
+
+	n.toolRegistry = compute.NewRegistry()
+	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
+
+	// Resolver from providers/chains. Nil if no providers are
+	// configured — Agent stays constructible but LLM calls fail
+	// until operator wires providers.
+	if len(n.cfg.Compute.Providers) > 0 {
+		r, err := compute.NewResolver(&n.cfg.Compute)
+		if err != nil {
+			return fmt.Errorf("resolver: %w", err)
+		}
+		n.resolver = r
+	}
+
+	// LLM provider: injection wins; else build LLMClient from the
+	// first provider (simplest "default" behaviour pre-Phase-6-channel).
+	switch {
+	case n.cfg.LLMProvider != nil:
+		n.llmProvider = n.cfg.LLMProvider
+	case len(n.cfg.Compute.Providers) > 0:
+		first := n.cfg.Compute.Providers[0]
+		apiKey, err := n.resolveAPIKey(first.APIKeyRef)
+		if err != nil {
+			return fmt.Errorf("api key for provider %q: %w", first.Label, err)
+		}
+		client, err := compute.NewLLMClient(compute.LLMClientConfig{
+			Endpoint: first.Endpoint,
+			APIKey:   apiKey,
+			Model:    first.Model,
+		})
+		if err != nil {
+			return fmt.Errorf("llm client for %q: %w", first.Label, err)
+		}
+		n.llmProvider = client
+	}
+
+	// Agent is only constructable with a non-nil Provider. A
+	// Compute-enabled node with no providers gets n.agent=nil —
+	// REST handler surfaces "provider not configured" at message
+	// time rather than blocking boot.
+	if n.llmProvider != nil {
+		a, err := compute.NewAgent(compute.AgentConfig{
+			Provider: n.llmProvider,
+			Executor: n.executor,
+			Logger:   n.log,
+		})
+		if err != nil {
+			return fmt.Errorf("agent: %w", err)
+		}
+		n.agent = a
+	}
+
+	n.log.Info("compute stack wired",
+		"has_policy_engine", n.policyEngine != nil,
+		"providers", len(n.cfg.Compute.Providers),
+		"chains", len(n.cfg.Compute.Chains),
+		"has_agent", n.agent != nil,
+	)
+	return nil
+}
+
+// resolveAPIKey looks up a provider's APIKeyRef via the configured
+// resolver, falling back to config.ResolveSecret for the default
+// "env:/file:/kms:" reference scheme. Empty ref means "no auth",
+// which is legitimate for local providers like Ollama.
+func (n *Node) resolveAPIKey(ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if n.cfg.APIKeyResolver != nil {
+		return n.cfg.APIKeyResolver(ref)
+	}
+	return config.ResolveSecret(ref)
 }

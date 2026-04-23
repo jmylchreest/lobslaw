@@ -311,6 +311,8 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 		BroadcastInterval:   cfg.Discovery.BroadcastInterval,
 		Creds:               creds,
 		MemoryKey:           memKey,
+		Compute:             cfg.Compute,
+		Hooks:               cfg.Hooks,
 		Logger:              logger,
 	}, nil
 }
