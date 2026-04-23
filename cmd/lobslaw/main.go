@@ -182,6 +182,9 @@ func main() {
 	if dispatchCluster(os.Args[1:]) {
 		return
 	}
+	if dispatchPlugin(os.Args[1:]) {
+		return
+	}
 
 	var f flags
 	if err := parseFlags(os.Args[1:], &f); err != nil {

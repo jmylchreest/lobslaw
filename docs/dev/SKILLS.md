@@ -290,7 +290,7 @@ Short timeouts are intentional: a stuck RTK shouldn't block tool dispatch. The h
 | **Agent integration** (skills as tool-registry entries) | ✅ shipped (8c) |
 | **RTK hooks example** (config-only, uses existing hooks system) | ✅ shipped (8f) |
 | **Signature verification** (tri-state policy + ed25519) | ✅ shipped (8g) |
-| **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ⬜ Phase 8d |
+| **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ✅ shipped (8d) |
 | **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ⬜ Phase 8e |
 | **RTK hooks** (config-only PreToolUse/PostToolUse integration) | ⬜ Phase 8f |
 | **Signature verification** (minisign / SHA-pinning) | ⬜ Phase 8g |
