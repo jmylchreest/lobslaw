@@ -840,6 +840,70 @@ func TestNodeStorageServiceReplicatesAndReconciles(t *testing.T) {
 	}
 }
 
+// TestNodeSchedulerDreamHandlerRegistered proves the fix for the
+// Phase-7 wiring gap: an operator scheduling a skill:dream task
+// actually reaches the memory DreamRunner rather than the
+// "no handler" release path the scheduler falls into when a ref
+// is unknown.
+func TestNodeSchedulerDreamHandlerRegistered(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping dream handler boot integration in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "dream-handler-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	memoryKey := mustKey(t)
+
+	cfg := node.Config{
+		NodeID: nodeID,
+		Functions: []types.NodeFunction{
+			types.FunctionMemory, types.FunctionPolicy, types.FunctionStorage,
+		},
+		ListenAddr:     "127.0.0.1:0",
+		DataDir:        filepath.Join(tmp, "data"),
+		Bootstrap:      true,
+		SnapshotTarget: "storage:test-backup",
+		Creds:          creds,
+		MemoryKey:      memoryKey,
+	}
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+
+	handler, ok := n.Scheduler().Handlers().GetTaskHandler(node.DreamHandlerRef)
+	if !ok {
+		t.Fatal("skill:dream handler not registered after node.New")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	if err := n.Raft().WaitForLeader(5 * time.Second); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("WaitForLeader: %v", err)
+	}
+
+	// Invoking the handler directly — proves the closure resolves
+	// through to DreamRunner without error. A scheduled-task-based
+	// test would add ~seconds of tick latency for no additional
+	// coverage (the scheduler's own tests already prove ref lookup).
+	if err := handler(ctx, &lobslawv1.ScheduledTaskRecord{Id: "t-dream"}); err != nil {
+		cancel()
+		<-done
+		t.Errorf("skill:dream handler returned error: %v", err)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned: %v", err)
+	}
+}
+
 // TestNodeAgentRoutesToSkill is the Phase 8c exit criterion: a
 // boot-wired node with a skill registered receives an LLM
 // tool-call for that skill's name and dispatches through the

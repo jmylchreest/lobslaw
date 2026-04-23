@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/mod/semver"
 
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 )
 
@@ -34,7 +35,12 @@ type Registry struct {
 	// favour of signed manifests. Set by NewRegistryWithPolicy under
 	// SigningPrefer.
 	preferSigned bool
-	log          *slog.Logger
+	// policySink receives any policy.d/ files shipped alongside a
+	// skill's manifest. When nil the policy-loading path is skipped
+	// entirely — useful for tests that don't care about the
+	// sandbox layer. compute.Registry satisfies the interface.
+	policySink sandbox.PolicySink
+	log        *slog.Logger
 }
 
 // NewRegistry constructs an empty registry with the given logger.
@@ -42,6 +48,18 @@ type Registry struct {
 // under SigningOff — no preference between signed + unsigned.
 func NewRegistry(log *slog.Logger) *Registry {
 	return NewRegistryWithPolicy(log, SigningOff)
+}
+
+// SetPolicySink wires the sandbox policy receiver. When non-nil,
+// every skill discovered during Scan/ScanWithPolicy is inspected
+// for a policy.d/ subtree; if one exists, its tool policies are
+// loaded via sandbox.LoadSkillPolicies and applied to the sink.
+// Safe to call once at boot before Scan runs; re-setting mid-run
+// is racy and not supported.
+func (r *Registry) SetPolicySink(sink sandbox.PolicySink) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.policySink = sink
 }
 
 // NewRegistryWithPolicy wires the signing policy into the registry
@@ -213,8 +231,11 @@ func (r *Registry) Scan(root string) []error {
 // ScanWithPolicy is the production scan entry point: every skill
 // subdir under root is parsed with the given policy + verifier.
 // Rejections from ParseWithPolicy (missing-required-signature,
-// invalid-signature) surface as errors; the skill stays
-// unregistered and its next-highest candidate retains the name.
+// invalid-signature) surface as errors. When a policy sink is
+// configured AND the skill dir contains policy.d/, its tool
+// policies are applied via sandbox.LoadSkillPolicies with
+// ownership restricted to the skill's own name (the MVP model —
+// manifests don't yet declare additional owned tools).
 func (r *Registry) ScanWithPolicy(root string, policy SigningPolicy, verifier *Verifier) []error {
 	var errs []error
 	entries, err := os.ReadDir(root)
@@ -236,8 +257,42 @@ func (r *Registry) ScanWithPolicy(root string, policy SigningPolicy, verifier *V
 			continue
 		}
 		r.Put(skill)
+		if err := r.loadSkillPolicies(skill); err != nil {
+			r.log.Warn("skills: policy.d load failed",
+				"skill", skill.Name(), "err", err)
+			errs = append(errs, err)
+		}
 	}
 	return errs
+}
+
+// loadSkillPolicies calls sandbox.LoadSkillPolicies against the
+// skill's policy.d/ subtree when one exists. No-op when no sink is
+// configured OR the skill ships no policy.d.
+func (r *Registry) loadSkillPolicies(skill *Skill) error {
+	r.mu.RLock()
+	sink := r.policySink
+	r.mu.RUnlock()
+	if sink == nil {
+		return nil
+	}
+	policyDir := filepath.Join(skill.ManifestDir, "policy.d")
+	if _, err := os.Stat(policyDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	_, err := sandbox.LoadSkillPolicies(
+		policyDir,
+		[]string{skill.Name()},
+		sink,
+		sandbox.LoadOptions{Logger: r.log},
+	)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // Watch wires the registry to a storage-Manager mount label. Runs

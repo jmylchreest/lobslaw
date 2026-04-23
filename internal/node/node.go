@@ -266,6 +266,13 @@ func New(cfg Config) (*Node, error) {
 		}
 		n.scheduler = sched
 
+		// Dream/REM handler. Registered once memorySvc + scheduler are
+		// both known (both live under needsRaft). Operators configure
+		// a ScheduledTask with HandlerRef=DreamHandlerRef; the
+		// scheduler's CAS-claim model picks one node per fire and the
+		// runner's leader-gate makes non-leader wins a soft-skip.
+		n.registerDreamHandler()
+
 		// Storage service piggybacks on the Raft stack — every voter
 		// serves ListMounts from its local replica, AddMount /
 		// RemoveMount propagate via Apply, and the FSM change hook
@@ -755,6 +762,15 @@ func (n *Node) wireCompute() error {
 	n.toolRegistry = compute.NewRegistry()
 	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
 
+	// Wire the skill registry's PolicySink so skill-bundled policy.d/
+	// subtrees apply to the tool registry during scan. Order matters:
+	// skills scanned BEFORE operator's policy.d load means
+	// operator-authored policies win on overlap (SANDBOX.md §
+	// "Skill-bundled policies" step 2).
+	if n.skillRegistry != nil {
+		n.skillRegistry.SetPolicySink(n.toolRegistry)
+	}
+
 	// Resolver from providers/chains. Nil if no providers are
 	// configured — Agent stays constructible but LLM calls fail
 	// until operator wires providers.
@@ -827,6 +843,45 @@ func (n *Node) wireCompute() error {
 // "every morning run the check-in skill" configure a task with this
 // ref and a Params["prompt"].
 const AgentTurnHandlerRef = "agent:turn"
+
+// DreamHandlerRef is the well-known HandlerRef for the memory
+// Dream/REM consolidation pass. Replaces the pre-Phase-7 internal
+// ticker design — now every node's scheduler races to claim a
+// scheduled_tasks entry with this ref, and the winner runs one
+// Dream pass. DreamRunner itself is leader-only-gated so a claim
+// winner on a non-leader soft-skips.
+const DreamHandlerRef = "skill:dream"
+
+// registerDreamHandler wires DreamRunner into the scheduler so an
+// operator's `handler = "skill:dream"` ScheduledTask actually fires
+// the Dream pass. Called from node.New when both memorySvc and
+// scheduler are present on this node (i.e. any Raft-hosting node).
+func (n *Node) registerDreamHandler() {
+	if n.memorySvc == nil || n.scheduler == nil {
+		return
+	}
+	runner := n.memorySvc.DreamRunner()
+	if runner == nil {
+		return
+	}
+	_ = n.scheduler.Handlers().RegisterTask(DreamHandlerRef,
+		func(ctx context.Context, _ *lobslawv1.ScheduledTaskRecord) error {
+			result, err := runner.Run(ctx)
+			if err != nil {
+				return fmt.Errorf("dream: %w", err)
+			}
+			if result == nil {
+				// Non-leader soft-skip — runner already logged.
+				return nil
+			}
+			n.log.Info("scheduler: dream pass completed",
+				"candidates", result.Candidates,
+				"consolidated", result.Consolidated,
+				"pruned", result.Pruned,
+			)
+			return nil
+		})
+}
 
 // registerAgentTurnHandlers installs the default task + commitment
 // handlers that drive compute.Agent.RunToolCallLoop with the

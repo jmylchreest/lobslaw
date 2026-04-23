@@ -4,8 +4,36 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 )
+
+// fakePolicySink records every SetPolicy call. Satisfies
+// sandbox.PolicySink for Registry tests without pulling in the
+// real compute.Registry (which would cycle the import graph).
+type fakePolicySink struct {
+	mu       sync.Mutex
+	policies map[string]*sandbox.Policy
+}
+
+func newFakePolicySink() *fakePolicySink {
+	return &fakePolicySink{policies: make(map[string]*sandbox.Policy)}
+}
+
+func (f *fakePolicySink) SetPolicy(name string, p *sandbox.Policy) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.policies[name] = p
+}
+
+func (f *fakePolicySink) get(name string) (*sandbox.Policy, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.policies[name]
+	return p, ok
+}
 
 func stubSkill(name, version, dir string) *Skill {
 	return &Skill{
@@ -151,6 +179,97 @@ handler: h.sh`), 0o644)
 	}
 	if len(r.List()) != 2 {
 		t.Errorf("expected 2 skills; got %d", len(r.List()))
+	}
+}
+
+// TestRegistryScanLoadsSkillPolicyDir — when a skill ships a
+// policy.d/ subtree AND a PolicySink is configured, the scanner
+// applies its tool policies via sandbox.LoadSkillPolicies.
+func TestRegistryScanLoadsSkillPolicyDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+
+	skDir := filepath.Join(root, "greeter")
+	_ = os.Mkdir(skDir, 0o755)
+	_ = os.WriteFile(filepath.Join(skDir, "h.sh"), []byte("echo"), 0o755)
+	_ = os.WriteFile(filepath.Join(skDir, "manifest.yaml"), []byte(`name: greeter
+version: 1.0.0
+runtime: bash
+handler: h.sh`), 0o644)
+
+	policyDir := filepath.Join(skDir, "policy.d")
+	_ = os.Mkdir(policyDir, 0o755)
+	_ = os.WriteFile(filepath.Join(policyDir, "greeter.toml"), []byte(`
+name = "greeter"
+allowed_paths = ["/tmp"]
+`), 0o644)
+
+	sink := newFakePolicySink()
+	r := NewRegistry(nil)
+	r.SetPolicySink(sink)
+
+	errs := r.Scan(root)
+	if len(errs) != 0 {
+		t.Fatalf("scan errs: %v", errs)
+	}
+	if _, ok := sink.get("greeter"); !ok {
+		t.Error("policy.d/greeter.toml should have been applied to the sink")
+	}
+}
+
+// TestRegistryScanRejectsPoliciesOutsideOwnership — the ownership
+// guard inside sandbox.LoadSkillPolicies rejects policies that name
+// tools the skill doesn't own.
+func TestRegistryScanRejectsPoliciesOutsideOwnership(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	skDir := filepath.Join(root, "greeter")
+	_ = os.Mkdir(skDir, 0o755)
+	_ = os.WriteFile(filepath.Join(skDir, "h.sh"), []byte("echo"), 0o755)
+	_ = os.WriteFile(filepath.Join(skDir, "manifest.yaml"), []byte(`name: greeter
+version: 1.0.0
+runtime: bash
+handler: h.sh`), 0o644)
+
+	policyDir := filepath.Join(skDir, "policy.d")
+	_ = os.Mkdir(policyDir, 0o755)
+	// Skill "greeter" trying to ship a policy for "git" — must be
+	// rejected by the ownership guard.
+	_ = os.WriteFile(filepath.Join(policyDir, "git.toml"), []byte(`
+name = "git"
+allowed_paths = ["/tmp"]
+`), 0o644)
+
+	sink := newFakePolicySink()
+	r := NewRegistry(nil)
+	r.SetPolicySink(sink)
+
+	_ = r.Scan(root)
+	if _, ok := sink.get("git"); ok {
+		t.Error("ownership guard should have blocked the foreign policy")
+	}
+}
+
+// TestRegistryScanSkipsPoliciesWhenNoSink — without a PolicySink
+// configured, a skill's policy.d/ is left untouched (no crash, no
+// error). Preserves the sink-less test path used elsewhere.
+func TestRegistryScanSkipsPoliciesWhenNoSink(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	skDir := filepath.Join(root, "x")
+	_ = os.Mkdir(skDir, 0o755)
+	_ = os.WriteFile(filepath.Join(skDir, "h.sh"), []byte(""), 0o755)
+	_ = os.WriteFile(filepath.Join(skDir, "manifest.yaml"), []byte(`name: x
+version: 1.0.0
+runtime: bash
+handler: h.sh`), 0o644)
+	_ = os.MkdirAll(filepath.Join(skDir, "policy.d"), 0o755)
+	_ = os.WriteFile(filepath.Join(skDir, "policy.d", "x.toml"), []byte(`name = "x"`), 0o644)
+
+	r := NewRegistry(nil) // no sink
+	errs := r.Scan(root)
+	if len(errs) != 0 {
+		t.Errorf("scan without sink should be clean; got %v", errs)
 	}
 }
 
