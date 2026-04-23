@@ -456,11 +456,16 @@ func (h *TelegramHandler) firstSeen(updateID int64) bool {
 // constant time w.r.t. the matching prefix).
 func constantTimeEq(a, b string) bool {
 	if len(a) != len(b) {
-		// Still do a pass so attackers can't detect length mismatch
-		// via timing. Compare a against itself for the duration.
+		// Length mismatch: we can't XOR byte pairs (b is a different
+		// length — indexing b[i] here would panic or, worse, compare
+		// against the wrong bytes). Still touch every byte of a so
+		// this branch takes time proportional to len(a), matching
+		// the equal-length branch's work shape. The write to acc
+		// (never compared later) is only there to prevent a future
+		// compiler from deciding the whole loop is dead code.
 		var acc byte
 		for i := 0; i < len(a); i++ {
-			acc |= a[i] ^ a[i]
+			acc |= a[i]
 		}
 		_ = acc
 		return false
