@@ -1,16 +1,24 @@
 # syntax=docker/dockerfile:1.7
 #
-# Tools sidecar — Alpine base with the common subprocess runtimes a
-# compute node invokes inside the skill sandbox: busybox (shell +
-# coreutils), git, python3, bash, jq, curl. Ships the same lobslaw
-# binary as the core image so you can run either image as the node
-# entrypoint; the tools are here for the skill invoker's subprocess
-# execs, not for interactive use.
+# Tools sidecar — debian:12-slim base with the common subprocess
+# runtimes a compute node invokes inside the skill sandbox: bash,
+# git, python3, jq, curl. Ships the same lobslaw binary as the core
+# image so you can run either image as the node entrypoint; the
+# tools are here for the skill invoker's subprocess execs, not for
+# interactive use.
+#
+# glibc (not musl): user-authored Python skills frequently depend on
+# wheels that are only published for manylinux / glibc; musl breaks
+# on pandas, numpy built-from-source, several cryptography packages,
+# and anything linking against platform-specific libc extensions.
+# The extra ~60MB over alpine is worth not debugging opaque
+# import-time SIGILL / missing-symbol failures inside sandboxed
+# skills.
 #
 # Deployment patterns:
 #
 #   - Single image per node: run this image; gets lobslaw + tools.
-#     Larger (~90MB) but operationally simpler.
+#     Larger (~120MB) but operationally simpler.
 #
 #   - Sidecar pattern: run `lobslaw:core` as the main container and
 #     bind-mount this image's filesystem layers into the sandbox
@@ -20,7 +28,7 @@
 #
 # Operators who want additional tools in the sandbox (rtk, ripgrep,
 # node, rust toolchain, etc.) extend this image with their own
-# RUN apk add / COPY steps on top.
+# RUN apt-get install / COPY steps on top.
 
 ARG GO_VERSION=1.26
 
@@ -45,31 +53,36 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         ./cmd/lobslaw
 
 # ---- Runtime stage -------------------------------------------------
-FROM alpine:3.20
+FROM debian:12-slim
 
-# busybox is already in the alpine base (sh, coreutils-ish). Add the
-# runtimes the skill invoker exec()s into, plus common dev CLIs that
-# user-authored skills rely on.
-#
 # ca-certificates: outbound HTTPS (same reason as distroless).
 # tzdata: scheduler timezone parsing.
-# Other packages cover typical Phase 8 skill runtimes.
-RUN apk add --no-cache \
+# bash / git / python3 / jq / curl / openssh-client: typical Phase 8
+# skill runtime deps.
+#
+# --no-install-recommends keeps the image close to ~120MB; without
+# it apt pulls documentation, man pages, and suggested extras that
+# add ~50MB for no runtime benefit.
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         tzdata \
         bash \
         git \
         python3 \
-        py3-pip \
+        python3-pip \
         jq \
         curl \
-        openssh-client
+        openssh-client && \
+    rm -rf /var/lib/apt/lists/*
 
 # Non-root runtime user — matches the distroless nonroot UID/GID so
 # shared volumes mounted from a distroless-based peer have consistent
 # permissions.
-RUN addgroup -g 65532 -S lobslaw && \
-    adduser -u 65532 -S -G lobslaw -h /lobslaw lobslaw
+RUN groupadd --system --gid 65532 lobslaw && \
+    useradd --system --uid 65532 --gid 65532 \
+        --home-dir /lobslaw --create-home --shell /usr/sbin/nologin \
+        lobslaw
 
 COPY --from=build /out/lobslaw /usr/local/bin/lobslaw
 
