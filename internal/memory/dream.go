@@ -46,11 +46,12 @@ type DreamConfig struct {
 // DreamRunner encapsulates the state needed to run a Dream pass.
 // Writes go through raft.Apply; reads hit the local store directly.
 type DreamRunner struct {
-	store      *Store
-	raft       *RaftNode
-	summarizer Summarizer // may be nil until Phase 5
-	cfg        DreamConfig
-	logger     *slog.Logger
+	store       *Store
+	raft        *RaftNode
+	summarizer  Summarizer  // may be nil until Phase 5
+	adjudicator Adjudicator // defaults to AlwaysKeepDistinct — safe no-op
+	cfg         DreamConfig
+	logger      *slog.Logger
 }
 
 // SetSummarizer swaps in the consolidation-layer summarizer.
@@ -58,8 +59,22 @@ type DreamRunner struct {
 // Resolver. Safe to call while the runner is idle.
 func (d *DreamRunner) SetSummarizer(s Summarizer) { d.summarizer = s }
 
+// SetAdjudicator swaps in the merge-layer adjudicator. nil is
+// normalised to the AlwaysKeepDistinct stub so the merge phase
+// always has a non-nil Adjudicator to call (and defaults to
+// no-op on startup before Phase 5's LLM module wires in a real one).
+func (d *DreamRunner) SetAdjudicator(a Adjudicator) {
+	if a == nil {
+		a = AlwaysKeepDistinctAdjudicator{}
+	}
+	d.adjudicator = a
+}
+
 // NewDreamRunner constructs a runner. summarizer may be nil — Phase 5
-// supplies the real one.
+// supplies the real one. The Adjudicator defaults to the always-
+// keep-distinct stub, so the merge phase is boot-safe (runs, but
+// never merges) until Phase 5 calls SetAdjudicator with an LLM-
+// backed implementation.
 func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg DreamConfig, logger *slog.Logger) *DreamRunner {
 	if logger == nil {
 		logger = slog.Default()
@@ -77,11 +92,12 @@ func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg Dre
 		cfg.Now = time.Now
 	}
 	return &DreamRunner{
-		store:      store,
-		raft:       raft,
-		summarizer: summarizer,
-		cfg:        cfg,
-		logger:     logger,
+		store:       store,
+		raft:        raft,
+		summarizer:  summarizer,
+		adjudicator: AlwaysKeepDistinctAdjudicator{},
+		cfg:         cfg,
+		logger:      logger,
 	}
 }
 
@@ -90,6 +106,10 @@ type DreamResult struct {
 	Consolidated int
 	Pruned       int
 	Candidates   []string // IDs selected for consolidation (may be empty if no Summarizer)
+	// Merge is the outcome of the Phase 2 near-duplicate consolidation
+	// pass. Zero values are expected before Phase 5 lands — the default
+	// AlwaysKeepDistinct Adjudicator never takes destructive action.
+	Merge MergeResult
 }
 
 // Run performs one Dream/REM pass: score → select → consolidate (if
@@ -125,6 +145,19 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		return nil, fmt.Errorf("prune: %w", err)
 	}
 
+	// Phase 2: near-duplicate consolidation over long-term records.
+	// Runs after prune so session/episodic chatter is already gone
+	// and the merge decisions operate on the records that actually
+	// matter long-term. LLM failures are non-fatal — the stub
+	// Adjudicator is safe, and a real one that errors out just
+	// preserves the cluster for next run's retry.
+	mergeResult, err := d.mergePhase(ctx)
+	if err != nil {
+		// Don't fail the whole Run — log and keep the summary/prune
+		// results. Next run's mergePhase retries from scratch.
+		d.logger.Warn("dream: merge phase failed", "err", err)
+	}
+
 	if err := d.logDreamSession(now, len(candidates), consolidated, pruned); err != nil {
 		// Don't fail the run for a log-entry error; just warn.
 		d.logger.Warn("dream: failed to log session", "err", err)
@@ -138,11 +171,15 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		Consolidated: consolidated,
 		Pruned:       pruned,
 		Candidates:   ids,
+		Merge:        mergeResult,
 	}
 	d.logger.Info("dream complete",
 		"candidates", len(ids),
 		"consolidated", consolidated,
 		"pruned", pruned,
+		"merged", mergeResult.Merged,
+		"conflicts", mergeResult.Conflicts,
+		"supersedes", mergeResult.Supersedes,
 	)
 	return result, nil
 }
