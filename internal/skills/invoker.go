@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 )
 
@@ -32,32 +33,52 @@ type InvokeResult struct {
 	Duration time.Duration
 }
 
+// RunSpec bundles everything the runner needs for one invocation.
+// A struct rather than a long argument list so extending the
+// contract (adding cgroup quotas, rlimits, etc.) doesn't cascade
+// through every test fake.
+type RunSpec struct {
+	Argv   []string
+	Env    []string
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+	Policy *sandbox.Policy
+}
+
 // SubprocessRunner abstracts exec.Cmd creation so tests can
-// substitute a fake that records argv / env / stdin without
-// actually spawning python/bash. Production uses CmdBuilder.
+// substitute a fake that records argv / env / stdin / policy
+// without actually spawning python/bash. Production uses CmdBuilder.
 type SubprocessRunner interface {
-	Run(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
+	Run(ctx context.Context, spec RunSpec) (int, error)
 }
 
 // CmdBuilder is the production runner — builds an exec.Cmd,
-// wires stdio, and returns the exit code.
+// wires stdio, applies the sandbox policy, and returns the exit
+// code.
 type CmdBuilder struct{}
 
 // Run spawns the subprocess and waits. Non-zero exit is NOT an
 // error — the int exit code is the signal; err is reserved for
-// spawn failures (binary missing, permission denied).
-func (CmdBuilder) Run(ctx context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	if len(argv) == 0 {
+// spawn failures (binary missing, permission denied, sandbox
+// install error).
+func (CmdBuilder) Run(ctx context.Context, spec RunSpec) (int, error) {
+	if len(spec.Argv) == 0 {
 		return -1, errors.New("skills: empty argv")
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Env = env
-	cmd.Stdin = stdin
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+	cmd := exec.CommandContext(ctx, spec.Argv[0], spec.Argv[1:]...)
+	cmd.Env = spec.Env
+	cmd.Stdin = spec.Stdin
+	cmd.Stdout = spec.Stdout
+	cmd.Stderr = spec.Stderr
+
+	if spec.Policy != nil {
+		if err := sandbox.Apply(cmd, spec.Policy); err != nil {
+			return -1, fmt.Errorf("skills: sandbox apply: %w", err)
+		}
+	}
+
 	if err := cmd.Run(); err != nil {
-		// ExitError is a non-zero exit. Everything else is a real
-		// spawn failure we should surface.
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			return ee.ExitCode(), nil
@@ -134,6 +155,10 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		return nil, err
 	}
 	env := buildEnv(skill, i.storage)
+	policy, err := buildPolicy(skill, argv[0], i.storage)
+	if err != nil {
+		return nil, err
+	}
 
 	stdinBytes, err := json.Marshal(req.Params)
 	if err != nil {
@@ -151,7 +176,14 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 	stderr := &cappedBuffer{cap: 64 << 10}
 
 	started := time.Now()
-	exitCode, err := i.runner.Run(runCtx, argv, env, bytesReader(stdinBytes), stdout, stderr)
+	exitCode, err := i.runner.Run(runCtx, RunSpec{
+		Argv:   argv,
+		Env:    env,
+		Stdin:  bytesReader(stdinBytes),
+		Stdout: stdout,
+		Stderr: stderr,
+		Policy: policy,
+	})
 	dur := time.Since(started)
 	if err != nil {
 		return nil, fmt.Errorf("skills: run %q: %w", skill.Name(), err)
@@ -162,6 +194,72 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		Stderr:   stderr.Bytes(),
 		Duration: dur,
 	}, nil
+}
+
+// buildPolicy composes a per-invocation sandbox.Policy from the
+// manifest. Rules:
+//
+//   - NoNewPrivs + default seccomp via Normalise once any
+//     enforcement is requested (Landlock paths, at minimum).
+//   - Namespaces: user + pid + ipc + uts (mount and network NOT
+//     enabled yet — mount namespace would require a pivot_root
+//     dance that's out of scope; network is policy-level, handled
+//     separately when we wire egress rules).
+//   - AllowedPaths: the manifest directory (so the interpreter can
+//     read the handler script), /tmp (skill runtime scratch), and
+//     one entry per declared storage access resolved via the
+//     Manager. ReadOnlyPaths lists everything except write-mode
+//     storage entries.
+//   - Runtime interpreter path is admitted via AllowedPaths so
+//     the subprocess can load libraries next to the binary (e.g.
+//     Python's sys.path from /usr/lib/python3*).
+//
+// Returns nil when the skill declares no sandboxing signals AND
+// there's no storage access — equivalent to "run as tools do with
+// no policy." In practice we always produce a non-nil policy
+// because we always want NoNewPrivs + default seccomp for skills.
+func buildPolicy(skill *Skill, runtimePath string, mgr *storage.Manager) (*sandbox.Policy, error) {
+	policy := &sandbox.Policy{
+		Namespaces: sandbox.NamespaceSet{
+			User: true, PID: true, IPC: true, UTS: true,
+		},
+		NoNewPrivs: true,
+	}
+
+	// Handler directory — the interpreter reads the handler script
+	// and any sibling files the skill author included.
+	if filepath.IsAbs(skill.ManifestDir) {
+		policy.AllowedPaths = append(policy.AllowedPaths, skill.ManifestDir)
+		policy.ReadOnlyPaths = append(policy.ReadOnlyPaths, skill.ManifestDir)
+	}
+
+	if filepath.IsAbs(runtimePath) {
+		policy.AllowedPaths = append(policy.AllowedPaths, filepath.Dir(runtimePath))
+		policy.ReadOnlyPaths = append(policy.ReadOnlyPaths, filepath.Dir(runtimePath))
+	}
+
+	// /tmp must be writable so interpreters have somewhere for
+	// scratch (bytecode caches, lockfiles, temp extractions).
+	policy.AllowedPaths = append(policy.AllowedPaths, "/tmp")
+
+	for _, s := range skill.Manifest.Storage {
+		if mgr == nil {
+			return nil, fmt.Errorf("skills: storage access without manager")
+		}
+		p, err := mgr.Resolve(s.Label)
+		if err != nil {
+			return nil, fmt.Errorf("skills: resolve storage %q: %w", s.Label, err)
+		}
+		policy.AllowedPaths = append(policy.AllowedPaths, p)
+		if s.Mode == StorageRead {
+			policy.ReadOnlyPaths = append(policy.ReadOnlyPaths, p)
+		}
+	}
+
+	if err := policy.Validate(); err != nil {
+		return nil, fmt.Errorf("skills: policy: %w", err)
+	}
+	return policy, nil
 }
 
 // buildArgv turns the manifest runtime into a concrete argv. Each

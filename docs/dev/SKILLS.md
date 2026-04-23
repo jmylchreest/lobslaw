@@ -163,7 +163,17 @@ echo "{\"reply\": \"got $params\"}"
 
 See [SANDBOX.md](SANDBOX.md) for the sandbox internals.
 
-**Not yet shipped:** the sandbox integration. `Invoker.Invoke` spawns via the production `CmdBuilder` with only env + stdio isolation today. The integration is a straightforward extension — wrap the `CmdBuilder.Run` body in `sandbox.Apply(cmd, policy)` with `policy` composed per the rules above — and is Phase 8's top follow-up.
+**Sandbox integration (Phase 8b.2) is shipped.** `Invoker` builds a `sandbox.Policy` per invocation and passes it via `RunSpec.Policy`; the production `CmdBuilder.Run` wraps `cmd.Start` with `sandbox.Apply(cmd, policy)` so every skill subprocess runs under Landlock + seccomp + user-namespace isolation + NoNewPrivs. Test fakes receive the policy too, so "did we ask for read-only on this label?" becomes a direct assertion.
+
+Composition rules:
+
+| Source | Becomes |
+|---|---|
+| Always | `NoNewPrivs: true`, default seccomp, user + PID + IPC + UTS namespaces |
+| Manifest dir | Read-only entry in `AllowedPaths` + `ReadOnlyPaths` |
+| Runtime interpreter dir (e.g. `/usr/bin` for `/usr/bin/bash`) | Read-only entry |
+| `/tmp` | Writable entry (scratch for bytecode caches, lockfiles, etc.) |
+| Each manifest `storage` entry | `AllowedPaths` always; `ReadOnlyPaths` only when `mode: read` |
 
 ---
 
@@ -192,7 +202,7 @@ Not wired into `node.New` today — consumers that want skills instantiate the p
 | Registry (winner selection, fallback, scan, watch) | ✅ shipped |
 | Invoker (python/bash, JSON stdin, capped stdio, timeout) | ✅ shipped |
 | Storage-label env vars | ✅ shipped |
-| **Sandbox integration** (Landlock/seccomp/ns per manifest) | ⬜ Phase 8b.2 |
+| **Sandbox integration** (Landlock/seccomp/ns per manifest) | ✅ shipped (8b.2) |
 | **Agent integration** (skills as tool-registry entries) | ⬜ Phase 8c |
 | **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ⬜ Phase 8d |
 | **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ⬜ Phase 8e |

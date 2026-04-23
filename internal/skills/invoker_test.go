@@ -9,37 +9,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 )
 
 // fakeRunner records invocations and returns canned output.
 type fakeRunner struct {
-	mu      sync.Mutex
-	argv    []string
-	env     []string
-	stdin   []byte
-	stdout  string
-	stderr  string
-	exit    int
-	err     error
-	runCnt  int
+	mu     sync.Mutex
+	argv   []string
+	env    []string
+	stdin  []byte
+	policy *sandbox.Policy
+	stdout string
+	stderr string
+	exit   int
+	err    error
+	runCnt int
 }
 
-func (f *fakeRunner) Run(_ context.Context, argv []string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+func (f *fakeRunner) Run(_ context.Context, spec RunSpec) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runCnt++
-	f.argv = append([]string(nil), argv...)
-	f.env = append([]string(nil), env...)
-	if stdin != nil {
-		b, _ := io.ReadAll(stdin)
+	f.argv = append([]string(nil), spec.Argv...)
+	f.env = append([]string(nil), spec.Env...)
+	f.policy = spec.Policy
+	if spec.Stdin != nil {
+		b, _ := io.ReadAll(spec.Stdin)
 		f.stdin = b
 	}
 	if f.stdout != "" {
-		_, _ = stdout.Write([]byte(f.stdout))
+		_, _ = spec.Stdout.Write([]byte(f.stdout))
 	}
 	if f.stderr != "" {
-		_, _ = stderr.Write([]byte(f.stderr))
+		_, _ = spec.Stderr.Write([]byte(f.stderr))
 	}
 	return f.exit, f.err
 }
@@ -249,7 +252,7 @@ type deadlineRunner struct {
 	observed *bool
 }
 
-func (d *deadlineRunner) Run(ctx context.Context, _ []string, _ []string, _ io.Reader, _, _ io.Writer) (int, error) {
+func (d *deadlineRunner) Run(ctx context.Context, _ RunSpec) (int, error) {
 	if _, ok := ctx.Deadline(); ok {
 		*d.observed = true
 	}
@@ -262,9 +265,156 @@ type fakeStorageMount struct {
 	path  string
 }
 
-func (f *fakeStorageMount) Label() string                    { return f.label }
-func (f *fakeStorageMount) Backend() string                  { return "fake" }
-func (f *fakeStorageMount) Path() string                     { return f.path }
-func (f *fakeStorageMount) Start(_ context.Context) error    { return nil }
-func (f *fakeStorageMount) Stop(_ context.Context) error     { return nil }
-func (f *fakeStorageMount) Healthy() bool                    { return true }
+func (f *fakeStorageMount) Label() string                 { return f.label }
+func (f *fakeStorageMount) Backend() string               { return "fake" }
+func (f *fakeStorageMount) Path() string                  { return f.path }
+func (f *fakeStorageMount) Start(_ context.Context) error { return nil }
+func (f *fakeStorageMount) Stop(_ context.Context) error  { return nil }
+func (f *fakeStorageMount) Healthy() bool                 { return true }
+
+// --- Sandbox policy composition --------------------------------------
+
+// TestPolicyIncludesManifestDirReadOnly — the handler directory
+// must be readable by the interpreter but NOT writable. A skill
+// modifying its own manifest would be confusing at best and
+// tamper-with-audit at worst.
+func TestPolicyIncludesManifestDirReadOnly(t *testing.T) {
+	t.Parallel()
+	skill := &Skill{
+		Manifest:    Manifest{Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h"},
+		ManifestDir: "/mnt/skills/s",
+		HandlerPath: "/mnt/skills/s/h",
+	}
+	p, err := buildPolicy(skill, "/bin/bash", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(p.AllowedPaths, "/mnt/skills/s") {
+		t.Errorf("manifest dir not in AllowedPaths: %+v", p.AllowedPaths)
+	}
+	if !containsString(p.ReadOnlyPaths, "/mnt/skills/s") {
+		t.Errorf("manifest dir should be read-only: %+v", p.ReadOnlyPaths)
+	}
+}
+
+// TestPolicyIncludesRuntimeDir — the interpreter binary's dir must
+// be readable so python3 can load its stdlib / bash can locate
+// helpers. Full /usr would be overbroad; we settle for the
+// interpreter's immediate directory.
+func TestPolicyIncludesRuntimeDir(t *testing.T) {
+	t.Parallel()
+	skill := &Skill{
+		Manifest:    Manifest{Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h"},
+		ManifestDir: "/mnt/skills/s",
+		HandlerPath: "/mnt/skills/s/h",
+	}
+	p, _ := buildPolicy(skill, "/usr/bin/bash", nil)
+	if !containsString(p.AllowedPaths, "/usr/bin") {
+		t.Errorf("runtime dir missing: %+v", p.AllowedPaths)
+	}
+}
+
+// TestPolicyStorageReadOnlyRespected — a skill declaring read-only
+// access ends up with that mount's path in ReadOnlyPaths; write
+// mode stays rw.
+func TestPolicyStorageReadOnlyRespected(t *testing.T) {
+	t.Parallel()
+	mgr := storage.NewManager()
+	_ = mgr.Register(context.Background(), &fakeStorageMount{label: "ro", path: "/srv/ro"})
+	_ = mgr.Register(context.Background(), &fakeStorageMount{label: "rw", path: "/srv/rw"})
+
+	skill := &Skill{
+		Manifest: Manifest{
+			Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h",
+			Storage: []StorageAccess{
+				{Label: "ro", Mode: StorageRead},
+				{Label: "rw", Mode: StorageWrite},
+			},
+		},
+		ManifestDir: "/mnt/skills/s",
+		HandlerPath: "/mnt/skills/s/h",
+	}
+	p, err := buildPolicy(skill, "/bin/bash", mgr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(p.AllowedPaths, "/srv/ro") || !containsString(p.ReadOnlyPaths, "/srv/ro") {
+		t.Errorf("ro mount should be rw'd + read-only: %+v", p)
+	}
+	if !containsString(p.AllowedPaths, "/srv/rw") {
+		t.Errorf("rw mount should be in AllowedPaths: %+v", p.AllowedPaths)
+	}
+	if containsString(p.ReadOnlyPaths, "/srv/rw") {
+		t.Errorf("rw mount MUST NOT be read-only: %+v", p.ReadOnlyPaths)
+	}
+}
+
+// TestPolicyEnforcesNoNewPrivs — any skill invocation runs with
+// PR_SET_NO_NEW_PRIVS. Blocks setuid binary escalation in an
+// over-permissive storage mount (e.g. operator accidentally
+// bind-mounting /bin).
+func TestPolicyEnforcesNoNewPrivs(t *testing.T) {
+	t.Parallel()
+	skill := &Skill{
+		Manifest:    Manifest{Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h"},
+		ManifestDir: "/mnt/skills/s",
+		HandlerPath: "/mnt/skills/s/h",
+	}
+	p, _ := buildPolicy(skill, "/bin/bash", nil)
+	if !p.NoNewPrivs {
+		t.Error("skills must run with NoNewPrivs")
+	}
+}
+
+// TestPolicyUserNamespaceEnabled — user namespace is the gate
+// that makes unprivileged operation of the rest of the namespaces
+// possible. Required, not optional.
+func TestPolicyUserNamespaceEnabled(t *testing.T) {
+	t.Parallel()
+	skill := &Skill{
+		Manifest:    Manifest{Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h"},
+		ManifestDir: "/mnt/skills/s",
+		HandlerPath: "/mnt/skills/s/h",
+	}
+	p, _ := buildPolicy(skill, "/bin/bash", nil)
+	if !p.Namespaces.User {
+		t.Error("user namespace must be enabled for skills")
+	}
+}
+
+// TestInvokerPassesPolicyToRunner — the fakeRunner captures the
+// policy so we can assert the full integration: Invoke →
+// buildPolicy → runner.Run(RunSpec{Policy: ...}).
+func TestInvokerPassesPolicyToRunner(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest:    Manifest{Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h"},
+		ManifestDir: "/mnt/skills/s",
+		HandlerPath: "/mnt/skills/s/h",
+	})
+	runner := &fakeRunner{}
+	inv, _ := NewInvoker(InvokerConfig{Registry: reg, Runner: runner})
+	_, err := inv.Invoke(context.Background(), InvokeRequest{SkillName: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.policy == nil {
+		t.Fatal("policy not propagated to runner")
+	}
+	if !runner.policy.NoNewPrivs {
+		t.Error("NoNewPrivs should be on in the runner-observed policy")
+	}
+}
+
+func containsString(s []string, needle string) bool {
+	for _, v := range s {
+		if v == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// Compile-time guard that the sandbox import is actually used.
+var _ = sandbox.Policy{}

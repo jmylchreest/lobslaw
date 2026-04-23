@@ -839,7 +839,7 @@ The `skill:agenda` user-facing skill — which renders `PlanService.GetPlan` out
 **Shipped:** manifest parsing, validation (runtime allowlist, traversal blocks, default modes), Registry with semver-highest-wins + deterministic tiebreak + mount watch + fallback-on-remove, Invoker with python/bash runtime dispatch, JSON-on-stdin params, capped stdio, `LOBSLAW_STORAGE_<LABEL>` env vars. Tests pin each path including the invoker's rejection of storage access without a configured Manager and an unknown label. See [docs/dev/SKILLS.md](docs/dev/SKILLS.md).
 
 **Deferred as clearly-scoped follow-ups:**
-- **8b.2 Sandbox integration.** Wrap `CmdBuilder.Run` in `sandbox.Apply(cmd, policy)` where policy is composed from manifest `storage` (Landlock path ACLs) + runtime exec allowlist + base namespaces/seccomp from Phase 4.5.5. Straightforward extension.
+- **8b.2 Sandbox integration.** Shipped. `Invoker` builds a `sandbox.Policy` per invocation and the production `CmdBuilder` wraps `cmd.Start` with `sandbox.Apply`. Composition: manifest dir + runtime dir read-only, /tmp writable, declared storage labels added per mode.
 - **8c Agent integration.** Skills surfaced to the agent loop as callable entries (tool-registry adapter). Gives the LLM a natural way to invoke skills alongside built-in tools.
 - **8d Plugin install CLI.** `lobslaw plugin install/enable/disable/list/import` including clawhub ref resolution, manifest-tree approval prompt, SHA recording. Whole CLI subsystem.
 - **8e MCP client.** Stdio JSON-RPC to `.mcp.json`-declared servers, `initialize` / `tools/list` / `tools/call` with tool-registry conversion. Streaming responses out of scope for first shipment.
