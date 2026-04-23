@@ -59,6 +59,12 @@ FROM debian:12-slim
 # tzdata: scheduler timezone parsing.
 # bash / git / python3 / jq / curl / openssh-client: typical Phase 8
 # skill runtime deps.
+# unzip: needed to extract the bun release below.
+#
+# python3-pip is deliberately OMITTED. Package install is a build-
+# time concern, not a runtime one — operators that need Python deps
+# layer their own image on top. A skill calling `pip install` at
+# runtime inside a Landlock sandbox won't reach PyPI anyway.
 #
 # --no-install-recommends keeps the image close to ~120MB; without
 # it apt pulls documentation, man pages, and suggested extras that
@@ -70,11 +76,40 @@ RUN apt-get update && \
         bash \
         git \
         python3 \
-        python3-pip \
         jq \
         curl \
-        openssh-client && \
+        openssh-client \
+        unzip && \
     rm -rf /var/lib/apt/lists/*
+
+# bun ships bunx, which the MCP ecosystem uses to run servers
+# without a pre-installed package (`bunx @modelcontextprotocol/...`).
+# Pinned version is reproducible; operators bump via --build-arg
+# BUN_VERSION. Release artifacts ship per-arch zips, hence unzip.
+ARG BUN_VERSION=1.2.19
+RUN set -e; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) bun_arch=x64 ;; \
+        arm64) bun_arch=aarch64 ;; \
+        *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/bun.zip \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${bun_arch}.zip"; \
+    unzip -q /tmp/bun.zip -d /tmp/bun; \
+    mv "/tmp/bun/bun-linux-${bun_arch}/bun" /usr/local/bin/bun; \
+    ln -s /usr/local/bin/bun /usr/local/bin/bunx; \
+    rm -rf /tmp/bun /tmp/bun.zip
+
+# npx shim — most MCP server install docs tell you to run
+# `npx @modelcontextprotocol/server-…`. Bun's bunx is a drop-in for
+# that download-and-run case, so wrap it. Intentionally NOT shimming
+# npm: `npm install` / `npm test` / lifecycle scripts aren't 1:1
+# with bun, so masking that command would surprise operators. Those
+# who need a real npm layer their own image with `apt install nodejs
+# npm`.
+RUN printf '#!/bin/sh\nexec /usr/local/bin/bunx "$@"\n' > /usr/local/bin/npx && \
+    chmod +x /usr/local/bin/npx
 
 # Non-root runtime user — matches the distroless nonroot UID/GID so
 # shared volumes mounted from a distroless-based peer have consistent
