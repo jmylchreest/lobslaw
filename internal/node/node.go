@@ -1036,6 +1036,7 @@ func (n *Node) wireCompute() error {
 			Endpoint: first.Endpoint,
 			APIKey:   apiKey,
 			Model:    first.Model,
+			Logger:   n.log,
 		})
 		if err != nil {
 			return fmt.Errorf("llm client for %q: %w", first.Label, err)
@@ -1351,7 +1352,14 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
-		Logger:           n.log,
+		Soul: func() *types.SoulConfig {
+			s := n.Soul()
+			if s == nil {
+				return nil
+			}
+			return &s.Config
+		},
+		Logger: n.log,
 	}, n.agent)
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -52,6 +53,7 @@ type LLMClient struct {
 	apiKey     string // sent as "Authorization: Bearer ..."
 	model      string // default model when ChatRequest.Model is empty
 	httpClient *http.Client
+	log        *slog.Logger
 }
 
 // LLMClientConfig tunes client construction. Zero-value is usable
@@ -80,6 +82,10 @@ type LLMClientConfig struct {
 	// proxies, keep-alive tuning, test doubles). Zero → a new client
 	// with Timeout applied.
 	HTTPClient *http.Client
+
+	// Logger is used for structured DEBUG-level traces of each
+	// round-trip. Nil → slog.Default().
+	Logger *slog.Logger
 }
 
 // NewLLMClient constructs a client from explicit config. Fails
@@ -107,11 +113,16 @@ func NewLLMClient(cfg LLMClientConfig) (*LLMClient, error) {
 		}
 		hc = &http.Client{Timeout: timeout}
 	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &LLMClient{
 		endpoint:   endpoint,
 		apiKey:     cfg.APIKey,
 		model:      cfg.Model,
 		httpClient: hc,
+		log:        logger,
 	}, nil
 }
 
@@ -131,6 +142,30 @@ func NewLLMClientFromProvider(p config.ProviderConfig, apiKey string) (*LLMClien
 // JSON, POSTs to the endpoint, unmarshals the response, surfaces
 // errors via the ErrLLM* sentinels where callers may want to branch.
 func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	model := req.Model
+	if model == "" {
+		model = c.model
+	}
+	c.log.Debug("llm: request",
+		"endpoint", c.endpoint,
+		"model", model,
+		"messages", len(req.Messages),
+		"tools", len(req.Tools),
+		"temperature", req.Temperature,
+		"max_tokens", req.MaxTokens,
+		"tool_choice", req.ToolChoice)
+	// System prompt + first user turn get logged at DEBUG so
+	// operators can see exactly what the model is reasoning over.
+	// Each message body is truncated at 2KB; the full prompt goes
+	// to multiple log records to avoid single-line bloat.
+	for i, m := range req.Messages {
+		c.log.Debug("llm: request.message",
+			"endpoint", c.endpoint,
+			"index", i,
+			"role", m.Role,
+			"content", truncateBody([]byte(m.Content)))
+	}
+
 	body, err := json.Marshal(toOpenAIRequest(req, c.model))
 	if err != nil {
 		return nil, fmt.Errorf("llm: marshal request: %w", err)
@@ -146,6 +181,7 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("llm: http do: %w", err)
@@ -158,6 +194,9 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 	}
 
 	if resp.StatusCode >= 400 {
+		c.log.Debug("llm: response error",
+			"status", resp.StatusCode,
+			"duration", time.Since(start))
 		return nil, classifyHTTPError(resp.StatusCode, rawBody)
 	}
 
@@ -169,7 +208,26 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 		return nil, fmt.Errorf("%w: response had no choices", ErrLLMMalformed)
 	}
 
-	return fromOpenAIResponse(&openResp), nil
+	result := fromOpenAIResponse(&openResp)
+	c.log.Debug("llm: response",
+		"status", resp.StatusCode,
+		"duration", time.Since(start),
+		"content_len", len(result.Content),
+		"tool_calls", len(result.ToolCalls),
+		"prompt_tokens", openResp.Usage.PromptTokens,
+		"completion_tokens", openResp.Usage.CompletionTokens,
+		"total_tokens", openResp.Usage.TotalTokens,
+		"finish_reason", finishReasonOrEmpty(&openResp))
+	return result, nil
+}
+
+// finishReasonOrEmpty pulls the first choice's finish_reason for
+// DEBUG logging. Safe on nil/empty.
+func finishReasonOrEmpty(r *openAIResponse) string {
+	if r == nil || len(r.Choices) == 0 {
+		return ""
+	}
+	return r.Choices[0].FinishReason
 }
 
 // classifyHTTPError turns a non-2xx response into the right sentinel
