@@ -268,6 +268,74 @@ openssl pkeyutl -sign -inkey privkey.pem -rawin -in manifest.yaml > manifest.yam
 
 ---
 
+## MCP servers
+
+[Model Context Protocol](https://modelcontextprotocol.io/) servers are third-party subprocesses that expose tool surfaces over JSON-RPC 2.0 via stdio. Lobslaw's MCP client (`internal/mcp`) consumes these exactly like it consumes locally-authored skills — tools appear in the agent's dispatch table, go through the same per-turn budget, the same hook pipeline, and the same sandbox.
+
+### Declaring servers
+
+Each plugin can include a `.mcp.json` at its root. Format mirrors Claude Code's so existing manifests port over verbatim:
+
+```json
+{
+  "mcpServers": {
+    "fs": {
+      "command": "/usr/local/bin/mcp-server-filesystem",
+      "args": ["--root", "/srv/shared"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "secret_env": {
+        "ANTHROPIC_API_KEY": "env:ANTHROPIC_API_KEY"
+      }
+    },
+    "disabled-example": {
+      "command": "mcp-foo",
+      "disabled": true
+    }
+  }
+}
+```
+
+Fields:
+- `command` / `args` — subprocess argv; `command` required unless `disabled=true`.
+- `env` — plain KEY=value pairs.
+- `secret_env` — maps env-var names to secret refs (`env:`, `file:`, `kms:`). Resolved via the same resolver LLM providers + rclone use; refs never appear in process argv or logs.
+- `disabled` — honoured by the loader so operators can ship a manifest with a temporarily-off entry without removing it.
+
+### Boot flow
+
+At startup, `mcp.Loader.Start` walks the plugins root for `.mcp.json` files, spawns each enabled server, handshakes via `initialize`, calls `tools/list`, and catalogues the advertised tools. Same `compute.SkillDispatcher` contract the skill invoker satisfies — the agent's `runToolCall` treats MCP tools and local skills interchangeably.
+
+Tool name collisions across servers: the first server wins; subsequent servers advertising the same tool name log a warn and are skipped. Deterministic because `DiscoverManifests` sorts by plugin directory.
+
+### Dispatch semantics
+
+| MCP response | What the agent sees |
+|---|---|
+| `IsError=false`, text content | `ExitCode=0`, stdout = joined content |
+| `IsError=true`, text content | `ExitCode=1`, stderr = joined content |
+| Transport / protocol failure | tool-call `Error` surfaces, same shape as an executor or skill failure |
+
+Non-text content types (image, resource) aren't surfaced yet — deferred.
+
+### Security posture
+
+MCP servers run as regular subprocesses under lobslaw's control; their tool invocations are routed through the same sandbox machinery as everything else. The MCP server process itself isn't sandboxed by default (it's an operator-trusted subprocess), but the *tool calls* it serves go through the agent's normal guard pipeline.
+
+A signed-plugin deployment (under `signing_policy = require`) should require signed MCP manifests the same way — but manifest signing for `.mcp.json` entries is a follow-up; today only skill manifests are signed.
+
+### What's not yet shipped
+
+- Server notifications (push updates from server → client).
+- Streaming tool responses.
+- Resources / prompts / sampling (only tools are consumed).
+- Per-invocation sandbox for the MCP *server* process itself (trusted-subprocess model today).
+- `.mcp.json` manifest signature verification.
+
+---
+
 ## RTK integration
 
 RTK (Rust Token Killer) compresses tool output and decorates prompts to cut token cost on routine dev operations. Because it already speaks the Claude-Code hook protocol (JSON request on stdin, JSON response on stdout) and lobslaw adopted that same protocol in `internal/hooks`, no RTK-specific Go code is needed — it's a pure-config integration.
@@ -291,7 +359,7 @@ Short timeouts are intentional: a stuck RTK shouldn't block tool dispatch. The h
 | **RTK hooks example** (config-only, uses existing hooks system) | ✅ shipped (8f) |
 | **Signature verification** (tri-state policy + ed25519) | ✅ shipped (8g) |
 | **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ✅ shipped (8d) |
-| **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ⬜ Phase 8e |
+| **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ✅ shipped (8e) |
 | **RTK hooks** (config-only PreToolUse/PostToolUse integration) | ⬜ Phase 8f |
 | **Signature verification** (minisign / SHA-pinning) | ⬜ Phase 8g |
 | Go runtime, WASM runtime | ⬜ roadmap |
