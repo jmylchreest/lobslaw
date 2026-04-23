@@ -18,17 +18,18 @@ import (
 
 // singleNodeRaft brings up a single-voter in-proc Raft cluster. Much
 // cheaper than the mTLS gRPC fixture; sufficient to verify the
-// FSM + scheduler dance end-to-end.
-func singleNodeRaft(t *testing.T, nodeID string) (*memory.RaftNode, *memory.Store) {
-	t.Helper()
-	dir := t.TempDir()
+// FSM + scheduler dance end-to-end. Takes testing.TB so both tests
+// and benchmarks can call it.
+func singleNodeRaft(tb testing.TB, nodeID string) (*memory.RaftNode, *memory.Store) {
+	tb.Helper()
+	dir := tb.TempDir()
 	key, err := crypto.GenerateKey()
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	store, err := memory.OpenStore(filepath.Join(dir, "state.db"), key)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	fsm := memory.NewFSM(store)
 	localAddr := raft.ServerAddress(nodeID)
@@ -41,14 +42,14 @@ func singleNodeRaft(t *testing.T, nodeID string) (*memory.RaftNode, *memory.Stor
 		Transport: inmem,
 	}, fsm)
 	if err != nil {
-		t.Fatalf("NewRaft: %v", err)
+		tb.Fatalf("NewRaft: %v", err)
 	}
 	if err := node.WaitForLeader(5 * time.Second); err != nil {
 		_ = node.Shutdown()
 		_ = store.Close()
-		t.Fatalf("WaitForLeader: %v", err)
+		tb.Fatalf("WaitForLeader: %v", err)
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		_ = node.Shutdown()
 		_ = store.Close()
 	})
@@ -57,8 +58,8 @@ func singleNodeRaft(t *testing.T, nodeID string) (*memory.RaftNode, *memory.Stor
 
 // seedTask inserts a ScheduledTaskRecord directly via a PUT — lets
 // tests stage state without scheduling through the cron parser.
-func seedTask(t *testing.T, node *memory.RaftNode, task *lobslawv1.ScheduledTaskRecord) {
-	t.Helper()
+func seedTask(tb testing.TB, node *memory.RaftNode, task *lobslawv1.ScheduledTaskRecord) {
+	tb.Helper()
 	entry := &lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_PUT,
 		Id: task.Id,
@@ -68,14 +69,14 @@ func seedTask(t *testing.T, node *memory.RaftNode, task *lobslawv1.ScheduledTask
 	}
 	data, err := proto.Marshal(entry)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	res, err := node.Apply(data, 5*time.Second)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	if ferr, ok := res.(error); ok && ferr != nil {
-		t.Fatal(ferr)
+		tb.Fatal(ferr)
 	}
 }
 

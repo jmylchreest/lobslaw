@@ -41,6 +41,21 @@ for {
 
 The scheduler never polls. It computes the earliest firing time across all tasks + commitments and sleeps until then — or until a wake signal arrives. `MaxSleep` (default 60s) caps the sleep as belt-and-braces: if the wake callback is ever lost the scheduler self-heals within a minute.
 
+#### Scan cost at scale
+
+`nextDueTime` walks every scheduled task + pending commitment on each wake. Baseline from `BenchmarkSchedulerNextDueTime`:
+
+| Tasks   | ns/op   | Notes                                  |
+|---------|---------|----------------------------------------|
+| 10      |   7,181 | personal-scale (microseconds)          |
+| 100     |  66,624 | typical operator-scripted deployment   |
+| 1,000   | 620,463 | sub-ms — still negligible              |
+| 10,000  | 7.1 ms  | within any reasonable tick cadence     |
+
+Classic O(n), ~10× per decade of task count. Works fine through low thousands; at tens of thousands the scan approaches noticeable cost (not a hotspot, but measurable).
+
+**If this becomes a hotspot**, swap `nextDueTime` for a min-heap keyed on `NextRun`/`DueAt`. The heap cost is keeping it in sync with FSM writes — every add/remove/update has to push/pop/reshuffle. That maintenance bookkeeping is the reason not to ship it today: the scan is cheap enough that the complexity doesn't pay off yet. The benchmark is in-tree (`scheduler_bench_test.go`) so a future engineer wondering "is this still fine?" has data instead of intuition.
+
 ### Wake propagation
 
 Every FSM apply that touches `scheduled_tasks` or `commitments` fires `FSM.schedulerChange` — a nil-safe callback set by `scheduler.NewScheduler`. It posts a non-blocking send on the scheduler's buffered-of-1 `wakeCh`. Coalesced, so a burst of adds produces one wake.
