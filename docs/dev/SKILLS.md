@@ -182,15 +182,46 @@ Composition rules:
 Scheduler and channels are the natural skill consumers. The node layer wires:
 
 ```
-node.New (when FunctionStorage + skills mount configured)
+node.New (Raft branch)
  ├─ storage.Manager already up (Phase 9)
- ├─ skills.Registry constructed
- ├─ Registry.Watch(ctx, mgr, "skills-label")
- ├─ skills.Invoker(Registry, Manager)
- └─ register with agent / scheduler / channels as needed
+ ├─ skills.Registry(log)
+ ├─ skills.Invoker(Registry, Storage)
+ ├─ skills.AgentAdapter(Registry, Invoker)
+ └─ later, inside wireCompute:
+     compute.NewAgent(AgentConfig{..., Skills: adapter})
 ```
 
-Not wired into `node.New` today — consumers that want skills instantiate the pair themselves. Node-level integration (register as a `agent:skill-invoke` scheduler handler, expose via a SkillsService gRPC) is the next boot-wiring step.
+`Node.SkillRegistry()` exposes the registry so tests (and eventually a `skill install` CLI) can `Put` directly. Storage-mounted skills are picked up via `Registry.Watch(ctx, mgr, "skills")` — the node deliberately doesn't hard-code the mount label; operators configure a `[[storage.mounts]]` entry labelled `skills` and call `Registry.Watch` from their startup script (or future `lobslaw skill watch` subcommand).
+
+### Agent ↔ skills wiring
+
+The agent sees skills as if they were tools: when the LLM emits a `tool_call` whose `name` matches a registered skill, `compute.Agent.runToolCall` short-circuits the executor path and routes through `compute.SkillDispatcher` (backed by `skills.AgentAdapter`). The executor is consulted only when `Has(name)` returns false.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant LLM
+  participant Agent as compute.Agent
+  participant Skills as SkillDispatcher<br/>(skills.AgentAdapter)
+  participant Exec as compute.Executor
+
+  LLM->>Agent: tool_call{name, args}
+  Agent->>Skills: Has(name)?
+  alt known skill
+    Skills-->>Agent: true
+    Agent->>Skills: Invoke(name, params)
+    Skills->>Skills: Registry.Get → Invoker.Invoke<br/>(build policy, spawn subprocess,<br/>sandbox.Apply, capture stdio)
+    Skills-->>Agent: {exit_code, stdout, stderr}
+  else unknown skill
+    Skills-->>Agent: false
+    Agent->>Exec: Invoke(name, params)
+  end
+  Agent-->>LLM: ToolInvocation{output, exit_code, error}
+```
+
+Budget accounting is shared: `RecordToolCall` fires for skill-routed calls too, and `RecordEgressBytes` counts `len(stdout) + len(stderr)`. A skill can't be a loophole around per-turn budgets.
+
+Skill errors (missing storage label, sandbox install failure, invoker config error) surface as the `ToolInvocation.Error` field — same shape as executor errors, so the model sees a uniform "this call failed because X" message regardless of which path handled it.
 
 ---
 
@@ -203,7 +234,7 @@ Not wired into `node.New` today — consumers that want skills instantiate the p
 | Invoker (python/bash, JSON stdin, capped stdio, timeout) | ✅ shipped |
 | Storage-label env vars | ✅ shipped |
 | **Sandbox integration** (Landlock/seccomp/ns per manifest) | ✅ shipped (8b.2) |
-| **Agent integration** (skills as tool-registry entries) | ⬜ Phase 8c |
+| **Agent integration** (skills as tool-registry entries) | ✅ shipped (8c) |
 | **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ⬜ Phase 8d |
 | **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ⬜ Phase 8e |
 | **RTK hooks** (config-only PreToolUse/PostToolUse integration) | ⬜ Phase 8f |

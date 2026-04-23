@@ -21,6 +21,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 	storagelocal "github.com/jmylchreest/lobslaw/internal/storage/local"
 	storagenfs "github.com/jmylchreest/lobslaw/internal/storage/nfs"
@@ -132,9 +133,11 @@ type Node struct {
 
 	policySvc *policy.Service
 	memorySvc *memory.Service
-	planSvc   *plan.Service
-	storageSvc *storage.Service
-	storageMgr *storage.Manager
+	planSvc      *plan.Service
+	storageSvc   *storage.Service
+	storageMgr   *storage.Manager
+	skillRegistry *skills.Registry
+	skillAdapter  *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
 	toolRegistry *compute.Registry
@@ -299,6 +302,27 @@ func New(cfg Config) (*Node, error) {
 				}
 			})
 		}
+
+		// Skill registry + invoker + adapter. Constructed regardless
+		// of storage — an operator without a skills mount still has
+		// an empty registry (no skills means no skill routing).
+		// Registry.Watch is deferred to node.Start so the storage
+		// mount can be registered first.
+		n.skillRegistry = skills.NewRegistry(n.log)
+		skillInvoker, err := skills.NewInvoker(skills.InvokerConfig{
+			Registry: n.skillRegistry,
+			Storage:  n.storageMgr,
+		})
+		if err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("skills invoker: %w", err)
+		}
+		adapter, err := skills.NewAgentAdapter(n.skillRegistry, skillInvoker)
+		if err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("skills adapter: %w", err)
+		}
+		n.skillAdapter = adapter
 	}
 
 	// Wire the Compute stack iff this node runs the Compute function.
@@ -565,6 +589,17 @@ func planServiceOrNil(svc *plan.Service) gateway.PlanService {
 	return svc
 }
 
+// skillDispatcherOrNil mirrors planServiceOrNil: a typed-nil
+// *skills.AgentAdapter isn't the same as an untyped nil interface,
+// and the agent's "is skill dispatch configured?" check relies on
+// the latter.
+func skillDispatcherOrNil(a *skills.AgentAdapter) compute.SkillDispatcher {
+	if a == nil {
+		return nil
+	}
+	return a
+}
+
 // Scheduler returns this node's scheduler. Nil when the node doesn't
 // host Raft; otherwise used by the plan + (future) skill layers to
 // register HandlerRef → function mappings.
@@ -578,6 +613,11 @@ func (n *Node) Storage() *storage.Manager { return n.storageMgr }
 // StorageService returns the gRPC-facing StorageService for tests
 // that want to drive AddMount/RemoveMount programmatically.
 func (n *Node) StorageService() *storage.Service { return n.storageSvc }
+
+// SkillRegistry returns this node's skill registry. Nil when the
+// node doesn't host Raft. Tests use this to register skills
+// directly; production uses Storage-mounted skills via Watch.
+func (n *Node) SkillRegistry() *skills.Registry { return n.skillRegistry }
 
 // -- internal helpers --
 
@@ -756,6 +796,7 @@ func (n *Node) wireCompute() error {
 		a, err := compute.NewAgent(compute.AgentConfig{
 			Provider: n.llmProvider,
 			Executor: n.executor,
+			Skills:   skillDispatcherOrNil(n.skillAdapter),
 			Logger:   n.log,
 		})
 		if err != nil {

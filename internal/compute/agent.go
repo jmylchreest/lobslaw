@@ -58,8 +58,48 @@ type AgentConfig struct {
 	// DefaultMaxToolLoops.
 	MaxToolLoops int
 
+	// Skills routes tool-call names that match a registered skill
+	// through the skill invoker instead of the tool Executor. Nil
+	// disables skill dispatch — every tool-call goes through the
+	// executor. The interface is narrow on purpose: the agent
+	// shouldn't know what a manifest is.
+	Skills SkillDispatcher
+
 	// Logger is used for structured log entries. Nil → slog.Default().
 	Logger *slog.Logger
+}
+
+// SkillDispatcher abstracts the skill invoker so the agent doesn't
+// depend on internal/skills directly. internal/skills.Invoker
+// satisfies this via a thin adapter in that package.
+type SkillDispatcher interface {
+	// Has reports whether name is a registered skill. Returning false
+	// sends the tool call through the normal Executor path.
+	Has(name string) bool
+	// Invoke runs the skill. An error is reserved for invocation
+	// failures (skill missing, storage label unresolvable, sandbox
+	// install failure); non-zero subprocess exits come back via
+	// Result.ExitCode so the agent can surface them as tool output.
+	Invoke(ctx context.Context, req SkillInvokeRequest) (*SkillInvokeResult, error)
+}
+
+// SkillInvokeRequest is what the agent hands the skill dispatcher.
+// Mirrors the tool-call shape so the two paths are interchangeable
+// from the caller's perspective.
+type SkillInvokeRequest struct {
+	Name   string
+	Params map[string]any
+	Claims *types.Claims
+	TurnID string
+}
+
+// SkillInvokeResult is the subprocess outcome. Matches the relevant
+// subset of compute.InvokeResult so runToolCall can treat the two
+// paths uniformly.
+type SkillInvokeResult struct {
+	ExitCode int
+	Stdout   []byte
+	Stderr   []byte
 }
 
 // HookDispatcher abstracts the PreLLMCall / PostLLMCall hook events
@@ -377,6 +417,40 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		}, "", nil
 	}
 
+	inv := ToolInvocation{
+		CallID:   tc.ID,
+		ToolName: tc.Name,
+		Args:     tc.Arguments,
+	}
+
+	// Skill dispatch takes precedence when the name matches a
+	// registered skill. Keeps the executor unaware of skills and
+	// lets skill-level errors surface to the model distinctly.
+	if a.cfg.Skills != nil && a.cfg.Skills.Has(tc.Name) {
+		skillParams := make(map[string]any, len(params))
+		for k, v := range params {
+			skillParams[k] = v
+		}
+		skillRes, err := a.cfg.Skills.Invoke(ctx, SkillInvokeRequest{
+			Name:   tc.Name,
+			Params: skillParams,
+			Claims: req.Claims,
+			TurnID: req.TurnID,
+		})
+		if err != nil {
+			inv.Error = err.Error()
+			return inv, "", nil
+		}
+		inv.ExitCode = skillRes.ExitCode
+		inv.Output = combineSkillOutputs(skillRes)
+		req.Budget.RecordEgressBytes(int64(len(skillRes.Stdout) + len(skillRes.Stderr)))
+		return inv, "", nil
+	}
+
+	if a.cfg.Executor == nil {
+		inv.Error = fmt.Sprintf("tool %q not found (no executor or skill dispatcher registered)", tc.Name)
+		return inv, "", nil
+	}
 	invReq := InvokeRequest{
 		ToolName: tc.Name,
 		Params:   params,
@@ -384,15 +458,7 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		TurnID:   req.TurnID,
 	}
 	result, err := a.cfg.Executor.Invoke(ctx, invReq)
-	inv := ToolInvocation{
-		CallID:   tc.ID,
-		ToolName: tc.Name,
-		Args:     tc.Arguments,
-	}
 	if err != nil {
-		// Executor surfaced a control-flow error (policy denied, hook
-		// blocked, etc). Package into the ToolInvocation so the model
-		// sees the rejection reason.
 		inv.Error = err.Error()
 		return inv, "", nil
 	}
@@ -403,6 +469,21 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	req.Budget.RecordEgressBytes(int64(len(result.Stdout) + len(result.Stderr)))
 
 	return inv, "", nil
+}
+
+// combineSkillOutputs formats a skill result the same way
+// combineOutputs formats an executor result — stdout first, then
+// "---stderr---" delimiter + stderr on non-success. Keeps the
+// model's view of skill vs tool output homogeneous.
+func combineSkillOutputs(r *SkillInvokeResult) string {
+	out := string(r.Stdout)
+	if len(r.Stderr) > 0 && r.ExitCode != 0 {
+		if len(out) > 0 {
+			out += "\n---stderr---\n"
+		}
+		out += string(r.Stderr)
+	}
+	return out
 }
 
 // parseToolArgs turns the JSON-encoded args string from the LLM's

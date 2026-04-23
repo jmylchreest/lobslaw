@@ -840,7 +840,7 @@ The `skill:agenda` user-facing skill — which renders `PlanService.GetPlan` out
 
 **Deferred as clearly-scoped follow-ups:**
 - **8b.2 Sandbox integration.** Shipped. `Invoker` builds a `sandbox.Policy` per invocation and the production `CmdBuilder` wraps `cmd.Start` with `sandbox.Apply`. Composition: manifest dir + runtime dir read-only, /tmp writable, declared storage labels added per mode.
-- **8c Agent integration.** Skills surfaced to the agent loop as callable entries (tool-registry adapter). Gives the LLM a natural way to invoke skills alongside built-in tools.
+- **8c Agent integration.** Shipped. `compute.AgentConfig.Skills` accepts a `SkillDispatcher`; `skills.AgentAdapter` satisfies it. `runToolCall` checks `Has(name)` before hitting the executor. Budget accounting (tool-call count + egress bytes) is shared across the two paths so skills can't be a loophole. Boot wiring in `node.Node` constructs Registry + Invoker + Adapter alongside the Raft stack and hands the adapter to `compute.NewAgent`.
 - **8d Plugin install CLI.** `lobslaw plugin install/enable/disable/list/import` including clawhub ref resolution, manifest-tree approval prompt, SHA recording. Whole CLI subsystem.
 - **8e MCP client.** Stdio JSON-RPC to `.mcp.json`-declared servers, `initialize` / `tools/list` / `tools/call` with tool-registry conversion. Streaming responses out of scope for first shipment.
 - **8f RTK hooks.** Config-only — `[[hooks.PreToolUse]]` + `[[hooks.PostToolUse]]` entries running RTK as a subprocess. Trivial once 8c is in place; primarily a docs + example config exercise.

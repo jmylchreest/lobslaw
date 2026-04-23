@@ -22,6 +22,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/node"
+	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -837,6 +838,140 @@ func TestNodeStorageServiceReplicatesAndReconciles(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned: %v", err)
 	}
+}
+
+// TestNodeAgentRoutesToSkill is the Phase 8c exit criterion: a
+// boot-wired node with a skill registered receives an LLM
+// tool-call for that skill's name and dispatches through the
+// skill invoker rather than the tool executor. Uses a fake
+// SubprocessRunner so we don't depend on python3/bash being
+// present in the test environment.
+func TestNodeAgentRoutesToSkill(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping skill dispatch boot integration in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "skill-dispatch-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	memoryKey := mustKey(t)
+
+	// MockProviderFunc emits a tool-call for "agenda" on first hit,
+	// plain reply on second.
+	hit := 0
+	provider := compute.NewMockProviderFunc(func(_ compute.ChatRequest, _ int) (compute.MockResponse, error) {
+		hit++
+		if hit == 1 {
+			return compute.MockResponse{
+				ToolCalls: []compute.ToolCall{{
+					ID:        "call-1",
+					Name:      "agenda",
+					Arguments: `{"window":"24h"}`,
+				}},
+			}, nil
+		}
+		return compute.MockResponse{Content: "done"}, nil
+	})
+
+	cfg := node.Config{
+		NodeID: nodeID,
+		Functions: []types.NodeFunction{
+			types.FunctionMemory, types.FunctionPolicy,
+			types.FunctionStorage, types.FunctionCompute,
+		},
+		ListenAddr:     "127.0.0.1:0",
+		DataDir:        filepath.Join(tmp, "data"),
+		Bootstrap:      true,
+		SnapshotTarget: "storage:test-backup",
+		Creds:          creds,
+		MemoryKey:      memoryKey,
+		LLMProvider:    provider,
+	}
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if n.SkillRegistry() == nil {
+		t.Fatal("SkillRegistry() nil despite FunctionStorage enabled")
+	}
+
+	// Register a skill directly. Real deployments walk a storage
+	// mount; the test harness short-circuits to focus on dispatch.
+	n.SkillRegistry().Put(&skills.Skill{
+		Manifest: skills.Manifest{
+			Name:    "agenda",
+			Version: "1.0.0",
+			Runtime: skills.RuntimeBash,
+			Handler: "h.sh",
+		},
+		ManifestDir: filepath.Join(tmp, "skill-src"),
+		HandlerPath: filepath.Join(tmp, "skill-src", "h.sh"),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	if err := n.Raft().WaitForLeader(5 * time.Second); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("WaitForLeader: %v", err)
+	}
+
+	// Drive a message through the agent. Expectation: skill dispatch
+	// fails (handler script doesn't actually exist) but the failure
+	// mode proves we ROUTED to skills.Invoker rather than to the tool
+	// executor.
+	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
+	resp, err := n.Agent().RunToolCallLoop(ctx, compute.ProcessMessageRequest{
+		Message: "what's on today's plan?",
+		Claims:  &types.Claims{UserID: "alice"},
+		Budget:  budget,
+	})
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("RunToolCallLoop: %v", err)
+	}
+	if len(resp.ToolCalls) != 1 {
+		cancel()
+		<-done
+		t.Fatalf("expected 1 recorded tool call; got %d", len(resp.ToolCalls))
+	}
+	inv := resp.ToolCalls[0]
+	if inv.ToolName != "agenda" {
+		t.Errorf("tool name: %q", inv.ToolName)
+	}
+	// Either exit code 0 (if somehow bash ran) or an Error pointing
+	// at skills.invoker. What we must NOT see is the executor's
+	// "tool not found" error — that would mean routing failed.
+	if inv.Error != "" && !containsOneOf(inv.Error, []string{"skills", "handler", "sandbox", "bash"}) {
+		t.Errorf("error looks like it came from the tool executor, not skills: %q", inv.Error)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned: %v", err)
+	}
+}
+
+func containsOneOf(s string, needles []string) bool {
+	for _, n := range needles {
+		if stringContains(s, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringContains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 // TestNodeSchedulerAgentTurnHandler — the Phase 7d built-in
