@@ -23,6 +23,8 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 	storagelocal "github.com/jmylchreest/lobslaw/internal/storage/local"
+	storagenfs "github.com/jmylchreest/lobslaw/internal/storage/nfs"
+	storagerclone "github.com/jmylchreest/lobslaw/internal/storage/rclone"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -274,7 +276,9 @@ func New(cfg Config) (*Node, error) {
 				FSM:     n.fsm,
 				Manager: mgr,
 				Factories: map[string]storage.BackendFactory{
-					"local": storagelocal.Factory,
+					"local":  storagelocal.Factory,
+					"nfs":    storagenfs.Factory,
+					"rclone": storagerclone.Factory(n.resolveChannelSecret),
 				},
 				Logger: n.log,
 			})

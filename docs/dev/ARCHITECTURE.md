@@ -137,7 +137,8 @@ Any subset of functions (`memory`, `policy`, `compute`, `gateway`, `storage`) ca
 | 5 | Agent Core + Provider Resolver + promptgen + LLM client + budget | [AGENT.md](AGENT.md) |
 | 6 | REST + Telegram channels + confirmation prompts + JWT (HS256 + JWKS RS256/EdDSA) | [GATEWAY.md](GATEWAY.md) |
 | 7 | Scheduler + PlanService + CAS-claim cluster coordination + built-in agent:turn handler | [SCHEDULER.md](SCHEDULER.md) |
-| 8+ | Skills, Storage, SOUL, Audit, Polish | see PLAN.md |
+| 9 | Storage (Manager + Watcher + local/nfs/rclone backends + StorageService gRPC) | [STORAGE.md](STORAGE.md) |
+| 8, 10+ | Skills, SOUL, Audit, Polish | see PLAN.md |
 
 ---
 

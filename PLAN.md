@@ -892,9 +892,20 @@ RTK ships as PreToolUse + PostToolUse hooks. When RTK is enabled in config (`[[h
 
 ---
 
-## Phase 9: Storage Function
+## Phase 9: Storage Function — **shipped**
 
-**Goal:** The storage function materialises cluster-wide mount config into local mounts at `/cluster/store/{label}/`, and exposes a unified `Watcher` API so subscribers (skills registry, config loader, plugin loader) react to file changes across all backend types.
+**Goal:** The storage function materialises cluster-wide mount config into local mounts and exposes a unified `Watcher` API so subscribers (skills registry, config loader, plugin loader) react to file changes across all backend types.
+
+Shipped with path-resolution semantics instead of the original `unshare --mount` + bind-mount design — the sandbox already gates filesystem access via Landlock (see [SANDBOX.md](docs/dev/SANDBOX.md)) so the literal `/cluster/store/{label}` path added no security, only CAP_SYS_ADMIN requirement + Linux-only behaviour. Consumers call `storage.Manager.Resolve(label) → path`. See [docs/dev/STORAGE.md](docs/dev/STORAGE.md).
+
+All three backend types ship: `local:` (host directory), `nfs:` (kernel NFS via `mount -t nfs`), `rclone:` (FUSE subprocess via `rclone mount --daemon`). Raft-replicated config via `StorageService.AddMount / RemoveMount / ListMounts`; FSM change hook drives local Manager reconciliation on every node. Watcher composes fsnotify (near-zero-latency local-origin writes) with periodic scan (catches remote-origin writes on nfs/rclone).
+
+Follow-ups deferred past Phase 9:
+- rclone crypt (per-mount encryption layer) — VFS-mount skeleton only today.
+- Bind-mount mode (`WithBindMount` that creates `/cluster/store/{label}` in a private mount namespace). Not needed for skill/plugin use cases; optional operator preference.
+- 3-node mTLS storage integration test. The FSM-hook code path is transport-agnostic; covered by the existing single-node + shared-Raft scheduler pattern.
+- `lobslaw storage mount add/remove/list` CLI (Phase 12.x).
+- Real-infrastructure tests for NFS + rclone (requires a test NFS server + MinIO S3 fixture outside of in-tree CI).
 
 Per `lobslaw-storage-model`: three backend types — `local:`, `nfs:`, `rclone:`. Pure-Go S3 is explicitly not in scope (use cases are filesystem-oriented; S3 SDK isn't a filesystem).
 
