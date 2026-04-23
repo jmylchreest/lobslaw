@@ -130,6 +130,37 @@ func (s *Service) Search(ctx context.Context, req *lobslawv1.SearchRequest) (*lo
 	return &lobslawv1.SearchResponse{Hits: out}, nil
 }
 
+// FindClusters returns connected components of vector records
+// linked by pairwise cosine similarity above the threshold.
+// Deterministic (no LLM); Phase 3.4 merge flow composes this with
+// the LLM-driven Adjudicator. Runs against the local store.
+func (s *Service) FindClusters(ctx context.Context, req *lobslawv1.FindClustersRequest) (*lobslawv1.FindClustersResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request required")
+	}
+	q := clusterQuery{
+		threshold:       req.Threshold,
+		minClusterSize:  int(req.MinClusterSize),
+		maxClusterSize:  int(req.MaxClusterSize),
+		scopeFilter:     req.ScopeFilter,
+		retentionFilter: req.RetentionFilter,
+		limit:           int(req.Limit),
+	}
+	if req.Before != nil {
+		q.before = req.Before.AsTime()
+	}
+	clusters, err := findClusters(s.store, q)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "find clusters: %v", err)
+	}
+	logging.From(ctx).Debug("find clusters",
+		"threshold", q.threshold,
+		"retention", q.retentionFilter,
+		"count", len(clusters),
+	)
+	return &lobslawv1.FindClustersResponse{Clusters: clusters}, nil
+}
+
 // EpisodicAdd records a single EpisodicRecord through Raft.
 func (s *Service) EpisodicAdd(ctx context.Context, req *lobslawv1.EpisodicAddRequest) (*lobslawv1.EpisodicAddResponse, error) {
 	if req == nil || req.Record == nil {
