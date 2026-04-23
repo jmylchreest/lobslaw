@@ -17,8 +17,11 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/types/known/durationpb"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -76,8 +79,21 @@ type RESTConfig struct {
 	// auto-denying on timeout. 0 → 5 minutes default.
 	ConfirmationTTL time.Duration
 
+	// Plan, when non-nil, mounts GET /v1/plan on the mux. The
+	// handler wraps PlanService.GetPlan, translates the window
+	// query parameter into a protobuf Duration, and returns a
+	// JSON aggregate view suitable for UIs / skills.
+	Plan PlanService
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
+}
+
+// PlanService is the subset of lobslawv1.PlanServiceServer that the
+// REST layer actually calls. Kept narrow so tests can pass a fake
+// without constructing a real Raft-backed service.
+type PlanService interface {
+	GetPlan(ctx context.Context, req *lobslawv1.GetPlanRequest) (*lobslawv1.GetPlanResponse, error)
 }
 
 // Server is the REST channel handler. Stateful only for lifecycle
@@ -129,6 +145,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	if s.cfg.Prompts != nil {
 		mux.HandleFunc("/v1/prompts/", s.handlePrompt)
+	}
+	if s.cfg.Plan != nil {
+		mux.HandleFunc("/v1/plan", s.handlePlan)
 	}
 
 	ln, err := net.Listen("tcp", s.cfg.Addr)
@@ -534,6 +553,79 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"decision": decision.String()})
+}
+
+// handlePlan wraps PlanService.GetPlan. Accepts an optional
+// ?window=<duration> query param (Go-duration syntax: "24h", "30m",
+// "1h30m"); empty or invalid falls back to the service default.
+func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	req := &lobslawv1.GetPlanRequest{}
+	if wq := r.URL.Query().Get("window"); wq != "" {
+		if d, err := time.ParseDuration(wq); err == nil && d > 0 {
+			req.Window = durationpb.New(d)
+		}
+	}
+	resp, err := s.cfg.Plan.GetPlan(r.Context(), req)
+	if err != nil {
+		s.log.Error("plan: GetPlan failed", "err", err)
+		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	out := planResponseJSON{
+		WindowSeconds: resp.Window.AsDuration().Seconds(),
+	}
+	for _, c := range resp.Commitments {
+		out.Commitments = append(out.Commitments, commitmentJSON{
+			ID:     c.Id,
+			DueAt:  c.DueAt.AsTime(),
+			Reason: c.Reason,
+			Status: c.Status,
+		})
+	}
+	for _, t := range resp.ScheduledTasks {
+		entry := scheduledTaskJSON{
+			ID:         t.Id,
+			Name:       t.Name,
+			Schedule:   t.Schedule,
+			HandlerRef: t.HandlerRef,
+		}
+		if t.NextRun != nil {
+			entry.NextRun = t.NextRun.AsTime()
+		}
+		out.ScheduledTasks = append(out.ScheduledTasks, entry)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// planResponseJSON mirrors the GetPlanResponse subset the REST API
+// exposes. Kept narrow so the public JSON surface doesn't accidentally
+// drag new proto fields into client expectations.
+type planResponseJSON struct {
+	WindowSeconds  float64             `json:"window_seconds"`
+	Commitments    []commitmentJSON    `json:"commitments,omitempty"`
+	ScheduledTasks []scheduledTaskJSON `json:"scheduled_tasks,omitempty"`
+}
+
+type commitmentJSON struct {
+	ID     string    `json:"id"`
+	DueAt  time.Time `json:"due_at"`
+	Reason string    `json:"reason,omitempty"`
+	Status string    `json:"status"`
+}
+
+type scheduledTaskJSON struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name,omitempty"`
+	Schedule   string    `json:"schedule"`
+	HandlerRef string    `json:"handler_ref"`
+	NextRun    time.Time `json:"next_run,omitempty"`
 }
 
 // promptJSON is the on-the-wire shape for prompt state. Kept
