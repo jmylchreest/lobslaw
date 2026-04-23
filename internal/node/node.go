@@ -18,6 +18,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
@@ -81,6 +82,11 @@ type Config struct {
 	// MockProvider without touching the real HTTP path).
 	LLMProvider compute.LLMProvider
 
+	// Auth configures JWT validation for channels. Empty Issuer +
+	// AllowHS256=false means no validator is constructed (channels
+	// run in anonymous mode unless they explicitly require auth).
+	Auth config.AuthConfig
+
 	Logger *slog.Logger
 }
 
@@ -117,8 +123,17 @@ type Node struct {
 	executor     *compute.Executor
 	agent        *compute.Agent
 
+	// jwtValidator is constructed when Auth config enables a
+	// validation method (currently HS256; JWKS deferred).
+	jwtValidator *auth.Validator
+
 	shutdownOnce chan struct{}
 }
+
+// JWTValidator returns the configured JWT validator or nil when
+// no Auth method is enabled. Channels (REST, Telegram) consume
+// this at startup to decide whether to require auth.
+func (n *Node) JWTValidator() *auth.Validator { return n.jwtValidator }
 
 // New constructs a Node without starting it. Any construction error
 // leaves no partially-initialised subsystems behind — resources
@@ -200,6 +215,28 @@ func New(cfg Config) (*Node, error) {
 			n.closePartial()
 			return nil, fmt.Errorf("compute: %w", err)
 		}
+	}
+
+	// Auth is independent of functions — every channel handler may
+	// need it. Only constructed when the config actually enables a
+	// validation method; otherwise n.jwtValidator stays nil and
+	// channels run in anonymous-with-default-scope mode.
+	if cfg.Auth.AllowHS256 {
+		secret, err := n.resolveAPIKey(cfg.Auth.JWTSecretRef)
+		if err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("auth HS256 secret: %w", err)
+		}
+		v, err := auth.NewValidator(auth.Config{
+			Issuer:      cfg.Auth.Issuer,
+			AllowHS256:  true,
+			HS256Secret: secret,
+		})
+		if err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("auth validator: %w", err)
+		}
+		n.jwtValidator = v
 	}
 
 	// NodeService is registered exactly once, with nil RaftMembership

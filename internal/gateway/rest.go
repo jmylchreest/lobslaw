@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -39,14 +40,25 @@ type RESTConfig struct {
 	IdleTimeout  time.Duration
 
 	// DefaultScope is the security scope assigned to unauthenticated
-	// requests. Phase 6d's JWT validation supersedes this when a
-	// valid token is presented. "*" is the no-op-for-now placeholder.
+	// requests. A valid JWT (Authorization: Bearer ...) supersedes
+	// this with the token's own scope claim.
 	DefaultScope string
 
 	// DefaultBudget is the per-turn budget applied to each message.
 	// Zero caps mean unlimited. Callers typically pass caps derived
 	// from config.Compute.Budgets.
 	DefaultBudget compute.BudgetCaps
+
+	// JWTValidator validates inbound Authorization: Bearer tokens.
+	// Nil means accept unauthenticated requests with DefaultScope
+	// attribution — acceptable for localhost / reverse-proxy-
+	// terminated deployments, but loud in logs so operators see it.
+	JWTValidator *auth.Validator
+
+	// RequireAuth flips "missing or bad token" from "use DefaultScope"
+	// to "reject with 401". Deployments that MUST have valid JWTs
+	// (anything reachable from the public internet) set this true.
+	RequireAuth bool
 
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
@@ -223,9 +235,10 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := &types.Claims{
-		UserID: "anon",
-		Scope:  s.cfg.DefaultScope,
+	claims, authErr := s.authenticate(r)
+	if authErr != nil {
+		s.jsonErr(w, http.StatusUnauthorized, authErr.Error())
+		return
 	}
 
 	agentReq := compute.ProcessMessageRequest{
@@ -301,4 +314,58 @@ func (s *Server) jsonErr(w http.ResponseWriter, status int, reason string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
+}
+
+// authenticate extracts + validates the Authorization: Bearer JWT,
+// if one is present, and returns a *types.Claims. Behaviour when
+// no token or an invalid token is presented depends on RequireAuth:
+//
+//   - RequireAuth=false + no/invalid token → synthetic "anon" claims
+//     with DefaultScope. Good for localhost / behind reverse proxy.
+//   - RequireAuth=true  + no/invalid token → 401 error returned to
+//     the caller via jsonErr. Good for internet-reachable deployments.
+//
+// When the validator itself is nil, RequireAuth is ignored (no way
+// to validate) and anonymous is assumed. Operators who set
+// RequireAuth without configuring a validator get a boot-time
+// warning via Start's logs (Phase 6d.2 — JWKS wiring).
+func (s *Server) authenticate(r *http.Request) (*types.Claims, error) {
+	token := auth.ExtractBearer(r.Header.Get("Authorization"))
+
+	if s.cfg.JWTValidator == nil {
+		if s.cfg.RequireAuth {
+			return nil, fmt.Errorf("auth required but no validator configured")
+		}
+		return anonClaims(s.cfg.DefaultScope), nil
+	}
+	if token == "" {
+		if s.cfg.RequireAuth {
+			return nil, fmt.Errorf("missing bearer token")
+		}
+		return anonClaims(s.cfg.DefaultScope), nil
+	}
+
+	claims, err := s.cfg.JWTValidator.Validate(token)
+	if err != nil {
+		if s.cfg.RequireAuth {
+			return nil, fmt.Errorf("token validation failed: %w", err)
+		}
+		s.log.Warn("jwt validation failed; falling back to anon",
+			"err", err, "remote", r.RemoteAddr)
+		return anonClaims(s.cfg.DefaultScope), nil
+	}
+	if claims.Scope == "" {
+		claims.Scope = s.cfg.DefaultScope
+	}
+	return claims, nil
+}
+
+// anonClaims builds the placeholder claims used for unauthenticated
+// requests when RequireAuth is false. UserID is "anon" so audit
+// logs show a distinct-from-real identity even without a JWT.
+func anonClaims(scope string) *types.Claims {
+	return &types.Claims{
+		UserID: "anon",
+		Scope:  scope,
+	}
 }

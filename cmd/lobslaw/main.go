@@ -323,6 +323,7 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 		MemoryKey:           memKey,
 		Compute:             cfg.Compute,
 		Hooks:               cfg.Hooks,
+		Auth:                cfg.Auth,
 		Logger:              logger,
 	}, nil
 }
