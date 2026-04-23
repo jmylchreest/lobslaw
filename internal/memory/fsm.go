@@ -1,9 +1,11 @@
 package memory
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/protobuf/proto"
@@ -11,17 +13,40 @@ import (
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
+// ErrClaimConflict is returned from FSM.Apply when a LOG_OP_CLAIM
+// entry's expected_claimer didn't match the record's current claim.
+// Callers (the scheduler) treat this as "another node already won
+// the claim — skip."
+var ErrClaimConflict = errors.New("fsm: claim conflict")
+
 // FSM is the raft.FSM implementation backed by Store. Apply
 // unmarshals each log entry as a LogEntry proto and dispatches
 // to the appropriate bucket by payload type.
 type FSM struct {
 	mu    sync.RWMutex
 	store *Store
+
+	// schedulerChange is fired (if non-nil) after every successful
+	// apply that touched scheduled_tasks or commitments. Lets the
+	// scheduler wake on remote-originated writes without polling.
+	// Nil-safe; Scheduler wires this at construction.
+	schedulerChange func()
 }
 
 // NewFSM wraps a Store as a Raft FSM.
 func NewFSM(store *Store) *FSM {
 	return &FSM{store: store}
+}
+
+// SetSchedulerChangeCallback registers a callback that fires after
+// each FSM.Apply that touches BucketScheduledTasks or
+// BucketCommitments. Passing nil clears the callback. Safe to call
+// from any goroutine; the callback itself is invoked under the
+// FSM's write lock so it must not block.
+func (f *FSM) SetSchedulerChangeCallback(cb func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.schedulerChange = cb
 }
 
 // Store returns the underlying store. Intended for read-path code;
@@ -41,14 +66,31 @@ func (f *FSM) Apply(l *raft.Log) any {
 		return fmt.Errorf("unmarshal log entry: %w", err)
 	}
 
+	var result any
 	switch entry.Op {
 	case lobslawv1.LogOp_LOG_OP_PUT:
-		return f.applyPut(&entry)
+		result = f.applyPut(&entry)
 	case lobslawv1.LogOp_LOG_OP_DELETE:
-		return f.applyDelete(&entry)
+		result = f.applyDelete(&entry)
+	case lobslawv1.LogOp_LOG_OP_CLAIM:
+		result = f.applyClaim(&entry)
 	default:
 		return fmt.Errorf("unknown log op: %v", entry.Op)
 	}
+
+	// Fire scheduler wake if the touched bucket is one the scheduler
+	// watches AND the apply itself succeeded (returning an error
+	// leaves the store unchanged, so there's nothing to recompute).
+	if f.schedulerChange != nil {
+		if err, ok := result.(error); !ok || err == nil {
+			if bucket, _, berr := bucketAndPayload(&entry); berr == nil {
+				if bucket == BucketScheduledTasks || bucket == BucketCommitments {
+					f.schedulerChange()
+				}
+			}
+		}
+	}
+	return result
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
@@ -77,6 +119,89 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 		return fmt.Errorf("DELETE %s: empty id", bucket)
 	}
 	return f.store.Delete(bucket, entry.Id)
+}
+
+// applyClaim is the CAS primitive: the write goes through only when
+// the record's current claimed_by field matches entry.ExpectedClaimer.
+// Expired claims count as unclaimed (empty) for the check, so a
+// crashed node's abandoned claim can be picked up by the next tick.
+//
+// Only ScheduledTaskRecord and AgentCommitment are claimable today;
+// other payload types return an error so a misrouted CLAIM can't
+// silently overwrite a record that doesn't support CAS.
+func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
+	bucket, newPayload, err := bucketAndPayload(entry)
+	if err != nil {
+		return err
+	}
+	if entry.Id == "" {
+		return fmt.Errorf("CLAIM %s: empty id", bucket)
+	}
+	if bucket != BucketScheduledTasks && bucket != BucketCommitments {
+		return fmt.Errorf("CLAIM %s: bucket does not support claim semantics", bucket)
+	}
+
+	// Read the current record. Not-found is acceptable when the
+	// caller's expected_claimer is also empty ("I expect this to be
+	// a fresh insert"); otherwise refuse.
+	raw, getErr := f.store.Get(bucket, entry.Id)
+	if getErr != nil {
+		if entry.ExpectedClaimer != "" {
+			return fmt.Errorf("CLAIM %s/%s: record missing, expected prior claimer %q",
+				bucket, entry.Id, entry.ExpectedClaimer)
+		}
+		// fall through to write as a fresh insert
+	} else {
+		currentClaimer, err := extractClaimer(bucket, raw)
+		if err != nil {
+			return fmt.Errorf("CLAIM %s/%s: inspect current: %w", bucket, entry.Id, err)
+		}
+		if currentClaimer != entry.ExpectedClaimer {
+			return fmt.Errorf("%w: %s/%s expected=%q current=%q",
+				ErrClaimConflict, bucket, entry.Id, entry.ExpectedClaimer, currentClaimer)
+		}
+	}
+
+	bytes, err := proto.Marshal(newPayload)
+	if err != nil {
+		return fmt.Errorf("marshal %s payload: %w", bucket, err)
+	}
+	return f.store.Put(bucket, entry.Id, bytes)
+}
+
+// extractClaimer pulls the current (id-active) claimed_by value out
+// of a serialized ScheduledTaskRecord or AgentCommitment. An expired
+// claim is treated as unclaimed ("") so a crashed node's abandoned
+// record naturally becomes available on the next tick.
+func extractClaimer(bucket string, raw []byte) (string, error) {
+	switch bucket {
+	case BucketScheduledTasks:
+		var r lobslawv1.ScheduledTaskRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return "", err
+		}
+		if r.ClaimedBy == "" {
+			return "", nil
+		}
+		if r.ClaimExpiresAt != nil && r.ClaimExpiresAt.AsTime().Before(time.Now()) {
+			return "", nil
+		}
+		return r.ClaimedBy, nil
+	case BucketCommitments:
+		var r lobslawv1.AgentCommitment
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return "", err
+		}
+		if r.ClaimedBy == "" {
+			return "", nil
+		}
+		if r.ClaimExpiresAt != nil && r.ClaimExpiresAt.AsTime().Before(time.Now()) {
+			return "", nil
+		}
+		return r.ClaimedBy, nil
+	default:
+		return "", fmt.Errorf("bucket %q not claimable", bucket)
+	}
 }
 
 // bucketAndPayload maps a LogEntry's payload oneof to its bucket name

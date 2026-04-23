@@ -355,6 +355,12 @@ message AgentCommitment {
   string status = 7;               // "pending" | "done" | "cancelled"
   string handler_ref = 8;
   map<string, string> params = 9;
+  // Raft-CAS claim for cluster-wide singleton execution. See
+  // lobslaw-cluster-claim decision for semantics: whoever CASes the
+  // claim first wins and the rest skip. Expired claims are treated
+  // as unclaimed.
+  string claimed_by = 10;
+  google.protobuf.Timestamp claim_expires_at = 11;
 }
 
 message ScheduledTaskRecord {
@@ -368,6 +374,9 @@ message ScheduledTaskRecord {
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp last_run = 9;
   google.protobuf.Timestamp next_run = 10;
+  // Raft-CAS claim, same semantics as AgentCommitment.claimed_by.
+  string claimed_by = 11;
+  google.protobuf.Timestamp claim_expires_at = 12;
 }
 
 message InFlightWork {
@@ -493,6 +502,13 @@ enum LogOp {
   LOG_OP_UNSPECIFIED = 0;
   LOG_OP_PUT = 1;
   LOG_OP_DELETE = 2;
+  // Conditional write: FSM reads the current record and checks that
+  // its claimed_by equals expected_claimer before applying payload.
+  // On mismatch the Apply returns an error so the caller's
+  // raft.Apply() call surfaces ErrClaimConflict. Empty expected
+  // means "expect unclaimed"; applied expiry past now is also
+  // treated as unclaimed.
+  LOG_OP_CLAIM = 3;
 }
 
 message LogEntry {
@@ -509,4 +525,8 @@ message LogEntry {
     EpisodicRecord episodic_record = 15;
     StorageMount storage_mount = 16;
   }
+  // LOG_OP_CLAIM only: the value we expect on the current record's
+  // claimed_by field before we write. Used to enforce CAS semantics.
+  // Ignored for PUT / DELETE.
+  string expected_claimer = 20;
 }
