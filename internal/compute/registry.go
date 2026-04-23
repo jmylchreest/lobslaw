@@ -96,6 +96,28 @@ func (r *Registry) List() []*types.ToolDef {
 	return out
 }
 
+// LLMTools renders every registered tool as the function-calling
+// shape the LLM client expects. Tools without a ParametersSchema
+// are rendered with an empty-object schema so the model can still
+// call them (no args). Used by channel handlers to populate
+// ProcessMessageRequest.Tools.
+func (r *Registry) LLMTools() []Tool {
+	defs := r.List()
+	out := make([]Tool, 0, len(defs))
+	for _, d := range defs {
+		schema := d.ParametersSchema
+		if len(schema) == 0 {
+			schema = []byte(`{"type":"object","properties":{}}`)
+		}
+		out = append(out, Tool{
+			Name:        d.Name,
+			Description: d.Description,
+			Parameters:  schema,
+		})
+	}
+	return out
+}
+
 // Remove drops the tool. No error on missing — idempotent.
 // Also removes any per-tool sandbox policy so the entry is fully gone.
 func (r *Registry) Remove(name string) {
@@ -171,6 +193,9 @@ func cloneTool(t *types.ToolDef) *types.ToolDef {
 	}
 	if t.Capabilities != nil {
 		out.Capabilities = append([]string(nil), t.Capabilities...)
+	}
+	if t.ParametersSchema != nil {
+		out.ParametersSchema = append([]byte(nil), t.ParametersSchema...)
 	}
 	return &out
 }

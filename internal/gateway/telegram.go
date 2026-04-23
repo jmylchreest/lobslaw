@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
-	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -74,12 +73,6 @@ type TelegramConfig struct {
 
 	// ConfirmationTTL mirrors RESTConfig.ConfirmationTTL. 0 → 5min.
 	ConfirmationTTL time.Duration
-
-	// Soul returns the current SoulConfig — callback rather than a
-	// snapshot so SOUL.md hot-reload takes effect on the next turn
-	// without rebuilding the handler. Nil → no system prompt is
-	// attached (agent runs without personality).
-	Soul func() *types.SoulConfig
 
 	// HTTPClient is the client used to POST replies back to the
 	// Telegram Bot API. Nil → a new http.Client with 30s timeout.
@@ -280,33 +273,11 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		"scope", scope,
 		"text_len", len(msg.Text))
 
-	// Build the system prompt from the current soul. Hot-reload
-	// safe — each turn re-reads via the Soul() callback so a
-	// SOUL.md edit is live on the next message.
-	var systemPrompt string
-	if h.cfg.Soul != nil {
-		soul := h.cfg.Soul()
-		if soul != nil {
-			systemPrompt = promptgen.Generate(promptgen.GenerateInput{Soul: soul})
-			h.log.Debug("telegram: soul applied",
-				"turn_id", turnID,
-				"name", soul.Name,
-				"emoji_usage", soul.EmotiveStyle.EmojiUsage,
-				"excitement", soul.EmotiveStyle.Excitement,
-				"formality", soul.EmotiveStyle.Formality,
-				"directness", soul.EmotiveStyle.Directness,
-				"sarcasm", soul.EmotiveStyle.Sarcasm,
-				"humor", soul.EmotiveStyle.Humor,
-				"system_prompt_len", len(systemPrompt))
-		}
-	}
-
 	agentReq := compute.ProcessMessageRequest{
-		Message:      msg.Text,
-		Claims:       claims,
-		TurnID:       turnID,
-		Budget:       budget,
-		SystemPrompt: systemPrompt,
+		Message: msg.Text,
+		Claims:  claims,
+		TurnID:  turnID,
+		Budget:  budget,
 	}
 
 	resp, err := h.agent.RunToolCallLoop(ctx, agentReq)

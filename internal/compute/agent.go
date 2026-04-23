@@ -49,6 +49,21 @@ type AgentConfig struct {
 	// involves tool calls (i.e. most of them).
 	Executor *Executor
 
+	// Registry supplies the tool list advertised to the LLM on
+	// every turn. Channels shouldn't each have to know to plumb
+	// this — the agent pulls its own tool list at turn start. Nil
+	// → no tools are advertised (model runs without function-
+	// calling unless the caller populates req.Tools manually).
+	Registry *Registry
+
+	// Soul returns the current SoulConfig on each turn. Agent
+	// assembles the system prompt via promptgen so channels stay
+	// transport-only. Callback (not snapshot) so SOUL.md hot-
+	// reload takes effect on the next turn without rebuilding the
+	// agent. Nil → no system prompt is injected unless the caller
+	// populates req.SystemPrompt manually.
+	Soul func() *types.SoulConfig
+
 	// Hooks dispatches lifecycle events (PreLLMCall, PostLLMCall,
 	// PreToolUse, PostToolUse). May be nil — all hook calls become
 	// no-ops when unset.
@@ -235,7 +250,43 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if req.Budget == nil {
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
+	a.fillDefaults(&req)
 	return a.runLoop(ctx, req, a.seedMessages(req), &ProcessMessageResponse{})
+}
+
+// fillDefaults populates req.Tools from the agent's Registry and
+// req.SystemPrompt from the agent's Soul when the caller left
+// them empty. Channels stay transport-only — text in, reply out —
+// without each having to know about tools or personality.
+// Explicit values on req always win so tests that script exact
+// prompts still work.
+func (a *Agent) fillDefaults(req *ProcessMessageRequest) {
+	if req.Tools == nil && a.cfg.Registry != nil {
+		req.Tools = a.cfg.Registry.LLMTools()
+	}
+	if req.SystemPrompt == "" && a.cfg.Soul != nil {
+		soul := a.cfg.Soul()
+		if soul != nil {
+			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
+				Soul:  soul,
+				Tools: toPromptgenTools(req.Tools),
+			})
+		}
+	}
+}
+
+// toPromptgenTools renders the LLM-facing Tools as promptgen's
+// ToolInfo shape so the system-prompt "Available Tools" section
+// matches what the model actually has.
+func toPromptgenTools(tools []Tool) []promptgen.ToolInfo {
+	out := make([]promptgen.ToolInfo, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, promptgen.ToolInfo{
+			Name:        t.Name,
+			Description: t.Description,
+		})
+	}
+	return out
 }
 
 // ResumeFromConfirmation picks up a turn that previously returned
@@ -251,6 +302,7 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
+	a.fillDefaults(&req)
 	msgs := make([]Message, len(priorMessages))
 	copy(msgs, priorMessages)
 	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{})

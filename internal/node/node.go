@@ -1068,8 +1068,16 @@ func (n *Node) wireCompute() error {
 		a, err := compute.NewAgent(compute.AgentConfig{
 			Provider: n.llmProvider,
 			Executor: n.executor,
-			Skills:   skillDispatcherOrNil(n.skillAdapter),
-			Logger:   n.log,
+			Registry: n.toolRegistry,
+			Soul: func() *types.SoulConfig {
+				s := n.Soul()
+				if s == nil {
+					return nil
+				}
+				return &s.Config
+			},
+			Skills: skillDispatcherOrNil(n.skillAdapter),
+			Logger: n.log,
 		})
 		if err != nil {
 			return fmt.Errorf("agent: %w", err)
@@ -1368,13 +1376,6 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
-		Soul: func() *types.SoulConfig {
-			s := n.Soul()
-			if s == nil {
-				return nil
-			}
-			return &s.Config
-		},
 		Logger: n.log,
 	}, n.agent)
 }

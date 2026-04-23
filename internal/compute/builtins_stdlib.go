@@ -19,9 +19,11 @@ func RegisterStdlibBuiltins(b *Builtins) error {
 func StdlibToolDefs() []*types.ToolDef {
 	return []*types.ToolDef{
 		{
-			Name:     "current_time",
-			Path:     BuiltinScheme + "current_time",
-			RiskTier: types.RiskReversible,
+			Name:             "current_time",
+			Path:             BuiltinScheme + "current_time",
+			Description:      "Returns the current wall-clock time as JSON with fields utc (RFC3339), local (RFC3339), zone (IANA name), offset_secs, and unix (epoch seconds). Call this when the user asks about the time or date; do not guess.",
+			ParametersSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`),
+			RiskTier:         types.RiskReversible,
 		},
 	}
 }
