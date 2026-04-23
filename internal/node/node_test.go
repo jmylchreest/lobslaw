@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/node"
@@ -624,5 +626,107 @@ func TestNodeGatewayUnknownChannelTypeSkipped(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("/healthz: %d", resp.StatusCode)
+	}
+}
+
+// TestNodeSchedulerFiresCommitmentAfterBoot is the Phase 7c exit
+// criterion: a node boots with Raft + scheduler + PlanService;
+// PlanService.AddCommitment persists a due-now commitment; the
+// scheduler picks it up through the FSM wake hook and fires a
+// registered handler. Proves the boot wiring (New → wireRaft →
+// wireCompute → scheduler.NewScheduler → Run from Start) + the
+// full round-trip (PlanService → Raft → FSM callback → wake → CAS
+// claim → handler dispatch → complete CAS) works end-to-end.
+func TestNodeSchedulerFiresCommitmentAfterBoot(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping scheduler boot integration in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "sched-boot-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	memoryKey := mustKey(t)
+
+	cfg := node.Config{
+		NodeID:         nodeID,
+		Functions:      []types.NodeFunction{types.FunctionMemory, types.FunctionPolicy, types.FunctionStorage},
+		ListenAddr:     "127.0.0.1:0",
+		DataDir:        filepath.Join(tmp, "data"),
+		Bootstrap:      true,
+		SnapshotTarget: "storage:test-backup",
+		Creds:          creds,
+		MemoryKey:      memoryKey,
+	}
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if n.Plan() == nil {
+		t.Fatal("Plan() nil — PlanService should be wired when Raft is up")
+	}
+	if n.Scheduler() == nil {
+		t.Fatal("Scheduler() nil — scheduler should be wired alongside PlanService")
+	}
+
+	// Register a commitment handler BEFORE Start so it's in place
+	// when the scheduler starts ticking.
+	var fired int32
+	cb := make(chan struct{}, 1)
+	_ = n.Scheduler().Handlers().RegisterCommitment("test-ping",
+		func(_ context.Context, _ *lobslawv1.AgentCommitment) error {
+			atomic.AddInt32(&fired, 1)
+			select {
+			case cb <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- n.Start(ctx)
+	}()
+	<-started
+
+	if err := n.Raft().WaitForLeader(5 * time.Second); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("WaitForLeader: %v", err)
+	}
+
+	// Add a commitment due immediately. Boot wiring under test:
+	// PlanService → Raft.Apply → FSM.applyPut → schedulerChange
+	// callback → scheduler wakes → fires handler.
+	_, err = n.Plan().AddCommitment(ctx, &lobslawv1.AddCommitmentRequest{
+		Commitment: &lobslawv1.AgentCommitment{
+			DueAt:      timestamppb.New(time.Now().Add(-time.Second)),
+			Reason:     "ping test",
+			HandlerRef: "test-ping",
+		},
+	})
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("AddCommitment: %v", err)
+	}
+
+	select {
+	case <-cb:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("handler never fired within 5s")
+	}
+	if atomic.LoadInt32(&fired) != 1 {
+		t.Errorf("handler fired %d times; want 1", atomic.LoadInt32(&fired))
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned: %v", err)
 	}
 }

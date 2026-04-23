@@ -18,7 +18,9 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -126,6 +128,7 @@ type Node struct {
 
 	policySvc *policy.Service
 	memorySvc *memory.Service
+	planSvc   *plan.Service
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
 	toolRegistry *compute.Registry
@@ -135,6 +138,12 @@ type Node struct {
 	llmProvider  compute.LLMProvider
 	executor     *compute.Executor
 	agent        *compute.Agent
+
+	// Scheduler fires ScheduledTaskRecord and AgentCommitment records.
+	// Runs on any node that has access to the Raft stack (memory or
+	// policy function); multi-node clusters rely on its CAS-claim
+	// semantics for at-most-one-fires-per-turn.
+	scheduler *scheduler.Scheduler
 
 	// jwtValidator is constructed when Auth config enables a
 	// validation method (currently HS256; JWKS deferred).
@@ -226,6 +235,27 @@ func New(cfg Config) (*Node, error) {
 
 		n.memorySvc = memory.NewService(n.raft, n.store, log)
 		lobslawv1.RegisterMemoryServiceServer(server, n.memorySvc)
+
+		// PlanService needs the Raft stack; registration is independent
+		// of compute/gateway. Reads hit the same local store every
+		// other service uses.
+		n.planSvc = plan.NewService(n.raft, 0)
+		lobslawv1.RegisterPlanServiceServer(server, n.planSvc)
+
+		// Scheduler also needs Raft. Constructed here so its FSM-change
+		// callback is wired before any subsequent Apply could land.
+		// Start is called from Run (blocks on the tick loop until ctx
+		// cancel), so boot-time New just builds the struct.
+		handlers := scheduler.NewHandlerRegistry()
+		sched, err := scheduler.NewScheduler(scheduler.Config{
+			NodeID: cfg.NodeID,
+			Logger: log,
+		}, n.raft, handlers)
+		if err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("scheduler: %w", err)
+		}
+		n.scheduler = sched
 	}
 
 	// Wire the Compute stack iff this node runs the Compute function.
@@ -347,6 +377,17 @@ func (n *Node) Start(ctx context.Context) error {
 		}()
 	}
 
+	// Scheduler runs for the node lifetime. Exits cleanly on ctx
+	// cancel. Only present on Raft-hosting nodes (the construction
+	// branch in New gated that).
+	if n.scheduler != nil {
+		go func() {
+			if err := n.scheduler.Run(ctx); err != nil {
+				n.log.Warn("scheduler exited", "err", err)
+			}
+		}()
+	}
+
 	// Gateway HTTP server, when wired. Runs until ctx is cancelled;
 	// a failure to bind surfaces through errCh so we fail the whole
 	// node (a gateway-enabled node that couldn't bind its channel
@@ -448,6 +489,27 @@ func (n *Node) Resolver() *compute.Resolver { return n.resolver }
 // Tests use this to hit the HTTP endpoints on an ephemeral port;
 // main() calls Start implicitly via Node.Start.
 func (n *Node) Gateway() *gateway.Server { return n.gatewaySrv }
+
+// Plan returns the PlanService implementation (nil when this node
+// doesn't host Raft — PlanService needs Raft-replicated commitments
+// and scheduled tasks).
+func (n *Node) Plan() *plan.Service { return n.planSvc }
+
+// planServiceOrNil adapts a nullable *plan.Service into the
+// gateway.PlanService interface expected by RESTConfig. Returning
+// a typed-nil interface here would make the gateway wrongly think
+// a service is configured — explicitly check and pass nil instead.
+func planServiceOrNil(svc *plan.Service) gateway.PlanService {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
+// Scheduler returns this node's scheduler. Nil when the node doesn't
+// host Raft; otherwise used by the plan + (future) skill layers to
+// register HandlerRef → function mappings.
+func (n *Node) Scheduler() *scheduler.Scheduler { return n.scheduler }
 
 // -- internal helpers --
 
@@ -715,6 +777,7 @@ func (n *Node) wireGateway() error {
 		Telegram:         tg,
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
+		Plan:             planServiceOrNil(n.planSvc),
 		Logger:           n.log,
 	}
 
