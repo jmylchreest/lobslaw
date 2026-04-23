@@ -178,6 +178,12 @@ type GatewayChannelConfig struct {
 	SecretTokenRef string `koanf:"secret_token_ref,omitempty"`
 	TLSCert        string `koanf:"tls_cert,omitempty"`
 	TLSKey         string `koanf:"tls_key,omitempty"`
+	// UserScopes maps channel-specific user IDs (Telegram user_id
+	// as a string because TOML doesn't allow int keys) to lobslaw
+	// security scopes. An unmapped user falls through to the
+	// gateway's unknown_user_scope. For a personal bot, listing
+	// your own user_id with scope="owner" locks everyone else out.
+	UserScopes map[string]string `koanf:"user_scopes,omitempty"`
 }
 
 type DiscoveryConfig struct {

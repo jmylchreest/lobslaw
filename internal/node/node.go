@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -1336,16 +1337,40 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		}
 	}
 
+	userScopes, err := parseUserScopes(ch.UserScopes)
+	if err != nil {
+		return nil, fmt.Errorf("user_scopes: %w", err)
+	}
+
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
 		BotToken:         botToken,
 		Mode:             mode,
 		WebhookSecret:    webhookSecret,
+		UserIDScopes:     userScopes,
 		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
 		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
 		Logger:           n.log,
 	}, n.agent)
+}
+
+// parseUserScopes converts the TOML string-keyed user_scopes map
+// into the int64-keyed shape the Telegram handler expects. Empty
+// input → nil (handler treats that as "no explicit mappings").
+func parseUserScopes(raw map[string]string) (map[int64]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make(map[int64]string, len(raw))
+	for k, v := range raw {
+		id, err := strconv.ParseInt(k, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("user_scopes key %q: not a valid int64: %w", k, err)
+		}
+		out[id] = v
+	}
+	return out, nil
 }
 
 // resolveChannelSecret is the secret-ref resolver used by channel

@@ -15,7 +15,7 @@ User docs are stubs until the project reaches running-end-to-end state (Phase 5 
 | `CONFIG.md` | `config.toml` reference — every knob with defaults |
 | `CLUSTER.md` | Running as a cluster — seed nodes, mTLS bootstrap, adding members |
 | `SKILLS.md` | Installing and authoring skills; `policy.d/` for operator overrides |
-| `CHANNELS.md` | REST / Telegram channel setup and message flow |
+| [`CHANNELS.md`](./CHANNELS.md) | REST / Telegram channel setup and message flow |
 | `BACKUP.md` | Snapshotting, restoring, migrating between nodes |
 | `TROUBLESHOOTING.md` | Common failure modes and resolutions |
 | `FAQ.md` | Recurring questions |
