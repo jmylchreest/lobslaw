@@ -845,15 +845,21 @@ func (n *Node) wireCompute() error {
 const AgentTurnHandlerRef = "agent:turn"
 
 // DreamHandlerRef is the well-known HandlerRef for the memory
-// Dream/REM consolidation pass. Replaces the pre-Phase-7 internal
-// ticker design — now every node's scheduler races to claim a
-// scheduled_tasks entry with this ref, and the winner runs one
-// Dream pass. DreamRunner itself is leader-only-gated so a claim
-// winner on a non-leader soft-skips.
-const DreamHandlerRef = "skill:dream"
+// Dream/REM consolidation pass. Every node's scheduler races to
+// claim a scheduled_tasks entry with this ref, and the winner runs
+// one Dream pass. DreamRunner itself is leader-only-gated so a
+// claim winner on a non-leader soft-skips.
+//
+// Handler-ref namespaces are semantic prefixes, not implementation
+// categories: "agent:" dispatches through the LLM agent loop,
+// "memory:" dispatches to a memory-layer Go-native operation.
+// Renamed from the earlier "memory:dream" to avoid implying this is
+// a Phase 8 on-disk skill (it isn't — there's no manifest, no
+// subprocess; it's an internal Go operation).
+const DreamHandlerRef = "memory:dream"
 
 // registerDreamHandler wires DreamRunner into the scheduler so an
-// operator's `handler = "skill:dream"` ScheduledTask actually fires
+// operator's `handler = "memory:dream"` ScheduledTask actually fires
 // the Dream pass. Called from node.New when both memorySvc and
 // scheduler are present on this node (i.e. any Raft-hosting node).
 func (n *Node) registerDreamHandler() {

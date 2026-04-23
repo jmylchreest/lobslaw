@@ -421,7 +421,7 @@ Main goroutine startup sequence (`cmd/lobslaw/main.go`):
 
 **Trigger (Phase 3):** internal `time.Ticker` reading `[memory.dream.schedule]` (default `0 3 * * *`) with a local cron parser. Runs on the Raft leader only (non-leaders skip).
 
-**Trigger (Phase 7, replacement):** the scheduler takes over via a Raft-claimed `ScheduledTask` whose handler is `skill:dream`. The internal ticker is removed. This lets dream share the same claim-and-execute machinery as other scheduled work.
+**Trigger (Phase 7, replacement):** the scheduler takes over via a Raft-claimed `ScheduledTask` whose handler is `memory:dream`. The internal ticker is removed. This lets dream share the same claim-and-execute machinery as other scheduled work. (Originally drafted as `skill:dream`; renamed so the handler-ref namespace reflects implementation layer — "memory:" for memory-layer Go-native operations, "agent:" for LLM agent-loop dispatch, "skill:" reserved for Phase 8 on-disk skills.)
 
 Algorithm:
 1. Lock-free read of all `RetentionEpisodic` records from Boltdb

@@ -841,7 +841,7 @@ func TestNodeStorageServiceReplicatesAndReconciles(t *testing.T) {
 }
 
 // TestNodeSchedulerDreamHandlerRegistered proves the fix for the
-// Phase-7 wiring gap: an operator scheduling a skill:dream task
+// Phase-7 wiring gap: an operator scheduling a memory:dream task
 // actually reaches the memory DreamRunner rather than the
 // "no handler" release path the scheduler falls into when a ref
 // is unknown.
@@ -874,7 +874,7 @@ func TestNodeSchedulerDreamHandlerRegistered(t *testing.T) {
 
 	handler, ok := n.Scheduler().Handlers().GetTaskHandler(node.DreamHandlerRef)
 	if !ok {
-		t.Fatal("skill:dream handler not registered after node.New")
+		t.Fatal("memory:dream handler not registered after node.New")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -895,7 +895,7 @@ func TestNodeSchedulerDreamHandlerRegistered(t *testing.T) {
 	if err := handler(ctx, &lobslawv1.ScheduledTaskRecord{Id: "t-dream"}); err != nil {
 		cancel()
 		<-done
-		t.Errorf("skill:dream handler returned error: %v", err)
+		t.Errorf("memory:dream handler returned error: %v", err)
 	}
 
 	cancel()

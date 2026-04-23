@@ -134,6 +134,16 @@ type CommitmentHandler func(ctx, *AgentCommitment) error
 
 Both are expected to be idempotent per the partition caveat. Currently enforced only by convention; a future middleware could wrap a handler in a `(task_id, fire_ts)` de-dup guard.
 
+### Handler-ref namespaces
+
+Handler refs use a `<namespace>:<name>` convention that signals what kind of operation the ref resolves to. Three namespaces exist:
+
+- **`agent:*`** — dispatches through `compute.Agent.RunToolCallLoop` (the LLM agent loop). The only member today is `agent:turn` — operators use it for "every morning run this prompt" tasks.
+- **`memory:*`** — memory-layer Go-native operations registered at boot. Today's member is `memory:dream`, which fires one Dream/REM consolidation pass on the Raft leader (soft-skip on followers).
+- **`skill:*`** — reserved for Phase 8 on-disk skills (manifest + handler script + sandboxed subprocess). Not currently used by any built-in handler.
+
+The prefix is a semantic hint only — the scheduler's `HandlerRegistry` treats refs as opaque strings. An operator registering a custom handler can use any prefix they like; the conventions here exist so reading a config.toml tells you at a glance which subsystem handles which task.
+
 ### Built-in `agent:turn`
 
 Registered during `node.New` when both a scheduler and an agent are present. Dispatches the record's `Params["prompt"]` (or for commitments, `Reason` as a fallback) through `compute.Agent.RunToolCallLoop` with synthetic `"scheduler"` scope claims and a fresh `TurnBudget` from `cfg.Compute.Budgets`.
@@ -141,6 +151,22 @@ Registered during `node.New` when both a scheduler and an agent are present. Dis
 Operators who want "every morning check the weather and summarize" configure a task with `HandlerRef = "agent:turn"` and `Params.prompt = "check the weather and summarize it"`. Natural-language commitments ("remind me to call the plumber in 2 hours") skip `Params` and let `Reason` drive.
 
 Handler errors are logged; the next tick retries via the regular cron schedule (for tasks) or not at all (commitments — they're one-shot).
+
+### Built-in `memory:dream`
+
+Registered during `node.New` when both a scheduler and a `memory.Service` are present (Raft-hosting nodes). Dispatches to `memory.Service.DreamRunner().Run(ctx)`, which performs one Dream/REM pass: score → select-top-N → consolidate (if a Summarizer is wired) → prune → dream-session record. See [MEMORY.md](MEMORY.md) for the pass semantics.
+
+```toml
+[[scheduler.tasks]]
+name     = "nightly-dream"
+schedule = "0 3 * * *"
+handler  = "memory:dream"
+enabled  = true
+```
+
+Cluster behaviour: the scheduler's CAS-claim model means exactly one node per firing wins the claim. The winner's `DreamRunner.Run` then leader-gates — if that node isn't the current Raft leader it soft-skips (returns nil, nil). The next scheduled fire races the claim again, so a leadership change between fires is handled naturally. Worst case on a just-failed-over cluster: one fire silently skipped, the next one succeeds.
+
+`memory:dream` takes no `Params` — the configuration lives on the underlying `DreamRunner` (half-life, max candidates, prune threshold), typically set at memory-service construction from `config.Memory.Dream`.
 
 ---
 

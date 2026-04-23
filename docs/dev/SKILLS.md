@@ -359,7 +359,7 @@ Short timeouts are intentional: a stuck RTK shouldn't block tool dispatch. The h
 | **RTK hooks example** (config-only, uses existing hooks system) | ✅ shipped (8f) |
 | **Signature verification** (tri-state policy + ed25519) | ✅ shipped (8g) |
 | **Skill policy.d/ loading** (sandbox.LoadSkillPolicies wired into Scan) | ✅ shipped |
-| **skill:dream scheduler handler** (replaces pre-Phase-7 internal ticker) | ✅ shipped |
+| **memory:dream scheduler handler** (scheduler trigger for the Dream/REM pass) | ✅ shipped |
 | **Plugin install CLI** (`lobslaw plugin install/enable/disable/list/import`) | ✅ shipped (8d) |
 | **MCP client** (stdio JSON-RPC subprocess, tool surfacing) | ✅ shipped (8e) |
 | **RTK hooks** (config-only PreToolUse/PostToolUse integration) | ⬜ Phase 8f |

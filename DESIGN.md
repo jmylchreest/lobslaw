@@ -1334,7 +1334,7 @@ claim_lease = "5m"
 [[scheduler.tasks]]
 name = "daily-dream"
 schedule = "0 3 * * *"
-handler = "skill:dream"
+handler = "memory:dream"
 enabled = true
 
 [auth]
