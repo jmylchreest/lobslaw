@@ -1200,6 +1200,26 @@ Establish baseline: latency of a simple turn (echo tool), memory usage of a sing
 
 Document these in `docs/PERFORMANCE.md`. Set alerting thresholds for regression detection.
 
+### 12.5 Interactive onboarding & first-run experience
+
+New operators shouldn't need to hand-author `config.toml` + `SOUL.md` + `.env` from scratch. An interactive setup flow that takes them from zero to a running single-node instance:
+
+- `lobslaw init` subcommand — interactive TUI (bubbletea or simple prompts):
+  - Generate a random memory encryption key (`openssl rand` equivalent in-binary).
+  - Prompt for at least one LLM provider: endpoint, model, API key (stored in `.env`, referenced as `env:OPENROUTER_API_KEY` in the TOML).
+  - Optional SOUL tuning — emotive style defaults, persona blurb (skippable; sensible defaults).
+  - Optional channel setup — REST port, Telegram bot token + webhook.
+  - Policy preset selection (lock down vs. permissive), mapped to built-in [`lobslaw-documentation-audiences`]-style examples.
+  - Write `config.toml` + `.env` (chmod 0600) + `SOUL.md` to the chosen directory; suggest `$XDG_CONFIG_HOME/lobslaw/` as the default location.
+- `lobslaw doctor` subcommand — diagnostics for a misconfigured setup:
+  - Verifies TOML validates, `.env` is readable, providers reachable (HEAD request or `/health` where supported), memory key present, mTLS certs parseable.
+  - Points at the specific fix when something's wrong.
+- Container-friendly entrypoint — when `LOBSLAW_ONBOARD=1` and no `config.toml` exists, run `init` non-interactively from env vars (`LOBSLAW_PROVIDER_*` + `LOBSLAW_MEMORY_KEY` already in env).
+
+**Why Phase 12 not earlier:** the underlying subsystems must exist before `init` can be meaningful — at minimum a functional Phase 6 (so the generated config resolves end-to-end) and Phase 10 (so SOUL is real, not a stub). Earlier onboarding work would hit moving targets.
+
+**Exit criteria:** `lobslaw init` produces a working config that a fresh `lobslaw` invocation successfully starts. `lobslaw doctor` catches the 5 most common misconfigurations (bad API key, wrong endpoint, missing memory key, unreadable .env, invalid TOML) with actionable messages.
+
 ---
 
 ## Open Questions (Not Yet Resolved)

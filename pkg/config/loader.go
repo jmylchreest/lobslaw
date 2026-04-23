@@ -77,6 +77,16 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 	cfg.resolvedPath = path
 
+	// LOBSLAW_PROVIDER_<LABEL>_<FIELD> env vars merge with the TOML-
+	// sourced providers slice before validation, so operators can
+	// declare providers entirely via env (container-first workflow)
+	// or override individual fields on a TOML-declared provider.
+	if !opts.SkipEnv {
+		if err := applyEnvProviders(cfg); err != nil {
+			return nil, fmt.Errorf("%w: env providers: %w", types.ErrInvalidConfig, err)
+		}
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
