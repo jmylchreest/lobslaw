@@ -12,12 +12,40 @@ import (
 )
 
 // writeHookScript drops a small shell script into dir and returns
-// its absolute path. chmod +x.
+// its absolute path. Uses the same paranoid write-then-exec pattern
+// internal/compute/executor_test.go's writeScript uses: OpenFile +
+// Write + Sync + Close + Chmod + Stat-verify-exec-bit. os.WriteFile
+// alone races with subsequent execve on some filesystems — tmpfs /
+// CoW overlays can leave executable mode bits or file contents
+// invisible to an immediate child process, which surfaces as the
+// test's "text file busy" / "permission denied" flakes.
 func writeHookScript(t *testing.T, dir, name, script string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+	f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o700)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := f.WriteString("#!/bin/sh\n" + script + "\n"); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("writeHookScript: %q has no executable bits after Chmod (fs race?)", p)
 	}
 	return p
 }

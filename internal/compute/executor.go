@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/hooks"
@@ -225,7 +226,7 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
-	err := cmd.Run()
+	err := runWithETXTBSYRetry(runCtx, cmd)
 
 	result := &InvokeResult{
 		Stdout:    stdout.Bytes(),
@@ -240,6 +241,84 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 		return result, fmt.Errorf("exec %q: %w", path, err)
 	}
 	return result, nil
+}
+
+// runWithETXTBSYRetry wraps cmd.Run with a short bounded retry on
+// ETXTBSY (Linux errno 26, "text file busy"). This error surfaces
+// when execve races the kernel's inode write-lock for a file that
+// was just written + closed: tmpfs under parallel test load is the
+// most common trigger, but the same race surfaces in production
+// during a skill / tool binary replacement (plugin install, rolling
+// update). Retries are capped + short because ETXTBSY resolves
+// within microseconds once the last writer's FD is fully released.
+//
+// Non-ETXTBSY errors return immediately — we don't want to mask
+// exec failures like "binary not found" or a real ExitError.
+func runWithETXTBSYRetry(ctx context.Context, cmd *exec.Cmd) error {
+	const (
+		maxAttempts    = 5
+		initialBackoff = 10 * time.Millisecond
+	)
+	var err error
+	backoff := initialBackoff
+	for attempt := range maxAttempts {
+		if attempt > 0 {
+			if ctx.Err() != nil {
+				return err
+			}
+			cmd = cloneForRetry(ctx, cmd)
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+		err = cmd.Run()
+		if !isETXTBSY(err) {
+			return err
+		}
+	}
+	return err
+}
+
+// isETXTBSY returns true when err is an exec ENOEXEC-style
+// transient — ETXTBSY while another writer still holds the FD or
+// EAGAIN from clone's pthread-spawn path. errors.Is walks
+// exec.Error / os.PathError wrappers; the string-match fallback
+// catches kernel + Go runtime versions where the error chain
+// doesn't preserve the syscall errno cleanly.
+func isETXTBSY(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ETXTBSY) || errors.Is(err, syscall.EAGAIN) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "text file busy") ||
+		strings.Contains(s, "resource temporarily unavailable")
+}
+
+// cloneForRetry builds a fresh exec.Cmd for a second Run. exec.Cmd
+// is single-use — a second Run() panics. Must rebuild via
+// exec.CommandContext rather than struct-literal construction: the
+// stdlib refuses to Run a Cmd that has a non-nil Cancel but wasn't
+// built via CommandContext (guards against lost ctx cancellation).
+// Reuses stdout/stderr Writers so retry output continuity survives
+// — ETXTBSY means the first attempt never produced output anyway.
+func cloneForRetry(ctx context.Context, src *exec.Cmd) *exec.Cmd {
+	args := src.Args
+	if len(args) == 0 {
+		args = []string{src.Path}
+	}
+	fresh := exec.CommandContext(ctx, args[0], args[1:]...)
+	fresh.Path = src.Path
+	fresh.Env = src.Env
+	fresh.Dir = src.Dir
+	fresh.Stdin = src.Stdin
+	fresh.Stdout = src.Stdout
+	fresh.Stderr = src.Stderr
+	fresh.ExtraFiles = src.ExtraFiles
+	fresh.SysProcAttr = src.SysProcAttr
+	fresh.WaitDelay = src.WaitDelay
+	return fresh
 }
 
 // resolvePolicy picks the sandbox Policy for the given tool via the
