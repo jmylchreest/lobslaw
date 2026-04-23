@@ -32,6 +32,29 @@ func TestNewLLMClientRequiresEndpoint(t *testing.T) {
 	}
 }
 
+// TestNewLLMClientAppendsChatCompletions — operators copy-paste
+// base URLs like "https://openrouter.ai/api/v1" from provider
+// docs. The client must append /chat/completions when missing and
+// leave alone when already present. Trailing slashes collapse.
+func TestNewLLMClientAppendsChatCompletions(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"https://openrouter.ai/api/v1":                    "https://openrouter.ai/api/v1/chat/completions",
+		"https://openrouter.ai/api/v1/":                   "https://openrouter.ai/api/v1/chat/completions",
+		"https://openrouter.ai/api/v1/chat/completions":   "https://openrouter.ai/api/v1/chat/completions",
+		"https://openrouter.ai/api/v1/chat/completions/":  "https://openrouter.ai/api/v1/chat/completions",
+	}
+	for in, want := range cases {
+		c, err := NewLLMClient(LLMClientConfig{Endpoint: in})
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if c.endpoint != want {
+			t.Errorf("endpoint(%q) = %q; want %q", in, c.endpoint, want)
+		}
+	}
+}
+
 func TestLLMClientChatHappyPath(t *testing.T) {
 	t.Parallel()
 	srv := fakeOpenAIServer(t, func(w http.ResponseWriter, r *http.Request) {

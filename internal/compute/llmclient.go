@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -47,7 +48,7 @@ var (
 // LLMClient is the real OpenAI-compatible HTTP client. Stateless
 // per call; safe to share across goroutines. Implements LLMProvider.
 type LLMClient struct {
-	endpoint   string // full URL to /chat/completions
+	endpoint   string // resolved full URL to /chat/completions
 	apiKey     string // sent as "Authorization: Bearer ..."
 	model      string // default model when ChatRequest.Model is empty
 	httpClient *http.Client
@@ -56,7 +57,10 @@ type LLMClient struct {
 // LLMClientConfig tunes client construction. Zero-value is usable
 // for the common case (provider defaults, 120s timeout).
 type LLMClientConfig struct {
-	// Endpoint is the /chat/completions URL. Required.
+	// Endpoint is the provider base URL (e.g.
+	// "https://openrouter.ai/api/v1") or the full chat-completions
+	// URL (e.g. ".../v1/chat/completions"). Both are accepted — the
+	// client appends /chat/completions when absent. Required.
 	Endpoint string
 
 	// APIKey is the Bearer token for the Authorization header.
@@ -81,9 +85,19 @@ type LLMClientConfig struct {
 // NewLLMClient constructs a client from explicit config. Fails
 // fast if Endpoint is missing — empty endpoint with no fallback is
 // a configuration bug, not a runtime recoverable.
+//
+// Endpoint tolerates both the bare base URL (e.g.
+// "https://openrouter.ai/api/v1") and the full chat-completions URL
+// (e.g. "https://openrouter.ai/api/v1/chat/completions"). Most
+// OpenAI-compat provider docs quote the base URL; auto-appending
+// /chat/completions matches operator expectation.
 func NewLLMClient(cfg LLMClientConfig) (*LLMClient, error) {
 	if cfg.Endpoint == "" {
 		return nil, errors.New("LLMClient: endpoint is required")
+	}
+	endpoint := strings.TrimRight(cfg.Endpoint, "/")
+	if !strings.HasSuffix(endpoint, "/chat/completions") {
+		endpoint += "/chat/completions"
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
@@ -94,7 +108,7 @@ func NewLLMClient(cfg LLMClientConfig) (*LLMClient, error) {
 		hc = &http.Client{Timeout: timeout}
 	}
 	return &LLMClient{
-		endpoint:   cfg.Endpoint,
+		endpoint:   endpoint,
 		apiKey:     cfg.APIKey,
 		model:      cfg.Model,
 		httpClient: hc,
