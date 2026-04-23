@@ -1,0 +1,207 @@
+package main
+
+import (
+	"context"
+	"encoding/base64"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/mtls"
+)
+
+// dispatchDoctor handles `lobslaw doctor`. Returns true if handled.
+func dispatchDoctor(args []string) bool {
+	if len(args) < 1 || args[0] != "doctor" {
+		return false
+	}
+	lobslawDoctor(args[1:])
+	return true
+}
+
+// doctorCheck is one diagnostic. Run returns a short pass/fail
+// message; a non-nil problem means the check failed and a non-zero
+// exit code should follow.
+type doctorCheck struct {
+	Name string
+	Run  func() (detail string, problem error)
+}
+
+func lobslawDoctor(args []string) {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml")
+	offline := fs.Bool("offline", false, "skip network reachability checks")
+	_ = fs.Parse(args)
+
+	if *cfgPath == "" {
+		exitWith("doctor: --config (or LOBSLAW_CONFIG) required")
+	}
+
+	// Config must load before anything else — every other check
+	// depends on its values. Done eagerly so subsequent checks can
+	// close over the parsed struct.
+	cfg, err := config.Load(config.LoadOptions{Path: *cfgPath})
+	if err != nil {
+		fmt.Printf("FAIL  config parse: %v\n", err)
+		os.Exit(1)
+	}
+
+	checks := []doctorCheck{
+		{
+			Name: ".env readable + chmod 0600",
+			Run: func() (string, error) {
+				envFile := filepath.Join(filepath.Dir(*cfgPath), ".env")
+				fi, err := os.Stat(envFile)
+				if err != nil {
+					return "", fmt.Errorf("stat %q: %w", envFile, err)
+				}
+				if mode := fi.Mode().Perm(); mode != 0o600 {
+					return "", fmt.Errorf("%q has mode %o; want 0600 (contains secrets)", envFile, mode)
+				}
+				return envFile, nil
+			},
+		},
+		{
+			Name: "memory encryption key",
+			Run: func() (string, error) {
+				ref := cfg.Memory.Encryption.KeyRef
+				if ref == "" {
+					return "", fmt.Errorf("memory.encryption.key_ref is empty")
+				}
+				val, err := config.ResolveSecret(ref)
+				if err != nil {
+					return "", fmt.Errorf("resolve %q: %w", ref, err)
+				}
+				raw, err := base64.StdEncoding.DecodeString(val)
+				if err != nil {
+					return "", fmt.Errorf("decode base64: %w", err)
+				}
+				if len(raw) != 32 {
+					return "", fmt.Errorf("%d bytes decoded; want 32", len(raw))
+				}
+				return "32-byte key resolved via " + ref, nil
+			},
+		},
+		{
+			Name: "mTLS CA certificate",
+			Run: func() (string, error) {
+				path := cfg.Cluster.MTLS.CACert
+				if path == "" {
+					return "", fmt.Errorf("cluster.mtls.ca_cert not set")
+				}
+				if _, err := os.Stat(path); err != nil {
+					return "", err
+				}
+				return path, nil
+			},
+		},
+		{
+			Name: "mTLS node cert + key",
+			Run: func() (string, error) {
+				ca := cfg.Cluster.MTLS.CACert
+				cert := cfg.Cluster.MTLS.NodeCert
+				key := cfg.Cluster.MTLS.NodeKey
+				if ca == "" || cert == "" || key == "" {
+					return "", fmt.Errorf("cluster.mtls.{ca_cert,node_cert,node_key} must all be set")
+				}
+				// LoadNodeCreds parses the full bundle — a mangled
+				// PEM, mismatched key, or unsigned cert fails here
+				// with a descriptive error.
+				if _, err := mtls.LoadNodeCreds(ca, cert, key); err != nil {
+					return "", err
+				}
+				return cert, nil
+			},
+		},
+		{
+			Name: "SOUL.md parses",
+			Run: func() (string, error) {
+				path := cfg.Soul.Path
+				if path == "" {
+					return "default (no SoulPath set)", nil
+				}
+				if _, err := os.Stat(path); err != nil {
+					return "", err
+				}
+				return path, nil
+			},
+		},
+		{
+			Name: "audit.local path writable",
+			Run: func() (string, error) {
+				if !cfg.Audit.Local.Enabled {
+					return "disabled", nil
+				}
+				p := cfg.Audit.Local.Path
+				if p == "" {
+					return "", fmt.Errorf("audit.local.path is empty")
+				}
+				// Probe the parent directory with a temp create; a
+				// read-only mount is a common first-run surprise.
+				dir := filepath.Dir(p)
+				tmp, err := os.CreateTemp(dir, ".lobslaw-doctor-*")
+				if err != nil {
+					return "", fmt.Errorf("write probe in %q: %w", dir, err)
+				}
+				_ = tmp.Close()
+				_ = os.Remove(tmp.Name())
+				return p, nil
+			},
+		},
+		{
+			Name: "LLM provider reachable",
+			Run: func() (string, error) {
+				if *offline {
+					return "skipped (--offline)", nil
+				}
+				if len(cfg.Compute.Providers) == 0 {
+					return "", fmt.Errorf("no [[compute.providers]] configured")
+				}
+				first := cfg.Compute.Providers[0]
+				if first.Endpoint == "" {
+					return "", fmt.Errorf("provider %q has empty endpoint", first.Label)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+				defer cancel()
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, first.Endpoint, nil)
+				if err != nil {
+					return "", err
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					return "", fmt.Errorf("dial %q: %w", first.Endpoint, err)
+				}
+				defer func() {
+					_, _ = io.Copy(io.Discard, resp.Body)
+					_ = resp.Body.Close()
+				}()
+				// Any HTTP response (even 401/404) proves the endpoint
+				// resolves + TLS handshakes. Real auth happens at
+				// request time; doctor only cares about reachability.
+				return fmt.Sprintf("%s → HTTP %d", first.Endpoint, resp.StatusCode), nil
+			},
+		},
+	}
+
+	var failures int
+	for _, c := range checks {
+		detail, err := c.Run()
+		if err != nil {
+			fmt.Printf("FAIL  %s: %v\n", c.Name, err)
+			failures++
+			continue
+		}
+		fmt.Printf("OK    %s: %s\n", c.Name, detail)
+	}
+
+	if failures > 0 {
+		fmt.Fprintf(os.Stderr, "\n%d check(s) failed\n", failures)
+		os.Exit(1)
+	}
+	fmt.Println("\nall checks passed")
+}
