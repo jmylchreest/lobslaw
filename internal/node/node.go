@@ -242,19 +242,24 @@ func New(cfg Config) (*Node, error) {
 
 	// Auth is independent of functions — every channel handler may
 	// need it. Only constructed when the config actually enables a
-	// validation method; otherwise n.jwtValidator stays nil and
-	// channels run in anonymous-with-default-scope mode.
-	if cfg.Auth.AllowHS256 {
-		secret, err := n.resolveAPIKey(cfg.Auth.JWTSecretRef)
-		if err != nil {
-			n.closePartial()
-			return nil, fmt.Errorf("auth HS256 secret: %w", err)
+	// validation method (HS256 secret or JWKS URL); otherwise
+	// n.jwtValidator stays nil and channels run in
+	// anonymous-with-default-scope mode.
+	if cfg.Auth.AllowHS256 || cfg.Auth.JWKSURL != "" {
+		authCfg := auth.Config{
+			Issuer:     cfg.Auth.Issuer,
+			AllowHS256: cfg.Auth.AllowHS256,
+			JWKSURL:    cfg.Auth.JWKSURL,
 		}
-		v, err := auth.NewValidator(auth.Config{
-			Issuer:      cfg.Auth.Issuer,
-			AllowHS256:  true,
-			HS256Secret: secret,
-		})
+		if cfg.Auth.AllowHS256 {
+			secret, err := n.resolveAPIKey(cfg.Auth.JWTSecretRef)
+			if err != nil {
+				n.closePartial()
+				return nil, fmt.Errorf("auth HS256 secret: %w", err)
+			}
+			authCfg.HS256Secret = secret
+		}
+		v, err := auth.NewValidator(authCfg)
 		if err != nil {
 			n.closePartial()
 			return nil, fmt.Errorf("auth validator: %w", err)
