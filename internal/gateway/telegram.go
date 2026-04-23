@@ -84,6 +84,25 @@ type TelegramHandler struct {
 	// twice for one user intent.
 	inflightMu sync.Mutex
 	seenUpdate map[int64]time.Time // update_id → first-seen time
+
+	// continuations hold the agent-turn state needed to resume a
+	// turn after the user taps Approve on a confirmation keyboard.
+	// Keyed by prompt ID (same ID that appears in callback_data).
+	// Populated by sendConfirmationKeyboard; drained by
+	// handleCallbackQuery. Entries aren't persisted — a restart
+	// loses in-flight continuations (the user's tap becomes a no-op
+	// with a "no longer exists" reply from the registry).
+	continuationsMu sync.Mutex
+	continuations   map[string]*telegramContinuation
+}
+
+// telegramContinuation captures everything handleCallbackQuery
+// needs to resume an in-flight turn on approval.
+type telegramContinuation struct {
+	req      compute.ProcessMessageRequest
+	messages []compute.Message
+	chatID   int64
+	reason   string
 }
 
 // Telegram Update / Message types — minimal subset we consume. The
@@ -149,12 +168,13 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		logger = slog.Default()
 	}
 	return &TelegramHandler{
-		cfg:        cfg,
-		agent:      agent,
-		log:        logger,
-		client:     client,
-		base:       base,
-		seenUpdate: make(map[int64]time.Time),
+		cfg:           cfg,
+		agent:         agent,
+		log:           logger,
+		client:        client,
+		base:          base,
+		seenUpdate:    make(map[int64]time.Time),
+		continuations: make(map[string]*telegramContinuation),
 	}, nil
 }
 
@@ -237,13 +257,14 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		Scope:  scope,
 	}
 	turnID := "tg-" + strconv.FormatInt(msg.MessageID, 10)
-
-	resp, err := h.agent.RunToolCallLoop(ctx, compute.ProcessMessageRequest{
+	agentReq := compute.ProcessMessageRequest{
 		Message: msg.Text,
 		Claims:  claims,
 		TurnID:  turnID,
 		Budget:  budget,
-	})
+	}
+
+	resp, err := h.agent.RunToolCallLoop(ctx, agentReq)
 	if err != nil {
 		h.log.Error("telegram: agent error",
 			"turn_id", turnID, "err", err)
@@ -254,7 +275,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	switch {
 	case resp.NeedsConfirmation:
 		if h.cfg.Prompts != nil {
-			h.sendConfirmationKeyboard(msg.Chat.ID, turnID, resp.ConfirmationReason)
+			h.sendConfirmationKeyboard(msg.Chat.ID, agentReq, resp)
 			return
 		}
 		// Fallback: no registry wired — render the reason as plain text.
@@ -276,21 +297,35 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 // {"inline_keyboard": [[{text, callback_data}, ...]]}. Callback
 // data is prefixed "prompt:approve:<id>" / "prompt:deny:<id>" so
 // the handler can parse the verb + id without a separate mapping.
-func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, turnID, reason string) {
+func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse) {
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
-	p, err := h.cfg.Prompts.Create(turnID, reason, "telegram", ttl)
+	p, err := h.cfg.Prompts.Create(req.TurnID, resp.ConfirmationReason, "telegram", ttl)
 	if err != nil {
 		h.log.Error("telegram: prompt registration failed", "err", err)
-		h.sendText(chatID, "Confirmation required: "+reason)
+		h.sendText(chatID, "Confirmation required: "+resp.ConfirmationReason)
 		return
 	}
 
+	// Stash resume state so handleCallbackQuery can re-enter the
+	// agent loop on approval. Dropped if the user denies or the
+	// prompt times out — nothing periodically reaps entries because
+	// every code path that reads this map also deletes on the way
+	// out (approve, deny, or missing on re-tap).
+	h.continuationsMu.Lock()
+	h.continuations[p.ID] = &telegramContinuation{
+		req:      req,
+		messages: resp.Messages,
+		chatID:   chatID,
+		reason:   resp.ConfirmationReason,
+	}
+	h.continuationsMu.Unlock()
+
 	body := map[string]any{
 		"chat_id": chatID,
-		"text":    "Confirmation required: " + reason,
+		"text":    "Confirmation required: " + resp.ConfirmationReason,
 		"reply_markup": map[string]any{
 			"inline_keyboard": [][]map[string]string{
 				{
@@ -303,6 +338,21 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, turnID, reason 
 	h.postJSON("sendMessage", body)
 }
 
+// takeContinuation pops and returns the stored continuation for the
+// given prompt ID. Returns (nil, false) when no entry exists — the
+// prompt may have been resolved on a different channel, reaped, or
+// never existed. Callers surface a "no longer exists" message in
+// that case.
+func (h *TelegramHandler) takeContinuation(promptID string) (*telegramContinuation, bool) {
+	h.continuationsMu.Lock()
+	defer h.continuationsMu.Unlock()
+	c, ok := h.continuations[promptID]
+	if ok {
+		delete(h.continuations, promptID)
+	}
+	return c, ok
+}
+
 // handleCallbackQuery resolves a pending prompt based on the
 // callback_data tag format "prompt:<verb>:<id>" produced by
 // sendConfirmationKeyboard. Any other callback_data shape is
@@ -312,8 +362,6 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, turnID, reason 
 // removes the "loading" spinner on the user's side; the resolution
 // outcome is surfaced via a plain sendMessage confirmation.
 func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallbackQuery) {
-	_ = ctx
-
 	// Always ack the callback so the client UI stops spinning.
 	defer h.postJSON("answerCallbackQuery", map[string]any{
 		"callback_query_id": q.ID,
@@ -354,10 +402,60 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 			h.log.Error("telegram: resolve failed", "err", err, "id", promptID)
 			reply = "Couldn't process the response."
 		}
+		// Resolution failed or was redundant — drop any stored
+		// continuation to avoid leaking memory on repeat taps.
+		_, _ = h.takeContinuation(promptID)
+		if q.Message != nil {
+			h.sendText(q.Message.Chat.ID, reply)
+		}
+		return
 	}
 
+	if decision == PromptDenied {
+		_, _ = h.takeContinuation(promptID) // drop state, nothing to resume
+		if q.Message != nil {
+			h.sendText(q.Message.Chat.ID, reply)
+		}
+		return
+	}
+
+	// Approved — acknowledge + resume the turn.
 	if q.Message != nil {
 		h.sendText(q.Message.Chat.ID, reply)
+	}
+	cont, ok := h.takeContinuation(promptID)
+	if !ok {
+		// Approval with no stored state — probably a bot restart
+		// after the keyboard was sent. Nothing to resume.
+		h.log.Warn("telegram: approve with no continuation state", "prompt_id", promptID)
+		if q.Message != nil {
+			h.sendText(q.Message.Chat.ID, "I've lost track of that turn — send it again.")
+		}
+		return
+	}
+	h.resumeAfterApproval(ctx, cont)
+}
+
+// resumeAfterApproval re-enters the agent loop with a relaxed
+// budget and sends the final reply (or a new keyboard if another
+// confirmation is needed) back to the originating chat. Kept as a
+// method so callers can also invoke it from tests.
+func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, cont *telegramContinuation) {
+	cont.req.Budget.Relax()
+	resp, err := h.agent.ResumeFromConfirmation(ctx, cont.req, cont.messages)
+	if err != nil {
+		h.log.Error("telegram: resume failed",
+			"turn_id", cont.req.TurnID, "err", err)
+		h.sendText(cont.chatID, "Something went wrong continuing your request.")
+		return
+	}
+	switch {
+	case resp.NeedsConfirmation:
+		h.sendConfirmationKeyboard(cont.chatID, cont.req, resp)
+	case resp.Reply == "":
+		h.sendText(cont.chatID, "(empty reply)")
+	default:
+		h.sendText(cont.chatID, resp.Reply)
 	}
 }
 

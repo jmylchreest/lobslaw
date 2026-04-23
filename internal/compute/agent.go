@@ -195,10 +195,28 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if req.Budget == nil {
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
-	messages := a.seedMessages(req)
+	return a.runLoop(ctx, req, a.seedMessages(req), &ProcessMessageResponse{})
+}
 
-	resp := &ProcessMessageResponse{}
+// ResumeFromConfirmation picks up a turn that previously returned
+// NeedsConfirmation. Callers must pass the prior response's Messages
+// (so we re-enter mid-conversation, not from the system prompt) and a
+// Budget with Relax() already called (so the step that originally
+// tripped the cap can proceed). The resume may itself hit a new
+// confirmation — channel handlers loop until final reply or denial.
+func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRequest, priorMessages []Message) (*ProcessMessageResponse, error) {
+	if req.Budget == nil {
+		return nil, errors.New("ResumeFromConfirmation: req.Budget is required")
+	}
+	if len(priorMessages) == 0 {
+		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
+	}
+	msgs := make([]Message, len(priorMessages))
+	copy(msgs, priorMessages)
+	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{})
+}
 
+func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse) (*ProcessMessageResponse, error) {
 	for loop := range a.cfg.MaxToolLoops {
 		a.cfg.Logger.Debug("agent: LLM round-trip",
 			"turn_id", req.TurnID, "loop", loop, "messages", len(messages))

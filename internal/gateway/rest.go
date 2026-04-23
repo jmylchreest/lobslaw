@@ -282,26 +282,67 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-resume loop: when the agent returns NeedsConfirmation AND
+	// the registry is wired, register a prompt, long-poll Wait until
+	// the user resolves it (or the TTL fires), then either resume the
+	// turn with a lifted budget (Approved) or stop with a deny reply
+	// (Denied / TimedOut). The resumed turn may itself hit a fresh
+	// confirmation; we loop until the agent returns a plain reply or
+	// the user refuses. A nil registry leaves resp unchanged — older
+	// clients that don't understand prompt_id still see the reason in
+	// the response body.
+	var lastPromptID string
+	for resp.NeedsConfirmation && s.cfg.Prompts != nil {
+		ttl := s.cfg.ConfirmationTTL
+		if ttl <= 0 {
+			ttl = 5 * time.Minute
+		}
+		p, perr := s.cfg.Prompts.Create(req.TurnID, resp.ConfirmationReason, "rest", ttl)
+		if perr != nil {
+			s.log.Warn("rest: prompt registration failed — returning confirmation as-is", "err", perr)
+			break
+		}
+		lastPromptID = p.ID
+
+		decision, werr := s.cfg.Prompts.Wait(r.Context(), p.ID)
+		if werr != nil {
+			s.log.Warn("rest: prompt wait aborted",
+				"prompt_id", p.ID, "turn_id", req.TurnID, "err", werr)
+			break
+		}
+		if decision != PromptApproved {
+			resp.Reply = fmt.Sprintf("Confirmation %s: %s",
+				decision.String(), resp.ConfirmationReason)
+			resp.NeedsConfirmation = false
+			resp.ConfirmationReason = ""
+			break
+		}
+
+		// Approved: lift caps and re-enter. resp.Messages carries the
+		// conversation at the moment the original turn stopped.
+		agentReq.Budget.Relax()
+		resumed, rerr := s.agent.ResumeFromConfirmation(r.Context(), agentReq, resp.Messages)
+		if rerr != nil {
+			s.log.Error("rest: resume after approval failed",
+				"turn_id", req.TurnID, "err", rerr)
+			s.jsonErr(w, http.StatusInternalServerError, rerr.Error())
+			return
+		}
+		// Preserve prior tool calls in the cumulative response.
+		resumed.ToolCalls = append(resp.ToolCalls, resumed.ToolCalls...)
+		resp = resumed
+	}
+
 	out := messageResponse{
 		Reply:              resp.Reply,
 		NeedsConfirmation:  resp.NeedsConfirmation,
 		ConfirmationReason: resp.ConfirmationReason,
+		PromptID:           lastPromptID,
 		Budget: budgetStateJSON{
 			ToolCalls:   resp.BudgetState.ToolCalls,
 			SpendUSD:    resp.BudgetState.SpendUSD,
 			EgressBytes: resp.BudgetState.EgressBytes,
 		},
-	}
-	if resp.NeedsConfirmation && s.cfg.Prompts != nil {
-		ttl := s.cfg.ConfirmationTTL
-		if ttl <= 0 {
-			ttl = 5 * time.Minute
-		}
-		if p, err := s.cfg.Prompts.Create(req.TurnID, resp.ConfirmationReason, "rest", ttl); err == nil {
-			out.PromptID = p.ID
-		} else {
-			s.log.Warn("rest: prompt registration failed", "err", err)
-		}
 	}
 	for _, tc := range resp.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, toolCallJSON{

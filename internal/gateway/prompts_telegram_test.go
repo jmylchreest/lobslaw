@@ -80,7 +80,12 @@ func TestTelegramSendConfirmationKeyboardRegistersAndPostsKeyboard(t *testing.T)
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	h.handler.sendConfirmationKeyboard(555, "turn-42", "run this scary thing?")
+	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
+	h.handler.sendConfirmationKeyboard(
+		555,
+		compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
+		&compute.ProcessMessageResponse{ConfirmationReason: "run this scary thing?"},
+	)
 
 	calls := h.capturedCalls()
 	if len(calls) != 1 || calls[0].Method != "sendMessage" {

@@ -172,6 +172,22 @@ func (b *TurnBudget) Records() []CostRecord {
 // "unlimited on that dimension".
 func (b *TurnBudget) Caps() BudgetCaps { return b.caps }
 
+// Relax lifts every cap for the rest of this turn — all three
+// dimensions go to "unlimited". Used by channel handlers after a
+// user explicitly approves continuing past a budget-triggered
+// confirmation prompt. Semantics: approval applies to the REMAINDER
+// of this turn only; subsequent turns construct a fresh TurnBudget
+// from config.
+//
+// Existing counters are preserved (and visible via State) so audit
+// still reflects what was spent before + after the approval. Only
+// the caps change.
+func (b *TurnBudget) Relax() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.caps = BudgetCaps{}
+}
+
 // ---- lock-held helpers ----
 
 func (b *TurnBudget) withinLocked() BudgetDecision {
