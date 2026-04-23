@@ -730,3 +730,105 @@ func TestNodeSchedulerFiresCommitmentAfterBoot(t *testing.T) {
 		t.Fatalf("Start returned: %v", err)
 	}
 }
+
+// TestNodeSchedulerAgentTurnHandler — the Phase 7d built-in
+// "agent:turn" handler must dispatch the task's params.prompt
+// through the real agent loop. Uses a MockProvider so we can
+// assert on the ChatRequest the agent built.
+func TestNodeSchedulerAgentTurnHandler(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping agent-turn boot integration in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "agent-turn-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+	memoryKey := mustKey(t)
+
+	// MockProviderFunc lets us capture the request + gate "done."
+	seen := make(chan compute.ChatRequest, 1)
+	provider := compute.NewMockProviderFunc(func(req compute.ChatRequest, _ int) (compute.MockResponse, error) {
+		select {
+		case seen <- req:
+		default:
+		}
+		return compute.MockResponse{Content: "ok"}, nil
+	})
+
+	cfg := node.Config{
+		NodeID: nodeID,
+		Functions: []types.NodeFunction{
+			types.FunctionMemory, types.FunctionPolicy,
+			types.FunctionStorage, types.FunctionCompute,
+		},
+		ListenAddr:     "127.0.0.1:0",
+		DataDir:        filepath.Join(tmp, "data"),
+		Bootstrap:      true,
+		SnapshotTarget: "storage:test-backup",
+		Creds:          creds,
+		MemoryKey:      memoryKey,
+		LLMProvider:    provider,
+	}
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if _, ok := n.Scheduler().Handlers().GetCommitmentHandler(node.AgentTurnHandlerRef); !ok {
+		t.Fatal("boot did not register agent:turn commitment handler")
+	}
+	if _, ok := n.Scheduler().Handlers().GetTaskHandler(node.AgentTurnHandlerRef); !ok {
+		t.Fatal("boot did not register agent:turn task handler")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	if err := n.Raft().WaitForLeader(5 * time.Second); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("WaitForLeader: %v", err)
+	}
+
+	_, err = n.Plan().AddCommitment(ctx, &lobslawv1.AddCommitmentRequest{
+		Commitment: &lobslawv1.AgentCommitment{
+			DueAt:      timestamppb.New(time.Now().Add(-time.Second)),
+			Reason:     "check the oven",
+			HandlerRef: node.AgentTurnHandlerRef,
+			CreatedFor: "alice",
+		},
+	})
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("AddCommitment: %v", err)
+	}
+
+	select {
+	case req := <-seen:
+		if len(req.Messages) == 0 {
+			t.Fatal("agent saw no messages")
+		}
+		// Find the user-role message; promptgen may prepend
+		// system/RAG content.
+		var userPrompt string
+		for _, m := range req.Messages {
+			if m.Role == "user" {
+				userPrompt = m.Content
+			}
+		}
+		if userPrompt != "check the oven" {
+			t.Errorf("user prompt: %q want %q", userPrompt, "check the oven")
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("agent never called within 5s")
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned: %v", err)
+	}
+}

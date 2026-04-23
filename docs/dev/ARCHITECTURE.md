@@ -135,8 +135,9 @@ Any subset of functions (`memory`, `policy`, `compute`, `gateway`, `storage`) ca
 | 3 | Memory service (Store/Recall/Search/Forget, Dream, consolidation merge) | [MEMORY.md](MEMORY.md) |
 | 4 | Tool execution (Registry, Policy, Hooks, Executor, Sandbox) | [SANDBOX.md](SANDBOX.md) |
 | 5 | Agent Core + Provider Resolver + promptgen + LLM client + budget | [AGENT.md](AGENT.md) |
-| 6 | REST + Telegram channels + confirmation prompts + JWT (HS256) | [GATEWAY.md](GATEWAY.md) |
-| 7+ | Scheduler, Skills, Storage, SOUL, Audit, Polish | see PLAN.md |
+| 6 | REST + Telegram channels + confirmation prompts + JWT (HS256 + JWKS RS256/EdDSA) | [GATEWAY.md](GATEWAY.md) |
+| 7 | Scheduler + PlanService + CAS-claim cluster coordination + built-in agent:turn handler | [SCHEDULER.md](SCHEDULER.md) |
+| 8+ | Skills, Storage, SOUL, Audit, Polish | see PLAN.md |
 
 ---
 

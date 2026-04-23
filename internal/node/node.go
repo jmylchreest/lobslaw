@@ -696,6 +696,14 @@ func (n *Node) wireCompute() error {
 		n.agent = a
 	}
 
+	// When both the agent and scheduler are present on this node,
+	// register the built-in "agent:turn" handler so operators can
+	// schedule tasks + commitments that dispatch through the agent
+	// loop without writing custom handler code.
+	if n.agent != nil && n.scheduler != nil {
+		n.registerAgentTurnHandlers()
+	}
+
 	n.log.Info("compute stack wired",
 		"has_policy_engine", n.policyEngine != nil,
 		"providers", len(n.cfg.Compute.Providers),
@@ -703,6 +711,105 @@ func (n *Node) wireCompute() error {
 		"has_agent", n.agent != nil,
 	)
 	return nil
+}
+
+// AgentTurnHandlerRef is the well-known HandlerRef that dispatches a
+// scheduled task or commitment as an agent turn. Operators who want
+// "every morning run the check-in skill" configure a task with this
+// ref and a Params["prompt"].
+const AgentTurnHandlerRef = "agent:turn"
+
+// registerAgentTurnHandlers installs the default task + commitment
+// handlers that drive compute.Agent.RunToolCallLoop with the
+// scheduler-originated request. Intended to be called once during
+// boot; subsequent calls overwrite the prior registration (fine —
+// RegisterTask/RegisterCommitment are last-write-wins).
+func (n *Node) registerAgentTurnHandlers() {
+	_ = n.scheduler.Handlers().RegisterTask(AgentTurnHandlerRef, n.runTaskAsAgentTurn)
+	_ = n.scheduler.Handlers().RegisterCommitment(AgentTurnHandlerRef, n.runCommitmentAsAgentTurn)
+}
+
+// runTaskAsAgentTurn dispatches a scheduled task's Params["prompt"]
+// through the agent loop with synthetic "scheduler" claims and a
+// fresh TurnBudget. A missing prompt is a config error — we log +
+// return instead of running an empty turn (which would waste a
+// provider call).
+func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.ScheduledTaskRecord) error {
+	prompt := task.Params["prompt"]
+	if prompt == "" {
+		return fmt.Errorf("scheduled task %q: params.prompt missing", task.Id)
+	}
+	budget, err := compute.NewTurnBudget(compute.FromConfig(n.cfg.Compute.Budgets))
+	if err != nil {
+		return fmt.Errorf("budget: %w", err)
+	}
+	req := compute.ProcessMessageRequest{
+		Message: prompt,
+		Claims:  n.schedulerClaims(task.CreatedBy),
+		TurnID:  fmt.Sprintf("task-%s-%d", task.Id, time.Now().UnixNano()),
+		Budget:  budget,
+	}
+	resp, err := n.agent.RunToolCallLoop(ctx, req)
+	if err != nil {
+		return fmt.Errorf("agent loop: %w", err)
+	}
+	n.log.Info("scheduler: agent task completed",
+		"task_id", task.Id,
+		"turn_id", req.TurnID,
+		"tool_calls", len(resp.ToolCalls),
+		"needs_confirm", resp.NeedsConfirmation,
+	)
+	return nil
+}
+
+// runCommitmentAsAgentTurn is the one-shot equivalent. Prefers
+// Params["prompt"]; falls back to Reason (so commitments created
+// via natural-language "remind me to check the oven in 2 hours"
+// round-trip the description as the prompt body).
+func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentCommitment) error {
+	prompt := c.Params["prompt"]
+	if prompt == "" {
+		prompt = c.Reason
+	}
+	if prompt == "" {
+		return fmt.Errorf("commitment %q: no prompt or reason", c.Id)
+	}
+	budget, err := compute.NewTurnBudget(compute.FromConfig(n.cfg.Compute.Budgets))
+	if err != nil {
+		return fmt.Errorf("budget: %w", err)
+	}
+	req := compute.ProcessMessageRequest{
+		Message: prompt,
+		Claims:  n.schedulerClaims(c.CreatedFor),
+		TurnID:  fmt.Sprintf("commitment-%s-%d", c.Id, time.Now().UnixNano()),
+		Budget:  budget,
+	}
+	resp, err := n.agent.RunToolCallLoop(ctx, req)
+	if err != nil {
+		return fmt.Errorf("agent loop: %w", err)
+	}
+	n.log.Info("scheduler: agent commitment completed",
+		"commitment_id", c.Id,
+		"turn_id", req.TurnID,
+		"tool_calls", len(resp.ToolCalls),
+		"needs_confirm", resp.NeedsConfirmation,
+	)
+	return nil
+}
+
+// schedulerClaims builds the synthetic claims attached to a
+// scheduler-originated turn. UserID traces back to whoever created
+// the task/commitment so audit can distinguish "alice scheduled
+// this" from "bob did." Scope defaults to "scheduler" so policies
+// can gate what scheduled tasks are allowed to touch.
+func (n *Node) schedulerClaims(creator string) *types.Claims {
+	if creator == "" {
+		creator = "scheduler"
+	}
+	return &types.Claims{
+		UserID: creator,
+		Scope:  "scheduler",
+	}
 }
 
 // wireGateway builds the REST server + any channel handlers listed

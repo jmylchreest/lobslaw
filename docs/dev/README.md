@@ -18,6 +18,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Executor | *(tbd)* | Tool invocation pipeline, env whitelist, capped output |
 | Agent loop | [AGENT.md](AGENT.md) | RunToolCallLoop, resolver, promptgen, LLM client, budget |
 | Gateway (channels) | [GATEWAY.md](GATEWAY.md) | REST server, Telegram webhook, confirmation prompts, JWT validator |
+| Scheduler | [SCHEDULER.md](SCHEDULER.md) | Sleep-until-due loop, CAS claim, PlanService, built-in agent:turn handler |
 
 ## Conventions
 

@@ -769,9 +769,19 @@ Unknown Telegram user → configurable `gateway.unknown_user_scope` (default: re
 
 ---
 
-## Phase 7: Scheduler + Commitments
+## Phase 7: Scheduler + Commitments — **shipped**
 
 **Goal:** Scheduled tasks and commitments fire at the right time, claimed exactly once across the cluster.
+
+Shipped in Phases 7a–7d. Sleep-until-due loop in `internal/scheduler` with a Raft-CAS claim primitive (`LOG_OP_CLAIM`) + FSM scheduler-change callback for wake propagation. `internal/plan.Service` backs three gRPC RPCs (`GetPlan`, `AddCommitment`, `CancelCommitment`) + REST `GET /v1/plan`. Boot wiring in `node.Node` constructs both alongside the Raft stack and registers the built-in `agent:turn` handler when the agent is also present. See [docs/dev/SCHEDULER.md](docs/dev/SCHEDULER.md).
+
+Exit criterion met: single node boots, `PlanService.AddCommitment` with a due-now commitment → scheduler fires a registered handler within seconds via the FSM-callback wake path. `TestSchedulerConcurrentClaimOnlyOneWins` exercises the exactly-one-fires invariant across two schedulers sharing one Raft group.
+
+Follow-ups deferred past Phase 7d:
+- 3-node mTLS end-to-end cluster test (not blocking — the FSM-level CAS semantics are covered by direct Apply tests + the shared-Raft scheduler race).
+- `AddScheduledTask` / `RemoveScheduledTask` RPCs (scheduled tasks are operator-defined via config today).
+- `InFlightWork` / `CheckBackThreads` on `GetPlanResponse` (lands with Phase 10 in-flight tracker + Phase 11 audit).
+- Idempotency middleware for handlers — planned as a wrapper once real side-effecting handlers (messaging, audit writes) arrive.
 
 ### 7.1 Scheduled Task Loop
 
