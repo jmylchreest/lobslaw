@@ -6,8 +6,14 @@ High-level shape of the system. Start here, then dive into a subsystem doc.
 
 ```mermaid
 flowchart TB
-  subgraph User-Facing
-    Channel["Channel handlers<br/>(REST / Telegram — Phase 6)"]
+  subgraph UserFacing["User-Facing (Phase 6)"]
+    REST["gateway.Server<br/>/v1/messages /healthz /readyz<br/>/v1/prompts/{id} /v1/prompts/{id}/resolve"]
+    TG["gateway.TelegramHandler<br/>webhook + inline keyboard"]
+    Prompts["gateway.PromptRegistry<br/>confirmation state<br/>(in-memory, TTL auto-deny)"]
+    JWT["pkg/auth.Validator<br/>HS256 (RS256/EdDSA=TBD)"]
+    REST --> JWT
+    REST --> Prompts
+    TG --> Prompts
   end
 
   subgraph Agent["Agent loop (Phase 5)"]
@@ -45,7 +51,8 @@ flowchart TB
     NodeSvc["node.Node<br/>lifecycle + gRPC server"]
   end
 
-  Channel --> AgentLoop
+  REST --> AgentLoop
+  TG --> AgentLoop
   AgentLoop --> Promptgen
   AgentLoop --> Resolver
   AgentLoop --> LLMClient
@@ -128,7 +135,8 @@ Any subset of functions (`memory`, `policy`, `compute`, `gateway`, `storage`) ca
 | 3 | Memory service (Store/Recall/Search/Forget, Dream, consolidation merge) | [MEMORY.md](MEMORY.md) |
 | 4 | Tool execution (Registry, Policy, Hooks, Executor, Sandbox) | [SANDBOX.md](SANDBOX.md) |
 | 5 | Agent Core + Provider Resolver + promptgen + LLM client + budget | [AGENT.md](AGENT.md) |
-| 6+ | Channels, Scheduler, Skills, Storage, SOUL, Audit, Polish | see PLAN.md |
+| 6 | REST + Telegram channels + confirmation prompts + JWT (HS256) | [GATEWAY.md](GATEWAY.md) |
+| 7+ | Scheduler, Skills, Storage, SOUL, Audit, Polish | see PLAN.md |
 
 ---
 
@@ -318,6 +326,46 @@ sequenceDiagram
   Note over Eng: no rule matched →<br/>Decision{Deny, "default deny"}
   Eng-->>Caller: Decision
 ```
+
+### Channel request flow (Phase 6)
+
+Inbound user message → channel → agent → back. Confirmations branch through the shared `PromptRegistry`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Client
+  participant CH as Channel<br/>(REST Server or<br/>TelegramHandler)
+  participant Auth as pkg/auth.Validator<br/>(REST only)
+  participant Agent as compute.Agent
+  participant Reg as gateway.PromptRegistry
+
+  Client->>CH: POST /v1/messages<br/>or Telegram webhook
+  alt REST with validator
+    CH->>Auth: Validate(bearer)
+    Auth-->>CH: *types.Claims or error
+  else Telegram
+    CH->>CH: webhook-secret constant-time compare<br/>+ firstSeen(update_id) dedup<br/>+ resolveScope(user)
+  end
+  CH->>Agent: RunToolCallLoop(req)
+  Agent-->>CH: ProcessMessageResponse
+
+  alt resp.NeedsConfirmation
+    CH->>Reg: Create(turnID, reason, channel, TTL)
+    Reg-->>CH: Prompt{ID}
+    alt REST
+      CH-->>Client: 200 {prompt_id, needs_confirmation}
+      Note over Client,Reg: client polls GET /v1/prompts/<id><br/>then POST /v1/prompts/<id>/resolve
+    else Telegram
+      CH->>Client: sendMessage + inline_keyboard<br/>callback_data "prompt:<verb>:<id>"
+      Note over Client,Reg: user tap → callback_query webhook →<br/>handleCallbackQuery → Resolve
+    end
+  else plain reply
+    CH-->>Client: 200 (JSON) or sendMessage (TG)
+  end
+```
+
+See [GATEWAY.md](GATEWAY.md) for route tables, auth modes, dedup behaviour, and the PromptRegistry's atomic-resolve contract.
 
 ### Node startup and cluster join (Phase 2)
 

@@ -710,9 +710,16 @@ Bootstrap loader with truncation (`bootstrap_max_chars`, `bootstrap_total_max_ch
 
 ---
 
-## Phase 6: Channels (REST + Telegram)
+## Phase 6: Channels (REST + Telegram) — **shipped**
 
 **Goal:** Accept user messages via REST and Telegram; deliver confirmations inline.
+
+Shipped in Phases 6a–6g. End-to-end path: REST `POST /v1/messages` → `auth` → `compute.Agent.RunToolCallLoop` → LLM + tools → JSON reply. Telegram webhook: update → same agent path. Confirmations arrive as REST `prompt_id` (with `/v1/prompts/<id>` + `/resolve`) or as a Telegram inline keyboard (`prompt:approve:<id>` / `prompt:deny:<id>` callback_data). See [docs/dev/GATEWAY.md](docs/dev/GATEWAY.md).
+
+Follow-ups deferred beyond Phase 6g:
+- JWKS + RS256 / EdDSA for hosted-IdP deployments (Phase 6d.2).
+- Agent auto-resume after a confirmation is approved (prompt resolves but the original turn does not yet re-enter with an increased budget).
+- `GET /v1/plan` + `GET /v1/health` — land with Phase 7 / Phase 11 respectively.
 
 ### 6.1 REST Channel Handler
 

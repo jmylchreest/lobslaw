@@ -17,6 +17,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Policy engine | *(tbd — linked from MEMORY.md + SANDBOX.md for now)* | Rule walk, conditions, evaluator injection |
 | Executor | *(tbd)* | Tool invocation pipeline, env whitelist, capped output |
 | Agent loop | [AGENT.md](AGENT.md) | RunToolCallLoop, resolver, promptgen, LLM client, budget |
+| Gateway (channels) | [GATEWAY.md](GATEWAY.md) | REST server, Telegram webhook, confirmation prompts, JWT validator |
 
 ## Conventions
 
