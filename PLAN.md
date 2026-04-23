@@ -714,13 +714,12 @@ Bootstrap loader with truncation (`bootstrap_max_chars`, `bootstrap_total_max_ch
 
 **Goal:** Accept user messages via REST and Telegram; deliver confirmations inline.
 
-Shipped in Phases 6a–6h. End-to-end path: REST `POST /v1/messages` → `auth` → `compute.Agent.RunToolCallLoop` → LLM + tools → JSON reply. Telegram webhook: update → same agent path. Confirmations arrive as REST `prompt_id` (with `/v1/prompts/<id>` + `/resolve`) or as a Telegram inline keyboard (`prompt:approve:<id>` / `prompt:deny:<id>` callback_data). Boot wiring: `node.Node.wireGateway` constructs `gateway.Server` from `cfg.Gateway.*`; channel list is config-driven and extensible (switch-by-Type dispatch). See [docs/dev/GATEWAY.md](docs/dev/GATEWAY.md).
+Shipped in Phases 6a–6h plus the Phase 6d.2 (JWKS) and auto-resume follow-ups. End-to-end path: REST `POST /v1/messages` → `auth` (HS256 or JWKS-backed RS256/ES256/EdDSA) → `compute.Agent.RunToolCallLoop` → LLM + tools → JSON reply. Telegram webhook: update → same agent path. Confirmations arrive as REST `prompt_id` (with `/v1/prompts/<id>` + `/resolve`) or as a Telegram inline keyboard (`prompt:approve:<id>` / `prompt:deny:<id>` callback_data), and are auto-resumed on approve via `agent.ResumeFromConfirmation` + `TurnBudget.Relax()`. Boot wiring: `node.Node.wireGateway` constructs `gateway.Server` from `cfg.Gateway.*`; channel list is config-driven and extensible (switch-by-Type dispatch). See [docs/dev/GATEWAY.md](docs/dev/GATEWAY.md).
 
-Follow-ups deferred beyond Phase 6h:
-- JWKS + RS256 / EdDSA for hosted-IdP deployments (Phase 6d.2).
-- Agent auto-resume after a confirmation is approved (prompt resolves but the original turn does not yet re-enter with an increased budget).
+Follow-ups deferred past Phase 6:
 - `GET /v1/plan` + `GET /v1/health` — land with Phase 7 / Phase 11 respectively.
 - ACME / Let's Encrypt — TLS certs are passed explicitly today.
+- Clustered confirmation state — PromptRegistry + Telegram continuations are per-process; multi-node deployments with cross-node approval flows would need a shared backend.
 
 ### 6.1 REST Channel Handler
 

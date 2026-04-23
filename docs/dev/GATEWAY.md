@@ -184,21 +184,38 @@ The registry is in-memory per REST server / per Telegram handler. A clustered de
 
 ## JWT validator (pkg/auth)
 
-Phase 6d ships minimal HS256 support:
+Two validation modes, independently configurable — a deployment can enable either, both, or neither.
+
+### HS256 (shared secret)
 
 - `NewValidator(Config)` with `AllowHS256=true` + `HS256Secret=<≥32 bytes>`.
-- Strict alg allowlist (`jwt.NewParser(WithValidMethods([]string{"HS256"}))`) — rejects `alg=none`, `RS256`, and every other attempt at algorithm-confusion attacks.
+- Good for single-node / personal deployments where a shared secret between the token minter and the server is the simplest answer.
+- Secret is pre-resolved; the caller translates `jwt_secret_ref` (e.g. `env:JWT_SECRET`) via the same resolver used for LLM API keys.
+
+### JWKS (RS256/384/512, ES256/384/512, EdDSA)
+
+- `NewValidator(Config)` with `JWKSURL="https://idp.example/.well-known/jwks.json"`.
+- Keys fetched lazily on first validation, cached in memory, refreshed every `JWKSRefreshInterval` (default 10m).
+- **Key rotation:** a token whose `kid` isn't in the cache force-refreshes once (rate-limited to `JWKSForceRefreshMin`, default 30s) — so an IdP rotation is picked up automatically without operator action, but a flood of bogus `kid` values can't DDoS the IdP through us.
+- **Stale-beats-dead:** a refresh that HTTP-errors or returns malformed JSON leaves the existing cache intact and logs a warn. Auth stays up through transient IdP hiccups.
+- Supported `kty`: `RSA`, `EC` (P-256/P-384/P-521), `OKP` (Ed25519).
+- **Alg/key type coherence:** the validator refuses any combination the IdP didn't advertise — an ES256-header token presented against an RSA JWK is rejected before verification. Blocks classic alg-confusion attacks.
+
+### Shared guarantees (both modes)
+
+- Strict alg allowlist. Accepted algs are the union of what each enabled mode permits; `alg=none` is never accepted.
 - Optional `Issuer` claim check.
-- `Validate(token)` → `*types.Claims{UserID, Scope, Roles}` (no raw token returned — discarded after parsing).
+- `Validate(token)` → `*types.Claims{UserID, Scope, Roles}`. The raw token is parsed, verified, and discarded — never returned.
+- `ValidateContext(ctx, token)` plumbs a ctx through to the JWKS fetcher so a hung IdP doesn't stall a request indefinitely.
 - `ExtractBearer(header)` — case-insensitive `Bearer` prefix + whitespace-tolerant.
 
-Misconfiguration is rejected at construction time:
+### Construction-time validation
+
+Misconfiguration fails at `NewValidator` rather than on the first inbound request:
 
 - `AllowHS256=true` with no secret → error.
-- Secret supplied but `AllowHS256=false` → error (the operator almost certainly meant to enable it).
-- Every token validation when no validator is configured returns `ErrNoValidator` — the REST server special-cases this to fall back to anon (when `RequireAuth=false`) or 401 (when `RequireAuth=true`).
-
-JWKS + RS256 / EdDSA for hosted-IdP deployments is Phase 6d.2 — not shipped. A deployment that needs it today terminates TLS + auth at a reverse proxy and runs lobslaw with `RequireAuth=false`.
+- Secret supplied but `AllowHS256=false` → error.
+- No HS256 AND no JWKS → `Validate` always returns `ErrNoValidator`. The REST server maps this to anon-fallback (when `RequireAuth=false`) or 401 (when `RequireAuth=true`).
 
 ---
 
@@ -246,13 +263,23 @@ Empty resolved secrets fail boot loudly — a Telegram channel with no bot token
 
 A node with `FunctionGateway` but no `FunctionCompute` has no agent to dispatch to. `wireGateway` returns an error from `node.New` rather than silently serving 503s — operators see the misconfiguration at boot, not at first message.
 
+## Agent auto-resume
+
+When an agent turn returns `NeedsConfirmation`, both channels now resume automatically on approval:
+
+- **REST:** `handleMessages` long-polls `PromptRegistry.Wait` in a loop. Approved → `agent.ResumeFromConfirmation` with a `Budget.Relax()`'d turn budget, then loop again if the resumed turn hits another confirmation. Denied / TimedOut → short "Confirmation denied/timed_out: <reason>" reply. Client sees exactly one response per `POST /v1/messages`, whether or not a confirmation was involved.
+- **Telegram:** `handleMessage` sends the inline keyboard as before AND stashes the in-flight `TurnBudget` + conversation slice in a per-handler `continuations` map keyed by prompt ID. `handleCallbackQuery` on Approve drains that entry, relaxes the budget, calls `agent.ResumeFromConfirmation`, and `sendMessage`s the final reply. Deny drops the continuation. Approval AFTER a process restart (state lost) tells the user to resend.
+
+Caps are lifted for the remainder of the turn via `TurnBudget.Relax()` — semantically, the user's Approve means "I authorize this turn to continue however it needs to." Counters are preserved so audit records the full trail.
+
+The continuation is per-handler and in-memory; a clustered deployment with node-A-sends-keyboard / node-B-receives-tap scenarios needs a shared store, which isn't shipped yet.
+
 ## What's not yet shipped
 
 Callouts deferred past Phase 6h:
 
-- **Agent auto-resume after confirmation.** When `NeedsConfirmation` fires, the prompt is registered and returned to the client, but resolving it does not automatically re-drive the agent loop with an elevated budget. The client currently re-posts with a lifted cap.
-- **JWKS / RS256 / EdDSA.** See above — Phase 6d.2.
 - **`GET /v1/plan` and `GET /v1/health`.** Owned by Phase 7 (scheduler) and Phase 11 (audit) respectively.
 - **ACME / Let's Encrypt.** TLS certs are passed explicitly; automatic issuance isn't wired.
+- **Clustered confirmations.** PromptRegistry + Telegram continuations are per-process; cluster-wide state for multi-node deployments would need a shared backend (future: memory.Store keyed by TurnID).
 
 See [PLAN.md Phase 6](../../PLAN.md#phase-6-channels-rest--telegram--shipped) for the shipped-scope summary.
