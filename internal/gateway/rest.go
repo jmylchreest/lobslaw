@@ -65,6 +65,17 @@ type RESTConfig struct {
 	// so operators don't need a second listener.
 	Telegram *TelegramHandler
 
+	// Prompts is the confirmation-prompt registry. When set, the
+	// REST server mounts /v1/prompts/{id} endpoints. Agents that
+	// return NeedsConfirmation register a prompt here; UIs poll
+	// and resolve. Nil = no prompt flow (NeedsConfirmation returns
+	// as plain text like Phase 6e).
+	Prompts *PromptRegistry
+
+	// ConfirmationTTL is how long a pending prompt waits before
+	// auto-denying on timeout. 0 → 5 minutes default.
+	ConfirmationTTL time.Duration
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -115,6 +126,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	if s.cfg.Telegram != nil {
 		mux.Handle("/telegram", s.cfg.Telegram)
+	}
+	if s.cfg.Prompts != nil {
+		mux.HandleFunc("/v1/prompts/", s.handlePrompt)
 	}
 
 	ln, err := net.Listen("tcp", s.cfg.Addr)
@@ -194,6 +208,10 @@ type messageResponse struct {
 	ToolCalls          []toolCallJSON      `json:"tool_calls,omitempty"`
 	NeedsConfirmation  bool                `json:"needs_confirmation,omitempty"`
 	ConfirmationReason string              `json:"confirmation_reason,omitempty"`
+	// PromptID is populated when NeedsConfirmation and Prompts is
+	// configured — the client polls /v1/prompts/<id> and resolves
+	// via POST /v1/prompts/<id>/resolve.
+	PromptID           string              `json:"prompt_id,omitempty"`
 	Budget             budgetStateJSON     `json:"budget,omitempty"`
 }
 
@@ -273,6 +291,17 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			SpendUSD:    resp.BudgetState.SpendUSD,
 			EgressBytes: resp.BudgetState.EgressBytes,
 		},
+	}
+	if resp.NeedsConfirmation && s.cfg.Prompts != nil {
+		ttl := s.cfg.ConfirmationTTL
+		if ttl <= 0 {
+			ttl = 5 * time.Minute
+		}
+		if p, err := s.cfg.Prompts.Create(req.TurnID, resp.ConfirmationReason, "rest", ttl); err == nil {
+			out.PromptID = p.ID
+		} else {
+			s.log.Warn("rest: prompt registration failed", "err", err)
+		}
 	}
 	for _, tc := range resp.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, toolCallJSON{
@@ -376,4 +405,105 @@ func anonClaims(scope string) *types.Claims {
 		UserID: "anon",
 		Scope:  scope,
 	}
+}
+
+// handlePrompt serves two sub-routes under /v1/prompts/:
+//
+//	GET  /v1/prompts/<id>         — returns the prompt's current state
+//	POST /v1/prompts/<id>/resolve — body {"approve": bool}; resolves
+//
+// Prompt state includes reason, decision, and timestamps — enough
+// for a UI to render + render a decision and know when the prompt
+// expires. Resolution is idempotent-on-conflict: a second attempt
+// after the first (or after timeout) returns 409.
+func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
+	// Parse path: /v1/prompts/<id>[/resolve]
+	path := strings.TrimPrefix(r.URL.Path, "/v1/prompts/")
+	if path == "" {
+		s.jsonErr(w, http.StatusNotFound, "missing prompt id")
+		return
+	}
+	var id, action string
+	if idx := strings.Index(path, "/"); idx >= 0 {
+		id = path[:idx]
+		action = path[idx+1:]
+	} else {
+		id = path
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		s.handlePromptGet(w, r, id)
+	case action == "resolve" && r.Method == http.MethodPost:
+		s.handlePromptResolve(w, r, id)
+	case action == "" && r.Method != http.MethodGet:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	case action == "resolve" && r.Method != http.MethodPost:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	default:
+		s.jsonErr(w, http.StatusNotFound, "unknown prompt action")
+	}
+}
+
+func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id string) {
+	p, err := s.cfg.Prompts.Get(id)
+	if err != nil {
+		if errors.Is(err, ErrPromptNotFound) {
+			s.jsonErr(w, http.StatusNotFound, "prompt not found")
+			return
+		}
+		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(promptJSON{
+		ID:        p.ID,
+		TurnID:    p.TurnID,
+		Reason:    p.Reason,
+		Channel:   p.Channel,
+		Decision:  p.Decision.String(),
+		CreatedAt: p.CreatedAt,
+		ExpiresAt: p.ExpiresAt,
+	})
+}
+
+func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var body struct {
+		Approve bool `json:"approve"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
+		return
+	}
+	decision := PromptDenied
+	if body.Approve {
+		decision = PromptApproved
+	}
+	if err := s.cfg.Prompts.Resolve(id, decision); err != nil {
+		switch {
+		case errors.Is(err, ErrPromptNotFound):
+			s.jsonErr(w, http.StatusNotFound, "prompt not found")
+		case errors.Is(err, ErrPromptResolved):
+			s.jsonErr(w, http.StatusConflict, "prompt already resolved")
+		default:
+			s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"decision": decision.String()})
+}
+
+// promptJSON is the on-the-wire shape for prompt state. Kept
+// narrow so the user-visible API doesn't accidentally leak
+// internal state.
+type promptJSON struct {
+	ID        string    `json:"id"`
+	TurnID    string    `json:"turn_id,omitempty"`
+	Reason    string    `json:"reason"`
+	Channel   string    `json:"channel"`
+	Decision  string    `json:"decision"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }

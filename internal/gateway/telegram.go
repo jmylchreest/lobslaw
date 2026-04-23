@@ -45,6 +45,16 @@ type TelegramConfig struct {
 	// REST channel.
 	DefaultBudget compute.BudgetCaps
 
+	// Prompts is the confirmation-prompt registry (shared with REST
+	// if configured there). When nil, NeedsConfirmation surfaces
+	// as plain text (Phase 6e fallback). When set, the bot sends an
+	// inline keyboard with Approve / Deny buttons; the button's
+	// callback_data carries the prompt ID.
+	Prompts *PromptRegistry
+
+	// ConfirmationTTL mirrors RESTConfig.ConfirmationTTL. 0 → 5min.
+	ConfirmationTTL time.Duration
+
 	// HTTPClient is the client used to POST replies back to the
 	// Telegram Bot API. Nil → a new http.Client with 30s timeout.
 	// Injectable for tests that want to intercept the reply path.
@@ -193,10 +203,7 @@ func (h *TelegramHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case up.Message != nil && up.Message.Text != "":
 		h.handleMessage(r.Context(), up.Message)
 	case up.CallbackQuery != nil:
-		// Phase 6f will handle inline-keyboard callbacks; for now
-		// acknowledge silently so Telegram doesn't keep retrying.
-		h.log.Debug("telegram: callback query received (ignored in Phase 6e)",
-			"callback_id", up.CallbackQuery.ID)
+		h.handleCallbackQuery(r.Context(), up.CallbackQuery)
 	default:
 		h.log.Debug("telegram: unsupported update shape", "update_id", up.UpdateID)
 	}
@@ -244,17 +251,136 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		return
 	}
 
-	reply := resp.Reply
 	switch {
 	case resp.NeedsConfirmation:
-		// Phase 6f adds inline keyboards; for now surface the
-		// reason as plain text so the operator sees something
-		// useful rather than an empty reply.
-		reply = "Confirmation required: " + resp.ConfirmationReason
-	case reply == "":
-		reply = "(empty reply)"
+		if h.cfg.Prompts != nil {
+			h.sendConfirmationKeyboard(msg.Chat.ID, turnID, resp.ConfirmationReason)
+			return
+		}
+		// Fallback: no registry wired — render the reason as plain text.
+		h.sendText(msg.Chat.ID, "Confirmation required: "+resp.ConfirmationReason)
+	case resp.Reply == "":
+		h.sendText(msg.Chat.ID, "(empty reply)")
+	default:
+		h.sendText(msg.Chat.ID, resp.Reply)
 	}
-	h.sendText(msg.Chat.ID, reply)
+}
+
+// sendConfirmationKeyboard registers a prompt in the shared
+// registry and sends a sendMessage with an inline keyboard whose
+// buttons carry the prompt ID as callback_data. The user's tap
+// fires a callback_query update; handleCallbackQuery resolves the
+// registry entry accordingly.
+//
+// The reply_markup shape matches Telegram's InlineKeyboardMarkup:
+// {"inline_keyboard": [[{text, callback_data}, ...]]}. Callback
+// data is prefixed "prompt:approve:<id>" / "prompt:deny:<id>" so
+// the handler can parse the verb + id without a separate mapping.
+func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, turnID, reason string) {
+	ttl := h.cfg.ConfirmationTTL
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	p, err := h.cfg.Prompts.Create(turnID, reason, "telegram", ttl)
+	if err != nil {
+		h.log.Error("telegram: prompt registration failed", "err", err)
+		h.sendText(chatID, "Confirmation required: "+reason)
+		return
+	}
+
+	body := map[string]any{
+		"chat_id": chatID,
+		"text":    "Confirmation required: " + reason,
+		"reply_markup": map[string]any{
+			"inline_keyboard": [][]map[string]string{
+				{
+					{"text": "Approve", "callback_data": "prompt:approve:" + p.ID},
+					{"text": "Deny", "callback_data": "prompt:deny:" + p.ID},
+				},
+			},
+		},
+	}
+	h.postJSON("sendMessage", body)
+}
+
+// handleCallbackQuery resolves a pending prompt based on the
+// callback_data tag format "prompt:<verb>:<id>" produced by
+// sendConfirmationKeyboard. Any other callback_data shape is
+// logged + ignored (forward-compatible with future button types).
+//
+// The tap is acknowledged with answerCallbackQuery so Telegram
+// removes the "loading" spinner on the user's side; the resolution
+// outcome is surfaced via a plain sendMessage confirmation.
+func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallbackQuery) {
+	_ = ctx
+
+	// Always ack the callback so the client UI stops spinning.
+	defer h.postJSON("answerCallbackQuery", map[string]any{
+		"callback_query_id": q.ID,
+	})
+
+	parts := strings.SplitN(q.Data, ":", 3)
+	if len(parts) != 3 || parts[0] != "prompt" {
+		h.log.Debug("telegram: unhandled callback_data shape", "data", q.Data)
+		return
+	}
+	verb, promptID := parts[1], parts[2]
+
+	var decision PromptDecision
+	var reply string
+	switch verb {
+	case "approve":
+		decision = PromptApproved
+		reply = "Approved."
+	case "deny":
+		decision = PromptDenied
+		reply = "Denied."
+	default:
+		h.log.Debug("telegram: unknown prompt verb", "verb", verb, "data", q.Data)
+		return
+	}
+
+	if h.cfg.Prompts == nil {
+		h.log.Warn("telegram: callback arrived but no prompt registry configured")
+		return
+	}
+	if err := h.cfg.Prompts.Resolve(promptID, decision); err != nil {
+		switch {
+		case errors.Is(err, ErrPromptNotFound):
+			reply = "That prompt no longer exists."
+		case errors.Is(err, ErrPromptResolved):
+			reply = "That prompt was already resolved."
+		default:
+			h.log.Error("telegram: resolve failed", "err", err, "id", promptID)
+			reply = "Couldn't process the response."
+		}
+	}
+
+	if q.Message != nil {
+		h.sendText(q.Message.Chat.ID, reply)
+	}
+}
+
+// postJSON POSTs to a bot API method with a JSON body. Shared by
+// sendText and the inline-keyboard paths.
+func (h *TelegramHandler) postJSON(method string, body any) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		h.log.Error("telegram: marshal "+method, "err", err)
+		return
+	}
+	url := fmt.Sprintf("%s/bot%s/%s", h.base, h.cfg.BotToken, method)
+	resp, err := h.client.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		h.log.Error("telegram: POST "+method+" failed", "err", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		h.log.Error("telegram: "+method+" non-2xx",
+			"status", resp.StatusCode, "body", string(raw))
+	}
 }
 
 // resolveScope maps a Telegram user → lobslaw scope. Returns
