@@ -535,6 +535,20 @@ func (n *Node) Start(ctx context.Context) error {
 		}
 	}
 
+	// Seed default policy rules for stdlib builtins. Leader-only
+	// and idempotent; followers see them through replication.
+	// Runs after a brief leadership wait so single-node bootstrap
+	// finishes electing itself before we Apply. Failure is warn-
+	// level, not fatal — the node still boots; the first user turn
+	// hits default-deny and the operator sees the warning.
+	if n.raft != nil {
+		if err := n.raft.WaitForLeader(5 * time.Second); err == nil {
+			if err := n.seedDefaultPolicyRules(ctx); err != nil {
+				n.log.Warn("policy: seed defaults failed", "err", err)
+			}
+		}
+	}
+
 	// Gateway HTTP server, when wired. Runs until ctx is cancelled;
 	// a failure to bind surfaces through errCh so we fail the whole
 	// node (a gateway-enabled node that couldn't bind its channel
@@ -810,6 +824,53 @@ func (n *Node) wireAudit(ctx context.Context) error {
 // nil after New; a zero-sink configuration returns a log that no-ops
 // on Append so callers don't need to nil-check.
 func (n *Node) Audit() *audit.AuditLog { return n.auditLog }
+
+// seedDefaultPolicyRules writes a platform-trusted allow rule for
+// every stdlib builtin tool. Without these, the default-deny posture
+// blocks current_time (and every future stdlib addition) — the LLM
+// calls the tool correctly, the executor denies it, and the model
+// apologises to the user. Platform builtins are Go code inside the
+// trust boundary; denying them by default is theater.
+//
+// Rules are idempotent: deterministic IDs of the form
+// "lobslaw-builtin-<tool>", Priority 1 so operator rules at higher
+// priority win. An operator who wants to deny current_time for a
+// specific scope writes subject=<scope> effect=deny priority=10.
+//
+// Only runs on the Raft leader — followers get these entries via
+// replication. No-op on nodes without a Raft stack.
+func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
+	if n.raft == nil || n.store == nil || n.policySvc == nil {
+		return nil
+	}
+	if !n.raft.IsLeader() {
+		return nil
+	}
+	for _, td := range compute.StdlibToolDefs() {
+		ruleID := "lobslaw-builtin-" + td.Name
+		if _, err := n.store.Get(memory.BucketPolicyRules, ruleID); err == nil {
+			// Already present (prior boot seeded it, or operator
+			// wrote a rule with this ID explicitly). Skip.
+			continue
+		}
+		_, err := n.policySvc.AddRule(ctx, &lobslawv1.AddRuleRequest{
+			Rule: &lobslawv1.PolicyRule{
+				Id:       ruleID,
+				Subject:  "*",
+				Action:   "tool:exec",
+				Resource: td.Name,
+				Effect:   "allow",
+				Priority: 1,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("seed %q: %w", ruleID, err)
+		}
+		n.log.Info("policy: seeded default builtin allow rule",
+			"tool", td.Name, "rule_id", ruleID)
+	}
+	return nil
+}
 
 // Discovery returns the NodeService implementation. Tests call
 // Reload / GetPeers directly through this rather than dialing the
