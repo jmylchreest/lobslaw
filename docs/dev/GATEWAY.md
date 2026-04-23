@@ -222,11 +222,34 @@ Telegram shares the REST server's listener — one TLS cert, one port, one log s
 
 ---
 
+## Binary wiring (Phase 6h)
+
+`node.Node.wireGateway` constructs the `gateway.Server` when both `FunctionGateway` is enabled for the node AND `cfg.Gateway.Enabled = true`. Either gate keeps the HTTP surface dormant — a gateway node that's in the cluster but waiting to be cut-in can boot without binding a user-facing port.
+
+```
+cfg.Gateway.Channels[]   -> switch ch.Type { case "telegram": buildTelegramHandler(ch) ... }
+```
+
+The channel list is the extension point. Adding a new backend (Slack, Matrix, Signal) is a new `case` in `wireGateway` plus a handler package; the config shape stays stable. Unknown types log a warn and skip so a typo in one entry doesn't prevent the rest of the server from coming up.
+
+### Secret resolution
+
+Channel-level secrets (`bot_token_ref`, `secret_token_ref`) go through `node.Config.ChannelSecretResolver` if set, else the node's default `APIKeyResolver` (the same `env:`/`file:` scheme LLM providers use). Tests inject canned secrets via `ChannelSecretResolver`; production reads them from env/file.
+
+Empty resolved secrets fail boot loudly — a Telegram channel with no bot token is a silent drop of every webhook, so we surface the misconfig at `node.New` time rather than silently accepting updates that never reach the agent.
+
+### Port + TLS
+
+`cfg.Gateway.HTTPPort` defaults to `8443`. Pass `0` for "OS-picked ephemeral port" (tests rely on this). If any channel in `Channels` supplies `tls_cert` + `tls_key`, that pair fronts the whole REST surface — Telegram's webhook demands TLS, so a deployment that lists Telegram automatically gets HTTPS on `/v1/messages` too. No channel with TLS → plaintext (localhost / reverse-proxy-terminated deployments).
+
+### Gateway without compute
+
+A node with `FunctionGateway` but no `FunctionCompute` has no agent to dispatch to. `wireGateway` returns an error from `node.New` rather than silently serving 503s — operators see the misconfiguration at boot, not at first message.
+
 ## What's not yet shipped
 
-Callouts deferred past Phase 6g:
+Callouts deferred past Phase 6h:
 
-- **Binary wiring into main.go.** `cmd/lobslaw` constructs the node + agent but does not yet start a REST server. A Phase 6h-style follow-up will bind `cfg.Gateway.*` to a `RESTConfig` and kick off `Server.Start` from the node lifecycle.
 - **Agent auto-resume after confirmation.** When `NeedsConfirmation` fires, the prompt is registered and returned to the client, but resolving it does not automatically re-drive the agent loop with an elevated budget. The client currently re-posts with a lifted cap.
 - **JWKS / RS256 / EdDSA.** See above — Phase 6d.2.
 - **`GET /v1/plan` and `GET /v1/health`.** Owned by Phase 7 (scheduler) and Phase 11 (audit) respectively.

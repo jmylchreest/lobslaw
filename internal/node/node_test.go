@@ -4,9 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +18,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/node"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -297,5 +303,326 @@ func TestSingleNodeStartAndPolicyRoundTrip(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("second Start: %v", err)
+	}
+}
+
+// TestNodeBootsGatewayHTTPServer is the Phase 6h exit-criterion test:
+// a node constructed with FunctionGateway + FunctionCompute enabled
+// AND cfg.Gateway.Enabled = true must actually serve HTTP. Proves the
+// cmd/lobslaw → node.New → wireGateway → gateway.Server chain is
+// intact, not just that the handlers work in isolation.
+func TestNodeBootsGatewayHTTPServer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping gateway boot integration in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "gateway-boot-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+
+	// Mock LLM so the node's agent can answer without a real provider.
+	// injects via node.Config.LLMProvider — same path the binary would
+	// use if an operator wired a test-mode provider.
+	mockProvider := compute.NewMockProvider(compute.MockResponse{Content: "pong"})
+
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		LLMProvider: mockProvider,
+		Gateway: config.GatewayConfig{
+			Enabled:          true,
+			HTTPPort:         0, // OS-picked ephemeral port
+			UnknownUserScope: "public",
+			// No channels configured — REST-only deployment.
+		},
+	}
+
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if n.Gateway() == nil {
+		t.Fatal("Gateway() nil even though cfg.Gateway.Enabled=true")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	// Wait for the gateway to bind. Gateway.Addr() returns empty until
+	// then, so poll.
+	deadline := time.Now().Add(3 * time.Second)
+	for n.Gateway().Addr() == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n.Gateway().Addr() == "" {
+		cancel()
+		<-done
+		t.Fatal("gateway didn't bind within 3s")
+	}
+
+	base := "http://" + n.Gateway().Addr()
+
+	// /healthz — always 200 while the process is up.
+	{
+		resp, err := http.Get(base + "/healthz")
+		if err != nil {
+			cancel()
+			<-done
+			t.Fatalf("GET /healthz: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			cancel()
+			<-done
+			t.Errorf("/healthz: got %d", resp.StatusCode)
+		}
+	}
+
+	// /readyz — 200 once the agent is wired.
+	{
+		resp, err := http.Get(base + "/readyz")
+		if err != nil {
+			cancel()
+			<-done
+			t.Fatalf("GET /readyz: %v", err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			cancel()
+			<-done
+			t.Errorf("/readyz with agent wired should 200; got %d", resp.StatusCode)
+		}
+	}
+
+	// /v1/messages — full round-trip through the real agent + mock LLM.
+	{
+		resp, err := http.Post(base+"/v1/messages", "application/json",
+			strings.NewReader(`{"message":"ping"}`))
+		if err != nil {
+			cancel()
+			<-done
+			t.Fatalf("POST /v1/messages: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			cancel()
+			<-done
+			t.Fatalf("/v1/messages: got %d body=%s", resp.StatusCode, body)
+		}
+		var out struct {
+			Reply string `json:"reply"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			cancel()
+			<-done
+			t.Fatal(err)
+		}
+		if out.Reply != "pong" {
+			cancel()
+			<-done
+			t.Errorf("reply didn't round-trip through the agent: %q", out.Reply)
+		}
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned: %v", err)
+	}
+}
+
+// TestNodeGatewayDisabledWhenFlagOff — a node that enables the
+// gateway function at boot but leaves cfg.Gateway.Enabled=false MUST
+// NOT bind an HTTP port. Prevents deployments from serving channel
+// endpoints by accident after enabling the function.
+func TestNodeGatewayDisabledWhenFlagOff(t *testing.T) {
+	t.Parallel()
+
+	nodeID := "gateway-off-node"
+	creds := signNodeCert(t, t.TempDir(), nodeID)
+
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "unused"}),
+		Gateway: config.GatewayConfig{
+			Enabled: false, // explicit opt-out
+		},
+	}
+
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+	if n.Gateway() != nil {
+		t.Error("Gateway() non-nil when cfg.Gateway.Enabled=false")
+	}
+}
+
+// TestNodeGatewayRejectsMissingAgent — an operator who enables the
+// gateway without the compute function is misconfiguring the node
+// (no agent to dispatch to). Fail construction loudly.
+func TestNodeGatewayRejectsMissingAgent(t *testing.T) {
+	t.Parallel()
+
+	nodeID := "gateway-no-compute-node"
+	creds := signNodeCert(t, t.TempDir(), nodeID)
+
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionGateway}, // no Compute
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		Gateway:    config.GatewayConfig{Enabled: true},
+	}
+
+	if _, err := node.New(cfg); err == nil {
+		t.Error("gateway without compute should fail node.New; it didn't")
+	}
+}
+
+// TestNodeGatewayTelegramChannelConstructed — a gateway with a
+// telegram channel listed (plus secrets via ChannelSecretResolver)
+// actually constructs the handler and mounts /telegram on the mux.
+func TestNodeGatewayTelegramChannelConstructed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping gateway Telegram boot in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "gateway-tg-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "pong"}),
+		ChannelSecretResolver: func(ref string) (string, error) {
+			switch ref {
+			case "env:TG_BOT":
+				return "test-bot-token", nil
+			case "env:TG_SECRET":
+				return "test-webhook-secret-min-32bytes-fill", nil
+			}
+			return "", fmt.Errorf("unexpected ref: %q", ref)
+		},
+		Gateway: config.GatewayConfig{
+			Enabled:  true,
+			HTTPPort: 0,
+			Channels: []config.GatewayChannelConfig{
+				{
+					Type:           "telegram",
+					BotTokenRef:    "env:TG_BOT",
+					SecretTokenRef: "env:TG_SECRET",
+				},
+			},
+			UnknownUserScope: "public",
+		},
+	}
+
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for n.Gateway().Addr() == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n.Gateway().Addr() == "" {
+		cancel()
+		<-done
+		t.Fatal("gateway didn't bind")
+	}
+
+	// /telegram should exist but reject (401) because we didn't send
+	// the secret header. That's enough to prove the handler mounted.
+	resp, err := http.Post("http://"+n.Gateway().Addr()+"/telegram",
+		"application/json", strings.NewReader(`{"update_id":1}`))
+	if err != nil {
+		cancel()
+		<-done
+		t.Fatalf("POST /telegram: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		cancel()
+		<-done
+		t.Errorf("/telegram without secret header should 401 (proves mount);"+
+			" got %d", resp.StatusCode)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Start returned: %v", err)
+	}
+}
+
+// TestNodeGatewayUnknownChannelTypeSkipped — a typo'd channel type
+// ("telegrm") logs a warn and is skipped; other channels still boot.
+// Prevents single-entry misconfigurations from taking down the node.
+func TestNodeGatewayUnknownChannelTypeSkipped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping gateway boot in short mode")
+	}
+
+	tmp := t.TempDir()
+	nodeID := "gateway-typo-node"
+	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
+
+	cfg := node.Config{
+		NodeID:     nodeID,
+		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "pong"}),
+		Gateway: config.GatewayConfig{
+			Enabled:  true,
+			HTTPPort: 0,
+			Channels: []config.GatewayChannelConfig{
+				{Type: "telegrm"},      // typo — unknown
+				{Type: "future-thing"}, // completely unknown
+			},
+			UnknownUserScope: "public",
+		},
+	}
+
+	n, err := node.New(cfg)
+	if err != nil {
+		t.Fatalf("node.New should tolerate unknown types: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- n.Start(ctx) }()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for n.Gateway().Addr() == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n.Gateway().Addr() == "" {
+		t.Fatal("gateway didn't bind — unknown channel types should not block server startup")
+	}
+
+	// Healthz confirms the process is serving.
+	resp, err := http.Get("http://" + n.Gateway().Addr() + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("/healthz: %d", resp.StatusCode)
 	}
 }

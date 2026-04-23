@@ -14,6 +14,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -87,6 +88,18 @@ type Config struct {
 	// run in anonymous mode unless they explicitly require auth).
 	Auth config.AuthConfig
 
+	// Gateway carries the channel-config shape from config.toml. Only
+	// consulted when FunctionGateway is enabled AND cfg.Gateway.Enabled
+	// (otherwise the node skips gateway wiring entirely).
+	Gateway config.GatewayConfig
+
+	// APIKeyResolverForChannels overrides the secret-resolver used by
+	// channels (Telegram bot token, webhook secret, etc.). Empty means
+	// "reuse APIKeyResolver / default env:/file: resolver". Separate
+	// field so tests can inject channel-only resolvers without
+	// impacting LLM-provider secret resolution.
+	ChannelSecretResolver func(string) (string, error)
+
 	Logger *slog.Logger
 }
 
@@ -126,6 +139,16 @@ type Node struct {
 	// jwtValidator is constructed when Auth config enables a
 	// validation method (currently HS256; JWKS deferred).
 	jwtValidator *auth.Validator
+
+	// Gateway channel layer. Constructed when FunctionGateway is on
+	// AND Gateway.Enabled is true. A node with gateway disabled leaves
+	// these nil — Gateway() returns nil and Start skips the HTTP server
+	// entirely. Keeping them separate from the gRPC server means the
+	// cluster control plane stays up even if a user-facing channel
+	// misconfigures itself.
+	gatewaySrv      *gateway.Server
+	telegramHandler *gateway.TelegramHandler
+	promptRegistry  *gateway.PromptRegistry
 
 	shutdownOnce chan struct{}
 }
@@ -239,6 +262,18 @@ func New(cfg Config) (*Node, error) {
 		n.jwtValidator = v
 	}
 
+	// Gateway (channel handlers) — only if the function is enabled
+	// AND the config turns it on. Depends on the compute stack for
+	// the agent; a gateway-only node with no compute is a misconfig
+	// and wireGateway returns an error pointing at the missing
+	// function. Runs after Auth so the validator can be wired in.
+	if has(cfg.Functions, types.FunctionGateway) && cfg.Gateway.Enabled {
+		if err := n.wireGateway(); err != nil {
+			n.closePartial()
+			return nil, fmt.Errorf("gateway: %w", err)
+		}
+	}
+
 	// NodeService is registered exactly once, with nil RaftMembership
 	// on non-Raft nodes so AddMember returns Unimplemented.
 	var raftMembership discovery.RaftMembership
@@ -303,6 +338,19 @@ func (n *Node) Start(ctx context.Context) error {
 		go func() {
 			if err := n.broadcaster.Start(ctx); err != nil {
 				n.log.Warn("broadcast exited", "err", err)
+			}
+		}()
+	}
+
+	// Gateway HTTP server, when wired. Runs until ctx is cancelled;
+	// a failure to bind surfaces through errCh so we fail the whole
+	// node (a gateway-enabled node that couldn't bind its channel
+	// surface isn't useful — better to crash + let the supervisor
+	// restart than silently serve only gRPC).
+	if n.gatewaySrv != nil {
+		go func() {
+			if err := n.gatewaySrv.Start(ctx); err != nil {
+				errCh <- fmt.Errorf("gateway serve: %w", err)
 			}
 		}()
 	}
@@ -389,6 +437,12 @@ func (n *Node) ToolRegistry() *compute.Registry { return n.toolRegistry }
 // Resolver returns the provider resolver for the Compute stack.
 // Nil when Compute isn't enabled or no providers are configured.
 func (n *Node) Resolver() *compute.Resolver { return n.resolver }
+
+// Gateway returns the REST/channel server. Nil when the node didn't
+// enable the gateway function or when cfg.Gateway.Enabled is false.
+// Tests use this to hit the HTTP endpoints on an ephemeral port;
+// main() calls Start implicitly via Node.Start.
+func (n *Node) Gateway() *gateway.Server { return n.gatewaySrv }
 
 // -- internal helpers --
 
@@ -582,6 +636,134 @@ func (n *Node) wireCompute() error {
 		"has_agent", n.agent != nil,
 	)
 	return nil
+}
+
+// wireGateway builds the REST server + any channel handlers listed
+// in cfg.Gateway.Channels. The channel list is the extension point:
+// each entry is discriminated by Type and dispatched to a handler
+// constructor. Unknown types log a warning and skip rather than
+// aborting boot — a typo in a single channel shouldn't prevent the
+// rest of the gateway from coming up.
+//
+// Today's supported types: "telegram". The REST surface (/v1/messages,
+// /healthz, /readyz, /v1/prompts/...) is always mounted when the
+// gateway function is enabled — it's the control plane, not a channel
+// in the list. Adding a new chat backend (Slack, Matrix, Signal) is
+// a new case plus a handler package; the config shape doesn't change.
+func (n *Node) wireGateway() error {
+	if n.agent == nil {
+		return fmt.Errorf("gateway requires compute function (no agent wired on this node)")
+	}
+
+	n.promptRegistry = gateway.NewPromptRegistry()
+
+	var tg *gateway.TelegramHandler
+	for i, ch := range n.cfg.Gateway.Channels {
+		switch ch.Type {
+		case "telegram":
+			h, err := n.buildTelegramHandler(ch)
+			if err != nil {
+				return fmt.Errorf("gateway.channels[%d] (telegram): %w", i, err)
+			}
+			tg = h
+			n.telegramHandler = h
+		case "":
+			n.log.Warn("gateway.channels[%d] has empty type; skipping", "index", i)
+		default:
+			n.log.Warn("gateway.channels: unknown type; skipping",
+				"index", i, "type", ch.Type)
+		}
+	}
+
+	// HTTPPort defaults to 8443 when unset. ListenAddr uses 0.0.0.0
+	// unless the operator supplies a specific bind via future config
+	// (Phase 6h keeps it simple; a bind-address setting lands with
+	// rest-of-cluster operator polish).
+	port := n.cfg.Gateway.HTTPPort
+	if port == 0 {
+		port = 8443
+	}
+	addr := fmt.Sprintf(":%d", port)
+
+	// Pick a default TLS pair from the first channel that supplies
+	// one — Telegram's webhook demands TLS, so if it's configured we
+	// want its cert to front the REST surface too. No channel with
+	// TLS → plaintext (fine for localhost + reverse-proxy-terminated
+	// deployments; operators wanting public HTTPS supply a channel
+	// with tls_cert/tls_key).
+	var tlsCert, tlsKey string
+	for _, ch := range n.cfg.Gateway.Channels {
+		if ch.TLSCert != "" && ch.TLSKey != "" {
+			tlsCert, tlsKey = ch.TLSCert, ch.TLSKey
+			break
+		}
+	}
+
+	cfg := gateway.RESTConfig{
+		Addr:             addr,
+		TLSCert:          tlsCert,
+		TLSKey:           tlsKey,
+		DefaultScope:     n.cfg.Gateway.UnknownUserScope,
+		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
+		JWTValidator:     n.jwtValidator,
+		RequireAuth:      n.cfg.Auth.RequireAuth,
+		Telegram:         tg,
+		Prompts:          n.promptRegistry,
+		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
+		Logger:           n.log,
+	}
+
+	n.gatewaySrv = gateway.NewServer(cfg, n.agent)
+	n.log.Info("gateway wired",
+		"http_port", port,
+		"tls", tlsCert != "",
+		"channels", len(n.cfg.Gateway.Channels),
+		"telegram", tg != nil,
+		"require_auth", cfg.RequireAuth,
+	)
+	return nil
+}
+
+// buildTelegramHandler resolves bot token + webhook secret from the
+// channel config's secret refs and constructs the handler. Secrets
+// missing from the environment fail boot loudly — a Telegram channel
+// with an empty token is a silent drop of every update.
+func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.TelegramHandler, error) {
+	botToken, err := n.resolveChannelSecret(ch.BotTokenRef)
+	if err != nil {
+		return nil, fmt.Errorf("bot_token_ref %q: %w", ch.BotTokenRef, err)
+	}
+	if botToken == "" {
+		return nil, fmt.Errorf("bot_token_ref %q resolved to empty — required for Telegram", ch.BotTokenRef)
+	}
+	webhookSecret, err := n.resolveChannelSecret(ch.SecretTokenRef)
+	if err != nil {
+		return nil, fmt.Errorf("secret_token_ref %q: %w", ch.SecretTokenRef, err)
+	}
+	if webhookSecret == "" {
+		return nil, fmt.Errorf("secret_token_ref %q resolved to empty — required for Telegram webhook", ch.SecretTokenRef)
+	}
+
+	return gateway.NewTelegramHandler(gateway.TelegramConfig{
+		BotToken:         botToken,
+		WebhookSecret:    webhookSecret,
+		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
+		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
+		Prompts:          n.promptRegistry,
+		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
+		Logger:           n.log,
+	}, n.agent)
+}
+
+// resolveChannelSecret is the secret-ref resolver used by channel
+// handlers. Defaults to ChannelSecretResolver / the main APIKeyResolver
+// so tests can inject canned secrets without touching env:/file:/kms:
+// resolution.
+func (n *Node) resolveChannelSecret(ref string) (string, error) {
+	if n.cfg.ChannelSecretResolver != nil {
+		return n.cfg.ChannelSecretResolver(ref)
+	}
+	return n.resolveAPIKey(ref)
 }
 
 // resolveAPIKey looks up a provider's APIKeyRef via the configured

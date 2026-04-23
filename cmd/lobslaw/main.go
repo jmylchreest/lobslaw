@@ -324,6 +324,7 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 		Compute:             cfg.Compute,
 		Hooks:               cfg.Hooks,
 		Auth:                cfg.Auth,
+		Gateway:             cfg.Gateway,
 		Logger:              logger,
 	}, nil
 }

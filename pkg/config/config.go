@@ -248,6 +248,15 @@ type AuthConfig struct {
 	JWKSURL      string `koanf:"jwks_url"`
 	JWTSecretRef string `koanf:"jwt_secret_ref,omitempty"`
 	AllowHS256   bool   `koanf:"allow_hs256"`
+
+	// RequireAuth makes missing or invalid Authorization tokens a
+	// hard 401 on channels that honour it (REST today). Leave false
+	// for localhost / reverse-proxy-terminated deployments where
+	// auth is checked upstream; set true for anything reachable from
+	// the public internet. Unset-and-validator-configured is
+	// intentional: "accept valid tokens, fall back to default scope
+	// for anonymous" is the correct stance for a dev/home deployment.
+	RequireAuth bool `koanf:"require_auth"`
 }
 
 type SandboxConfig struct {
