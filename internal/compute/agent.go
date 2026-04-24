@@ -78,6 +78,12 @@ type AgentConfig struct {
 	// falls through to Provider.
 	Roles *RoleMap
 
+	// ContextEngine, when non-nil, runs per-turn semantic memory
+	// recall and appends a "Relevant context" block to the
+	// system prompt. Channels don't see or configure this —
+	// it's the agent's job to enrich the turn.
+	ContextEngine *ContextEngine
+
 	// Hooks dispatches lifecycle events (PreLLMCall, PostLLMCall,
 	// PreToolUse, PostToolUse). May be nil — all hook calls become
 	// no-ops when unset.
@@ -286,7 +292,7 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if req.Budget == nil {
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
-	a.fillDefaults(&req)
+	a.fillDefaults(ctx, &req)
 	return a.runLoop(ctx, req, a.seedMessages(req), &ProcessMessageResponse{})
 }
 
@@ -296,7 +302,7 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 // without each having to know about tools or personality.
 // Explicit values on req always win so tests that script exact
 // prompts still work.
-func (a *Agent) fillDefaults(req *ProcessMessageRequest) {
+func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 	if req.Tools == nil && a.cfg.Registry != nil {
 		req.Tools = a.cfg.Registry.LLMTools()
 	}
@@ -307,6 +313,19 @@ func (a *Agent) fillDefaults(req *ProcessMessageRequest) {
 				Soul:  soul,
 				Tools: toPromptgenTools(req.Tools),
 			})
+		}
+	}
+	// Context engine runs after the base prompt is assembled —
+	// its addition is appended, not prepended. Recall is purely
+	// additive; the model still gets identity + operating
+	// principles at the top.
+	if a.cfg.ContextEngine != nil {
+		assembly := a.cfg.ContextEngine.Assemble(ctx, req.Message)
+		if assembly.SystemPromptAddition != "" {
+			req.SystemPrompt += assembly.SystemPromptAddition
+			a.cfg.Logger.Debug("agent: context-engine recall injected",
+				"turn_id", req.TurnID,
+				"recall_count", len(assembly.RecallIDs))
 		}
 	}
 }
@@ -365,7 +384,7 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
-	a.fillDefaults(&req)
+	a.fillDefaults(ctx, &req)
 	msgs := make([]Message, len(priorMessages))
 	copy(msgs, priorMessages)
 	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{})

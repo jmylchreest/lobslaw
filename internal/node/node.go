@@ -1325,8 +1325,13 @@ func (n *Node) wireCompute() error {
 			},
 			EpisodicIngester: episodicIngester,
 			Roles:            n.roleMap,
-			Skills:           skillDispatcherOrNil(n.skillAdapter),
-			Logger:           n.log,
+			ContextEngine: compute.NewContextEngine(compute.ContextEngineConfig{
+				Store:    n.store,
+				Embedder: n.embedder,
+				Logger:   n.log,
+			}),
+			Skills: skillDispatcherOrNil(n.skillAdapter),
+			Logger: n.log,
 		})
 		if err != nil {
 			return fmt.Errorf("agent: %w", err)
