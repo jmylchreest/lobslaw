@@ -107,15 +107,13 @@ func main() {
 	)
 	entropy := ulid.Monotonic(cryptorand.Reader, 0)
 
-	// Pacing: spread calls across a minute to respect provider
-	// RPM. MiniMax Token Plan returns status 1002 "rate limit
-	// exceeded(RPM)" at low QPS; 20 rpm (3s gap) is conservative
-	// enough to finish without tripping it.
-	if rpm < 1 {
-		rpm = 1
+	// Collect records needing embedding first, then batch the
+	// HTTP calls. 1 HTTP round-trip per batch instead of N.
+	type pending struct {
+		rec  *lobslawv1.EpisodicRecord
+		text string
 	}
-	gap := time.Minute / time.Duration(rpm)
-
+	var todo []pending
 	err = store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 		total++
 		var rec lobslawv1.EpisodicRecord
@@ -134,39 +132,82 @@ func main() {
 		if text == "" {
 			return nil
 		}
-		vec, err := embedWithRetry(ec, text)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  [FAIL] %s: %v\n", rec.Id, err)
-			failed++
-			return nil
-		}
-		vecID := ulid.MustNew(ulid.Now(), entropy).String()
-		vrec := &lobslawv1.VectorRecord{
-			Id:        vecID,
-			Embedding: vec,
-			Text:      text,
-			Scope:     "episodic",
-			Retention: rec.Retention,
-			CreatedAt: rec.Timestamp,
-			SourceIds: []string{rec.Id},
-		}
-		vraw, err := proto.Marshal(vrec)
-		if err != nil {
-			failed++
-			return nil
-		}
-		if err := store.Put(memory.BucketVectorRecords, vecID, vraw); err != nil {
-			fmt.Fprintf(os.Stderr, "  [WRITE-FAIL] %s: %v\n", rec.Id, err)
-			failed++
-			return nil
-		}
-		backfilled++
-		fmt.Printf("  [OK] %s → vec=%s (%d dims)\n", rec.Id, vecID, len(vec))
-		time.Sleep(gap)
+		todo = append(todo, pending{rec: &rec, text: text})
 		return nil
 	})
 	if err != nil {
 		die("scan episodic: %v", err)
+	}
+
+	if len(todo) == 0 {
+		fmt.Println("No records need backfilling.")
+	}
+
+	// Pacing between batches — most providers rate-limit on
+	// requests, not tokens, so batching is a direct QPS win
+	// even at aggressive --rpm. MiniMax is the exception (rate
+	// limit is per-call regardless of payload size).
+	if rpm < 1 {
+		rpm = 1
+	}
+	gap := time.Minute / time.Duration(rpm)
+
+	// Process in batches. 32 is the sweet spot for most
+	// providers (OpenAI accepts up to 2048; Qwen / DeepInfra
+	// similar). Too-large batches risk exceeding the context
+	// window and tripping "input too long" errors.
+	const batchSize = 32
+	for start := 0; start < len(todo); start += batchSize {
+		end := start + batchSize
+		if end > len(todo) {
+			end = len(todo)
+		}
+		chunk := todo[start:end]
+		texts := make([]string, len(chunk))
+		for i, p := range chunk {
+			texts[i] = p.text
+		}
+		vecs, err := embedBatchWithRetry(ec, texts)
+		if err != nil {
+			for _, p := range chunk {
+				fmt.Fprintf(os.Stderr, "  [FAIL] %s: %v\n", p.rec.Id, err)
+			}
+			failed += len(chunk)
+			time.Sleep(gap)
+			continue
+		}
+		for i, p := range chunk {
+			vec := vecs[i]
+			if len(vec) == 0 {
+				failed++
+				continue
+			}
+			vecID := ulid.MustNew(ulid.Now(), entropy).String()
+			vrec := &lobslawv1.VectorRecord{
+				Id:        vecID,
+				Embedding: vec,
+				Text:      p.text,
+				Scope:     "episodic",
+				Retention: p.rec.Retention,
+				CreatedAt: p.rec.Timestamp,
+				SourceIds: []string{p.rec.Id},
+			}
+			vraw, err := proto.Marshal(vrec)
+			if err != nil {
+				failed++
+				continue
+			}
+			if err := store.Put(memory.BucketVectorRecords, vecID, vraw); err != nil {
+				fmt.Fprintf(os.Stderr, "  [WRITE-FAIL] %s: %v\n", p.rec.Id, err)
+				failed++
+				continue
+			}
+			backfilled++
+			fmt.Printf("  [OK] %s → vec=%s (%d dims)\n", p.rec.Id, vecID, len(vec))
+		}
+		if end < len(todo) {
+			time.Sleep(gap)
+		}
 	}
 
 	// Note: direct store.Put writes BYPASS Raft consensus. For a
@@ -197,6 +238,31 @@ func embedWithRetry(ec *compute.EmbeddingClient, text string) ([]float32, error)
 		lastErr = err
 		msg := err.Error()
 		if !isRateLimited(msg) {
+			return nil, err
+		}
+		wait := time.Duration(5<<attempt) * time.Second
+		if wait > 60*time.Second {
+			wait = 60 * time.Second
+		}
+		fmt.Fprintf(os.Stderr, "  [RATE-LIMIT] %v — sleeping %s\n", err, wait)
+		time.Sleep(wait)
+	}
+	return nil, fmt.Errorf("rate-limited after retries: %w", lastErr)
+}
+
+// embedBatchWithRetry is the batch analogue of embedWithRetry.
+// One HTTP round-trip per call; retry the whole batch on rate-limit.
+func embedBatchWithRetry(ec *compute.EmbeddingClient, texts []string) ([][]float32, error) {
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		vecs, err := ec.EmbedBatch(ctx, texts)
+		cancel()
+		if err == nil {
+			return vecs, nil
+		}
+		lastErr = err
+		if !isRateLimited(err.Error()) {
 			return nil, err
 		}
 		wait := time.Duration(5<<attempt) * time.Second

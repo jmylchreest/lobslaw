@@ -19,6 +19,14 @@ import (
 // of HTTP details.
 type EmbeddingProvider interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+	// EmbedBatch returns one vector per input string in the same
+	// order. Providers that support batch requests (most do —
+	// OpenAI-compat /embeddings takes input as either a string
+	// or a string array) fold N texts into one round-trip.
+	// Providers without native batch fall back to sequential
+	// Embed calls, so callers can always batch without checking
+	// capability.
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 	Dimensions() int
 }
 
@@ -132,6 +140,127 @@ func NewEmbeddingClient(cfg EmbeddingClientConfig) (*EmbeddingClient, error) {
 
 // Dimensions reports the vector length Embed returns.
 func (c *EmbeddingClient) Dimensions() int { return c.dims }
+
+// EmbedBatch dispatches one HTTP call per batch. OpenAI-compat
+// providers accept `input` as a string array; MiniMax accepts
+// `texts` as an array natively. Both return N vectors in order.
+//
+// Empty input returns an empty slice without a round-trip.
+// Single-item batches delegate to Embed to keep the simple case
+// on the cached single-element path.
+func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	if len(texts) == 1 {
+		vec, err := c.Embed(ctx, texts[0])
+		if err != nil {
+			return nil, err
+		}
+		return [][]float32{vec}, nil
+	}
+	// Filter empty strings — they fail on the single-Embed path
+	// and there's no sensible vector for a zero-norm input.
+	nonEmpty := make([]string, 0, len(texts))
+	originalIdx := make([]int, 0, len(texts))
+	for i, t := range texts {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		nonEmpty = append(nonEmpty, t)
+		originalIdx = append(originalIdx, i)
+	}
+	if len(nonEmpty) == 0 {
+		return nil, errors.New("EmbedBatch: all inputs empty after trimming")
+	}
+
+	var reqBody []byte
+	switch c.format {
+	case EmbeddingFormatOpenAI:
+		reqBody, _ = json.Marshal(struct {
+			Input []string `json:"input"`
+			Model string   `json:"model"`
+		}{Input: nonEmpty, Model: c.model})
+	case EmbeddingFormatMiniMax:
+		reqBody, _ = json.Marshal(minimaxEmbeddingRequest{
+			Texts: nonEmpty,
+			Model: c.model,
+			Type:  "db",
+		})
+	default:
+		return nil, fmt.Errorf("EmbedBatch: unknown format %q", c.format)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	start := time.Now()
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("EmbedBatch: http: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("EmbedBatch: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 256))
+	}
+
+	var vectors [][]float32
+	switch c.format {
+	case EmbeddingFormatOpenAI:
+		var decoded openAIEmbeddingResponse
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return nil, fmt.Errorf("EmbedBatch: decode (openai): %w", err)
+		}
+		if len(decoded.Data) != len(nonEmpty) {
+			return nil, fmt.Errorf("EmbedBatch: got %d vectors, sent %d inputs", len(decoded.Data), len(nonEmpty))
+		}
+		vectors = make([][]float32, len(decoded.Data))
+		for _, d := range decoded.Data {
+			if d.Index < 0 || d.Index >= len(decoded.Data) {
+				return nil, fmt.Errorf("EmbedBatch: openai returned out-of-range index %d", d.Index)
+			}
+			vectors[d.Index] = d.Embedding
+		}
+	case EmbeddingFormatMiniMax:
+		var decoded minimaxEmbeddingResponse
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return nil, fmt.Errorf("EmbedBatch: decode (minimax): %w", err)
+		}
+		if decoded.BaseResp.StatusCode != 0 {
+			return nil, fmt.Errorf("EmbedBatch: minimax status %d: %s",
+				decoded.BaseResp.StatusCode, decoded.BaseResp.StatusMsg)
+		}
+		if len(decoded.Vectors) != len(nonEmpty) {
+			return nil, fmt.Errorf("EmbedBatch: got %d vectors, sent %d inputs", len(decoded.Vectors), len(nonEmpty))
+		}
+		vectors = decoded.Vectors
+	}
+
+	// Dim-check the first vector (all should match).
+	if len(vectors) > 0 && len(vectors[0]) != c.dims {
+		return nil, fmt.Errorf("EmbedBatch: model returned %d dims, expected %d", len(vectors[0]), c.dims)
+	}
+
+	// Re-project into the caller's original slot order (empty
+	// inputs stay nil).
+	out := make([][]float32, len(texts))
+	for i, origIdx := range originalIdx {
+		out[origIdx] = vectors[i]
+	}
+
+	c.log.Debug("embed.batch",
+		"format", c.format, "count", len(nonEmpty),
+		"dims", c.dims, "duration", time.Since(start))
+	return out, nil
+}
 
 // Embed returns the vector for text. Empty text returns an error
 // rather than a zero vector because downstream similarity math
