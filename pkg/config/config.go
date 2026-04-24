@@ -109,7 +109,8 @@ type ComputeConfig struct {
 	Chains              []ChainConfig    `koanf:"chains"`
 	DefaultChain        string           `koanf:"default_chain"`
 	ComplexityEstimator string           `koanf:"complexity_estimator"`
-	Budgets             BudgetsConfig    `koanf:"budgets"`
+	Budgets             BudgetsConfig    `koanf:"budgets"`  // deprecated; use Limits
+	Limits              LimitsConfig     `koanf:"limits,omitempty"`
 	Plugins             []PluginConfig   `koanf:"plugins"`
 	WebSearch           WebSearchConfig  `koanf:"web_search,omitempty"`
 	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
@@ -186,6 +187,14 @@ type ProviderConfig struct {
 	Capabilities []string              `koanf:"capabilities,omitempty"`
 	TrustTier    types.TrustTier       `koanf:"trust_tier"`
 	Pricing      types.ProviderPricing `koanf:"pricing,omitempty"`
+
+	// Backup is the label of the provider to fall back to when this
+	// one fails with a transient hard error (5xx, rate-limit, network
+	// refusal, timeout). Empty → end of chain, error surfaces to the
+	// caller. Chains are walked same-turn so the user sees the reply
+	// from whichever provider succeeds, transparently. Cycles are
+	// rejected at config load.
+	Backup string `koanf:"backup,omitempty"`
 	// ServerTools are provider-side tools (e.g. OpenRouter's
 	// openrouter:web_search) merged into every request's tools
 	// array. Transparent to the Executor — the provider handles
@@ -229,6 +238,17 @@ type BudgetsConfig struct {
 	MaxEgressBytesPerTurn int64   `koanf:"max_egress_bytes_per_turn"`
 }
 
+// LimitsConfig holds non-cost safety valves. These are about
+// preventing runaway loops and pathological behaviour, not about
+// rationing spend (which lobslaw doesn't gate on).
+type LimitsConfig struct {
+	// MaxToolCallsPerTurn caps how many tool invocations one turn
+	// can chain before the agent forces a summary reply. Default 30
+	// (applied at consumer time when zero). Protects against a
+	// stuck LLM calling the same failing tool indefinitely.
+	MaxToolCallsPerTurn int `koanf:"max_tool_calls_per_turn"`
+}
+
 type PluginConfig struct {
 	Name              string `koanf:"name"`
 	Source            string `koanf:"source"`
@@ -247,6 +267,12 @@ type GatewayConfig struct {
 	Channels            []GatewayChannelConfig `koanf:"channels"`
 	ConfirmationTimeout time.Duration          `koanf:"confirmation_timeout"`
 	UnknownUserScope    string                 `koanf:"unknown_user_scope"`
+
+	// Responsiveness timers. Zero on any = disabled. Operators can
+	// tune per deployment; sensible defaults land in Load().
+	TypingInterval time.Duration `koanf:"typing_interval"` // refresh typing indicator (Telegram clears at ~5s)
+	InterimTimeout time.Duration `koanf:"interim_timeout"` // send "still working" message after this (chatty SOUL only)
+	HardTimeout    time.Duration `koanf:"hard_timeout"`    // cancel turn + force summary reply after this
 }
 
 type GatewayChannelConfig struct {

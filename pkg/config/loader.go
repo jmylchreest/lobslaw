@@ -104,6 +104,61 @@ func (c *Config) Validate() error {
 	if c.Memory.Enabled && !c.Storage.Enabled {
 		return fmt.Errorf("%w: memory.enabled=true requires storage.enabled=true on the same node (snapshot-export targets resolve via local storage mounts)", types.ErrInvalidConfig)
 	}
+	if err := validateProviderBackups(c.Compute.Providers); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateProviderBackups enforces two invariants on the implicit
+// chain built from ProviderConfig.Backup pointers: every Backup
+// value must reference an existing label, and walking the chain
+// from any starting provider must terminate — no cycles.
+func validateProviderBackups(providers []ProviderConfig) error {
+	labels := make(map[string]bool, len(providers))
+	for _, p := range providers {
+		if p.Label == "" {
+			continue
+		}
+		labels[p.Label] = true
+	}
+	for _, p := range providers {
+		if p.Backup == "" {
+			continue
+		}
+		if !labels[p.Backup] {
+			return fmt.Errorf("%w: provider %q has backup=%q which is not a defined provider label", types.ErrInvalidConfig, p.Label, p.Backup)
+		}
+	}
+	// Cycle detection: walk each starting point and bail if we
+	// revisit. Bound the walk by the provider count to handle the
+	// pathological case defensively.
+	indexByLabel := make(map[string]int, len(providers))
+	for i, p := range providers {
+		indexByLabel[p.Label] = i
+	}
+	for _, start := range providers {
+		if start.Backup == "" {
+			continue
+		}
+		seen := map[string]bool{start.Label: true}
+		cur := start.Backup
+		for step := 0; step < len(providers); step++ {
+			if seen[cur] {
+				return fmt.Errorf("%w: provider backup chain has a cycle starting at %q (revisits %q)", types.ErrInvalidConfig, start.Label, cur)
+			}
+			seen[cur] = true
+			idx, ok := indexByLabel[cur]
+			if !ok {
+				break
+			}
+			next := providers[idx].Backup
+			if next == "" {
+				break
+			}
+			cur = next
+		}
+	}
 	return nil
 }
 

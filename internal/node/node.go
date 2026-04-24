@@ -179,11 +179,12 @@ type Node struct {
 	hooksDisp    *hooks.Dispatcher
 	policyEngine *policy.Engine
 	resolver     *compute.Resolver
-	llmProvider  compute.LLMProvider
-	executor     *compute.Executor
-	agent        *compute.Agent
-	embedder     compute.EmbeddingProvider
-	roleMap      *compute.RoleMap
+	llmProvider      compute.LLMProvider
+	executor         *compute.Executor
+	agent            *compute.Agent
+	embedder         compute.EmbeddingProvider
+	roleMap          *compute.RoleMap
+	providerRegistry *compute.ProviderRegistry
 
 	// Scheduler fires ScheduledTaskRecord and AgentCommitment records.
 	// Runs on any node that has access to the Raft stack (memory or
@@ -1203,6 +1204,24 @@ func (n *Node) wireCompute() error {
 		n.log.Info("compute: memory_search + memory_write registered")
 	}
 
+	// Council tools: list_providers + council_review. Only wire
+	// when multiple providers are registered — a single-provider
+	// deployment has nothing to council.
+	if n.providerRegistry != nil && len(n.providerRegistry.List()) > 1 {
+		if err := compute.RegisterCouncilBuiltins(builtins, compute.CouncilConfig{
+			Registry: n.providerRegistry,
+		}); err != nil {
+			return fmt.Errorf("register council builtins: %w", err)
+		}
+		for _, td := range compute.CouncilToolDefs() {
+			if err := n.toolRegistry.Register(td); err != nil {
+				return fmt.Errorf("register council tool %q: %w", td.Name, err)
+			}
+		}
+		n.log.Info("compute: list_providers + council_review registered",
+			"provider_count", len(n.providerRegistry.List()))
+	}
+
 	// Fetch tool is always-on — no secret required, the SSRF
 	// guard blocks private addresses by default. Operators who
 	// want to disable it write a deny rule against the fetch_url
@@ -1311,6 +1330,7 @@ func (n *Node) wireCompute() error {
 		n.llmProvider = n.cfg.LLMProvider
 		clientsByLabel["main"] = n.cfg.LLMProvider
 	case len(n.cfg.Compute.Providers) > 0:
+		n.providerRegistry = compute.NewProviderRegistry()
 		for i, p := range n.cfg.Compute.Providers {
 			// Trust-tier guard on every provider — a misconfigured
 			// secondary shouldn't slip past the Soul's floor just
@@ -1336,6 +1356,13 @@ func (n *Node) wireCompute() error {
 				return fmt.Errorf("llm client for %q: %w", p.Label, err)
 			}
 			clientsByLabel[p.Label] = client
+			n.providerRegistry.Register(compute.ProviderEntry{
+				Label:        p.Label,
+				TrustTier:    p.TrustTier,
+				Capabilities: p.Capabilities,
+				Backup:       p.Backup,
+				Client:       client,
+			})
 			if i == 0 {
 				n.llmProvider = client
 			}
@@ -1754,8 +1781,25 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
-		Logger: n.log,
+		TypingInterval:   n.cfg.Gateway.TypingInterval,
+		InterimTimeout:   n.cfg.Gateway.InterimTimeout,
+		HardTimeout:      n.cfg.Gateway.HardTimeout,
+		Soul:             n.soulProvider,
+		Logger:           n.log,
 	}, n.agent)
+}
+
+// soulProvider returns the current SOUL config if one is loaded,
+// or nil when the node is running without a soul file. Passed to
+// TelegramConfig so responsiveness timers can gate on SOUL
+// characteristics without needing a direct dependency.
+func (n *Node) soulProvider() *types.SoulConfig {
+	s := n.Soul()
+	if s == nil {
+		return nil
+	}
+	cfg := s.Config
+	return &cfg
 }
 
 // parseUserScopes converts the TOML string-keyed user_scopes map
