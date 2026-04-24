@@ -64,6 +64,27 @@ type TelegramConfig struct {
 	// REST channel.
 	DefaultBudget compute.BudgetCaps
 
+	// TypingInterval refreshes the typing indicator (Telegram
+	// clears it at ~5s). 0 disables. Default 4s applied by
+	// handleMessage when unset.
+	TypingInterval time.Duration
+
+	// InterimTimeout sends a "still working on this" message if
+	// the turn exceeds this duration AND the SOUL's directness
+	// score is low (chatty). 0 disables. Default 30s.
+	InterimTimeout time.Duration
+
+	// HardTimeout cancels the turn context and lets the agent's
+	// forceSummaryReply produce a graceful user-visible wrap-up.
+	// 0 disables. Default 90s.
+	HardTimeout time.Duration
+
+	// Soul supplies the current SoulConfig on demand. Used to gate
+	// interim messages on EmotiveStyle.Directness — high directness
+	// (>=7) means "no filler chatter", so interim messages are
+	// suppressed. Nil → interim messages are universal.
+	Soul func() *types.SoulConfig
+
 	// Prompts is the confirmation-prompt registry (shared with REST
 	// if configured there). When nil, NeedsConfirmation surfaces
 	// as plain text (Phase 6e fallback). When set, the bot sends an
@@ -295,7 +316,15 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ConversationHistory: priorHistory,
 	}
 
-	resp, err := h.agent.RunToolCallLoop(ctx, agentReq)
+	// Wrap the agent call with the responsiveness guards: typing
+	// indicator keep-alive, interim "still working" message (if
+	// SOUL personality allows), and a hard-timeout context that
+	// triggers forceSummaryReply inside the agent rather than
+	// silent failure.
+	turnCtx, cleanup := h.startResponsivenessGuards(ctx, msg.Chat.ID)
+	defer cleanup()
+
+	resp, err := h.agent.RunToolCallLoop(turnCtx, agentReq)
 	if err != nil {
 		h.log.Error("telegram: agent error",
 			"turn_id", turnID, "err", err)
