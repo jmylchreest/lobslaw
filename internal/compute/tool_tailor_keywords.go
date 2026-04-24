@@ -89,6 +89,21 @@ var toolCategoryPatterns = []toolCategory{
 			regexp.MustCompile(`https?://`),
 		},
 	},
+	// ---- Scheduler ------------------------------------------
+	// Recurring / time-based intents. Single-shot reminders map
+	// to commitments (Phase 7), recurring ones to scheduled tasks.
+	{
+		category: "scheduler",
+		tools:    []string{"schedule_create", "schedule_list", "schedule_get", "schedule_delete"},
+		keywords: []string{
+			"every 5", "every 10", "every 15", "every 30", "every hour",
+			"every morning", "every evening", "daily at",
+			"check every", "remind me every", "poll every",
+			"scheduled task", "scheduled tasks", "my schedules",
+			"cancel schedule", "stop schedule", "remove schedule",
+			"list schedule", "what schedules", "running tasks",
+		},
+	},
 	// ---- Provider council -----------------------------------
 	// Explicit user requests for multi-provider review. Keywords
 	// must be specific — "council" shouldn't fire on "I had a

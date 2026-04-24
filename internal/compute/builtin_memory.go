@@ -32,6 +32,12 @@ type memoryRaftApplier interface {
 	Apply(data []byte, timeout time.Duration) (any, error)
 }
 
+// memoryForgetter is the subset of *memory.Service needed for
+// memory_forget. Interface so tests can substitute a fake.
+type memoryForgetter interface {
+	Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lobslawv1.ForgetResponse, error)
+}
+
 // MemoryConfig wires the memory_search + memory_write builtins.
 // Both are registered together — reading without writing is a
 // degraded state that confuses the model.
@@ -42,9 +48,10 @@ type memoryRaftApplier interface {
 // internal/memory.EpisodicIngester) should use the same embedder
 // so query vectors and stored vectors come from the same model.
 type MemoryConfig struct {
-	Store    *memory.Store
-	Raft     memoryRaftApplier
-	Embedder EmbeddingProvider
+	Store     *memory.Store
+	Raft      memoryRaftApplier
+	Forgetter memoryForgetter // enables memory_forget + memory_correct; nil → those builtins skip registration
+	Embedder  EmbeddingProvider
 }
 
 // RegisterMemoryBuiltins installs memory_search + memory_write
@@ -63,6 +70,17 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 	}
 	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store)); err != nil {
 		return err
+	}
+	if err := b.Register("dream_recap", newDreamRecapHandler(cfg.Store)); err != nil {
+		return err
+	}
+	if cfg.Forgetter != nil {
+		if err := b.Register("memory_forget", newMemoryForgetHandler(cfg.Forgetter)); err != nil {
+			return err
+		}
+		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Raft, cfg.Forgetter)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -116,6 +134,52 @@ func MemoryToolDefs() []*types.ToolDef {
 					"since": {"type": "string", "description": "Only include entries newer than this duration ago (e.g. '24h', '7d'). Default: no filter."},
 					"limit": {"type": "integer", "description": "Max entries (1-50). Default 20."}
 				},
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "dream_recap",
+			Path:        BuiltinScheme + "dream_recap",
+			Description: "Show what was consolidated during recent REM/dream cycles. Returns vector records tagged as consolidations with their source_id counts, consolidation timestamps, and summary text. Use when the user asks 'what did you dream about', 'what did you consolidate', or 'what did you learn last night'. Narrate the result in your own voice per Personality & Style — don't dump the raw structure. Optional since filter (e.g. '24h', '7d', default all-time).",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"since": {"type": "string", "description": "Only include consolidations newer than this (e.g. '24h'). Default: all."},
+					"limit": {"type": "integer", "description": "Max entries (1-50). Default 10."}
+				},
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "memory_forget",
+			Path:        BuiltinScheme + "memory_forget",
+			Description: "Delete memories matching the given filter. Cascades: any consolidated memory whose source_ids intersect the matched set is ALSO deleted (privacy-safe: won't leave summaries echoing forgotten content). DESTRUCTIVE — requires confirmation. Pass at least one filter: query (substring match), ids (explicit list), before (RFC3339 cutoff), or tags. Returns count deleted.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Substring match against event or context."},
+					"ids": {"type": "array", "items": {"type": "string"}, "description": "Explicit list of memory IDs to delete."},
+					"before": {"type": "string", "description": "Delete entries older than this RFC3339 timestamp (e.g. 2026-04-01T00:00:00Z)."},
+					"tags": {"type": "array", "items": {"type": "string"}, "description": "Match entries carrying any of these tags."}
+				},
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskIrreversible,
+		},
+		{
+			Name:        "memory_correct",
+			Path:        BuiltinScheme + "memory_correct",
+			Description: "Supersede an existing memory with corrected content. Writes a new memory with updated text, then forgets the original — audit log preserves the change. Use when you realise a stored fact is wrong (user said 'I moved last week, your memory still says Y'). No confirmation required (it's improving, not destroying). Pass id of the memory to supersede plus new_event (one-sentence summary) and optionally new_context (full detail).",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"id": {"type": "string", "description": "ID of the memory to supersede."},
+					"new_event": {"type": "string", "description": "Updated one-sentence summary."},
+					"new_context": {"type": "string", "description": "Updated full detail (optional)."}
+				},
+				"required": ["id", "new_event"],
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskReversible,
@@ -493,6 +557,193 @@ func tsNano(ts *timestamppb.Timestamp) int64 {
 		return 0
 	}
 	return ts.AsTime().UnixNano()
+}
+
+// newDreamRecapHandler lists vector records whose SourceIds count
+// is > 1 (indicating they are consolidations produced by a dream/REM
+// cycle), newest-first. Read-only; safe on followers. Narration
+// discipline is enforced prompt-side — the tool returns structured
+// JSON; the bot re-renders in voice.
+func newDreamRecapHandler(store *memory.Store) BuiltinFunc {
+	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+		limit := 10
+		if raw, ok := args["limit"]; ok && raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
+				limit = n
+			}
+		}
+		var cutoff time.Time
+		if raw, ok := args["since"]; ok && raw != "" {
+			d, err := time.ParseDuration(raw)
+			if err != nil {
+				return nil, 2, fmt.Errorf("dream_recap: since must be a duration like '24h': %w", err)
+			}
+			cutoff = time.Now().Add(-d)
+		}
+		type recap struct {
+			ID             string   `json:"id"`
+			Text           string   `json:"text"`
+			Scope          string   `json:"scope,omitempty"`
+			SourceCount    int      `json:"source_count"`
+			SourceIDs      []string `json:"source_ids"`
+			ConsolidatedAt string   `json:"consolidated_at"`
+			unix           int64
+		}
+		var all []recap
+		err := store.ForEach(memory.BucketVectorRecords, func(_ string, raw []byte) error {
+			var v lobslawv1.VectorRecord
+			if err := proto.Unmarshal(raw, &v); err != nil {
+				return nil
+			}
+			if len(v.SourceIds) < 2 {
+				return nil
+			}
+			t := v.CreatedAt.AsTime()
+			if !cutoff.IsZero() && t.Before(cutoff) {
+				return nil
+			}
+			all = append(all, recap{
+				ID:             v.Id,
+				Text:           v.Text,
+				Scope:          v.Scope,
+				SourceCount:    len(v.SourceIds),
+				SourceIDs:      v.SourceIds,
+				ConsolidatedAt: t.Format(time.RFC3339),
+				unix:           t.UnixNano(),
+			})
+			return nil
+		})
+		if err != nil {
+			return nil, 1, fmt.Errorf("dream_recap: scan: %w", err)
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].unix > all[j].unix })
+		if len(all) > limit {
+			all = all[:limit]
+		}
+		out, err := json.Marshal(map[string]any{
+			"count":          len(all),
+			"consolidations": all,
+		})
+		if err != nil {
+			return nil, 1, err
+		}
+		return out, 0, nil
+	}
+}
+
+// newMemoryForgetHandler wraps memory.Service.Forget with the
+// builtin JSON arg shape. Requires raft leader (Service.Forget
+// errors otherwise); confirmation is enforced by the policy layer
+// via RiskIrreversible.
+func newMemoryForgetHandler(svc memoryForgetter) BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		query := strings.TrimSpace(args["query"])
+		var ids []string
+		if raw, ok := args["ids"]; ok && raw != "" {
+			if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+				return nil, 2, fmt.Errorf("memory_forget: ids must be a JSON array: %w", err)
+			}
+		}
+		var tags []string
+		if raw, ok := args["tags"]; ok && raw != "" {
+			if err := json.Unmarshal([]byte(raw), &tags); err != nil {
+				return nil, 2, fmt.Errorf("memory_forget: tags must be a JSON array: %w", err)
+			}
+		}
+		var before *timestamppb.Timestamp
+		if raw, ok := args["before"]; ok && raw != "" {
+			t, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				return nil, 2, fmt.Errorf("memory_forget: before must be RFC3339: %w", err)
+			}
+			before = timestamppb.New(t)
+		}
+		if query == "" && len(ids) == 0 && len(tags) == 0 && before == nil {
+			return nil, 2, errors.New("memory_forget: at least one filter required (query, ids, tags, or before) — refusing to forget everything")
+		}
+		req := &lobslawv1.ForgetRequest{
+			Query:  query,
+			Ids:    ids,
+			Tags:   tags,
+			Before: before,
+		}
+		resp, err := svc.Forget(ctx, req)
+		if err != nil {
+			return nil, 1, fmt.Errorf("memory_forget: %w", err)
+		}
+		out, err := json.Marshal(map[string]any{
+			"deleted_count":        resp.RecordsRemoved,
+			"consolidations_swept": resp.ConsolidationsReforged,
+		})
+		if err != nil {
+			return nil, 1, err
+		}
+		return out, 0, nil
+	}
+}
+
+// newMemoryCorrectHandler writes a new memory with superseded
+// metadata, then forgets the original by id. Two-step operation
+// but single transactional intent: audit log retains both the new
+// write and the forget, preserving the correction trail.
+func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter) BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		oldID := strings.TrimSpace(args["id"])
+		if oldID == "" {
+			return nil, 2, errors.New("memory_correct: id is required")
+		}
+		newEvent := strings.TrimSpace(args["new_event"])
+		if newEvent == "" {
+			return nil, 2, errors.New("memory_correct: new_event is required")
+		}
+		newContext := args["new_context"]
+
+		// Step 1: write the correction as a new memory with a
+		// "corrects:<old_id>" tag so the audit trail is queryable.
+		newID := ulid.MustNew(ulid.Now(), memIDEntropy).String()
+		newRec := &lobslawv1.EpisodicRecord{
+			Id:         newID,
+			Event:      newEvent,
+			Context:    newContext,
+			Importance: 5,
+			Tags:       []string{"corrects:" + oldID},
+			Timestamp:  timestamppb.Now(),
+			Retention:  "long",
+		}
+		entry := &lobslawv1.LogEntry{
+			Op: lobslawv1.LogOp_LOG_OP_PUT,
+			Id: newID,
+			Payload: &lobslawv1.LogEntry_EpisodicRecord{
+				EpisodicRecord: newRec,
+			},
+		}
+		data, err := proto.Marshal(entry)
+		if err != nil {
+			return nil, 1, fmt.Errorf("memory_correct: marshal: %w", err)
+		}
+		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+			return nil, 1, fmt.Errorf("memory_correct: raft apply new: %w", err)
+		}
+
+		// Step 2: forget the original. Any consolidations containing
+		// the old id are also swept (privacy-safe).
+		forgetReq := &lobslawv1.ForgetRequest{Ids: []string{oldID}}
+		forgetResp, err := forgetter.Forget(ctx, forgetReq)
+		if err != nil {
+			return nil, 1, fmt.Errorf("memory_correct: forget old: %w", err)
+		}
+
+		out, err := json.Marshal(map[string]any{
+			"new_id":               newID,
+			"old_id":               oldID,
+			"deleted_count":        forgetResp.RecordsRemoved,
+			"consolidations_swept": forgetResp.ConsolidationsReforged,
+		})
+		if err != nil {
+			return nil, 1, err
+		}
+		return out, 0, nil
+	}
 }
 
 // newMemoryRecentHandler lists recent episodic memory writes sorted
