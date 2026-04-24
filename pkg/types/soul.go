@@ -10,17 +10,6 @@ type SoulConfig struct {
 	Culture     string `yaml:"culture" json:"culture"`
 	Nationality string `yaml:"nationality" json:"nationality"`
 
-	// Project + Repository + Workspace let the agent answer
-	// "look at <project> on GitHub" by recognising itself as the
-	// project being referenced. Without these the bot will search
-	// the web for similarly-named projects and confidently report
-	// findings about a stranger codebase. Operator sets these
-	// when the deployment IS a known software project; personal-
-	// assistant deployments without code can leave them empty.
-	Project    string `yaml:"project,omitempty" json:"project,omitempty"`
-	Repository string `yaml:"repository,omitempty" json:"repository,omitempty"`
-	Workspace  string `yaml:"workspace,omitempty" json:"workspace,omitempty"`
-
 	Language Language `yaml:"language" json:"language"`
 
 	PersonaDescription string `yaml:"persona_description" json:"persona_description"`
