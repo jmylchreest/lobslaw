@@ -125,6 +125,12 @@ type Config struct {
 	// AddMount at runtime without collision).
 	Storage config.StorageConfig
 
+	// Skills carries signing policy + the storage label the
+	// Registry's fsnotify watcher subscribes to. Empty
+	// StorageLabel → no watcher started; skills registered
+	// programmatically still work.
+	Skills config.SkillsConfig
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate
@@ -558,6 +564,20 @@ func (n *Node) Start(ctx context.Context) error {
 			if err := n.seedStorageMountsFromConfig(ctx); err != nil {
 				n.log.Warn("storage: seed from config failed", "err", err)
 			}
+		}
+	}
+
+	// Skill registry watcher: fsnotify on the skills storage
+	// mount so drop-in manifests are auto-discovered. Gated on
+	// both the registry and a configured storage label —
+	// deployments without skills just skip.
+	if n.skillRegistry != nil && n.storageMgr != nil && n.cfg.Skills.StorageLabel != "" {
+		label := n.cfg.Skills.StorageLabel
+		if err := n.skillRegistry.Watch(ctx, n.storageMgr, label); err != nil {
+			n.log.Warn("skills: watcher failed to start",
+				"label", label, "err", err)
+		} else {
+			n.log.Info("skills: watcher started", "label", label)
 		}
 	}
 

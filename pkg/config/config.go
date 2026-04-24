@@ -422,6 +422,13 @@ type SkillsConfig struct {
 	// When true (and SigningPolicy empty) the effective policy is
 	// SigningRequire. Prefer SigningPolicy for new configs.
 	RequireSigned bool `koanf:"require_signed"`
+
+	// StorageLabel is the [[storage.mounts]] label where skill
+	// manifests live. Registry.Watch subscribes to fsnotify
+	// events on this label and re-scans on changes. Empty →
+	// no watcher started; skills can still be registered
+	// programmatically but won't auto-discover on drop-in.
+	StorageLabel string `koanf:"storage_label,omitempty"`
 }
 
 type ObservabilityConfig struct {
