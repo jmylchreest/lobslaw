@@ -1099,6 +1099,18 @@ func (n *Node) wireCompute() error {
 		n.log.Info("compute: memory_search + memory_write registered")
 	}
 
+	// Fetch tool is always-on — no secret required, the SSRF
+	// guard blocks private addresses by default. Operators who
+	// want to disable it write a deny rule against the fetch_url
+	// tool name.
+	if err := compute.RegisterFetchBuiltin(builtins, compute.FetchConfig{}); err != nil {
+		return fmt.Errorf("register fetch_url: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.FetchToolDef()); err != nil {
+		return fmt.Errorf("register fetch_url tool def: %w", err)
+	}
+	n.log.Info("compute: fetch_url registered")
+
 	// Web search: only registered when an Exa API key is
 	// configured. Skipped silently when absent so deployments that
 	// don't want web access don't need to redact anything — they
