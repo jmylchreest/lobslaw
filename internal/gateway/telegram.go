@@ -351,14 +351,6 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		h.history.Append(msg.Chat.ID, newTurn...)
 	}
 
-	// Tool-call breadcrumb: chatty-SOUL deployments get a compact
-	// "ran X, Y, Z" italic prefix so the user sees what actually
-	// happened under the hood. Direct-SOUL keeps the reply clean.
-	breadcrumb := ""
-	if h.shouldEmitInterim() {
-		breadcrumb = toolCallBreadcrumb(resp.ToolCalls)
-	}
-
 	switch {
 	case resp.NeedsConfirmation:
 		if h.cfg.Prompts != nil {
@@ -370,11 +362,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	case resp.Reply == "":
 		h.sendText(msg.Chat.ID, "(empty reply)")
 	default:
-		reply := resp.Reply
-		if breadcrumb != "" {
-			reply = breadcrumb + "\n\n" + reply
-		}
-		h.sendText(msg.Chat.ID, reply)
+		h.sendText(msg.Chat.ID, resp.Reply)
 	}
 }
 

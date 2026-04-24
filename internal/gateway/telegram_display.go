@@ -103,57 +103,6 @@ func primaryArgDisplay(rawJSON string) string {
 	return joined
 }
 
-// toolCallBreadcrumb renders a compact "ran X, Y, Z" line
-// summarising what tools the turn invoked. Used as an italic
-// prefix on the final reply when the SOUL is chatty enough that
-// tool-call transparency is wanted. Direct-SOUL deployments skip
-// this — terse replies shouldn't carry breadcrumbs.
-//
-// When more than breadcrumbExpandedLimit calls succeed, switches
-// to a per-tool-name count summary ("8× FetchUrl, 3× ReadFile")
-// to stay readable on a phone screen — listing 16 individual
-// FetchUrl(...) entries is noise, not transparency.
-//
-// Returns empty when there are no successful tool invocations.
-const breadcrumbExpandedLimit = 6
-
-func toolCallBreadcrumb(calls []compute.ToolInvocation) string {
-	if len(calls) == 0 {
-		return ""
-	}
-	successful := make([]compute.ToolInvocation, 0, len(calls))
-	for _, inv := range calls {
-		if inv.Error != "" {
-			continue
-		}
-		successful = append(successful, inv)
-	}
-	if len(successful) == 0 {
-		return ""
-	}
-	if len(successful) <= breadcrumbExpandedLimit {
-		parts := make([]string, len(successful))
-		for i, inv := range successful {
-			parts[i] = "`" + formatToolCall(inv) + "`"
-		}
-		return "_ran: " + strings.Join(parts, ", ") + "_"
-	}
-	counts := make(map[string]int)
-	order := make([]string, 0)
-	for _, inv := range successful {
-		display := prettyToolName(inv.ToolName)
-		if _, seen := counts[display]; !seen {
-			order = append(order, display)
-		}
-		counts[display]++
-	}
-	parts := make([]string, 0, len(order))
-	for _, name := range order {
-		parts = append(parts, fmt.Sprintf("%d× `%s`", counts[name], name))
-	}
-	return "_ran: " + strings.Join(parts, ", ") + "_"
-}
-
 // notifyPolicyDenials emits one Telegram message per tool call
 // that was denied by policy. Kept as a separate interstitial
 // (rather than folded into the final reply) so the user always
