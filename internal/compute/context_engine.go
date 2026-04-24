@@ -87,13 +87,17 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 
 	vec, err := e.embedder.Embed(ctx, userMessage)
 	if err != nil {
-		e.log.Debug("context-engine: embed failed; skipping recall",
+		// WARN — an embedding outage drops every turn's
+		// passive recall. Operators need to see this to
+		// diagnose (wrong API key, provider blocklist, dim
+		// mismatch, etc.).
+		e.log.Warn("context-engine: embed failed; skipping passive recall",
 			"err", err)
 		return ContextAssembly{}
 	}
 	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2, "", "")
 	if err != nil {
-		e.log.Debug("context-engine: vector search failed",
+		e.log.Warn("context-engine: vector search failed",
 			"err", err)
 		return ContextAssembly{}
 	}

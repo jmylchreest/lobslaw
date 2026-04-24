@@ -280,6 +280,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		"scope", scope,
 		"text_len", len(msg.Text))
 
+
 	priorHistory := h.history.Load(msg.Chat.ID)
 	h.log.Debug("telegram: conversation history loaded",
 		"turn_id", turnID,

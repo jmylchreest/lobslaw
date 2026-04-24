@@ -5,67 +5,9 @@ import (
 	"strings"
 )
 
-// toolTailorDefaults are tools that stay in every turn's advertised
-// list regardless of classifier output. current_time + memory_*
-// are cheap to advertise (small schemas), broadly applicable, and
-// the model loses utility without them across essentially any
-// turn shape.
-var toolTailorDefaults = map[string]bool{
-	"current_time":   true,
-	"memory_search":  true,
-	"memory_write":   true,
-}
-
-// toolCategoryPatterns groups tools by the kind of intent that
-// should unlock them. Keywords are lowercased substrings tested
-// against the user message. Hits on ANY keyword in a category
-// admit EVERY tool in that category for this turn.
-var toolCategoryPatterns = []struct {
-	category string
-	tools    []string
-	keywords []string
-	regexes  []*regexp.Regexp
-}{
-	{
-		category: "filesystem_read",
-		tools:    []string{"read_file", "search_files"},
-		keywords: []string{
-			"file ", "read ", "open ", "show me", "cat ", "look at",
-			"search for", "grep", "find in", "contents of", ".go", ".md",
-			".py", ".ts", ".json", ".yaml", ".toml", "directory", "folder",
-			"/home/", "/etc/", "/var/", "/tmp/",
-		},
-	},
-	{
-		category: "filesystem_write",
-		tools:    []string{"write_file", "edit_file"},
-		keywords: []string{
-			"write ", "create ", "save ", "edit ", "change ", "update ",
-			"modify ", "replace ", "add to", "append ", "overwrite",
-		},
-	},
-	{
-		category: "shell",
-		tools:    []string{"shell_command"},
-		keywords: []string{
-			"run ", "execute ", "shell", "bash", "command", "ls ", "ps ",
-			"kill ", "git ", "process", "install ",
-		},
-	},
-	{
-		category: "web",
-		tools:    []string{"fetch_url", "web_search"},
-		keywords: []string{
-			"web ", "internet", "online", "google ", "look up",
-			"latest news", "latest version", "latest release",
-			"news about", "recent news", "current events",
-			"wikipedia", " article ",
-		},
-		regexes: []*regexp.Regexp{
-			regexp.MustCompile(`https?://`),
-		},
-	},
-}
+// Constants that drive the classifier (toolTailorDefaults,
+// toolCategoryPatterns) live in tool_tailor_keywords.go so
+// keyword tuning doesn't require reading the dispatch code.
 
 // tailoredToolsFor returns the subset of available that the
 // heuristic thinks the model will actually need for userMessage.

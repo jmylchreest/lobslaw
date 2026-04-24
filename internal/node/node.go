@@ -1160,6 +1160,23 @@ func (n *Node) wireCompute() error {
 	}
 	n.log.Info("compute: write_file + edit_file registered")
 
+	// Debug tools expose internal state (tools, policy rules,
+	// memory stats, raft, scheduler, providers) so the agent can
+	// answer operator questions like "what tools do you have"
+	// or "what's the current raft leader" directly. Scope-level
+	// gating is the operator's policy responsibility — a deny
+	// rule against debug_* for non-owner scopes keeps strangers
+	// out without needing a separate config toggle.
+	if err := compute.RegisterDebugBuiltins(builtins, &debugInspector{n: n}); err != nil {
+		return fmt.Errorf("register debug builtins: %w", err)
+	}
+	for _, td := range compute.DebugToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			return fmt.Errorf("register debug tool %q: %w", td.Name, err)
+		}
+	}
+	n.log.Info("compute: debug_* builtins registered")
+
 	// Shell access — most dangerous of all the stdlib tools.
 	// Denylist + compound-command gate + 30s default timeout
 	// give an MVP-acceptable surface; the ask-based permission

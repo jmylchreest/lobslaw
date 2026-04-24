@@ -209,9 +209,15 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 	}
 
 	if resp.StatusCode >= 400 {
-		c.log.Debug("llm: response error",
+		// WARN, not DEBUG — operators need to see provider
+		// failures without enabling verbose logs. Body is
+		// truncated so a long error page doesn't flood stderr.
+		c.log.Warn("llm: response error",
 			"status", resp.StatusCode,
-			"duration", time.Since(start))
+			"endpoint", c.endpoint,
+			"model", model,
+			"duration", time.Since(start),
+			"body", truncateBody(rawBody))
 		return nil, classifyHTTPError(resp.StatusCode, rawBody)
 	}
 
