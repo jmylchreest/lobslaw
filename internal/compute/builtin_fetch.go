@@ -49,7 +49,7 @@ func FetchToolDef() *types.ToolDef {
 	return &types.ToolDef{
 		Name:        "fetch_url",
 		Path:        BuiltinScheme + "fetch_url",
-		Description: "Fetch the contents of a URL and return the body as plaintext. Use when the user references a specific URL or you need to read a page whose contents you don't have. Private-network hosts (127.0.0.1, 10.0.0.0/8, etc.) are blocked to prevent SSRF. HTML is extracted to plain text; max_chars caps the response body (default 10000, max 50000).",
+		Description: "Fetch the contents of a URL and return the body as plaintext PLUS a list of links extracted from the page. Use when the user references a URL or you need to read a page whose contents you don't have. Private-network hosts are blocked (SSRF guard). HTML is extracted to plain text; max_chars caps the body (default 10000, max 50000). Response JSON: {url, body, truncated, from_cache, links: [{text, url}]}. When summarising fetched content for the user, CITE relevant source URLs using markdown link syntax like [headline](https://...) so the user can click through.",
 		ParametersSchema: []byte(`{
 			"type": "object",
 			"properties": {
@@ -147,7 +147,7 @@ func newFetchHandler(client *http.Client, cache *fetchCache) BuiltinFunc {
 		}
 
 		if cached, ok := cache.get(raw); ok {
-			return packFetchResult(raw, cached, maxChars, true)
+			return packFetchResult(raw, cached.body, cached.links, maxChars, true)
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
@@ -170,13 +170,19 @@ func newFetchHandler(client *http.Client, cache *fetchCache) BuiltinFunc {
 			return nil, 1, fmt.Errorf("fetch_url: HTTP %d: %s", resp.StatusCode, truncateBodyFor(body, 256))
 		}
 
-		plain := htmlToPlain(string(body), resp.Header.Get("Content-Type"))
-		cache.set(raw, plain)
-		return packFetchResult(raw, plain, maxChars, false)
+		plain, links := htmlToPlainWithLinks(string(body), resp.Header.Get("Content-Type"), raw)
+		cache.set(raw, plain, links)
+		return packFetchResult(raw, plain, links, maxChars, false)
 	}
 }
 
-func packFetchResult(fullURL, body string, maxChars int, fromCache bool) ([]byte, int, error) {
+// fetchLink is an extracted <a href> anchor from a fetched page.
+type fetchLink struct {
+	Text string `json:"text"`
+	URL  string `json:"url"`
+}
+
+func packFetchResult(fullURL, body string, links []fetchLink, maxChars int, fromCache bool) ([]byte, int, error) {
 	truncated := false
 	if len(body) > maxChars {
 		body = body[:maxChars]
@@ -187,6 +193,7 @@ func packFetchResult(fullURL, body string, maxChars int, fromCache bool) ([]byte
 		"body":       body,
 		"truncated":  truncated,
 		"from_cache": fromCache,
+		"links":      links,
 	})
 	if err != nil {
 		return nil, 1, err
@@ -194,19 +201,73 @@ func packFetchResult(fullURL, body string, maxChars int, fromCache bool) ([]byte
 	return out, 0, nil
 }
 
-// htmlToPlain is a cheap HTML-to-text. Strips tags + collapses
-// whitespace. Not a full markdown renderer — the goal is to get
-// the model the semantic content without parser dependencies.
-// JSON/plain bodies pass through unchanged.
-func htmlToPlain(body, contentType string) string {
+// htmlToPlainWithLinks strips tags + extracts <a href> anchors.
+// Returns (plain text, up-to-N deduplicated links). Relative URLs
+// are resolved against pageURL. Non-HTML bodies return the input
+// unchanged and no links. Not a full parser — regex-based, good
+// enough for news/blog pages; pages with heavy JS-rendered
+// content would need a headless browser.
+func htmlToPlainWithLinks(body, contentType, pageURL string) (string, []fetchLink) {
 	if !strings.Contains(strings.ToLower(contentType), "html") {
-		return body
+		return body, nil
 	}
+	links := extractAnchors(body, pageURL)
 	body = stripScriptStyle.ReplaceAllString(body, " ")
 	body = htmlTagRe.ReplaceAllString(body, " ")
 	body = htmlWhitespaceRe.ReplaceAllString(body, " ")
-	return strings.TrimSpace(body)
+	return strings.TrimSpace(body), links
 }
+
+// extractAnchors pulls (text, url) pairs from <a href="…">text</a>
+// spans. Caps at 40 deduplicated entries — plenty for news
+// homepages, not enough to flood the model's context. Relative
+// URLs resolve against pageURL; fragment-only (#anchor) and
+// javascript:/mailto: links are dropped.
+const maxExtractedLinks = 40
+
+func extractAnchors(html, pageURL string) []fetchLink {
+	base, berr := url.Parse(pageURL)
+	matches := anchorRe.FindAllStringSubmatch(html, -1)
+	out := make([]fetchLink, 0, len(matches))
+	seen := map[string]bool{}
+	for _, m := range matches {
+		href := strings.TrimSpace(m[1])
+		text := strings.TrimSpace(htmlTagRe.ReplaceAllString(m[2], " "))
+		text = htmlWhitespaceRe.ReplaceAllString(text, " ")
+		if href == "" || strings.HasPrefix(href, "#") ||
+			strings.HasPrefix(href, "javascript:") ||
+			strings.HasPrefix(href, "mailto:") {
+			continue
+		}
+		resolved := href
+		if berr == nil {
+			if parsed, perr := url.Parse(href); perr == nil {
+				resolved = base.ResolveReference(parsed).String()
+			}
+		}
+		if text == "" {
+			text = resolved
+		}
+		if len(text) > 200 {
+			text = text[:200] + "…"
+		}
+		key := resolved + "|" + text
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, fetchLink{Text: text, URL: resolved})
+		if len(out) >= maxExtractedLinks {
+			break
+		}
+	}
+	return out
+}
+
+// anchorRe matches <a ... href="URL" ...>inner text</a>. Supports
+// both single- and double-quoted href; not bulletproof (malformed
+// HTML slips through) but covers the 90% case.
+var anchorRe = regexp.MustCompile(`(?is)<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>`)
 
 var (
 	stripScriptStyle = regexp.MustCompile(`(?is)<(script|style)[^>]*>.*?</(script|style)>`)
@@ -226,25 +287,26 @@ type fetchCache struct {
 }
 
 type fetchCacheEntry struct {
-	body    string
+	body     string
+	links    []fetchLink
 	cachedAt time.Time
 }
 
-func (c *fetchCache) get(key string) (string, bool) {
+func (c *fetchCache) get(key string) (*fetchCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[key]
 	if !ok {
-		return "", false
+		return nil, false
 	}
 	if time.Since(e.cachedAt) > c.ttl {
 		delete(c.entries, key)
-		return "", false
+		return nil, false
 	}
-	return e.body, true
+	return e, true
 }
 
-func (c *fetchCache) set(key, body string) {
+func (c *fetchCache) set(key, body string, links []fetchLink) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.entries) >= c.maxSize {
@@ -259,5 +321,6 @@ func (c *fetchCache) set(key, body string) {
 		}
 		delete(c.entries, oldestKey)
 	}
-	c.entries[key] = &fetchCacheEntry{body: body, cachedAt: time.Now()}
+	c.entries[key] = &fetchCacheEntry{body: body, links: links, cachedAt: time.Now()}
 }
+

@@ -111,7 +111,7 @@ func TestFetchCacheTTL(t *testing.T) {
 		maxSize: 10,
 		entries: map[string]*fetchCacheEntry{},
 	}
-	c.set("k", "v")
+	c.set("k", "v", nil)
 	if _, ok := c.get("k"); !ok {
 		t.Error("set/get failed")
 	}
@@ -128,11 +128,11 @@ func TestFetchCacheEviction(t *testing.T) {
 		maxSize: 2,
 		entries: map[string]*fetchCacheEntry{},
 	}
-	c.set("a", "1")
+	c.set("a", "1", nil)
 	time.Sleep(2 * time.Millisecond)
-	c.set("b", "2")
+	c.set("b", "2", nil)
 	time.Sleep(2 * time.Millisecond)
-	c.set("c", "3")
+	c.set("c", "3", nil)
 	if _, ok := c.get("a"); ok {
 		t.Error("oldest entry should have been evicted")
 	}

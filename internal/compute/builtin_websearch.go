@@ -66,7 +66,7 @@ func WebSearchToolDef() *types.ToolDef {
 	return &types.ToolDef{
 		Name:        "web_search",
 		Path:        BuiltinScheme + "web_search",
-		Description: "Search the web for up-to-date information. Returns a list of results (title, url, snippet). Call this when the user asks about current events, recent changes, or facts you're not certain about. Pass query as the search string; optionally set num_results (default 5, max 10) and type (\"auto\", \"fast\", \"deep\" — \"auto\" is usually right).",
+		Description: "Search the web for up-to-date information. Returns a list of results (title, url, snippet). Call this when the user asks about current events, recent changes, or facts you're not certain about. Pass query as the search string; optionally set num_results (default 5, max 10) and type (\"auto\", \"fast\", \"deep\" — \"auto\" is usually right). When summarising results for the user, CITE sources with markdown link syntax like [title](url) so the user can click through.",
 		ParametersSchema: []byte(`{
 			"type": "object",
 			"properties": {

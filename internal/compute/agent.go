@@ -432,7 +432,13 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 		messages = append(messages, assistantMsg)
 
 		if len(chatResp.ToolCalls) == 0 {
-			resp.Reply = chatResp.Content
+			// Strip reasoning-model chain-of-thought from the
+			// user-facing reply. Internal messages keep the full
+			// content so the next round-trip (including this
+			// assistant message) still shows the model its own
+			// reasoning. Only resp.Reply — what channels render
+			// — gets the stripped form.
+			resp.Reply = stripReasoningTags(chatResp.Content)
 			resp.Messages = messages
 			resp.BudgetState = req.Budget.State()
 			// Fire-and-forget episodic ingest: the model
