@@ -59,6 +59,61 @@ func TestChatHistorySeparatesByChat(t *testing.T) {
 	}
 }
 
+func TestNewTurnMessagesStripsSystemAndPrior(t *testing.T) {
+	t.Parallel()
+	all := []compute.Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "old user msg"},
+		{Role: "assistant", Content: "old assistant reply"},
+		{Role: "user", Content: "new user msg"},
+		{Role: "assistant", ToolCalls: []compute.ToolCall{{Name: "fetch_url"}}},
+		{Role: "tool", Content: "tool result"},
+		{Role: "assistant", Content: "final reply"},
+	}
+	priorLen := 2 // old user msg + old assistant reply
+	got := newTurnMessages(all, priorLen)
+	if len(got) != 4 {
+		t.Fatalf("len=%d want 4 (user + asst-tool-call + tool result + final asst)", len(got))
+	}
+	if got[0].Role != "user" || got[0].Content != "new user msg" {
+		t.Errorf("first new msg: %+v", got[0])
+	}
+	if len(got[1].ToolCalls) != 1 {
+		t.Errorf("tool call should survive: %+v", got[1])
+	}
+	if got[2].Role != "tool" {
+		t.Errorf("tool result should survive: %+v", got[2])
+	}
+	if got[3].Content != "final reply" {
+		t.Errorf("final reply: %+v", got[3])
+	}
+}
+
+func TestNewTurnMessagesNoSystemPrefix(t *testing.T) {
+	t.Parallel()
+	all := []compute.Message{
+		{Role: "user", Content: "u"},
+		{Role: "assistant", Content: "a"},
+	}
+	got := newTurnMessages(all, 0)
+	if len(got) != 2 {
+		t.Errorf("without system prefix all messages should appear: %+v", got)
+	}
+}
+
+func TestNewTurnMessagesPriorOverflowSafe(t *testing.T) {
+	t.Parallel()
+	all := []compute.Message{
+		{Role: "system", Content: "s"},
+		{Role: "user", Content: "u"},
+	}
+	// Defensive: priorLen larger than what's actually in the slice
+	// shouldn't crash; should return empty.
+	if got := newTurnMessages(all, 100); got != nil {
+		t.Errorf("overflow should yield nil; got %+v", got)
+	}
+}
+
 func TestChatHistoryForget(t *testing.T) {
 	t.Parallel()
 	h := newChatHistory(20, time.Hour)

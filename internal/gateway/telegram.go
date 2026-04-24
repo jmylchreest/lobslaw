@@ -338,14 +338,17 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	// blocked and why.
 	h.notifyPolicyDenials(msg.Chat.ID, resp.ToolCalls)
 
-	// Record the user turn + final assistant reply so the next
-	// message in this chat sees the context. Tool-role intermediates
-	// are skipped: they inflate context fast without adding much
-	// semantic continuity the model needs two turns later.
-	if resp.Reply != "" {
-		h.history.Append(msg.Chat.ID,
-			compute.Message{Role: "user", Content: msg.Text},
-			compute.Message{Role: "assistant", Content: resp.Reply})
+	// Persist the FULL message thread from this turn (user message,
+	// every intermediate assistant with tool_calls, every tool
+	// result, and the final assistant reply). Without this the bot
+	// has no record of its own actions on follow-up turns — leading
+	// to the "I don't have a web fetch tool" lie when the user asks
+	// "why did you do X" after a turn that DID do X. Cap is on
+	// total messages (not turns) so a single multi-tool turn
+	// doesn't permanently swamp the buffer; oldest messages drop
+	// when the cap is hit.
+	if newTurn := newTurnMessages(resp.Messages, len(priorHistory)); len(newTurn) > 0 {
+		h.history.Append(msg.Chat.ID, newTurn...)
 	}
 
 	// Tool-call breadcrumb: chatty-SOUL deployments get a compact
