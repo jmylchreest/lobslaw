@@ -1213,6 +1213,14 @@ func (n *Node) wireCompute() error {
 	// REST handler surfaces "provider not configured" at message
 	// time rather than blocking boot.
 	if n.llmProvider != nil {
+		var episodicIngester compute.EpisodicIngester
+		if n.raft != nil {
+			ingester, err := memory.NewEpisodicIngester(n.raft, 0)
+			if err != nil {
+				return fmt.Errorf("episodic ingester: %w", err)
+			}
+			episodicIngester = &episodicIngesterAdapter{inner: ingester}
+		}
 		a, err := compute.NewAgent(compute.AgentConfig{
 			Provider: n.llmProvider,
 			Executor: n.executor,
@@ -1224,8 +1232,9 @@ func (n *Node) wireCompute() error {
 				}
 				return &s.Config
 			},
-			Skills: skillDispatcherOrNil(n.skillAdapter),
-			Logger: n.log,
+			EpisodicIngester: episodicIngester,
+			Skills:           skillDispatcherOrNil(n.skillAdapter),
+			Logger:           n.log,
 		})
 		if err != nil {
 			return fmt.Errorf("agent: %w", err)
@@ -1384,6 +1393,26 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 // the task/commitment so audit can distinguish "alice scheduled
 // this" from "bob did." Scope defaults to "scheduler" so policies
 // can gate what scheduled tasks are allowed to touch.
+// episodicIngesterAdapter adapts memory.EpisodicIngester to the
+// compute.EpisodicIngester interface. They share the same shape
+// but can't import each other without a package cycle, so a thin
+// adapter keeps the types at the right layer boundary.
+type episodicIngesterAdapter struct {
+	inner *memory.EpisodicIngester
+}
+
+func (a *episodicIngesterAdapter) IngestTurn(ctx context.Context, t compute.EpisodicTurn) error {
+	return a.inner.IngestTurn(ctx, memory.EpisodicTurn{
+		Channel:     t.Channel,
+		ChatID:      t.ChatID,
+		UserID:      t.UserID,
+		UserMessage: t.UserMessage,
+		AssistReply: t.AssistReply,
+		TurnID:      t.TurnID,
+		CompletedAt: t.CompletedAt,
+	})
+}
+
 // serverToolsFromConfig converts the TOML-shaped ServerToolSpec
 // list into the compute-layer ServerTool shape. Trivial mapper; the
 // separation just keeps config types out of internal/compute.

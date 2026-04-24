@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -64,6 +65,13 @@ type AgentConfig struct {
 	// populates req.SystemPrompt manually.
 	Soul func() *types.SoulConfig
 
+	// EpisodicIngester, when non-nil, receives each turn's
+	// user-message + assistant-reply pair as an EpisodicRecord
+	// write opportunity. The agent calls IngestTurn after a
+	// successful reply — nothing ingested on confirmation-pending
+	// or error paths. Dream consolidation picks up what lands here.
+	EpisodicIngester EpisodicIngester
+
 	// Hooks dispatches lifecycle events (PreLLMCall, PostLLMCall,
 	// PreToolUse, PostToolUse). May be nil — all hook calls become
 	// no-ops when unset.
@@ -82,6 +90,28 @@ type AgentConfig struct {
 
 	// Logger is used for structured log entries. Nil → slog.Default().
 	Logger *slog.Logger
+}
+
+// EpisodicIngester writes per-turn records into episodic memory.
+// The agent doesn't talk to Raft directly; implementations behind
+// this interface (typically internal/memory) propose the write via
+// consensus and swallow routine errors (log level).
+type EpisodicIngester interface {
+	IngestTurn(ctx context.Context, turn EpisodicTurn) error
+}
+
+// EpisodicTurn is one complete user↔assistant exchange ready for
+// episodic commit. Channel carries its own identity (channel,
+// chat_id, user_id) so dream can cluster by conversation without
+// needing message-layer metadata.
+type EpisodicTurn struct {
+	Channel     string
+	ChatID      string
+	UserID      string
+	UserMessage string
+	AssistReply string
+	TurnID      string
+	CompletedAt time.Time
 }
 
 // SkillDispatcher abstracts the skill invoker so the agent doesn't
@@ -275,6 +305,33 @@ func (a *Agent) fillDefaults(req *ProcessMessageRequest) {
 	}
 }
 
+// maybeIngestTurn fires the configured EpisodicIngester when the
+// turn completed cleanly (reply non-empty, no confirmation
+// pending). Ingest failures are logged and swallowed — memory
+// loss on a single turn is preferable to dropping the user's
+// reply for a backend hiccup. ChatID / UserID are pulled from
+// Claims when available; channel is best-effort (scope often
+// holds a channel-adjacent value like "telegram").
+func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string) {
+	if a.cfg.EpisodicIngester == nil || reply == "" {
+		return
+	}
+	turn := EpisodicTurn{
+		UserMessage: req.Message,
+		AssistReply: reply,
+		TurnID:      req.TurnID,
+		CompletedAt: time.Now(),
+	}
+	if req.Claims != nil {
+		turn.UserID = req.Claims.UserID
+		turn.Channel = req.Claims.Scope
+	}
+	if err := a.cfg.EpisodicIngester.IngestTurn(ctx, turn); err != nil {
+		a.cfg.Logger.Warn("agent: episodic ingest failed; turn still succeeded",
+			"turn_id", req.TurnID, "err", err)
+	}
+}
+
 // toPromptgenTools renders the LLM-facing Tools as promptgen's
 // ToolInfo shape so the system-prompt "Available Tools" section
 // matches what the model actually has.
@@ -341,6 +398,13 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			resp.Reply = chatResp.Content
 			resp.Messages = messages
 			resp.BudgetState = req.Budget.State()
+			// Fire-and-forget episodic ingest: the model
+			// finished a turn, capture it for dream
+			// consolidation. Nil ingester is a no-op; errors are
+			// logged and swallowed because memory loss is a
+			// soft failure compared to dropping the user's
+			// reply.
+			a.maybeIngestTurn(ctx, req, chatResp.Content)
 			return resp, nil
 		}
 
