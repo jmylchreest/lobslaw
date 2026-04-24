@@ -132,14 +132,14 @@ func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider) Bui
 }
 
 // runSemanticSearch embeds the query, runs vectorSearch, then
-// dereferences the source episodic records for the hits. Returns
-// fallback-substring results on embedder failure — transient
-// embedding-API issues shouldn't wipe out recall entirely.
+// dereferences the source episodic records for the hits. If
+// semantic returns fewer than `limit` hits, augments with
+// substring matches — covers pre-embedding records that have
+// no vector row yet. Returns fallback-substring on embedder
+// failure.
 func runSemanticSearch(ctx context.Context, store *memory.Store, embedder EmbeddingProvider, query, tagFilter string, limit int) ([]byte, int, error) {
 	vec, err := embedder.Embed(ctx, query)
 	if err != nil {
-		// Degrade to substring — surface the embed failure in the
-		// payload so the operator sees it via the tool response.
 		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr
 	}
@@ -180,15 +180,87 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 		}
 	}
 
+	// Augment with substring matches when semantic under-
+	// delivered. This is the common case during embedding
+	// rollout: recent turns have vector records (found via
+	// semantic), older turns don't (invisible without this
+	// merge). Once the backfill runs, semantic dominates
+	// naturally and this augmentation just no-ops.
+	strategy := "semantic"
+	if len(results) < limit {
+		more := runSubstringMatches(store, query, tagFilter, limit-len(results), seen)
+		if len(more) > 0 {
+			results = append(results, more...)
+			strategy = "semantic+substring"
+		}
+	}
+
 	payload, err := json.Marshal(map[string]any{
 		"query":    query,
 		"results":  results,
-		"strategy": "semantic",
+		"strategy": strategy,
 	})
 	if err != nil {
 		return nil, 1, err
 	}
 	return payload, 0, nil
+}
+
+// runSubstringMatches is the inner helper that returns the
+// episodic-map results without the JSON envelope. Lets the
+// semantic path augment its result set without round-tripping
+// through JSON.
+func runSubstringMatches(store *memory.Store, query, tagFilter string, limit int, exclude map[string]bool) []map[string]any {
+	tokens := tokeniseQuery(query)
+	if len(tokens) == 0 {
+		return nil
+	}
+	type hit struct {
+		rec   *lobslawv1.EpisodicRecord
+		score int
+	}
+	var hits []hit
+	_ = store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
+		var r lobslawv1.EpisodicRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil
+		}
+		if exclude[r.Id] {
+			return nil
+		}
+		if tagFilter != "" && !containsString(r.Tags, tagFilter) {
+			return nil
+		}
+		hay := strings.ToLower(r.Event + " " + r.Context)
+		matches := 0
+		for _, tok := range tokens {
+			if strings.Contains(hay, tok) {
+				matches++
+			}
+		}
+		if matches == 0 {
+			return nil
+		}
+		hits = append(hits, hit{rec: &r, score: matches})
+		return nil
+	})
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].score != hits[j].score {
+			return hits[i].score > hits[j].score
+		}
+		if hits[i].rec.Importance != hits[j].rec.Importance {
+			return hits[i].rec.Importance > hits[j].rec.Importance
+		}
+		return tsNano(hits[i].rec.Timestamp) > tsNano(hits[j].rec.Timestamp)
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	out := make([]map[string]any, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, episodicToMap(h.rec, 0))
+	}
+	return out
 }
 
 // runSubstringSearch does tokenised BM25-ish lexical matching —
