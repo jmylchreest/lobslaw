@@ -22,6 +22,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
+	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
@@ -131,6 +132,10 @@ type Config struct {
 	// programmatically still work.
 	Skills config.SkillsConfig
 
+	// MCP declares top-level [[mcp.servers]] entries that start at
+	// boot alongside any plugin-provided MCP manifests.
+	MCP config.MCPConfig
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate
@@ -185,6 +190,9 @@ type Node struct {
 	embedder         compute.EmbeddingProvider
 	roleMap          *compute.RoleMap
 	providerRegistry *compute.ProviderRegistry
+	mcpLoader        *mcp.Loader
+	webhookHandlers  []*gateway.WebhookHandler
+	mountResolver    *compute.MountResolver
 
 	// Scheduler fires ScheduledTaskRecord and AgentCommitment records.
 	// Runs on any node that has access to the Raft stack (memory or
@@ -582,6 +590,16 @@ func (n *Node) Start(ctx context.Context) error {
 		}
 	}
 
+	// MCP servers from top-level [mcp.servers] config. Plugin
+	// manifests can also declare servers; the loader dedupes by
+	// name (first-registered wins). Failures per server are
+	// isolated — a misconfigured integration doesn't block boot.
+	if len(n.cfg.MCP.Servers) > 0 {
+		if err := n.startMCPFromConfig(ctx); err != nil {
+			n.log.Warn("mcp: direct servers failed to start", "err", err)
+		}
+	}
+
 	// Gateway HTTP server, when wired. Runs until ctx is cancelled;
 	// a failure to bind surfaces through errCh so we fail the whole
 	// node (a gateway-enabled node that couldn't bind its channel
@@ -868,6 +886,12 @@ func (n *Node) Audit() *audit.AuditLog { return n.auditLog }
 // debug_storage return [] until they manually gRPC-call
 // StorageService.AddMount, which is silly for local dev.
 func (n *Node) seedStorageMountsFromConfig(ctx context.Context) error {
+	// Populate the MountResolver independent of Raft leadership —
+	// every node needs local label → path resolution for fs tools,
+	// even followers that aren't responsible for propagating
+	// writes.
+	n.refreshMountResolver()
+
 	if n.storageSvc == nil || n.store == nil {
 		return nil
 	}
@@ -896,6 +920,24 @@ func (n *Node) seedStorageMountsFromConfig(ctx context.Context) error {
 			"label", m.Label, "type", m.Type, "path", m.Path)
 	}
 	return nil
+}
+
+// refreshMountResolver rebuilds the local mount-label → path map
+// from [[storage.mounts]]. Called during boot + when config hot-
+// reloads. Only handles local-type mounts today (the fs builtins
+// are local-filesystem anyway); remote-backend mounts (S3, rclone)
+// are addressed by a different surface.
+func (n *Node) refreshMountResolver() {
+	if n.mountResolver == nil {
+		n.mountResolver = compute.NewMountResolver()
+	}
+	for _, m := range n.cfg.Storage.Mounts {
+		if m.Label == "" || m.Type != "local" || m.Path == "" {
+			continue
+		}
+		n.mountResolver.Register(m.Label, m.Path, m.Writable, m.Excludes)
+	}
+	compute.SetActiveMountResolver(n.mountResolver)
 }
 
 // seedDefaultPolicyRules writes a platform-trusted allow rule for
@@ -1190,9 +1232,10 @@ func (n *Node) wireCompute() error {
 	// on Raft-hosting nodes; a compute-only node (no Raft) skips.
 	if n.raft != nil && n.store != nil {
 		if err := compute.RegisterMemoryBuiltins(builtins, compute.MemoryConfig{
-			Store:    n.store,
-			Raft:     n.raft,
-			Embedder: embedder,
+			Store:     n.store,
+			Raft:      n.raft,
+			Forgetter: n.memorySvc,
+			Embedder:  embedder,
 		}); err != nil {
 			return fmt.Errorf("register memory builtins: %w", err)
 		}
@@ -1202,6 +1245,24 @@ func (n *Node) wireCompute() error {
 			}
 		}
 		n.log.Info("compute: memory_search + memory_write registered")
+	}
+
+	// Schedule tools: schedule_create / list / get / delete. Need
+	// Raft + store. Agent-turn handler for the actual dispatch is
+	// already registered via registerAgentTurnHandlers().
+	if n.raft != nil && n.store != nil {
+		if err := compute.RegisterScheduleBuiltins(builtins, compute.ScheduleConfig{
+			Store: n.store,
+			Raft:  n.raft,
+		}); err != nil {
+			return fmt.Errorf("register schedule builtins: %w", err)
+		}
+		for _, td := range compute.ScheduleToolDefs() {
+			if err := n.toolRegistry.Register(td); err != nil {
+				return fmt.Errorf("register schedule tool %q: %w", td.Name, err)
+			}
+		}
+		n.log.Info("compute: schedule_create/list/get/delete registered")
 	}
 
 	// Council tools: list_providers + council_review. Only wire
@@ -1426,10 +1487,19 @@ func (n *Node) wireCompute() error {
 			}
 			episodicIngester = &episodicIngesterAdapter{inner: ingester}
 		}
+		primaryLabel := ""
+		if len(n.cfg.Compute.Providers) > 0 {
+			primaryLabel = n.cfg.Compute.Providers[0].Label
+			if n.cfg.Compute.Roles.Main != "" {
+				primaryLabel = n.cfg.Compute.Roles.Main
+			}
+		}
 		a, err := compute.NewAgent(compute.AgentConfig{
-			Provider: n.llmProvider,
-			Executor: n.executor,
-			Registry: n.toolRegistry,
+			Provider:     n.llmProvider,
+			PrimaryLabel: primaryLabel,
+			Providers:    n.providerRegistry,
+			Executor:     n.executor,
+			Registry:     n.toolRegistry,
 			Soul: func() *types.SoulConfig {
 				s := n.Soul()
 				if s == nil {
@@ -1671,6 +1741,7 @@ func (n *Node) wireGateway() error {
 	n.promptRegistry = gateway.NewPromptRegistry()
 
 	var tg *gateway.TelegramHandler
+	var webhooks []*gateway.WebhookHandler
 	for i, ch := range n.cfg.Gateway.Channels {
 		switch ch.Type {
 		case "telegram":
@@ -1680,6 +1751,15 @@ func (n *Node) wireGateway() error {
 			}
 			tg = h
 			n.telegramHandler = h
+		case "webhook":
+			h, err := n.buildWebhookHandler(ch)
+			if err != nil {
+				return fmt.Errorf("gateway.channels[%d] (webhook): %w", i, err)
+			}
+			webhooks = append(webhooks, h)
+		case "rest":
+			// REST is the base HTTP surface — no separate handler
+			// to register; ignore so operators can list it explicitly.
 		case "":
 			n.log.Warn("gateway.channels[%d] has empty type; skipping", "index", i)
 		default:
@@ -1687,6 +1767,7 @@ func (n *Node) wireGateway() error {
 				"index", i, "type", ch.Type)
 		}
 	}
+	n.webhookHandlers = webhooks
 
 	// HTTPPort defaults to 8443 when unset. ListenAddr uses 0.0.0.0
 	// unless the operator supplies a specific bind via future config
@@ -1721,6 +1802,7 @@ func (n *Node) wireGateway() error {
 		JWTValidator:     n.jwtValidator,
 		RequireAuth:      n.cfg.Auth.RequireAuth,
 		Telegram:         tg,
+		Webhooks:         webhooks,
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
 		Plan:             planServiceOrNil(n.planSvc),
@@ -1793,6 +1875,50 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 // or nil when the node is running without a soul file. Passed to
 // TelegramConfig so responsiveness timers can gate on SOUL
 // characteristics without needing a direct dependency.
+// buildWebhookHandler resolves the shared-secret ref and constructs
+// a WebhookHandler. Fails on empty name or unresolvable secret;
+// scope defaults to "webhook" at the handler layer.
+func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig) (*gateway.WebhookHandler, error) {
+	if ch.Name == "" {
+		return nil, fmt.Errorf("webhook channel: name required (used in mount path and logs)")
+	}
+	secret, err := n.resolveChannelSecret(ch.SharedSecretRef)
+	if err != nil {
+		return nil, fmt.Errorf("webhook %q: shared_secret_ref: %w", ch.Name, err)
+	}
+	return gateway.NewWebhookHandler(gateway.WebhookConfig{
+		Name:          ch.Name,
+		Path:          ch.WebhookPath,
+		SharedSecret:  secret,
+		Scope:         ch.Scope,
+		DefaultBudget: compute.FromConfig(n.cfg.Compute.Budgets),
+		Logger:        n.log,
+	}, n.agent)
+}
+
+// startMCPFromConfig spawns every [[mcp.servers]] entry, translating
+// lobslaw's config schema into the mcp package's ServerConfig shape.
+// Secret refs resolve via the channel resolver (same one Telegram
+// uses). Plugin-provided MCP manifests still work independently.
+func (n *Node) startMCPFromConfig(ctx context.Context) error {
+	if n.mcpLoader == nil {
+		n.mcpLoader = mcp.NewLoader(mcp.LoaderConfig{
+			Logger: n.log,
+		})
+	}
+	servers := make(map[string]mcp.ServerConfig, len(n.cfg.MCP.Servers))
+	for name, s := range n.cfg.MCP.Servers {
+		servers[name] = mcp.ServerConfig{
+			Command:   s.Command,
+			Args:      s.Args,
+			Env:       s.Env,
+			SecretEnv: s.SecretEnv,
+			Disabled:  s.Disabled,
+		}
+	}
+	return n.mcpLoader.StartDirect(ctx, servers)
+}
+
 func (n *Node) soulProvider() *types.SoulConfig {
 	s := n.Soul()
 	if s == nil {

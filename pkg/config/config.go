@@ -28,6 +28,7 @@ type Config struct {
 	Skills        SkillsConfig        `koanf:"skills"`
 	Observability ObservabilityConfig `koanf:"observability"`
 	Logging       LoggingConfig       `koanf:"logging"`
+	MCP           MCPConfig           `koanf:"mcp"`
 	ConfigOpts    ConfigOpts          `koanf:"config"`
 
 	// resolvedPath is the filesystem path Load resolved via
@@ -87,6 +88,17 @@ type StorageMountConfig struct {
 	Label            string            `koanf:"label"`
 	Type             string            `koanf:"type"`
 	Path             string            `koanf:"path,omitempty"`
+	// Writable controls whether the agent can write/edit files
+	// inside this mount via builtin fs tools. Default false — the
+	// operator must opt in explicitly, because a default-writable
+	// mount could corrupt internal state (snapshots, bbolt files)
+	// if its path overlaps with cluster-private directories.
+	Writable bool `koanf:"writable,omitempty"`
+	// Excludes is a list of glob patterns (e.g. ".git/**", "*.key",
+	// "node_modules/**") hidden from list/glob/grep/read inside
+	// this mount. Hardcoded internal excludes (.snapshot, state.db,
+	// *.pem) always apply on top of these.
+	Excludes []string `koanf:"excludes,omitempty"`
 	Bucket           string            `koanf:"bucket,omitempty"`
 	Endpoint         string            `koanf:"endpoint,omitempty"`
 	Account          string            `koanf:"account,omitempty"`
@@ -238,6 +250,30 @@ type BudgetsConfig struct {
 	MaxEgressBytesPerTurn int64   `koanf:"max_egress_bytes_per_turn"`
 }
 
+// MCPConfig describes top-level Model Context Protocol server
+// declarations. Each server is a subprocess (typically via stdio)
+// exposing a set of tools that appear alongside the built-in tools
+// in the LLM's function list. Plugins can also declare servers
+// via .mcp.json; both sources compose at boot.
+type MCPConfig struct {
+	// Servers maps a logical name (used as the tool namespace
+	// prefix, e.g. "gmail" → tools appear as gmail.search) to the
+	// subprocess specification.
+	Servers map[string]MCPServerConfig `koanf:"servers"`
+}
+
+// MCPServerConfig is one server's subprocess specification.
+// Command + Args compose the argv; Env pairs are plaintext;
+// SecretEnv names env vars whose values resolve via secret refs
+// (env:/file:/kms:) the same way every other lobslaw secret does.
+type MCPServerConfig struct {
+	Command   string            `koanf:"command"`
+	Args      []string          `koanf:"args,omitempty"`
+	Env       map[string]string `koanf:"env,omitempty"`
+	SecretEnv map[string]string `koanf:"secret_env,omitempty"`
+	Disabled  bool              `koanf:"disabled,omitempty"`
+}
+
 // LimitsConfig holds non-cost safety valves. These are about
 // preventing runaway loops and pathological behaviour, not about
 // rationing spend (which lobslaw doesn't gate on).
@@ -292,6 +328,17 @@ type GatewayChannelConfig struct {
 	// gateway's unknown_user_scope. For a personal bot, listing
 	// your own user_id with scope="owner" locks everyone else out.
 	UserScopes map[string]string `koanf:"user_scopes,omitempty"`
+
+	// Webhook channel fields. Only consulted when Type == "webhook".
+	// WebhookPath is the URL path mounted under the gateway HTTP
+	// server (default "/webhook/<Name>"). SharedSecretRef auths
+	// inbound requests via Authorization: Bearer <secret>. Scope
+	// applied to dispatched turns; operator controls what the
+	// inbound caller can do.
+	Name             string `koanf:"name,omitempty"`
+	WebhookPath      string `koanf:"webhook_path,omitempty"`
+	SharedSecretRef  string `koanf:"shared_secret_ref,omitempty"`
+	Scope            string `koanf:"scope,omitempty"`
 }
 
 type DiscoveryConfig struct {

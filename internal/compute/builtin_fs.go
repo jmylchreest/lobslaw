@@ -99,9 +99,16 @@ func readFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 		return marshalToolError("missing_arg", "path is required",
 			"pass path as an absolute filesystem path string")
 	}
+	resolved, errPayload, errExit := resolveFsPath(path, false)
+	if errExit != 0 {
+		return errPayload, errExit, nil
+	}
+	if resolved != "" {
+		path = resolved
+	}
 	if !filepath.IsAbs(path) {
-		return marshalToolError("relative_path", "path must be absolute",
-			"prefix with / (e.g. /home/johnm/lobslaw/notes.md). If you don't know where to look, call list_files on a directory you know exists")
+		return marshalToolError("relative_path", "path must be absolute OR mount-scoped (e.g. 'workspace/notes.md')",
+			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
 	}
 	if isInternalPath(path) {
 		return marshalToolError("internal_path", path+" is cluster-internal and cannot be read",
@@ -190,9 +197,16 @@ func listFilesBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 		return marshalToolError("missing_arg", "path is required",
 			"pass path as an absolute directory path string")
 	}
+	resolved, errPayload, errExit := resolveFsPath(path, false)
+	if errExit != 0 {
+		return errPayload, errExit, nil
+	}
+	if resolved != "" {
+		path = resolved
+	}
 	if !filepath.IsAbs(path) {
-		return marshalToolError("relative_path", "path must be absolute",
-			"prefix with / (e.g. /home/johnm/lobslaw)")
+		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
+			"use '/abs/path' or 'mount-label/subpath' (see debug_storage for mounts)")
 	}
 	if isInternalPath(path) {
 		return marshalToolError("internal_path", path+" is a cluster-internal path",
@@ -285,9 +299,16 @@ func globBuiltin(ctx context.Context, args map[string]string) ([]byte, int, erro
 		return marshalToolError("missing_arg", "path is required",
 			"pass an absolute root directory to walk")
 	}
+	resolved, errPayload, errExit := resolveFsPath(root, false)
+	if errExit != 0 {
+		return errPayload, errExit, nil
+	}
+	if resolved != "" {
+		root = resolved
+	}
 	if !filepath.IsAbs(root) {
-		return marshalToolError("relative_path", "path must be absolute",
-			"prefix with / (e.g. /home/johnm/lobslaw)")
+		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
+			"use '/abs/path' or 'mount-label/subpath'")
 	}
 	if isInternalPath(root) {
 		return marshalToolError("internal_path", root+" is a cluster-internal path", "")
@@ -426,9 +447,16 @@ func searchFilesBuiltin(ctx context.Context, args map[string]string) ([]byte, in
 		return marshalToolError("missing_arg", "path is required",
 			"pass an absolute directory or file path to search under. grep does NOT search the web or GitHub — use fetch_url for that")
 	}
+	resolved, errPayload, errExit := resolveFsPath(searchPath, false)
+	if errExit != 0 {
+		return errPayload, errExit, nil
+	}
+	if resolved != "" {
+		searchPath = resolved
+	}
 	if !filepath.IsAbs(searchPath) {
-		return marshalToolError("relative_path", "path must be absolute",
-			"prefix with / (e.g. /home/johnm/lobslaw). grep is local-filesystem only")
+		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
+			"use '/abs/path' or 'mount-label/subpath'. grep is local-filesystem only — for web/GitHub use fetch_url")
 	}
 	if isInternalPath(searchPath) {
 		return marshalToolError("internal_path", searchPath+" is a cluster-internal path", "")

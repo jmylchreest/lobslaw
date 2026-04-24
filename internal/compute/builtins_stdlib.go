@@ -51,7 +51,7 @@ func StdlibToolDefs() []*types.ToolDef {
 		{
 			Name:        "read_file",
 			Path:        BuiltinScheme + "read_file",
-			Description: "Read a LOCAL filesystem text file on this machine. Pass path (absolute). Optional offset (0-indexed line number to start at) and limit (max lines, default 200). Returns JSON with path, line_count, and content. LOCAL FILES ONLY — not web URLs, not GitHub, not remote content. For online resources use fetch_url. Do not guess paths: use list_files or glob first to discover what exists.",
+			Description: "Read a LOCAL filesystem text file on this machine. Pass path (absolute OR mount-scoped like \"workspace/notes.md\"). Optional offset (0-indexed line number to start at) and limit (max lines, default 200). Returns JSON with path, line_count, and content. LOCAL FILES ONLY — not web URLs, not GitHub, not remote content. For online resources use fetch_url. Do not guess paths: use list_files or glob first to discover what exists.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -67,7 +67,7 @@ func StdlibToolDefs() []*types.ToolDef {
 		{
 			Name:        "list_files",
 			Path:        BuiltinScheme + "list_files",
-			Description: "List entries in a LOCAL directory on this machine. Pass path (absolute). Returns JSON with entries [{name, is_dir, size}]. Hidden: .git, .snapshot, internal cluster files, TLS keys. Capped at 200 entries by default (max 1000). LOCAL FILESYSTEM ONLY — not for browsing GitHub, remote URLs, or web directories.",
+			Description: "List entries in a LOCAL directory on this machine. Pass path (absolute OR mount-scoped like \"workspace/notes.md\"). Returns JSON with entries [{name, is_dir, size}]. Hidden: .git, .snapshot, internal cluster files, TLS keys. Capped at 200 entries by default (max 1000). LOCAL FILESYSTEM ONLY — not for browsing GitHub, remote URLs, or web directories.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {

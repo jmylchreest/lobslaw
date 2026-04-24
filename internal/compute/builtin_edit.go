@@ -98,13 +98,20 @@ func writeFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 	if path == "" {
 		return marshalToolError("missing_arg", "path is required", "pass an absolute filesystem path")
 	}
+	resolved, errPayload, errExit := resolveFsPath(path, true)
+	if errExit != 0 {
+		return errPayload, errExit, nil
+	}
+	if resolved != "" {
+		path = resolved
+	}
 	if !filepath.IsAbs(path) {
-		return marshalToolError("relative_path", "path must be absolute",
-			"prefix with / (e.g. /home/johnm/lobslaw/notes.md)")
+		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
+			"use '/abs/path' or 'mount-label/subpath' where the mount is writable")
 	}
 	if isInternalPath(path) {
 		return marshalToolError("internal_path", path+" is cluster-internal and cannot be written",
-			"pick a path inside a configured storage mount")
+			"pick a path inside a writable storage mount")
 	}
 	content := args["content"]
 	if len(content) > writeFileMaxBytes {
@@ -146,8 +153,15 @@ func editFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 	if path == "" {
 		return marshalToolError("missing_arg", "path is required", "pass an absolute filesystem path")
 	}
+	resolved, errPayload, errExit := resolveFsPath(path, true)
+	if errExit != 0 {
+		return errPayload, errExit, nil
+	}
+	if resolved != "" {
+		path = resolved
+	}
 	if !filepath.IsAbs(path) {
-		return marshalToolError("relative_path", "path must be absolute", "prefix with /")
+		return marshalToolError("relative_path", "path must be absolute OR mount-scoped", "use '/abs/path' or 'mount-label/subpath' where the mount is writable")
 	}
 	if isInternalPath(path) {
 		return marshalToolError("internal_path", path+" is cluster-internal and cannot be edited", "")
