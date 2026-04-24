@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // Loader discovers .mcp.json manifests, spawns each declared
@@ -63,10 +64,15 @@ type managedServer struct {
 // managedTool is one tool sourced from an MCP server. We keep both
 // the server pointer (for CallTool dispatch) and the advertised
 // schema (for future ToolDef generation when we wire the compute
-// Registry-side integration).
+// Registry-side integration). rawName is the tool's name as the
+// upstream MCP server knows it; the Loader's tools map is keyed
+// (and the Tool.Name field exposed to lobslaw) by the namespaced
+// form "<server>.<rawName>" to prevent collisions across servers
+// that happen to define identically-named tools.
 type managedTool struct {
-	tool   Tool
-	server *managedServer
+	tool    Tool
+	rawName string
+	server  *managedServer
 }
 
 // Start launches every discovered-and-enabled server, initializes
@@ -156,12 +162,18 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 	srv := &managedServer{name: name, client: client}
 	l.servers[name] = srv
 	for _, t := range tools {
-		if _, collision := l.tools[t.Name]; collision {
-			l.log.Warn("mcp: tool name collision — keeping first",
-				"tool", t.Name, "server", name)
+		raw := t.Name
+		qualified := name + "." + raw
+		if _, collision := l.tools[qualified]; collision {
+			l.log.Warn("mcp: qualified-name collision — keeping first",
+				"tool", qualified, "server", name)
 			continue
 		}
-		l.tools[t.Name] = &managedTool{tool: t, server: srv}
+		// Tool exposed to the compute layer carries the namespaced
+		// name so the LLM sees e.g. "gmail.search" instead of just
+		// "search" (which would collide across servers).
+		t.Name = qualified
+		l.tools[qualified] = &managedTool{tool: t, rawName: raw, server: srv}
 	}
 	l.log.Info("mcp: server ready",
 		"name", name, "server_name", client.ServerInfo().Name,
@@ -178,7 +190,10 @@ func (l *Loader) registerServer(name string, client *Client, tools []Tool) {
 	srv := &managedServer{name: name, client: client}
 	l.servers[name] = srv
 	for _, t := range tools {
-		l.tools[t.Name] = &managedTool{tool: t, server: srv}
+		raw := t.Name
+		qualified := name + "." + raw
+		t.Name = qualified
+		l.tools[qualified] = &managedTool{tool: t, rawName: raw, server: srv}
 	}
 }
 
@@ -219,7 +234,9 @@ func (l *Loader) Invoke(ctx context.Context, req compute.SkillInvokeRequest) (*c
 	if !ok {
 		return nil, fmt.Errorf("mcp: tool %q not found", req.Name)
 	}
-	res, err := t.server.client.CallTool(ctx, req.Name, req.Params)
+	// Upstream MCP server doesn't know about the namespace prefix
+	// we added locally — pass its bare name back over the wire.
+	res, err := t.server.client.CallTool(ctx, t.rawName, req.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +270,32 @@ func (l *Loader) ListTools() []Tool {
 	out := make([]Tool, 0, len(l.tools))
 	for _, t := range l.tools {
 		out = append(out, t.tool)
+	}
+	return out
+}
+
+// ToolDefs returns a compute-layer ToolDef per MCP-registered tool.
+// Path uses the "mcp:" scheme so the compute.Executor knows to
+// route through the SkillDispatcher (where the Loader lives) rather
+// than exec'ing a binary. Node.New calls this after StartDirect +
+// Start to populate the compute.Registry — that's what makes MCP
+// tools visible to the LLM's function-calling list.
+func (l *Loader) ToolDefs() []*types.ToolDef {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]*types.ToolDef, 0, len(l.tools))
+	for _, t := range l.tools {
+		var schema []byte
+		if len(t.tool.InputSchema) > 0 {
+			schema = []byte(t.tool.InputSchema)
+		}
+		out = append(out, &types.ToolDef{
+			Name:             t.tool.Name,
+			Path:             "mcp:" + t.tool.Name,
+			Description:      t.tool.Description,
+			ParametersSchema: schema,
+			RiskTier:         types.RiskCommunicating,
+		})
 	}
 	return out
 }

@@ -244,10 +244,16 @@ type ChainTriggerConfig struct {
 	Always        bool     `koanf:"always,omitempty"`
 }
 
+// BudgetsConfig is DEPRECATED — retained so existing TOML configs
+// still parse without error, but the spend/egress fields are no-ops
+// per lobslaw-per-turn-budgets (superseded). MaxToolCallsPerTurn is
+// consumed by compute.FromConfig as a bridge to LimitsConfig during
+// the deprecation window; new configs should put it under
+// [compute.limits].
 type BudgetsConfig struct {
 	MaxToolCallsPerTurn   int     `koanf:"max_tool_calls_per_turn"`
-	MaxSpendUSDPerTurn    float64 `koanf:"max_spend_usd_per_turn"`
-	MaxEgressBytesPerTurn int64   `koanf:"max_egress_bytes_per_turn"`
+	MaxSpendUSDPerTurn    float64 `koanf:"max_spend_usd_per_turn,omitempty"`   // deprecated: no-op
+	MaxEgressBytesPerTurn int64   `koanf:"max_egress_bytes_per_turn,omitempty"` // deprecated: no-op
 }
 
 // MCPConfig describes top-level Model Context Protocol server

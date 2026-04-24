@@ -598,6 +598,7 @@ func (n *Node) Start(ctx context.Context) error {
 		if err := n.startMCPFromConfig(ctx); err != nil {
 			n.log.Warn("mcp: direct servers failed to start", "err", err)
 		}
+		n.registerMCPToolsWithCompute()
 	}
 
 	// Gateway HTTP server, when wired. Runs until ctx is cancelled;
@@ -1611,7 +1612,7 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 	if prompt == "" {
 		return fmt.Errorf("scheduled task %q: params.prompt missing", task.Id)
 	}
-	budget, err := compute.NewTurnBudget(compute.FromConfig(n.cfg.Compute.Budgets))
+	budget, err := compute.NewTurnBudget(compute.FromComputeConfig(n.cfg.Compute))
 	if err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
@@ -1646,7 +1647,7 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 	if prompt == "" {
 		return fmt.Errorf("commitment %q: no prompt or reason", c.Id)
 	}
-	budget, err := compute.NewTurnBudget(compute.FromConfig(n.cfg.Compute.Budgets))
+	budget, err := compute.NewTurnBudget(compute.FromComputeConfig(n.cfg.Compute))
 	if err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
@@ -1798,7 +1799,7 @@ func (n *Node) wireGateway() error {
 		TLSCert:          tlsCert,
 		TLSKey:           tlsKey,
 		DefaultScope:     n.cfg.Gateway.UnknownUserScope,
-		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
+		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
 		JWTValidator:     n.jwtValidator,
 		RequireAuth:      n.cfg.Auth.RequireAuth,
 		Telegram:         tg,
@@ -1860,7 +1861,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		WebhookSecret:    webhookSecret,
 		UserIDScopes:     userScopes,
 		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
-		DefaultBudget:    compute.FromConfig(n.cfg.Compute.Budgets),
+		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
 		TypingInterval:   n.cfg.Gateway.TypingInterval,
@@ -1891,7 +1892,7 @@ func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig) (*gateway.Web
 		Path:          ch.WebhookPath,
 		SharedSecret:  secret,
 		Scope:         ch.Scope,
-		DefaultBudget: compute.FromConfig(n.cfg.Compute.Budgets),
+		DefaultBudget: compute.FromComputeConfig(n.cfg.Compute),
 		Logger:        n.log,
 	}, n.agent)
 }
@@ -1900,6 +1901,33 @@ func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig) (*gateway.Web
 // lobslaw's config schema into the mcp package's ServerConfig shape.
 // Secret refs resolve via the channel resolver (same one Telegram
 // uses). Plugin-provided MCP manifests still work independently.
+// registerMCPToolsWithCompute adds each live MCP tool's ToolDef
+// into the compute.Registry so the LLM sees them in its function
+// list. Also chains the Loader into the agent's SkillDispatcher so
+// tool calls with mcp-registered names dispatch through it.
+// Called once after startMCPFromConfig; safe to call with zero
+// tools (no-op).
+func (n *Node) registerMCPToolsWithCompute() {
+	if n.mcpLoader == nil || n.toolRegistry == nil {
+		return
+	}
+	defs := n.mcpLoader.ToolDefs()
+	for _, td := range defs {
+		if err := n.toolRegistry.Register(td); err != nil {
+			n.log.Warn("mcp: register tool def failed", "name", td.Name, "err", err)
+		}
+	}
+	if n.agent != nil && len(defs) > 0 {
+		n.agent.SetSkillDispatcher(compute.NewSkillDispatcherChain(
+			skillDispatcherOrNil(n.skillAdapter),
+			n.mcpLoader,
+		))
+	}
+	if len(defs) > 0 {
+		n.log.Info("mcp: registered tools with compute registry", "count", len(defs))
+	}
+}
+
 func (n *Node) startMCPFromConfig(ctx context.Context) error {
 	if n.mcpLoader == nil {
 		n.mcpLoader = mcp.NewLoader(mcp.LoaderConfig{

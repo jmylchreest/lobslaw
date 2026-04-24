@@ -194,6 +194,16 @@ type Agent struct {
 	cfg AgentConfig
 }
 
+// SetSkillDispatcher swaps the skill dispatcher post-construction.
+// Used by node wiring to swap in a SkillDispatcherChain once MCP
+// servers have started (their tools aren't known at agent-
+// construction time — they arrive after tools/list round-trips).
+// Safe to call; AgentConfig isn't read concurrently with this
+// assignment during normal startup ordering.
+func (a *Agent) SetSkillDispatcher(d SkillDispatcher) {
+	a.cfg.Skills = d
+}
+
 // NewAgent validates required deps and constructs the Agent. Fails
 // fast on missing Provider — tests that need to exercise the
 // Executor-only path still need a mock provider.

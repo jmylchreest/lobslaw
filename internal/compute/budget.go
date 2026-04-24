@@ -43,15 +43,38 @@ type BudgetCaps struct {
 	MaxEgressBytes   int64
 }
 
-// FromConfig builds BudgetCaps from the config shape. Exists as a
-// function (not a method on BudgetsConfig) so pkg/config stays
-// free of compute-package types.
+// FromConfig builds BudgetCaps from the deprecated [compute.budgets]
+// block. Retained for back-compat; new config should use
+// FromLimits against [compute.limits] (which only carries the
+// tool-call safety valve — no spend/egress rationing).
 func FromConfig(cfg config.BudgetsConfig) BudgetCaps {
 	return BudgetCaps{
 		MaxToolCalls:   cfg.MaxToolCallsPerTurn,
 		MaxSpendUSD:    cfg.MaxSpendUSDPerTurn,
 		MaxEgressBytes: cfg.MaxEgressBytesPerTurn,
 	}
+}
+
+// FromLimits builds BudgetCaps from the current [compute.limits]
+// block. Spend + egress always zero (disabled); only the tool-call
+// safety valve is carried through. Default 30 when unset.
+func FromLimits(cfg config.LimitsConfig) BudgetCaps {
+	cap := cfg.MaxToolCallsPerTurn
+	if cap == 0 {
+		cap = 30
+	}
+	return BudgetCaps{MaxToolCalls: cap}
+}
+
+// FromComputeConfig picks Limits when non-zero, falling back to
+// Budgets.MaxToolCallsPerTurn for back-compat on unmigrated configs.
+// One-call API for wiring sites that don't want to know which
+// section an operator chose.
+func FromComputeConfig(cfg config.ComputeConfig) BudgetCaps {
+	if cfg.Limits.MaxToolCallsPerTurn > 0 {
+		return FromLimits(cfg.Limits)
+	}
+	return FromConfig(cfg.Budgets)
 }
 
 // BudgetDecision is the result of a Check / Record call. Exceeded

@@ -32,10 +32,13 @@ func TestLoaderHasKnowsRegisteredTools(t *testing.T) {
 	l, _ := newLoaderWithFakeServer(t, "fs", []Tool{
 		{Name: "read_file", Description: "Read a file"},
 	})
-	if !l.Has("read_file") {
-		t.Error("registered tool should be known")
+	if !l.Has("fs.read_file") {
+		t.Error("registered tool should be known under its namespaced name")
 	}
-	if l.Has("write_file") {
+	if l.Has("read_file") {
+		t.Error("bare tool names should not be visible; namespacing is the contract")
+	}
+	if l.Has("fs.write_file") {
 		t.Error("unregistered tool should not be known")
 	}
 }
@@ -51,7 +54,7 @@ func TestLoaderInvokeRoutesToServer(t *testing.T) {
 	})
 
 	res, err := l.Invoke(context.Background(), compute.SkillInvokeRequest{
-		Name:   "read_file",
+		Name:   "fs.read_file",
 		Params: map[string]any{"path": "/tmp/a.txt"},
 	})
 	if err != nil {
@@ -79,7 +82,7 @@ func TestLoaderInvokeToolErrorReturnsExit1(t *testing.T) {
 			"content": [{"type":"text","text":"file not found"}]
 		}`),
 	})
-	res, err := l.Invoke(context.Background(), compute.SkillInvokeRequest{Name: "risky"})
+	res, err := l.Invoke(context.Background(), compute.SkillInvokeRequest{Name: "fs.risky"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +135,7 @@ func TestLoaderCloseIsIdempotent(t *testing.T) {
 	if err := l.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
 	}
-	if l.Has("x") {
+	if l.Has("fs.x") {
 		t.Error("tools should be cleared after Close")
 	}
 }
