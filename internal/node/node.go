@@ -1080,6 +1080,25 @@ func (n *Node) wireCompute() error {
 		}
 	}
 
+	// Memory tools: registered when Raft + store are available.
+	// Without these the model can't recall anything past the
+	// conversation-history buffer. Safe to register unconditionally
+	// on Raft-hosting nodes; a compute-only node (no Raft) skips.
+	if n.raft != nil && n.store != nil {
+		if err := compute.RegisterMemoryBuiltins(builtins, compute.MemoryConfig{
+			Store: n.store,
+			Raft:  n.raft,
+		}); err != nil {
+			return fmt.Errorf("register memory builtins: %w", err)
+		}
+		for _, td := range compute.MemoryToolDefs() {
+			if err := n.toolRegistry.Register(td); err != nil {
+				return fmt.Errorf("register memory tool %q: %w", td.Name, err)
+			}
+		}
+		n.log.Info("compute: memory_search + memory_write registered")
+	}
+
 	// Web search: only registered when an Exa API key is
 	// configured. Skipped silently when absent so deployments that
 	// don't want web access don't need to redact anything — they
