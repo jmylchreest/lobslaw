@@ -342,14 +342,24 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 	}
 }
 
-// maybeIngestTurn fires the configured EpisodicIngester when the
-// turn completed cleanly (reply non-empty, no confirmation
-// pending). Ingest failures are logged and swallowed — memory
-// loss on a single turn is preferable to dropping the user's
-// reply for a backend hiccup. ChatID / UserID are pulled from
-// Claims when available; channel is best-effort (scope often
-// holds a channel-adjacent value like "telegram").
-func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string) {
+// maybeIngestTurn fires the configured EpisodicIngester after a
+// clean turn. Async by design — the reply has already been
+// appended to resp before this is called, and the channel's
+// response to the user is strictly downstream of that. Blocking
+// on Raft + embedding would add 200-500ms to every reply for
+// content the user has already received; firing in a goroutine
+// removes that latency without sacrificing durability (the write
+// is already eventually-consistent from the user's perspective).
+//
+// Context is deliberately decoupled from req.Context — the
+// channel's context cancels when its handler returns (right
+// after sending the reply), which would orphan our goroutine.
+// Use context.Background with a bounded timeout instead.
+//
+// Failures log WARN and are swallowed. Memory loss on a single
+// turn is preferable to dropping the user's reply for a backend
+// hiccup.
+func (a *Agent) maybeIngestTurn(_ context.Context, req ProcessMessageRequest, reply string) {
 	if a.cfg.EpisodicIngester == nil || reply == "" {
 		return
 	}
@@ -363,10 +373,14 @@ func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, 
 		turn.UserID = req.Claims.UserID
 		turn.Channel = req.Claims.Scope
 	}
-	if err := a.cfg.EpisodicIngester.IngestTurn(ctx, turn); err != nil {
-		a.cfg.Logger.Warn("agent: episodic ingest failed; turn still succeeded",
-			"turn_id", req.TurnID, "err", err)
-	}
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := a.cfg.EpisodicIngester.IngestTurn(bgCtx, turn); err != nil {
+			a.cfg.Logger.Warn("agent: episodic ingest failed; turn still succeeded",
+				"turn_id", req.TurnID, "err", err)
+		}
+	}()
 }
 
 // toPromptgenTools renders the LLM-facing Tools as promptgen's
