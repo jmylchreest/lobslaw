@@ -1116,6 +1116,21 @@ func (n *Node) wireCompute() error {
 	}
 	n.log.Info("compute: fetch_url registered")
 
+	// Write + edit tools — destructive so they register with
+	// RiskIrreversible. Default policy seeding (below) adds an
+	// allow rule but operators who want confirmation-on-every-write
+	// override with a higher-priority require_confirmation rule.
+	if err := compute.RegisterWriteEditBuiltins(builtins); err != nil {
+		return fmt.Errorf("register write/edit: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.WriteToolDef()); err != nil {
+		return fmt.Errorf("register write_file tool def: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.EditToolDef()); err != nil {
+		return fmt.Errorf("register edit_file tool def: %w", err)
+	}
+	n.log.Info("compute: write_file + edit_file registered")
+
 	// Web search: only registered when an Exa API key is
 	// configured. Skipped silently when absent so deployments that
 	// don't want web access don't need to redact anything — they
