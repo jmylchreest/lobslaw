@@ -78,6 +78,16 @@ type AgentConfig struct {
 	// falls through to Provider.
 	Roles *RoleMap
 
+	// PrimaryLabel names the provider that maps to Provider above
+	// in the registry. Used as the starting point for backup-chain
+	// walks. Empty → no chain walk, single-provider behaviour.
+	PrimaryLabel string
+
+	// Providers supplies label-keyed lookup for backup-chain
+	// fallback + council tools. nil → single-provider mode
+	// (Provider is the only LLM path).
+	Providers *ProviderRegistry
+
 	// ContextEngine, when non-nil, runs per-turn semantic memory
 	// recall and appends a "Relevant context" block to the
 	// system prompt. Channels don't see or configure this —
@@ -598,7 +608,7 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 		Model:    req.Model,
 		Tools:    req.Tools,
 	}
-	chatResp, err := a.cfg.Provider.Chat(ctx, chatReq)
+	chatResp, err := a.dispatchWithBackup(ctx, chatReq)
 	if err != nil {
 		return nil, err
 	}
@@ -627,6 +637,75 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 	}
 
 	return &chatWithCost{ChatResponse: chatResp, cost: cost}, nil
+}
+
+// dispatchWithBackup calls the primary LLM provider; on a hard
+// failure (rate-limit, 5xx, timeout, network refused) walks the
+// ProviderRegistry backup chain and retries on each subsequent
+// provider. Same-turn transparent fallback — the user sees one
+// reply from whichever provider succeeds.
+//
+// Soft errors (context cancellation, 4xx other than 429) bubble
+// immediately; they're not indicators of provider failure and
+// retrying wouldn't help.
+func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	// Single-provider mode: no registry wired, no chain to walk.
+	if a.cfg.Providers == nil || a.cfg.PrimaryLabel == "" {
+		return a.cfg.Provider.Chat(ctx, req)
+	}
+
+	chain := a.cfg.Providers.Chain(a.cfg.PrimaryLabel)
+	if len(chain) == 0 {
+		return a.cfg.Provider.Chat(ctx, req)
+	}
+
+	var lastErr error
+	for _, entry := range chain {
+		resp, err := entry.Client.Chat(ctx, req)
+		if err == nil {
+			if lastErr != nil {
+				a.cfg.Logger.Info("agent: provider backup succeeded",
+					"used_label", entry.Label,
+					"prior_error", lastErr.Error())
+			}
+			return resp, nil
+		}
+		if !isRetryableProviderError(err, ctx) {
+			return nil, err
+		}
+		a.cfg.Logger.Warn("agent: provider failed; walking backup chain",
+			"failed_label", entry.Label, "err", err)
+		lastErr = err
+	}
+	return nil, fmt.Errorf("agent: all providers in chain failed; last error: %w", lastErr)
+}
+
+// isRetryableProviderError classifies an LLM call failure as
+// transient (worth trying a backup) or permanent (surface
+// immediately). Context-cancelled errors are NOT retryable — the
+// user intent has changed or the hard-timeout fired, and retrying
+// on a backup inside the same cancelled context is wasted.
+func isRetryableProviderError(err error, ctx context.Context) bool {
+	if err == nil {
+		return false
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	// Hard transient signals: rate limits, 5xx, connection
+	// refused, i/o timeout. Matching on substring is crude but
+	// sufficient — the LLMClient formats these consistently.
+	for _, sig := range []string{
+		"rate limit", "429", "500", "502", "503", "504",
+		"connection refused", "timeout", "deadline",
+		"minimax status 1002", // MiniMax RPM limit
+	} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // runToolCall dispatches one tool call through the Executor.
