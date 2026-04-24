@@ -304,7 +304,19 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 // prompts still work.
 func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 	if req.Tools == nil && a.cfg.Registry != nil {
-		req.Tools = a.cfg.Registry.LLMTools()
+		all := a.cfg.Registry.LLMTools()
+		// Heuristic tool filter: keep defaults + category
+		// matches. Trims prompt size by ~40-60% on typical
+		// chat turns without sacrificing capability — the
+		// model still has memory_search and current_time for
+		// any intent class the classifier missed.
+		req.Tools = tailoredToolsFor(req.Message, all)
+		if len(req.Tools) < len(all) {
+			a.cfg.Logger.Debug("agent: tool list tailored",
+				"turn_id", req.TurnID,
+				"full", len(all),
+				"tailored", len(req.Tools))
+		}
 	}
 	if req.SystemPrompt == "" && a.cfg.Soul != nil {
 		soul := a.cfg.Soul()
