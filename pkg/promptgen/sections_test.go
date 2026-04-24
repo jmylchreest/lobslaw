@@ -56,22 +56,23 @@ func TestBuildIdentityOmitsName(t *testing.T) {
 		},
 		PersonaDescription: "A thoughtful assistant.",
 	}
-	s := BuildIdentity(soul)
-	if strings.Contains(s.Body, "Jarvis") {
-		t.Error("SECURITY: soul.Name must NOT appear in identity block")
+	identity := BuildIdentity(soul)
+	personality := BuildPersonality(soul)
+	if strings.Contains(identity.Body, "Jarvis") || strings.Contains(personality.Body, "Jarvis") {
+		t.Error("SECURITY: soul.Name must NOT appear in identity or personality blocks")
 	}
-	if !strings.Contains(s.Body, "A thoughtful assistant.") {
-		t.Error("persona description should appear")
+	if !strings.Contains(identity.Body, "A thoughtful assistant.") {
+		t.Error("persona description should appear in Identity")
 	}
-	if !strings.Contains(s.Body, "formality: 6/10") {
-		t.Error("emotive scores should render as n/10")
+	if !strings.Contains(personality.Body, "formality: 6/10") {
+		t.Error("emotive scores should render as n/10 in Personality")
 	}
-	if !strings.Contains(s.Body, "scope: personal") {
-		t.Error("scope should appear")
+	if !strings.Contains(identity.Body, "scope: personal") {
+		t.Error("scope should appear in Identity")
 	}
 }
 
-func TestBuildIdentitySkipsZeroScores(t *testing.T) {
+func TestBuildPersonalitySkipsZeroScores(t *testing.T) {
 	t.Parallel()
 	soul := &types.SoulConfig{
 		EmotiveStyle: types.EmotiveStyle{
@@ -79,7 +80,7 @@ func TestBuildIdentitySkipsZeroScores(t *testing.T) {
 			Directness: 0, // zero — should not render
 		},
 	}
-	s := BuildIdentity(soul)
+	s := BuildPersonality(soul)
 	if !strings.Contains(s.Body, "formality") {
 		t.Error("non-zero score should render")
 	}
@@ -216,11 +217,14 @@ func TestBuildRuntimeEmptyGracefully(t *testing.T) {
 	}
 }
 
-func TestBuildWorkspaceDefaultPath(t *testing.T) {
+func TestBuildWorkspaceEmptyPath(t *testing.T) {
 	t.Parallel()
 	s := BuildWorkspace("")
-	if !strings.Contains(s.Body, "/var/lobslaw/workspace") {
-		t.Errorf("default path expected; got %q", s.Body)
+	if strings.Contains(s.Body, "/var/lobslaw/workspace") {
+		t.Errorf("empty path should NOT emit a fabricated default; got %q", s.Body)
+	}
+	if !strings.Contains(s.Body, "No workspace mount is configured") {
+		t.Errorf("empty path should surface 'not configured' message; got %q", s.Body)
 	}
 }
 

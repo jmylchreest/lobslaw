@@ -62,8 +62,8 @@ func TestGenerateSectionOrder(t *testing.T) {
 		"Installed Skills":     strings.Index(got, "# Installed Skills"),
 	}
 	order := []string{
-		"Identity", "Operating Principles", "Current Time",
-		"Runtime", "Workspace", "Available Tools", "Installed Skills",
+		"Identity", "Operating Principles", "Available Tools",
+		"Installed Skills", "Current Time", "Runtime", "Workspace",
 	}
 	for i := 1; i < len(order); i++ {
 		prev, curr := positions[order[i-1]], positions[order[i]]
@@ -136,8 +136,9 @@ func TestGenerateContextWrappedWithTrustDelimiters(t *testing.T) {
 			{Source: "tool:bash", Trust: TrustUntrusted, Content: "some stdout"},
 		},
 	})
-	if !strings.Contains(got, "# Context") {
-		t.Error("Context section missing")
+	// Default (empty) category → short-term → "Recent Context" header.
+	if !strings.Contains(got, "# Recent Context") {
+		t.Error("Recent Context section missing")
 	}
 	if !strings.Contains(got, `<untrusted source="tool:bash">`) {
 		t.Errorf("untrusted wrapper missing; got:\n%s", got)
@@ -147,11 +148,30 @@ func TestGenerateContextWrappedWithTrustDelimiters(t *testing.T) {
 	}
 }
 
+func TestGenerateContextSplitsShortAndLongTerm(t *testing.T) {
+	t.Parallel()
+	got := Generate(GenerateInput{
+		Context: []ContextBlock{
+			{Source: "session:turn", Category: CategoryShortTerm, Trust: TrustUntrusted, Content: "recent discussion"},
+			{Source: "memory:recall", Category: CategoryLongTerm, Trust: TrustUntrusted, Content: "past session"},
+		},
+	})
+	if !strings.Contains(got, "# Recent Context") {
+		t.Error("Recent Context section missing for short-term block")
+	}
+	if !strings.Contains(got, "# Recalled Memory") {
+		t.Error("Recalled Memory section missing for long-term block")
+	}
+	if strings.Index(got, "# Recent Context") >= strings.Index(got, "# Recalled Memory") {
+		t.Error("Recent Context should appear before Recalled Memory")
+	}
+}
+
 func TestGenerateContextElidedWhenEmpty(t *testing.T) {
 	t.Parallel()
 	got := Generate(GenerateInput{Context: nil})
-	if strings.Contains(got, "# Context") {
-		t.Error("Context section should not render when blocks is empty")
+	if strings.Contains(got, "# Recent Context") || strings.Contains(got, "# Recalled Memory") {
+		t.Error("Context sections should not render when blocks is empty")
 	}
 }
 

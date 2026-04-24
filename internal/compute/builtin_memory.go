@@ -61,6 +61,9 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 	if err := b.Register("memory_write", newMemoryWriteHandler(cfg.Raft)); err != nil {
 		return err
 	}
+	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -98,6 +101,21 @@ func MemoryToolDefs() []*types.ToolDef {
 					"tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags."}
 				},
 				"required": ["event"],
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "memory_recent",
+			Path:        BuiltinScheme + "memory_recent",
+			Description: "List memories written recently. Use when the user asks 'what have you learned about me recently' or 'what's new in memory'. Optionally filter by retention (session|episodic|long-term) and a cutoff duration (since). Returns up to limit entries (default 20) sorted newest-first. Present as a markdown table or bullet list — this is fact-dense enumerable content, not narrative.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"retention": {"type": "string", "description": "Filter by retention tier: session | episodic | long-term. Default: all."},
+					"since": {"type": "string", "description": "Only include entries newer than this duration ago (e.g. '24h', '7d'). Default: no filter."},
+					"limit": {"type": "integer", "description": "Max entries (1-50). Default 20."}
+				},
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskReversible,
@@ -475,4 +493,85 @@ func tsNano(ts *timestamppb.Timestamp) int64 {
 		return 0
 	}
 	return ts.AsTime().UnixNano()
+}
+
+// newMemoryRecentHandler lists recent episodic memory writes sorted
+// newest-first, with optional retention and since-duration filters.
+// Read-only: no Raft proposal, safe on followers. Returns fact-dense
+// enumerable JSON — the agent is instructed (via humanisation rule)
+// to render this as a table/bullets, not narration.
+func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
+	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+		limit := 20
+		if raw, ok := args["limit"]; ok && raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
+				limit = n
+			}
+		}
+		retentionFilter := strings.TrimSpace(strings.ToLower(args["retention"]))
+
+		var cutoff time.Time
+		if raw, ok := args["since"]; ok && raw != "" {
+			d, err := time.ParseDuration(raw)
+			if err != nil {
+				return nil, 2, fmt.Errorf("memory_recent: since must be a duration like '24h' or '7d': %w", err)
+			}
+			cutoff = time.Now().Add(-d)
+		}
+
+		type entry struct {
+			ID         string   `json:"id"`
+			Event      string   `json:"event"`
+			Context    string   `json:"context,omitempty"`
+			Retention  string   `json:"retention"`
+			Importance int32    `json:"importance"`
+			Tags       []string `json:"tags,omitempty"`
+			Timestamp  string   `json:"timestamp"`
+			unix       int64
+		}
+		var all []entry
+
+		err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
+			var rec lobslawv1.EpisodicRecord
+			if err := proto.Unmarshal(raw, &rec); err != nil {
+				return nil
+			}
+			if retentionFilter != "" && !strings.EqualFold(rec.Retention, retentionFilter) {
+				return nil
+			}
+			t := rec.Timestamp.AsTime()
+			if !cutoff.IsZero() && t.Before(cutoff) {
+				return nil
+			}
+			all = append(all, entry{
+				ID:         rec.Id,
+				Event:      rec.Event,
+				Context:    rec.Context,
+				Retention:  rec.Retention,
+				Importance: rec.Importance,
+				Tags:       rec.Tags,
+				Timestamp:  t.Format(time.RFC3339),
+				unix:       t.UnixNano(),
+			})
+			return nil
+		})
+		if err != nil {
+			return nil, 1, fmt.Errorf("memory_recent: scan: %w", err)
+		}
+
+		sort.Slice(all, func(i, j int) bool { return all[i].unix > all[j].unix })
+		if len(all) > limit {
+			all = all[:limit]
+		}
+
+		out, err := json.Marshal(map[string]any{
+			"count":     len(all),
+			"retention": retentionFilter,
+			"entries":   all,
+		})
+		if err != nil {
+			return nil, 1, err
+		}
+		return out, 0, nil
+	}
 }

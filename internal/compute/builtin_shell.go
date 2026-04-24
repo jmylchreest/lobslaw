@@ -32,7 +32,7 @@ func ShellToolDef() *types.ToolDef {
 	return &types.ToolDef{
 		Name:        "shell_command",
 		Path:        BuiltinScheme + "shell_command",
-		Description: "Run a shell command and return stdout+stderr. Use sparingly — prefer dedicated tools (read_file, search_files, edit_file, write_file) for their use cases. Destructive or system-modifying commands (rm -rf, sudo, curl|sh, ssh) are rejected by a denylist. Compound commands (&&, ||, ;, |) are rejected unless allow_compound=true. timeout_secs bounds the run (default 30, max 300). cwd is optional. Return value includes stdout, stderr, exit_code, and truncated flag if output exceeded 256KB.",
+		Description: "Run a shell command and return stdout+stderr. Use sparingly — prefer dedicated tools (read_file, list_files, glob, grep, edit_file, write_file) for their use cases. Destructive or system-modifying commands (rm -rf, sudo, curl|sh, ssh) are rejected by a denylist. Compound commands (&&, ||, ;, |) are rejected unless allow_compound=true. timeout_secs bounds the run (default 30, max 300). cwd is optional. Return value includes stdout, stderr, exit_code, and truncated flag if output exceeded 256KB.",
 		ParametersSchema: []byte(`{
 			"type": "object",
 			"properties": {

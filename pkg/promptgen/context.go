@@ -35,14 +35,31 @@ const (
 	TrustUntrustedUser
 )
 
+// ContextCategory separates short-term (this-session) reference
+// from long-term (vector-recalled) reference. Generate groups blocks
+// by category and renders two distinct sections ("Recent Context"
+// vs "Recalled Memory") so the model can weigh them differently:
+// short-term wins on conflict ("user just said they moved to Y"),
+// long-term informs when short-term is silent.
+//
+// Empty → treated as short-term (safe default — current session
+// context is almost always more relevant than long-term recall).
+type ContextCategory string
+
+const (
+	CategoryShortTerm ContextCategory = "short-term"
+	CategoryLongTerm  ContextCategory = "long-term"
+)
+
 // ContextBlock is a labelled chunk of data the agent wants to
 // expose to the model. Source labels the origin (e.g. "memory:recall",
 // "tool:bash:stdout", "channel:telegram"); Content is the raw bytes
 // (verbatim into the prompt after delimiter wrapping).
 type ContextBlock struct {
-	Source  string
-	Trust   TrustLevel
-	Content string
+	Source   string
+	Category ContextCategory // short-term (session) | long-term (recalled)
+	Trust    TrustLevel
+	Content  string
 }
 
 // WrapContext renders one or more ContextBlocks into a single

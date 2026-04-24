@@ -20,7 +20,13 @@ func RegisterStdlibBuiltins(b *Builtins) error {
 	if err := b.Register("read_file", readFileBuiltin); err != nil {
 		return err
 	}
-	return b.Register("search_files", searchFilesBuiltin)
+	if err := b.Register("list_files", listFilesBuiltin); err != nil {
+		return err
+	}
+	if err := b.Register("glob", globBuiltin); err != nil {
+		return err
+	}
+	return b.Register("grep", searchFilesBuiltin)
 }
 
 func StdlibToolDefs() []*types.ToolDef {
@@ -45,7 +51,7 @@ func StdlibToolDefs() []*types.ToolDef {
 		{
 			Name:        "read_file",
 			Path:        BuiltinScheme + "read_file",
-			Description: "Read the contents of a text file. Pass path (absolute). Optional offset (0-indexed line number to start at) and limit (max lines to return, default 200). Returns JSON with path, line_count, and content. Use this to inspect files the user references rather than guessing their contents.",
+			Description: "Read a LOCAL filesystem text file on this machine. Pass path (absolute). Optional offset (0-indexed line number to start at) and limit (max lines, default 200). Returns JSON with path, line_count, and content. LOCAL FILES ONLY — not web URLs, not GitHub, not remote content. For online resources use fetch_url. Do not guess paths: use list_files or glob first to discover what exists.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -59,9 +65,39 @@ func StdlibToolDefs() []*types.ToolDef {
 			RiskTier: types.RiskReversible,
 		},
 		{
-			Name:        "search_files",
-			Path:        BuiltinScheme + "search_files",
-			Description: "Search for a pattern across text files. Pass pattern (regex) and optional path (default cwd) + glob (e.g. \"*.md\"). Returns JSON with matches [{path, line_number, line}]. Uses ripgrep when available, grep -rn otherwise. Capped at 100 matches.",
+			Name:        "list_files",
+			Path:        BuiltinScheme + "list_files",
+			Description: "List entries in a LOCAL directory on this machine. Pass path (absolute). Returns JSON with entries [{name, is_dir, size}]. Hidden: .git, .snapshot, internal cluster files, TLS keys. Capped at 200 entries by default (max 1000). LOCAL FILESYSTEM ONLY — not for browsing GitHub, remote URLs, or web directories.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Absolute directory path."},
+					"limit": {"type": "integer", "description": "Max entries to return (default 200, cap 1000)."}
+				},
+				"required": ["path"],
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "glob",
+			Path:        BuiltinScheme + "glob",
+			Description: "Find LOCAL files by glob pattern. Pass pattern (e.g. \"**/*.md\" or \"*.go\") and path (absolute root directory on this machine). Supports ** for multi-segment wildcards. Returns JSON with matches [{path, is_dir, size}]. Capped at 500 matches. LOCAL FILESYSTEM ONLY — for GitHub/online content use fetch_url or web_search.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"pattern": {"type": "string", "description": "Glob pattern. ** matches any number of path segments."},
+					"path": {"type": "string", "description": "Absolute root directory to walk."}
+				},
+				"required": ["pattern", "path"],
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "grep",
+			Path:        BuiltinScheme + "grep",
+			Description: "Search for a regex pattern across LOCAL filesystem text files on this machine. Pass pattern (regex) and path (absolute directory or file) + optional glob filter (e.g. \"*.md\"). Returns JSON with matches [{path, line_number, line}]. Uses ripgrep when available, grep -rn otherwise. Capped at 100 matches. LOCAL FILESYSTEM ONLY — does NOT search the web, GitHub, online repos, or remote URLs. For online content use fetch_url or web_search.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {

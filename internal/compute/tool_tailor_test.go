@@ -10,7 +10,9 @@ func allAvailableTools() []Tool {
 		{Name: "memory_search"},
 		{Name: "memory_write"},
 		{Name: "read_file"},
-		{Name: "search_files"},
+		{Name: "list_files"},
+		{Name: "glob"},
+		{Name: "grep"},
 		{Name: "write_file"},
 		{Name: "edit_file"},
 		{Name: "shell_command"},
@@ -45,8 +47,8 @@ func TestTailoredToolsUnlocksFilesystemRead(t *testing.T) {
 	if !set["read_file"] {
 		t.Error("read_file should be admitted for a file-read intent")
 	}
-	if !set["search_files"] {
-		t.Error("search_files should be admitted alongside read_file")
+	if !set["grep"] {
+		t.Error("grep should be admitted alongside read_file")
 	}
 	if set["shell_command"] {
 		t.Error("shell_command should NOT be admitted for simple read intent")

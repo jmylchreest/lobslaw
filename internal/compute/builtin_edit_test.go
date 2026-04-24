@@ -34,23 +34,23 @@ func TestWriteFileHappyPath(t *testing.T) {
 
 func TestWriteFileRejectsRelative(t *testing.T) {
 	t.Parallel()
-	_, _, err := writeFileBuiltin(context.Background(), map[string]string{
+	_, exit, _ := writeFileBuiltin(context.Background(), map[string]string{
 		"path":    "x.txt",
 		"content": "hi",
 	})
-	if err == nil {
-		t.Error("relative path should fail")
+	if exit == 0 {
+		t.Error("relative path should produce a tool error (exit != 0)")
 	}
 }
 
 func TestWriteFileRejectsOversize(t *testing.T) {
 	t.Parallel()
-	_, _, err := writeFileBuiltin(context.Background(), map[string]string{
+	_, exit, _ := writeFileBuiltin(context.Background(), map[string]string{
 		"path":    "/tmp/oversize.txt",
 		"content": strings.Repeat("x", writeFileMaxBytes+1),
 	})
-	if err == nil {
-		t.Error("oversized content should be rejected")
+	if exit == 0 {
+		t.Error("oversized content should be rejected (exit != 0)")
 	}
 }
 
@@ -84,13 +84,13 @@ func TestEditFileAmbiguousWithoutReplaceAll(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dup.txt")
 	_ = os.WriteFile(path, []byte("foo foo foo"), 0o644)
-	_, exit, err := editFileBuiltin(context.Background(), map[string]string{
+	_, exit, _ := editFileBuiltin(context.Background(), map[string]string{
 		"path":       path,
 		"old_string": "foo",
 		"new_string": "bar",
 	})
-	if err == nil || exit == 0 {
-		t.Error("multi-match without replace_all should fail")
+	if exit == 0 {
+		t.Error("multi-match without replace_all should produce a tool error (exit != 0)")
 	}
 }
 
@@ -119,24 +119,24 @@ func TestEditFileNoMatch(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "x.txt")
 	_ = os.WriteFile(path, []byte("content"), 0o644)
-	_, exit, err := editFileBuiltin(context.Background(), map[string]string{
+	_, exit, _ := editFileBuiltin(context.Background(), map[string]string{
 		"path":       path,
 		"old_string": "missing",
 		"new_string": "present",
 	})
-	if err == nil || exit == 0 {
-		t.Error("no-match should fail")
+	if exit == 0 {
+		t.Error("no-match should produce a tool error (exit != 0)")
 	}
 }
 
 func TestEditFileRejectsNoopReplace(t *testing.T) {
 	t.Parallel()
-	_, _, err := editFileBuiltin(context.Background(), map[string]string{
+	_, exit, _ := editFileBuiltin(context.Background(), map[string]string{
 		"path":       "/tmp/x",
 		"old_string": "same",
 		"new_string": "same",
 	})
-	if err == nil {
-		t.Error("same old/new should fail")
+	if exit == 0 {
+		t.Error("same old/new should produce a tool error (exit != 0)")
 	}
 }

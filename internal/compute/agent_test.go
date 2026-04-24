@@ -325,14 +325,19 @@ func TestRunToolCallLoopBudgetCapOfOneConfirmsOnSecondCall(t *testing.T) {
 	}
 }
 
-func TestRunToolCallLoopMaxToolLoopsProtectsInfiniteLoop(t *testing.T) {
+func TestRunToolCallLoopMaxToolLoopsForcesSummary(t *testing.T) {
 	t.Parallel()
-	// Script emits ONLY tool calls, never text — simulates a broken
-	// model stuck in tool-call loop. The MaxToolLoops cap should
-	// terminate the turn.
+	// Script emits tool calls until MaxToolLoops is reached, then
+	// the forced-summary call (with tools stripped) returns text.
+	// Confirms the loop exhausts into a user-facing reply rather
+	// than returning a silent error.
 	env := newAgentEnv(t)
-	// Override provider with a ScriptFunc that always returns a tool call.
 	env.mock = NewMockProviderFunc(func(req ChatRequest, idx int) (MockResponse, error) {
+		// When the forced-summary pass runs, tools are stripped from
+		// the request — detect that and return a plain-text reply.
+		if len(req.Tools) == 0 {
+			return MockResponse{Content: "I tried several tools and couldn't finish — here's what I found..."}, nil
+		}
 		return MockResponse{ToolCalls: []ToolCall{
 			{ID: fmt.Sprintf("c-%d", idx), Name: "noop", Arguments: `{}`},
 		}}, nil
@@ -345,12 +350,18 @@ func TestRunToolCallLoopMaxToolLoopsProtectsInfiniteLoop(t *testing.T) {
 
 	registerNoopTool(t, env, "noop")
 
-	_, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
+	resp, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
 		Claims: &types.Claims{UserID: "alice", Scope: "*"},
 		Budget: mkBudget(t, BudgetCaps{}),
 	})
-	if !errors.Is(err, ErrMaxToolLoops) {
-		t.Errorf("expected ErrMaxToolLoops; got %v", err)
+	if err != nil {
+		t.Fatalf("expected forced-summary success; got err %v", err)
+	}
+	if resp.Reply == "" {
+		t.Error("forced summary should produce a user-visible reply")
+	}
+	if !strings.Contains(resp.Reply, "tried several tools") {
+		t.Errorf("expected summary content; got %q", resp.Reply)
 	}
 }
 

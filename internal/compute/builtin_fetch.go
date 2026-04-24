@@ -49,7 +49,7 @@ func FetchToolDef() *types.ToolDef {
 	return &types.ToolDef{
 		Name:        "fetch_url",
 		Path:        BuiltinScheme + "fetch_url",
-		Description: "Fetch the contents of a URL and return the body as plaintext PLUS a list of links extracted from the page. Use when the user references a URL or you need to read a page whose contents you don't have. Private-network hosts are blocked (SSRF guard). HTML is extracted to plain text; max_chars caps the body (default 10000, max 50000). Response JSON: {url, body, truncated, from_cache, links: [{text, url}]}. When summarising fetched content for the user, CITE relevant source URLs using markdown link syntax like [headline](https://...) so the user can click through.",
+		Description: "Fetch the contents of any HTTP(S) URL — web pages, GitHub pages/raw files, online docs, APIs, RSS feeds. Returns body as plaintext plus extracted links. This is the RIGHT TOOL for \"check the repo on GitHub\", \"look at this URL\", \"what does this website say\" — NOT grep/read_file (those are local-filesystem only). Private-network hosts are blocked (SSRF guard). HTML is extracted to plain text; max_chars caps the body (default 10000, max 50000). Response JSON: {url, body, truncated, from_cache, links: [{text, url}]}. When summarising fetched content for the user, CITE relevant source URLs using markdown link syntax like [headline](https://...) so the user can click through.",
 		ParametersSchema: []byte(`{
 			"type": "object",
 			"properties": {

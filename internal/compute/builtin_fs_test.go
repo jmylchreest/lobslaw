@@ -58,17 +58,17 @@ func TestReadFileOffsetLimit(t *testing.T) {
 
 func TestReadFileRejectsRelativePath(t *testing.T) {
 	t.Parallel()
-	_, exit, err := readFileBuiltin(context.Background(), map[string]string{"path": "relative.txt"})
-	if err == nil || exit == 0 {
-		t.Error("relative path should fail")
+	_, exit, _ := readFileBuiltin(context.Background(), map[string]string{"path": "relative.txt"})
+	if exit == 0 {
+		t.Error("relative path should produce a tool error (exit != 0)")
 	}
 }
 
 func TestReadFileRejectsMissing(t *testing.T) {
 	t.Parallel()
-	_, _, err := readFileBuiltin(context.Background(), map[string]string{"path": "/does/not/exist"})
-	if err == nil {
-		t.Error("missing file should surface error")
+	_, exit, _ := readFileBuiltin(context.Background(), map[string]string{"path": "/does/not/exist"})
+	if exit == 0 {
+		t.Error("missing file should produce a tool error (exit != 0)")
 	}
 }
 
@@ -112,8 +112,8 @@ func TestSearchFilesMatchesAndEmpty(t *testing.T) {
 
 func TestSearchFilesRejectsEmptyPattern(t *testing.T) {
 	t.Parallel()
-	_, _, err := searchFilesBuiltin(context.Background(), map[string]string{})
-	if err == nil {
-		t.Error("empty pattern should fail")
+	_, exit, _ := searchFilesBuiltin(context.Background(), map[string]string{})
+	if exit == 0 {
+		t.Error("empty pattern should produce a tool error (exit != 0)")
 	}
 }

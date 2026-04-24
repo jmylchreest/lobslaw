@@ -3,7 +3,6 @@ package compute
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -97,14 +96,21 @@ func RegisterWriteEditBuiltins(b *Builtins) error {
 func writeFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, error) {
 	path := strings.TrimSpace(args["path"])
 	if path == "" {
-		return nil, 2, errors.New("write_file: path is required")
+		return marshalToolError("missing_arg", "path is required", "pass an absolute filesystem path")
 	}
 	if !filepath.IsAbs(path) {
-		return nil, 2, errors.New("write_file: path must be absolute")
+		return marshalToolError("relative_path", "path must be absolute",
+			"prefix with / (e.g. /home/johnm/lobslaw/notes.md)")
+	}
+	if isInternalPath(path) {
+		return marshalToolError("internal_path", path+" is cluster-internal and cannot be written",
+			"pick a path inside a configured storage mount")
 	}
 	content := args["content"]
 	if len(content) > writeFileMaxBytes {
-		return nil, 2, fmt.Errorf("write_file: content exceeds %d bytes", writeFileMaxBytes)
+		return marshalToolError("content_too_large",
+			fmt.Sprintf("content is %d bytes, max %d", len(content), writeFileMaxBytes),
+			"split the write into multiple smaller files or truncate")
 	}
 
 	lock := lockForPath(path)
@@ -114,7 +120,14 @@ func writeFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 	// If the parent directory is missing, the write fails with a
 	// clear error — caller (or user) can act on it.
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return nil, 1, fmt.Errorf("write_file: %w", err)
+		if os.IsNotExist(err) {
+			return marshalToolError("parent_not_found", err.Error(),
+				"the parent directory doesn't exist. Create it first or pick an existing directory")
+		}
+		if os.IsPermission(err) {
+			return marshalToolError("permission_denied", err.Error(), "")
+		}
+		return marshalToolError("write_failed", err.Error(), "")
 	}
 	out, _ := json.Marshal(map[string]any{
 		"path":  path,
@@ -131,18 +144,22 @@ func writeFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 func editFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, error) {
 	path := strings.TrimSpace(args["path"])
 	if path == "" {
-		return nil, 2, errors.New("edit_file: path is required")
+		return marshalToolError("missing_arg", "path is required", "pass an absolute filesystem path")
 	}
 	if !filepath.IsAbs(path) {
-		return nil, 2, errors.New("edit_file: path must be absolute")
+		return marshalToolError("relative_path", "path must be absolute", "prefix with /")
+	}
+	if isInternalPath(path) {
+		return marshalToolError("internal_path", path+" is cluster-internal and cannot be edited", "")
 	}
 	oldStr := args["old_string"]
 	newStr := args["new_string"]
 	if oldStr == "" {
-		return nil, 2, errors.New("edit_file: old_string is required")
+		return marshalToolError("missing_arg", "old_string is required",
+			"pass the exact substring to replace")
 	}
 	if oldStr == newStr {
-		return nil, 2, errors.New("edit_file: old_string equals new_string; nothing to change")
+		return marshalToolError("noop_edit", "old_string equals new_string; nothing to change", "")
 	}
 	replaceAll := args["replace_all"] == "true"
 
@@ -152,15 +169,23 @@ func editFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return nil, 1, fmt.Errorf("edit_file: read: %w", err)
+		if os.IsNotExist(err) {
+			return marshalToolError("path_not_found", path+" does not exist",
+				"use write_file to create a new file, or pick an existing path")
+		}
+		return marshalToolError("read_failed", err.Error(), "")
 	}
 	bodyStr := string(body)
 	count := strings.Count(bodyStr, oldStr)
 	if count == 0 {
-		return nil, 2, fmt.Errorf("edit_file: old_string not found in %s", path)
+		return marshalToolError("old_string_not_found",
+			fmt.Sprintf("old_string not found in %s", path),
+			"read the file first to see its exact contents; whitespace and newlines must match character-for-character")
 	}
 	if !replaceAll && count > 1 {
-		return nil, 2, fmt.Errorf("edit_file: old_string matches %d times; pass replace_all=true or give a more specific substring", count)
+		return marshalToolError("ambiguous_match",
+			fmt.Sprintf("old_string matches %d times", count),
+			"include more surrounding context in old_string to make it unique, or pass replace_all=true to replace every occurrence")
 	}
 
 	var updated string
@@ -170,7 +195,7 @@ func editFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 		updated = strings.Replace(bodyStr, oldStr, newStr, 1)
 	}
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-		return nil, 1, fmt.Errorf("edit_file: write: %w", err)
+		return marshalToolError("write_failed", err.Error(), "")
 	}
 
 	out, _ := json.Marshal(map[string]any{

@@ -32,7 +32,7 @@ var toolCategoryPatterns = []toolCategory{
 	// ---- Filesystem read ------------------------------------
 	{
 		category: "filesystem_read",
-		tools:    []string{"read_file", "search_files"},
+		tools:    []string{"read_file", "grep", "list_files", "glob"},
 		keywords: []string{
 			"file ", "read ", "open ", "show me", "cat ", "look at",
 			"search for", "grep", "find in", "contents of",
@@ -72,6 +72,11 @@ var toolCategoryPatterns = []toolCategory{
 			"latest news", "latest version", "latest release",
 			"news about", "recent news", "current events",
 			"wikipedia", " article ",
+			// Code hosting / online references
+			"github", "gitlab", "bitbucket", "the repo", "repository",
+			"pull request", "issue tracker", "readme online",
+			"website", "webpage", "homepage", "documentation online",
+			"blog post", "fetch the", "fetch this",
 			// Weather / environment
 			"weather", "forecast", "temperature", "rain",
 			"humidity", "wind", "snow", "sunrise", "sunset",
@@ -82,6 +87,35 @@ var toolCategoryPatterns = []toolCategory{
 		},
 		regexes: []*regexp.Regexp{
 			regexp.MustCompile(`https?://`),
+		},
+	},
+	// ---- Provider council -----------------------------------
+	// Explicit user requests for multi-provider review. Keywords
+	// must be specific — "council" shouldn't fire on "I had a
+	// council meeting yesterday", so we require the verification
+	// verbs nearby ("review", "second opinion", etc.).
+	{
+		category: "council",
+		tools:    []string{"list_providers", "council_review"},
+		keywords: []string{
+			"second opinion", "adversarial review", "council review",
+			"the council", "get the council", "verify this", "cross-check",
+			"ask the council", "consensus check", "fan out",
+			"which providers", "what providers", "list providers",
+		},
+	},
+	// ---- Memory introspection -------------------------------
+	// Distinct from memory_search (the always-on default): these
+	// list-style queries want the newest N memories, not a keyword
+	// match. Triggered on "recently", "lately", "learned about me".
+	{
+		category: "memory_introspection",
+		tools:    []string{"memory_recent"},
+		keywords: []string{
+			"recently", "lately", "this week", "last few days",
+			"what have you learned", "what do you remember",
+			"recent memories", "latest memories", "what's new",
+			"new memories", "recent learnings",
 		},
 	},
 	// ---- Debug / introspection ------------------------------

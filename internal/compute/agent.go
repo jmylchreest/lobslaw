@@ -423,6 +423,12 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 
 		chatResp, err := a.callLLM(ctx, req, messages)
 		if err != nil {
+			// Context deadline / cancellation (e.g. gateway
+			// hard-timeout) → produce a graceful user-visible
+			// reply via a FRESH context rather than a silent error.
+			if ctx.Err() != nil {
+				return a.forceSummaryReply(context.Background(), req, messages, resp, "hard_timeout")
+			}
 			return nil, fmt.Errorf("LLM call: %w", err)
 		}
 
@@ -485,7 +491,68 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 		}
 	}
 
-	return nil, fmt.Errorf("%w: %d", ErrMaxToolLoops, a.cfg.MaxToolLoops)
+	// Loop exhausted without the LLM choosing to stop calling tools.
+	// Historically this returned an error — which the gateway
+	// swallowed, and the user saw nothing. Force a final summary
+	// turn with tools disabled so the user always gets a reply,
+	// even if it's "I tried X, Y, Z and couldn't finish."
+	return a.forceSummaryReply(ctx, req, messages, resp, "tool_loop_exhausted")
+}
+
+// forceSummaryReply makes one last LLM call with tools stripped,
+// asking the model to wrap up honestly. Called when the agent loop
+// would otherwise return an error without a user-visible reply
+// (loop exhausted, hard timeout, etc.). Returns the reply in the
+// same shape as a successful turn.
+func (a *Agent) forceSummaryReply(
+	ctx context.Context,
+	req ProcessMessageRequest,
+	messages []Message,
+	resp *ProcessMessageResponse,
+	reason string,
+) (*ProcessMessageResponse, error) {
+	var instruction string
+	switch reason {
+	case "tool_loop_exhausted":
+		instruction = "You have reached the maximum number of tool calls for this turn. Do NOT call any more tools. Reply to the user in plain text: explain what you were trying to do, what you learned from the tools you did run, and what you couldn't complete. Be honest and concise."
+	case "hard_timeout":
+		instruction = "This turn has run too long. Do NOT call any more tools. Reply to the user in plain text: summarise progress so far, what succeeded, and what remains unfinished. Be concise."
+	default:
+		instruction = "Reply to the user in plain text without calling any more tools."
+	}
+
+	forced := make([]Message, 0, len(messages)+1)
+	forced = append(forced, messages...)
+	forced = append(forced, Message{Role: "system", Content: instruction})
+
+	// Build a ChatRequest with tools explicitly stripped so the
+	// model cannot emit another tool-call even if it wanted to.
+	forcedReq := req
+	forcedReq.Tools = nil
+
+	chatResp, err := a.callLLM(ctx, forcedReq, forced)
+	if err != nil {
+		// Can't even get a summary out — fall back to a static
+		// apology so the user sees SOMETHING rather than silence.
+		a.cfg.Logger.Warn("agent: forced-summary LLM call failed; returning static fallback",
+			"turn_id", req.TurnID, "reason", reason, "err", err)
+		resp.Reply = "I hit my tool-call limit for this turn and couldn't complete the task. Try rephrasing or narrowing the request."
+		resp.Messages = messages
+		if req.Budget != nil {
+			resp.BudgetState = req.Budget.State()
+		}
+		return resp, nil
+	}
+
+	if req.Budget != nil {
+		req.Budget.RecordCostUSD(chatResp.cost)
+		resp.BudgetState = req.Budget.State()
+	}
+	resp.Reply = stripReasoningTags(chatResp.Content)
+	messages = append(messages, Message{Role: "assistant", Content: chatResp.Content})
+	resp.Messages = messages
+	a.maybeIngestTurn(ctx, req, chatResp.Content)
+	return resp, nil
 }
 
 // seedMessages builds the initial message list from the system
