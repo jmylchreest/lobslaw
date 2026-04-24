@@ -1101,6 +1101,7 @@ func (n *Node) wireCompute() error {
 			APIKey:   embKey,
 			Model:    n.cfg.Compute.Embeddings.Model,
 			Dims:     n.cfg.Compute.Embeddings.Dims,
+			Format:   compute.EmbeddingFormat(n.cfg.Compute.Embeddings.Format),
 			Logger:   n.log,
 		})
 		if err != nil {

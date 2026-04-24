@@ -152,16 +152,29 @@ type WebSearchConfig struct {
 	Endpoint  string `koanf:"endpoint,omitempty"`
 }
 
-// EmbeddingsConfig points at an OpenAI-compat /embeddings endpoint.
-// Empty Endpoint → no embedder wired, memory_search falls back to
+// EmbeddingsConfig points at an embeddings endpoint. Empty
+// Endpoint → no embedder wired, memory_search falls back to
 // substring match and auto-ingest skips vector-record writes.
 // Dims MUST match the model's actual output dimension; mismatches
 // surface as runtime errors on every call.
+//
+// Format picks the request/response protocol:
+//
+//	"openai"  — {input, model} → {data: [{embedding: []}]}.
+//	            Used by OpenAI, OpenRouter, z.ai, most providers.
+//	            Default when Format is empty.
+//	"minimax" — {texts: [], model, type} → {vectors: []}.
+//	            MiniMax's native protocol via api.minimax.io/v1.
+//
+// Auto-detect is deliberately NOT supported: a probe-on-first-
+// call pattern wastes tokens and fails silently when credentials
+// are wrong. Operators declare the format explicitly.
 type EmbeddingsConfig struct {
 	Endpoint  string `koanf:"endpoint,omitempty"`
 	Model     string `koanf:"model,omitempty"`
 	APIKeyRef string `koanf:"api_key_ref,omitempty"`
 	Dims      int    `koanf:"dims,omitempty"`
+	Format    string `koanf:"format,omitempty"`
 }
 
 type ProviderConfig struct {
