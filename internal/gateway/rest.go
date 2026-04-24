@@ -68,6 +68,11 @@ type RESTConfig struct {
 	// so operators don't need a second listener.
 	Telegram *TelegramHandler
 
+	// Webhooks are generic inbound-webhook channels (Zapier,
+	// IFTTT, n8n, GitHub Actions, etc.). Each is mounted at its
+	// PathPrefix on the same mux. Empty slice = no webhooks.
+	Webhooks []*WebhookHandler
+
 	// Prompts is the confirmation-prompt registry. When set, the
 	// REST server mounts /v1/prompts/{id} endpoints. Agents that
 	// return NeedsConfirmation register a prompt here; UIs poll
@@ -142,6 +147,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
 		mux.Handle("/telegram", s.cfg.Telegram)
+	}
+	for _, wh := range s.cfg.Webhooks {
+		mux.Handle(wh.PathPrefix(), wh)
+		s.log.Info("gateway: webhook mounted",
+			"name", wh.Name(), "path", wh.PathPrefix())
 	}
 	if s.cfg.Prompts != nil {
 		mux.HandleFunc("/v1/prompts/", s.handlePrompt)

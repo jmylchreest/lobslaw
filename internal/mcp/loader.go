@@ -97,6 +97,30 @@ func (l *Loader) Start(ctx context.Context, discovered []DiscoveredManifest) err
 	return nil
 }
 
+// StartDirect launches MCP servers supplied directly from the
+// top-level [[mcp.servers]] TOML block (no plugin manifest needed).
+// Operators configure external integrations (Gmail, Slack, GitHub)
+// without wrapping them in a plugin. Failures per server are
+// isolated and logged.
+func (l *Loader) StartDirect(ctx context.Context, servers map[string]ServerConfig) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for name, cfg := range servers {
+		if cfg.Disabled {
+			l.log.Info("mcp: skipping disabled server", "name", name, "source", "config")
+			continue
+		}
+		if _, exists := l.servers[name]; exists {
+			l.log.Warn("mcp: duplicate server name — keeping first", "name", name, "source", "config")
+			continue
+		}
+		if err := l.startServerLocked(ctx, name, cfg); err != nil {
+			l.log.Warn("mcp: server failed to start", "name", name, "source", "config", "err", err)
+		}
+	}
+	return nil
+}
+
 // startServerLocked spawns one server. Separated so tests can
 // substitute a fake transport by calling the inner method with a
 // pre-wired client. Caller must hold l.mu.
