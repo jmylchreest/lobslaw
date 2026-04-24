@@ -852,6 +852,11 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	// iterate the live registry rather than the static StdlibToolDefs
 	// so additive wiring in node.New doesn't need to update a second
 	// list here.
+	// A Raft-hosting node without the compute function has no
+	// tool registry — nothing to seed. Skip cleanly.
+	if n.toolRegistry == nil {
+		return nil
+	}
 	seedTargets := []*types.ToolDef{}
 	for _, td := range n.toolRegistry.List() {
 		if strings.HasPrefix(td.Path, compute.BuiltinScheme) {
