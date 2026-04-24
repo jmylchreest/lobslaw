@@ -113,6 +113,12 @@ type TelegramHandler struct {
 	// with a "no longer exists" reply from the registry).
 	continuationsMu sync.Mutex
 	continuations   map[string]*telegramContinuation
+
+	// history is the per-chat rolling conversation buffer feeding
+	// ProcessMessageRequest.ConversationHistory. Stateless across
+	// restarts — persistent recall is the episodic-memory tool's
+	// responsibility, not this cache.
+	history *chatHistory
 }
 
 // telegramContinuation captures everything handleCallbackQuery
@@ -201,6 +207,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		base:          base,
 		seenUpdate:    make(map[int64]time.Time),
 		continuations: make(map[string]*telegramContinuation),
+		history:       newChatHistory(0, 0),
 	}, nil
 }
 
@@ -273,11 +280,18 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		"scope", scope,
 		"text_len", len(msg.Text))
 
+	priorHistory := h.history.Load(msg.Chat.ID)
+	h.log.Debug("telegram: conversation history loaded",
+		"turn_id", turnID,
+		"chat_id", msg.Chat.ID,
+		"prior_turns", len(priorHistory))
+
 	agentReq := compute.ProcessMessageRequest{
-		Message: msg.Text,
-		Claims:  claims,
-		TurnID:  turnID,
-		Budget:  budget,
+		Message:             msg.Text,
+		Claims:              claims,
+		TurnID:              turnID,
+		Budget:              budget,
+		ConversationHistory: priorHistory,
 	}
 
 	resp, err := h.agent.RunToolCallLoop(ctx, agentReq)
@@ -286,6 +300,16 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 			"turn_id", turnID, "err", err)
 		h.sendText(msg.Chat.ID, "Something went wrong processing your message.")
 		return
+	}
+
+	// Record the user turn + final assistant reply so the next
+	// message in this chat sees the context. Tool-role intermediates
+	// are skipped: they inflate context fast without adding much
+	// semantic continuity the model needs two turns later.
+	if resp.Reply != "" {
+		h.history.Append(msg.Chat.ID,
+			compute.Message{Role: "user", Content: msg.Text},
+			compute.Message{Role: "assistant", Content: resp.Reply})
 	}
 
 	switch {
