@@ -35,9 +35,16 @@ type memoryRaftApplier interface {
 // MemoryConfig wires the memory_search + memory_write builtins.
 // Both are registered together — reading without writing is a
 // degraded state that confuses the model.
+//
+// Embedder, when non-nil, enables semantic vector search on
+// memory_search. Without it, search falls back to substring match
+// on episodic event/context fields. Auto-ingest (see
+// internal/memory.EpisodicIngester) should use the same embedder
+// so query vectors and stored vectors come from the same model.
 type MemoryConfig struct {
-	Store *memory.Store
-	Raft  memoryRaftApplier
+	Store    *memory.Store
+	Raft     memoryRaftApplier
+	Embedder EmbeddingProvider
 }
 
 // RegisterMemoryBuiltins installs memory_search + memory_write
@@ -48,7 +55,7 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 	if cfg.Store == nil || cfg.Raft == nil {
 		return errors.New("memory builtins: Store + Raft required")
 	}
-	if err := b.Register("memory_search", newMemorySearchHandler(cfg.Store)); err != nil {
+	if err := b.Register("memory_search", newMemorySearchHandler(cfg.Store, cfg.Embedder)); err != nil {
 		return err
 	}
 	if err := b.Register("memory_write", newMemoryWriteHandler(cfg.Raft)); err != nil {
@@ -98,11 +105,12 @@ func MemoryToolDefs() []*types.ToolDef {
 	}
 }
 
-// newMemorySearchHandler returns a BuiltinFunc that scans
-// EpisodicRecords for substring matches in event or context.
-// Ranked by (importance desc, timestamp desc). Cheap O(N) scan —
-// personal-scale-acceptable; HNSW/BM25 is post-MVP.
-func newMemorySearchHandler(store *memory.Store) BuiltinFunc {
+// newMemorySearchHandler prefers semantic vector search when an
+// Embedder is configured, falls back to substring match over the
+// EpisodicRecord fields. The fallback path is the original MVP
+// behaviour — still useful for deployments without an embedding
+// provider, and as a safety net when the embedder times out.
+func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		query := strings.TrimSpace(args["query"])
 		if query == "" {
@@ -115,63 +123,154 @@ func newMemorySearchHandler(store *memory.Store) BuiltinFunc {
 			}
 		}
 		tagFilter := strings.TrimSpace(args["tag"])
-		needle := strings.ToLower(query)
 
-		type hit struct {
-			rec *lobslawv1.EpisodicRecord
+		if embedder != nil {
+			return runSemanticSearch(ctx, store, embedder, query, tagFilter, limit)
 		}
-		var hits []hit
-		err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
-			var r lobslawv1.EpisodicRecord
-			if err := proto.Unmarshal(raw, &r); err != nil {
-				return nil // skip malformed; don't fail the whole search
-			}
-			if tagFilter != "" && !containsString(r.Tags, tagFilter) {
-				return nil
-			}
-			if !strings.Contains(strings.ToLower(r.Event), needle) &&
-				!strings.Contains(strings.ToLower(r.Context), needle) {
-				return nil
-			}
-			hits = append(hits, hit{rec: &r})
-			return nil
-		})
-		if err != nil {
-			return nil, 1, fmt.Errorf("memory_search: scan: %w", err)
-		}
-		sort.Slice(hits, func(i, j int) bool {
-			if hits[i].rec.Importance != hits[j].rec.Importance {
-				return hits[i].rec.Importance > hits[j].rec.Importance
-			}
-			return tsNano(hits[i].rec.Timestamp) > tsNano(hits[j].rec.Timestamp)
-		})
-		if len(hits) > limit {
-			hits = hits[:limit]
-		}
-
-		out := make([]map[string]any, 0, len(hits))
-		for _, h := range hits {
-			entry := map[string]any{
-				"id":         h.rec.Id,
-				"event":      h.rec.Event,
-				"context":    h.rec.Context,
-				"importance": h.rec.Importance,
-				"tags":       h.rec.Tags,
-			}
-			if h.rec.Timestamp != nil {
-				entry["timestamp"] = h.rec.Timestamp.AsTime().Format(time.RFC3339)
-			}
-			out = append(out, entry)
-		}
-		payload, err := json.Marshal(map[string]any{
-			"query":   query,
-			"results": out,
-		})
-		if err != nil {
-			return nil, 1, err
-		}
-		return payload, 0, nil
+		return runSubstringSearch(store, query, tagFilter, limit)
 	}
+}
+
+// runSemanticSearch embeds the query, runs vectorSearch, then
+// dereferences the source episodic records for the hits. Returns
+// fallback-substring results on embedder failure — transient
+// embedding-API issues shouldn't wipe out recall entirely.
+func runSemanticSearch(ctx context.Context, store *memory.Store, embedder EmbeddingProvider, query, tagFilter string, limit int) ([]byte, int, error) {
+	vec, err := embedder.Embed(ctx, query)
+	if err != nil {
+		// Degrade to substring — surface the embed failure in the
+		// payload so the operator sees it via the tool response.
+		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
+		return annotateEmbeddingFailure(payload, err), 0, serr
+	}
+	hits, err := memory.VectorSearch(store, vec, limit*2, "", "")
+	if err != nil {
+		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
+		return annotateEmbeddingFailure(payload, err), 0, serr
+	}
+
+	// Each VectorRecord carries source_ids pointing at episodic
+	// records. Dereference them, apply tag filter, cap at limit.
+	seen := map[string]bool{}
+	results := make([]map[string]any, 0, limit)
+	for _, h := range hits {
+		for _, sid := range h.Record().SourceIds {
+			if seen[sid] {
+				continue
+			}
+			seen[sid] = true
+			var epi lobslawv1.EpisodicRecord
+			raw, err := store.Get(memory.BucketEpisodicRecords, sid)
+			if err != nil {
+				continue
+			}
+			if err := proto.Unmarshal(raw, &epi); err != nil {
+				continue
+			}
+			if tagFilter != "" && !containsString(epi.Tags, tagFilter) {
+				continue
+			}
+			results = append(results, episodicToMap(&epi, h.Score()))
+			if len(results) >= limit {
+				break
+			}
+		}
+		if len(results) >= limit {
+			break
+		}
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"query":    query,
+		"results":  results,
+		"strategy": "semantic",
+	})
+	if err != nil {
+		return nil, 1, err
+	}
+	return payload, 0, nil
+}
+
+func runSubstringSearch(store *memory.Store, query, tagFilter string, limit int) ([]byte, int, error) {
+	needle := strings.ToLower(query)
+	type hit struct {
+		rec *lobslawv1.EpisodicRecord
+	}
+	var hits []hit
+	err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
+		var r lobslawv1.EpisodicRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil
+		}
+		if tagFilter != "" && !containsString(r.Tags, tagFilter) {
+			return nil
+		}
+		if !strings.Contains(strings.ToLower(r.Event), needle) &&
+			!strings.Contains(strings.ToLower(r.Context), needle) {
+			return nil
+		}
+		hits = append(hits, hit{rec: &r})
+		return nil
+	})
+	if err != nil {
+		return nil, 1, fmt.Errorf("memory_search: scan: %w", err)
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].rec.Importance != hits[j].rec.Importance {
+			return hits[i].rec.Importance > hits[j].rec.Importance
+		}
+		return tsNano(hits[i].rec.Timestamp) > tsNano(hits[j].rec.Timestamp)
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	results := make([]map[string]any, 0, len(hits))
+	for _, h := range hits {
+		results = append(results, episodicToMap(h.rec, 0))
+	}
+	payload, err := json.Marshal(map[string]any{
+		"query":    query,
+		"results":  results,
+		"strategy": "substring",
+	})
+	if err != nil {
+		return nil, 1, err
+	}
+	return payload, 0, nil
+}
+
+func episodicToMap(rec *lobslawv1.EpisodicRecord, score float32) map[string]any {
+	entry := map[string]any{
+		"id":         rec.Id,
+		"event":      rec.Event,
+		"context":    rec.Context,
+		"importance": rec.Importance,
+		"tags":       rec.Tags,
+	}
+	if rec.Timestamp != nil {
+		entry["timestamp"] = rec.Timestamp.AsTime().Format(time.RFC3339)
+	}
+	if score != 0 {
+		entry["score"] = score
+	}
+	return entry
+}
+
+// annotateEmbeddingFailure adds a fallback-notice field to the
+// substring payload so the operator can see in logs + model can
+// surface to the user why recall might be less specific.
+func annotateEmbeddingFailure(payload []byte, err error) []byte {
+	var wrapped map[string]any
+	if jerr := json.Unmarshal(payload, &wrapped); jerr != nil {
+		return payload
+	}
+	wrapped["embedding_failed"] = err.Error()
+	wrapped["strategy"] = "substring_fallback"
+	out, merr := json.Marshal(wrapped)
+	if merr != nil {
+		return payload
+	}
+	return out
 }
 
 // newMemoryWriteHandler returns a BuiltinFunc that writes one

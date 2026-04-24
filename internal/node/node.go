@@ -170,6 +170,7 @@ type Node struct {
 	llmProvider  compute.LLMProvider
 	executor     *compute.Executor
 	agent        *compute.Agent
+	embedder     compute.EmbeddingProvider
 
 	// Scheduler fires ScheduledTaskRecord and AgentCommitment records.
 	// Runs on any node that has access to the Raft stack (memory or
@@ -1085,14 +1086,41 @@ func (n *Node) wireCompute() error {
 		}
 	}
 
+	// Embedding client (optional). When configured, memory_search
+	// upgrades from substring to semantic vector search, and the
+	// episodic ingester writes a paired vector record per turn.
+	var embedder compute.EmbeddingProvider
+	if n.cfg.Compute.Embeddings.Endpoint != "" {
+		embKey, err := n.resolveAPIKey(n.cfg.Compute.Embeddings.APIKeyRef)
+		if err != nil {
+			return fmt.Errorf("embeddings api key: %w", err)
+		}
+		ec, err := compute.NewEmbeddingClient(compute.EmbeddingClientConfig{
+			Endpoint: n.cfg.Compute.Embeddings.Endpoint,
+			APIKey:   embKey,
+			Model:    n.cfg.Compute.Embeddings.Model,
+			Dims:     n.cfg.Compute.Embeddings.Dims,
+			Logger:   n.log,
+		})
+		if err != nil {
+			return fmt.Errorf("embedding client: %w", err)
+		}
+		embedder = ec
+		n.embedder = ec
+		n.log.Info("compute: embedding client wired",
+			"model", n.cfg.Compute.Embeddings.Model,
+			"dims", n.cfg.Compute.Embeddings.Dims)
+	}
+
 	// Memory tools: registered when Raft + store are available.
 	// Without these the model can't recall anything past the
 	// conversation-history buffer. Safe to register unconditionally
 	// on Raft-hosting nodes; a compute-only node (no Raft) skips.
 	if n.raft != nil && n.store != nil {
 		if err := compute.RegisterMemoryBuiltins(builtins, compute.MemoryConfig{
-			Store: n.store,
-			Raft:  n.raft,
+			Store:    n.store,
+			Raft:     n.raft,
+			Embedder: embedder,
 		}); err != nil {
 			return fmt.Errorf("register memory builtins: %w", err)
 		}
@@ -1227,7 +1255,11 @@ func (n *Node) wireCompute() error {
 	if n.llmProvider != nil {
 		var episodicIngester compute.EpisodicIngester
 		if n.raft != nil {
-			ingester, err := memory.NewEpisodicIngester(n.raft, 0)
+			var memEmbedder memory.Embedder
+			if n.embedder != nil {
+				memEmbedder = n.embedder
+			}
+			ingester, err := memory.NewEpisodicIngester(n.raft, 0, memEmbedder)
 			if err != nil {
 				return fmt.Errorf("episodic ingester: %w", err)
 			}

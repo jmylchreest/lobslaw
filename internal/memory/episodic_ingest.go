@@ -33,12 +33,23 @@ type EpisodicTurn struct {
 	CompletedAt time.Time
 }
 
+// Embedder produces a vector embedding for a piece of text. Kept
+// as a narrow interface so the compute layer can provide the
+// implementation without internal/memory depending on it.
+type Embedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
+
 // EpisodicIngester writes per-turn records into the Raft-
 // replicated episodic bucket. Dream consolidates them later.
+// When an Embedder is configured, each ingest also writes a
+// VectorRecord whose embedding indexes the turn body — that's
+// what makes memory_search's semantic strategy work.
 type EpisodicIngester struct {
-	raft    raftApplier
-	entropy *ulidEntropy
-	timeout time.Duration
+	raft     raftApplier
+	entropy  *ulidEntropy
+	timeout  time.Duration
+	embedder Embedder
 }
 
 type ulidEntropy struct {
@@ -47,8 +58,9 @@ type ulidEntropy struct {
 
 // NewEpisodicIngester wires the ingester. ApplyTimeout zero picks
 // 5s — long enough for a healthy Raft round-trip, short enough to
-// not stall the turn's reply path.
-func NewEpisodicIngester(raft raftApplier, applyTimeout time.Duration) (*EpisodicIngester, error) {
+// not stall the turn's reply path. Embedder nil → substring-only
+// recall, no vector records written.
+func NewEpisodicIngester(raft raftApplier, applyTimeout time.Duration, embedder Embedder) (*EpisodicIngester, error) {
 	if raft == nil {
 		return nil, errors.New("episodic ingester: raft applier required")
 	}
@@ -56,9 +68,10 @@ func NewEpisodicIngester(raft raftApplier, applyTimeout time.Duration) (*Episodi
 		applyTimeout = 5 * time.Second
 	}
 	return &EpisodicIngester{
-		raft:    raft,
-		entropy: &ulidEntropy{reader: ulid.Monotonic(cryptorand.Reader, 0)},
-		timeout: applyTimeout,
+		raft:     raft,
+		entropy:  &ulidEntropy{reader: ulid.Monotonic(cryptorand.Reader, 0)},
+		timeout:  applyTimeout,
+		embedder: embedder,
 	}, nil
 }
 
@@ -112,6 +125,41 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 	}
 	if fsmErr, ok := res.(error); ok && fsmErr != nil {
 		return fmt.Errorf("fsm: %w", fsmErr)
+	}
+
+	// Paired vector record: embed the turn body so memory_search's
+	// semantic strategy has content to match against. Embedding is
+	// best-effort — a failure here doesn't roll back the episodic
+	// write because losing one turn's vector is better than losing
+	// the episodic content entirely.
+	if i.embedder != nil {
+		embedText := rec.Context
+		if embedText == "" {
+			embedText = rec.Event
+		}
+		if vec, verr := i.embedder.Embed(ctx, embedText); verr == nil {
+			vecID := ulid.MustNew(ulid.Now(), i.entropy.reader).String()
+			vrec := &lobslawv1.VectorRecord{
+				Id:        vecID,
+				Embedding: vec,
+				Text:      embedText,
+				Scope:     "episodic",
+				Retention: rec.Retention,
+				CreatedAt: rec.Timestamp,
+				SourceIds: []string{rec.Id},
+			}
+			ventry := &lobslawv1.LogEntry{
+				Op: lobslawv1.LogOp_LOG_OP_PUT,
+				Id: vecID,
+				Payload: &lobslawv1.LogEntry_VectorRecord{
+					VectorRecord: vrec,
+				},
+			}
+			vdata, merr := proto.Marshal(ventry)
+			if merr == nil {
+				_, _ = i.raft.Apply(vdata, i.timeout)
+			}
+		}
 	}
 	return nil
 }

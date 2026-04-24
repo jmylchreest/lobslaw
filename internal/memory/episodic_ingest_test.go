@@ -30,7 +30,7 @@ func (f *fakeApplier) Apply(data []byte, _ time.Duration) (any, error) {
 
 func TestNewEpisodicIngesterRequiresRaft(t *testing.T) {
 	t.Parallel()
-	if _, err := NewEpisodicIngester(nil, 0); err == nil {
+	if _, err := NewEpisodicIngester(nil, 0, nil); err == nil {
 		t.Error("nil raft should fail")
 	}
 }
@@ -38,7 +38,7 @@ func TestNewEpisodicIngesterRequiresRaft(t *testing.T) {
 func TestEpisodicIngestCapturesRecord(t *testing.T) {
 	t.Parallel()
 	applier := &fakeApplier{}
-	ing, err := NewEpisodicIngester(applier, 0)
+	ing, err := NewEpisodicIngester(applier, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestEpisodicIngestCapturesRecord(t *testing.T) {
 func TestEpisodicIngestLongEventTruncates(t *testing.T) {
 	t.Parallel()
 	applier := &fakeApplier{}
-	ing, _ := NewEpisodicIngester(applier, 0)
+	ing, _ := NewEpisodicIngester(applier, 0, nil)
 	long := ""
 	for i := 0; i < 500; i++ {
 		long += "x"
@@ -106,7 +106,7 @@ func TestEpisodicIngestLongEventTruncates(t *testing.T) {
 func TestEpisodicIngestSurfacesRaftError(t *testing.T) {
 	t.Parallel()
 	applier := &fakeApplier{err: errors.New("no quorum")}
-	ing, _ := NewEpisodicIngester(applier, 0)
+	ing, _ := NewEpisodicIngester(applier, 0, nil)
 	err := ing.IngestTurn(context.Background(), EpisodicTurn{
 		UserMessage: "x",
 		AssistReply: "y",

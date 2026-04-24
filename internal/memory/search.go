@@ -18,6 +18,21 @@ type searchHit struct {
 	score  float32
 }
 
+// Record exposes the underlying vector record for external callers
+// (e.g. compute.memory_search → dereference to episodic).
+func (h searchHit) Record() *lobslawv1.VectorRecord { return h.record }
+
+// Score exposes the cosine similarity score.
+func (h searchHit) Score() float32 { return h.score }
+
+// VectorSearch is the exported entry point for vector similarity
+// search. Same shape as the internal implementation; exported so
+// the compute package can wire memory_search to it without
+// duplicating the cosine math.
+func VectorSearch(store *Store, query []float32, limit int, scopeFilter, retentionFilter string) ([]searchHit, error) {
+	return vectorSearch(store, query, limit, scopeFilter, retentionFilter)
+}
+
 // vectorSearch linearly scans the vector bucket, computes cosine
 // similarity against query, and returns the top-K most similar records.
 // Scope/retention filters run inline — records failing any filter are

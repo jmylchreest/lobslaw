@@ -111,6 +111,7 @@ type ComputeConfig struct {
 	Budgets             BudgetsConfig    `koanf:"budgets"`
 	Plugins             []PluginConfig   `koanf:"plugins"`
 	WebSearch           WebSearchConfig  `koanf:"web_search,omitempty"`
+	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
 }
 
 // WebSearchConfig enables the Exa-backed web_search builtin. When
@@ -121,6 +122,18 @@ type ComputeConfig struct {
 type WebSearchConfig struct {
 	APIKeyRef string `koanf:"api_key_ref,omitempty"`
 	Endpoint  string `koanf:"endpoint,omitempty"`
+}
+
+// EmbeddingsConfig points at an OpenAI-compat /embeddings endpoint.
+// Empty Endpoint → no embedder wired, memory_search falls back to
+// substring match and auto-ingest skips vector-record writes.
+// Dims MUST match the model's actual output dimension; mismatches
+// surface as runtime errors on every call.
+type EmbeddingsConfig struct {
+	Endpoint  string `koanf:"endpoint,omitempty"`
+	Model     string `koanf:"model,omitempty"`
+	APIKeyRef string `koanf:"api_key_ref,omitempty"`
+	Dims      int    `koanf:"dims,omitempty"`
 }
 
 type ProviderConfig struct {
