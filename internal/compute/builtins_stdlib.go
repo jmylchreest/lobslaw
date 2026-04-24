@@ -14,7 +14,13 @@ import (
 // StdlibToolDefs into the exec Registry so the LLM sees them in
 // its function-calling list.
 func RegisterStdlibBuiltins(b *Builtins) error {
-	return b.Register("current_time", currentTimeBuiltin)
+	if err := b.Register("current_time", currentTimeBuiltin); err != nil {
+		return err
+	}
+	if err := b.Register("read_file", readFileBuiltin); err != nil {
+		return err
+	}
+	return b.Register("search_files", searchFilesBuiltin)
 }
 
 func StdlibToolDefs() []*types.ToolDef {
@@ -32,6 +38,38 @@ func StdlibToolDefs() []*types.ToolDef {
 						"description": "Optional list of IANA timezone names (e.g. America/Los_Angeles, Europe/London, UTC) to additionally return times for."
 					}
 				},
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "read_file",
+			Path:        BuiltinScheme + "read_file",
+			Description: "Read the contents of a text file. Pass path (absolute). Optional offset (0-indexed line number to start at) and limit (max lines to return, default 200). Returns JSON with path, line_count, and content. Use this to inspect files the user references rather than guessing their contents.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"path": {"type": "string", "description": "Absolute filesystem path."},
+					"offset": {"type": "integer", "description": "0-indexed line number to start at."},
+					"limit": {"type": "integer", "description": "Max lines to return (default 200, cap 2000)."}
+				},
+				"required": ["path"],
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "search_files",
+			Path:        BuiltinScheme + "search_files",
+			Description: "Search for a pattern across text files. Pass pattern (regex) and optional path (default cwd) + glob (e.g. \"*.md\"). Returns JSON with matches [{path, line_number, line}]. Uses ripgrep when available, grep -rn otherwise. Capped at 100 matches.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"pattern": {"type": "string", "description": "Search pattern (regex)."},
+					"path": {"type": "string", "description": "Directory or file to search under. Default current working directory."},
+					"glob": {"type": "string", "description": "Filename glob filter (e.g. *.go)."}
+				},
+				"required": ["pattern"],
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskReversible,
