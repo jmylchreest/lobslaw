@@ -191,10 +191,19 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 	return payload, 0, nil
 }
 
+// runSubstringSearch does tokenised BM25-ish lexical matching —
+// NOT a single-substring match. Splits the query into words,
+// drops noise (2-char and shorter), matches each word against the
+// record's Event+Context lowercase. Score = number of distinct
+// matching words weighted by importance. Rescues the common case
+// where the user's phrasing doesn't literally contain the stored
+// phrase — "where do I live" finds "User lives in Yorkshire" on
+// the word "live" alone.
 func runSubstringSearch(store *memory.Store, query, tagFilter string, limit int) ([]byte, int, error) {
-	needle := strings.ToLower(query)
+	tokens := tokeniseQuery(query)
 	type hit struct {
-		rec *lobslawv1.EpisodicRecord
+		rec   *lobslawv1.EpisodicRecord
+		score int
 	}
 	var hits []hit
 	err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
@@ -205,17 +214,26 @@ func runSubstringSearch(store *memory.Store, query, tagFilter string, limit int)
 		if tagFilter != "" && !containsString(r.Tags, tagFilter) {
 			return nil
 		}
-		if !strings.Contains(strings.ToLower(r.Event), needle) &&
-			!strings.Contains(strings.ToLower(r.Context), needle) {
+		hay := strings.ToLower(r.Event + " " + r.Context)
+		matches := 0
+		for _, tok := range tokens {
+			if strings.Contains(hay, tok) {
+				matches++
+			}
+		}
+		if matches == 0 {
 			return nil
 		}
-		hits = append(hits, hit{rec: &r})
+		hits = append(hits, hit{rec: &r, score: matches})
 		return nil
 	})
 	if err != nil {
 		return nil, 1, fmt.Errorf("memory_search: scan: %w", err)
 	}
 	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].score != hits[j].score {
+			return hits[i].score > hits[j].score
+		}
 		if hits[i].rec.Importance != hits[j].rec.Importance {
 			return hits[i].rec.Importance > hits[j].rec.Importance
 		}
@@ -231,12 +249,46 @@ func runSubstringSearch(store *memory.Store, query, tagFilter string, limit int)
 	payload, err := json.Marshal(map[string]any{
 		"query":    query,
 		"results":  results,
-		"strategy": "substring",
+		"strategy": "tokenised-substring",
 	})
 	if err != nil {
 		return nil, 1, err
 	}
 	return payload, 0, nil
+}
+
+// tokeniseQuery lowercases + splits on whitespace + drops
+// stopwords and 1-2-char tokens. Preserves original word order
+// (unused today but reserved for phrase-proximity scoring later).
+func tokeniseQuery(query string) []string {
+	fields := strings.Fields(strings.ToLower(query))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		// Strip trailing punctuation the user types casually.
+		f = strings.Trim(f, ".,!?;:'\"()[]")
+		if len(f) <= 2 {
+			continue
+		}
+		if memorySearchStopwords[f] {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// memorySearchStopwords are low-signal words that generate too
+// many hits to be useful. Conservative list — only the absolute
+// worst offenders.
+var memorySearchStopwords = map[string]bool{
+	"the": true, "and": true, "for": true, "but": true, "are": true,
+	"was": true, "were": true, "has": true, "have": true, "had": true,
+	"can": true, "you": true, "your": true, "this": true, "that": true,
+	"what": true, "how": true, "why": true, "when": true, "where": true,
+	"who": true, "which": true, "with": true, "from": true, "there": true,
+	"then": true, "them": true, "they": true, "their": true, "will": true,
+	"would": true, "could": true, "should": true, "about": true, "some": true,
+	"all": true, "any": true, "not": true, "yes": true, "just": true,
 }
 
 func episodicToMap(rec *lobslawv1.EpisodicRecord, score float32) map[string]any {
