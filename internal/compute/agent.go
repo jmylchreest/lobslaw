@@ -72,6 +72,12 @@ type AgentConfig struct {
 	// or error paths. Dream consolidation picks up what lands here.
 	EpisodicIngester EpisodicIngester
 
+	// Roles is the multi-provider map so non-main workloads
+	// (preflight classification, reranker, summariser) can target
+	// a different model than the primary turn. Nil → every role
+	// falls through to Provider.
+	Roles *RoleMap
+
 	// Hooks dispatches lifecycle events (PreLLMCall, PostLLMCall,
 	// PreToolUse, PostToolUse). May be nil — all hook calls become
 	// no-ops when unset.

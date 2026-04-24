@@ -171,6 +171,7 @@ type Node struct {
 	executor     *compute.Executor
 	agent        *compute.Agent
 	embedder     compute.EmbeddingProvider
+	roleMap      *compute.RoleMap
 
 	// Scheduler fires ScheduledTaskRecord and AgentCommitment records.
 	// Runs on any node that has access to the Raft stack (memory or
@@ -1214,38 +1215,84 @@ func (n *Node) wireCompute() error {
 		n.resolver = r
 	}
 
-	// LLM provider: injection wins; else build LLMClient from the
-	// first provider (simplest "default" behaviour pre-Phase-6-channel).
+	// LLM provider build: injection wins for the main slot; else
+	// build a client per configured [[compute.providers]] entry
+	// and resolve the RoleMap against their labels.
+	clientsByLabel := map[string]compute.LLMProvider{}
 	switch {
 	case n.cfg.LLMProvider != nil:
 		n.llmProvider = n.cfg.LLMProvider
+		clientsByLabel["main"] = n.cfg.LLMProvider
 	case len(n.cfg.Compute.Providers) > 0:
-		first := n.cfg.Compute.Providers[0]
-		// Trust-tier guard: refuse to construct a client below the
-		// Soul's MinTrustTier floor. ValidateProviderTier is a no-op
-		// when the soul hasn't declared a floor (DefaultSoul does
-		// not), so deployments without a SOUL.md are unaffected.
-		if err := soul.ValidateProviderTier(n.Soul(), soul.ProviderTrustTier{
-			Label:     first.Label,
-			TrustTier: first.TrustTier,
-		}); err != nil {
+		for i, p := range n.cfg.Compute.Providers {
+			// Trust-tier guard on every provider — a misconfigured
+			// secondary shouldn't slip past the Soul's floor just
+			// because it's not the main turn.
+			if err := soul.ValidateProviderTier(n.Soul(), soul.ProviderTrustTier{
+				Label:     p.Label,
+				TrustTier: p.TrustTier,
+			}); err != nil {
+				return fmt.Errorf("provider %q: %w", p.Label, err)
+			}
+			apiKey, err := n.resolveAPIKey(p.APIKeyRef)
+			if err != nil {
+				return fmt.Errorf("api key for provider %q: %w", p.Label, err)
+			}
+			client, err := compute.NewLLMClient(compute.LLMClientConfig{
+				Endpoint:    p.Endpoint,
+				APIKey:      apiKey,
+				Model:       p.Model,
+				ServerTools: serverToolsFromConfig(p.ServerTools),
+				Logger:      n.log,
+			})
+			if err != nil {
+				return fmt.Errorf("llm client for %q: %w", p.Label, err)
+			}
+			clientsByLabel[p.Label] = client
+			if i == 0 {
+				n.llmProvider = client
+			}
+		}
+	}
+
+	// Explicit role map from config overrides fallback picks.
+	n.roleMap = nil
+	if n.llmProvider != nil {
+		roleAssignments := map[compute.Role]compute.LLMProvider{}
+		pickRole := func(role compute.Role, label string) error {
+			if label == "" {
+				return nil
+			}
+			c, ok := clientsByLabel[label]
+			if !ok {
+				return fmt.Errorf("compute.roles.%s: unknown provider label %q", role, label)
+			}
+			roleAssignments[role] = c
+			return nil
+		}
+		if err := pickRole(compute.RoleMain, n.cfg.Compute.Roles.Main); err != nil {
 			return err
 		}
-		apiKey, err := n.resolveAPIKey(first.APIKeyRef)
-		if err != nil {
-			return fmt.Errorf("api key for provider %q: %w", first.Label, err)
+		if err := pickRole(compute.RolePreflight, n.cfg.Compute.Roles.Preflight); err != nil {
+			return err
 		}
-		client, err := compute.NewLLMClient(compute.LLMClientConfig{
-			Endpoint:    first.Endpoint,
-			APIKey:      apiKey,
-			Model:       first.Model,
-			ServerTools: serverToolsFromConfig(first.ServerTools),
-			Logger:      n.log,
-		})
-		if err != nil {
-			return fmt.Errorf("llm client for %q: %w", first.Label, err)
+		if err := pickRole(compute.RoleReranker, n.cfg.Compute.Roles.Reranker); err != nil {
+			return err
 		}
-		n.llmProvider = client
+		if err := pickRole(compute.RoleSummariser, n.cfg.Compute.Roles.Summariser); err != nil {
+			return err
+		}
+		// If compute.roles.main was set, it overrides first-provider.
+		main := n.llmProvider
+		if override, ok := roleAssignments[compute.RoleMain]; ok {
+			main = override
+			n.llmProvider = override
+		}
+		rm, err := compute.NewRoleMap(main, roleAssignments)
+		if err != nil {
+			return fmt.Errorf("role map: %w", err)
+		}
+		n.roleMap = rm
 	}
 
 	// Agent is only constructable with a non-nil Provider. A
@@ -1277,6 +1324,7 @@ func (n *Node) wireCompute() error {
 				return &s.Config
 			},
 			EpisodicIngester: episodicIngester,
+			Roles:            n.roleMap,
 			Skills:           skillDispatcherOrNil(n.skillAdapter),
 			Logger:           n.log,
 		})

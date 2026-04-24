@@ -112,6 +112,34 @@ type ComputeConfig struct {
 	Plugins             []PluginConfig   `koanf:"plugins"`
 	WebSearch           WebSearchConfig  `koanf:"web_search,omitempty"`
 	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
+	// Roles maps named functional roles (main, preflight,
+	// reranker, summariser, etc.) to provider labels. Internal
+	// code asks the resolver for a role by name; the resolver
+	// dereferences to the provider. Empty → first provider fills
+	// every role (today's behaviour).
+	Roles RolesConfig `koanf:"roles,omitempty"`
+}
+
+// RolesConfig names the provider labels for each agent role.
+// Keeping this as named fields rather than a map makes misspelled
+// roles a compile-time error and lets the TOML reader validate
+// shape. Add new roles here as we need them.
+type RolesConfig struct {
+	// Main is the provider for the user-facing agent turn. Empty
+	// → first provider (back-compat).
+	Main string `koanf:"main,omitempty"`
+
+	// Preflight is the cheap model used for context-engine
+	// classification and prompt tailoring. Empty → Main.
+	Preflight string `koanf:"preflight,omitempty"`
+
+	// Reranker is the model used for memory rerank (two-stage
+	// RAG). Empty → Preflight.
+	Reranker string `koanf:"reranker,omitempty"`
+
+	// Summariser is the model used for dream consolidation /
+	// episodic summarisation. Empty → Main.
+	Summariser string `koanf:"summariser,omitempty"`
 }
 
 // WebSearchConfig enables the Exa-backed web_search builtin. When
