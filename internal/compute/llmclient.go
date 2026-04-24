@@ -236,6 +236,7 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 		"content_len", len(result.Content),
 		"tool_calls", len(result.ToolCalls),
 		"prompt_tokens", openResp.Usage.PromptTokens,
+		"cached_tokens", openResp.Usage.cachedTokens(),
 		"completion_tokens", openResp.Usage.CompletionTokens,
 		"total_tokens", openResp.Usage.TotalTokens,
 		"finish_reason", finishReasonOrEmpty(&openResp))
@@ -344,9 +345,27 @@ type openAIUsage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
-	// Anthropic proxies often surface a `cached_tokens` field; keep
-	// it here so cost accounting can use it when present.
+	// CachedTokens is the top-level shape some older proxies use.
+	// Modern OpenAI + MiniMax nest it under prompt_tokens_details
+	// instead (see below). Keep both so either survives.
 	CachedTokens int `json:"cached_tokens,omitempty"`
+	// PromptTokensDetails is the OpenAI / MiniMax structured shape.
+	// MiniMax docs: "usage.prompt_tokens_details.cached_tokens".
+	// Prefer this over CachedTokens when non-zero.
+	PromptTokensDetails *openAITokenDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+type openAITokenDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
+}
+
+// cachedTokens returns the cached-prefix count from either the
+// top-level field or the nested details block.
+func (u openAIUsage) cachedTokens() int {
+	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
+		return u.PromptTokensDetails.CachedTokens
+	}
+	return u.CachedTokens
 }
 
 // toOpenAIRequest translates the provider-agnostic ChatRequest to
@@ -420,7 +439,7 @@ func fromOpenAIResponse(r *openAIResponse) *ChatResponse {
 			PromptTokens:     r.Usage.PromptTokens,
 			CompletionTokens: r.Usage.CompletionTokens,
 			TotalTokens:      r.Usage.TotalTokens,
-			CachedTokens:     r.Usage.CachedTokens,
+			CachedTokens:     r.Usage.cachedTokens(),
 		},
 	}
 	for _, tc := range first.Message.ToolCalls {
