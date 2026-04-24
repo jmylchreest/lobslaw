@@ -23,6 +23,7 @@ type DebugInspector interface {
 	DebugScheduler() []map[string]any
 	DebugProviders() []map[string]any
 	DebugVersion() string
+	DebugSandbox() map[string]any
 }
 
 // RegisterDebugBuiltins installs debug_* builtins. Nil inspector
@@ -63,6 +64,9 @@ func RegisterDebugBuiltins(b *Builtins, insp DebugInspector) error {
 	if err := b.Register("debug_version", wrapDebugString(insp.DebugVersion)); err != nil {
 		return err
 	}
+	if err := b.Register("debug_sandbox", wrapDebug(func() any { return insp.DebugSandbox() })); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -90,6 +94,7 @@ func DebugToolDefs() []*types.ToolDef {
 		mk("debug_scheduler", "List scheduled tasks with their schedule, next fire, claim state. Takes no arguments."),
 		mk("debug_providers", "List configured LLM providers with label, model, endpoint (not the API key). Shows which role each serves."),
 		mk("debug_version", "Return node_id + enabled functions. Takes no arguments."),
+		mk("debug_sandbox", "Return kernel sandbox capabilities: whether landlock (filesystem LSM), seccomp (syscall filter), PR_SET_NO_NEW_PRIVS, and cgroup v2 are available on this host, plus whether the lobslaw daemon itself is running under a seccomp filter. Use when the operator asks 'is the sandbox active?' or wants to verify tool isolation. Takes no arguments. Present the booleans as a markdown table; call out sandbox_mode ('enforces-tools' vs 'none') prominently."),
 	}
 }
 

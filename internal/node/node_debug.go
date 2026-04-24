@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 )
 
 // debugInspector exposes Node state to agent-side debug builtins.
@@ -171,4 +172,23 @@ func (d *debugInspector) DebugProviders() []map[string]any {
 
 func (d *debugInspector) DebugVersion() string {
 	return fmt.Sprintf("node_id=%s functions=%v", d.n.cfg.NodeID, d.n.cfg.Functions)
+}
+
+// DebugSandbox probes live kernel capabilities. See
+// internal/sandbox.Probe for what's surfaced; this wrapper turns
+// the typed report into the map[string]any shape DebugInspector
+// expects.
+func (d *debugInspector) DebugSandbox() map[string]any {
+	r := sandbox.Probe()
+	return map[string]any{
+		"os":                     r.OS,
+		"kernel_version":         r.KernelVersion,
+		"landlock_supported":     r.LandlockSupported,
+		"landlock_abi_version":   r.LandlockABIVersion,
+		"seccomp_supported":      r.SeccompSupported,
+		"no_new_privs_supported": r.NoNewPrivsSupported,
+		"cgroup_v2_mounted":      r.CgroupV2Mounted,
+		"daemon_under_sandbox":   r.DaemonUnderSandbox,
+		"sandbox_mode":           r.SandboxMode,
+	}
 }

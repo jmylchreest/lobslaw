@@ -332,6 +332,12 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		return
 	}
 
+	// Surface policy denials to the user directly — these are
+	// otherwise opaque (LLM may or may not narrate them). Emit one
+	// interstitial per denial so the user sees exactly what was
+	// blocked and why.
+	h.notifyPolicyDenials(msg.Chat.ID, resp.ToolCalls)
+
 	// Record the user turn + final assistant reply so the next
 	// message in this chat sees the context. Tool-role intermediates
 	// are skipped: they inflate context fast without adding much
@@ -340,6 +346,14 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		h.history.Append(msg.Chat.ID,
 			compute.Message{Role: "user", Content: msg.Text},
 			compute.Message{Role: "assistant", Content: resp.Reply})
+	}
+
+	// Tool-call breadcrumb: chatty-SOUL deployments get a compact
+	// "ran X, Y, Z" italic prefix so the user sees what actually
+	// happened under the hood. Direct-SOUL keeps the reply clean.
+	breadcrumb := ""
+	if h.shouldEmitInterim() {
+		breadcrumb = toolCallBreadcrumb(resp.ToolCalls)
 	}
 
 	switch {
@@ -353,7 +367,11 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	case resp.Reply == "":
 		h.sendText(msg.Chat.ID, "(empty reply)")
 	default:
-		h.sendText(msg.Chat.ID, resp.Reply)
+		reply := resp.Reply
+		if breadcrumb != "" {
+			reply = breadcrumb + "\n\n" + reply
+		}
+		h.sendText(msg.Chat.ID, reply)
 	}
 }
 
