@@ -1131,6 +1131,18 @@ func (n *Node) wireCompute() error {
 	}
 	n.log.Info("compute: write_file + edit_file registered")
 
+	// Shell access — most dangerous of all the stdlib tools.
+	// Denylist + compound-command gate + 30s default timeout
+	// give an MVP-acceptable surface; the ask-based permission
+	// model replaces this with per-pattern approval later.
+	if err := compute.RegisterShellBuiltin(builtins); err != nil {
+		return fmt.Errorf("register shell_command: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.ShellToolDef()); err != nil {
+		return fmt.Errorf("register shell_command tool def: %w", err)
+	}
+	n.log.Info("compute: shell_command registered")
+
 	// Web search: only registered when an Exa API key is
 	// configured. Skipped silently when absent so deployments that
 	// don't want web access don't need to redact anything — they
