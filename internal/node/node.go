@@ -193,6 +193,7 @@ type Node struct {
 	mcpLoader        *mcp.Loader
 	webhookHandlers  []*gateway.WebhookHandler
 	mountResolver    *compute.MountResolver
+	builtinsRegistry *compute.Builtins
 
 	// Scheduler fires ScheduledTaskRecord and AgentCommitment records.
 	// Runs on any node that has access to the Raft stack (memory or
@@ -1194,6 +1195,7 @@ func (n *Node) wireCompute() error {
 		return fmt.Errorf("builtins: %w", err)
 	}
 	n.executor.SetBuiltins(builtins)
+	n.builtinsRegistry = builtins
 	for _, t := range compute.StdlibToolDefs() {
 		if err := n.toolRegistry.Register(t); err != nil {
 			return fmt.Errorf("register stdlib tool %q: %w", t.Name, err)
@@ -1925,6 +1927,22 @@ func (n *Node) registerMCPToolsWithCompute() {
 	}
 	if len(defs) > 0 {
 		n.log.Info("mcp: registered tools with compute registry", "count", len(defs))
+	}
+
+	if n.builtinsRegistry != nil && n.toolRegistry != nil {
+		if err := compute.RegisterMCPManagementBuiltins(n.builtinsRegistry, compute.MCPManagementConfig{
+			Registry: n.mcpLoader,
+		}); err != nil {
+			n.log.Warn("mcp: register management builtins failed", "err", err)
+		} else {
+			for _, td := range compute.MCPManagementToolDefs() {
+				if err := n.toolRegistry.Register(td); err != nil {
+					n.log.Warn("mcp: register management tool def failed",
+						"name", td.Name, "err", err)
+				}
+			}
+			n.log.Info("compute: mcp_list + mcp_add + mcp_remove registered")
+		}
 	}
 }
 

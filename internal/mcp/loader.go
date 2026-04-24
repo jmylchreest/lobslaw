@@ -57,8 +57,10 @@ func NewLoader(cfg LoaderConfig) *Loader {
 // for. Keeps the client handle + resolved config so Close can
 // Wait() the subprocess cleanly.
 type managedServer struct {
-	name   string
-	client *Client
+	name    string
+	command string
+	args    []string
+	client  *Client
 }
 
 // managedTool is one tool sourced from an MCP server. We keep both
@@ -159,7 +161,12 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 		return fmt.Errorf("mcp: server %q tools/list: %w", name, err)
 	}
 
-	srv := &managedServer{name: name, client: client}
+	srv := &managedServer{
+		name:    name,
+		command: cfg.Command,
+		args:    cfg.Args,
+		client:  client,
+	}
 	l.servers[name] = srv
 	for _, t := range tools {
 		raw := t.Name
@@ -272,6 +279,77 @@ func (l *Loader) ListTools() []Tool {
 		out = append(out, t.tool)
 	}
 	return out
+}
+
+// ListServers returns a snapshot view of every registered server
+// for the mcp_list builtin. Tool counts are derived by scanning the
+// tools map; healthy is stubbed to true today (MCP doesn't have a
+// cheap liveness probe — reachability is only confirmed when the
+// next CallTool runs).
+func (l *Loader) ListServers() []compute.MCPServerView {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]compute.MCPServerView, 0, len(l.servers))
+	for name, srv := range l.servers {
+		count := 0
+		for _, t := range l.tools {
+			if t.server == srv {
+				count++
+			}
+		}
+		out = append(out, compute.MCPServerView{
+			Name:      name,
+			Command:   srv.command,
+			Args:      srv.args,
+			ToolCount: count,
+			Healthy:   true,
+		})
+	}
+	return out
+}
+
+// AddServer spawns a new MCP server at runtime. Expected shape:
+// fullCmd[0] is the executable, fullCmd[1:] are args. No-op on
+// duplicate name — caller surfaces that as a client-side "already
+// registered" hint via the returned error.
+func (l *Loader) AddServer(ctx context.Context, name string, fullCmd []string, env map[string]string) error {
+	if len(fullCmd) == 0 {
+		return fmt.Errorf("mcp: AddServer %q: command required", name)
+	}
+	l.mu.Lock()
+	if _, exists := l.servers[name]; exists {
+		l.mu.Unlock()
+		return fmt.Errorf("mcp: server %q already registered", name)
+	}
+	cfg := ServerConfig{
+		Command: fullCmd[0],
+		Args:    fullCmd[1:],
+		Env:     env,
+	}
+	err := l.startServerLocked(ctx, name, cfg)
+	l.mu.Unlock()
+	return err
+}
+
+// RemoveServer stops and deregisters a server. Returns an error
+// when the name is unknown so the caller doesn't silently think
+// something happened.
+func (l *Loader) RemoveServer(_ context.Context, name string) error {
+	l.mu.Lock()
+	srv, ok := l.servers[name]
+	if !ok {
+		l.mu.Unlock()
+		return fmt.Errorf("mcp: server %q not found", name)
+	}
+	delete(l.servers, name)
+	for key, t := range l.tools {
+		if t.server == srv {
+			delete(l.tools, key)
+		}
+	}
+	l.mu.Unlock()
+	_ = srv.client.Close()
+	return nil
 }
 
 // ToolDefs returns a compute-layer ToolDef per MCP-registered tool.
