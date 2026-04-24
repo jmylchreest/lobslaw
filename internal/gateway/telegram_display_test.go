@@ -105,6 +105,44 @@ func TestToolCallBreadcrumbFiltersFailures(t *testing.T) {
 	}
 }
 
+func TestToolCallBreadcrumbCompactsManyCalls(t *testing.T) {
+	t.Parallel()
+	// 8 fetch_url + 2 read_file → over the expanded limit, so
+	// breadcrumb should show counts not individual entries.
+	var calls []compute.ToolInvocation
+	for range 8 {
+		calls = append(calls, compute.ToolInvocation{ToolName: "fetch_url", Args: `{"url":"https://x"}`})
+	}
+	for range 2 {
+		calls = append(calls, compute.ToolInvocation{ToolName: "read_file", Args: `{"path":"/y"}`})
+	}
+	got := toolCallBreadcrumb(calls)
+	if !strings.Contains(got, "8× `FetchUrl`") {
+		t.Errorf("breadcrumb missing FetchUrl count: %q", got)
+	}
+	if !strings.Contains(got, "2× `ReadFile`") {
+		t.Errorf("breadcrumb missing ReadFile count: %q", got)
+	}
+	if strings.Contains(got, "https://x") {
+		t.Errorf("compact form should not list individual args: %q", got)
+	}
+}
+
+func TestToolCallBreadcrumbExpandsForSmallSets(t *testing.T) {
+	t.Parallel()
+	calls := []compute.ToolInvocation{
+		{ToolName: "grep", Args: `{"pattern":"foo"}`},
+		{ToolName: "read_file", Args: `{"path":"/x"}`},
+	}
+	got := toolCallBreadcrumb(calls)
+	if !strings.Contains(got, "Grep(foo)") {
+		t.Errorf("small set should expand: %q", got)
+	}
+	if strings.Contains(got, "×") {
+		t.Errorf("small set should NOT use count form: %q", got)
+	}
+}
+
 func TestToolCallBreadcrumbEmpty(t *testing.T) {
 	t.Parallel()
 	if toolCallBreadcrumb(nil) != "" {

@@ -38,7 +38,14 @@ var (
 // keeps calling tools without ever emitting text) from burning the
 // whole budget. Operators override via AgentConfig if a specific
 // workflow legitimately needs more rounds.
-const DefaultMaxToolLoops = 16
+//
+// 24 chosen empirically: 'fetch a repo + walk a few directories +
+// read a few files + synthesise' tops out around 16-20 fetch_url
+// calls in practice. 16 was too tight; the bot was hitting the
+// wall mid-research with useful state but nowhere to go. 24 gives
+// genuine multi-file research turns room to land while still
+// catching the broken-loop pathology before it racks up tokens.
+const DefaultMaxToolLoops = 24
 
 // AgentConfig configures the agent loop.
 type AgentConfig struct {
@@ -541,9 +548,14 @@ func (a *Agent) forceSummaryReply(
 		instruction = "Reply to the user in plain text without calling any more tools."
 	}
 
+	// MiniMax + several other providers reject role=system anywhere
+	// except position 0 (HTTP 400 "invalid message role: system").
+	// Use a user-role nudge instead — it's universally accepted and
+	// the model treats it the same operationally (final-turn
+	// instruction directing the next response).
 	forced := make([]Message, 0, len(messages)+1)
 	forced = append(forced, messages...)
-	forced = append(forced, Message{Role: "system", Content: instruction})
+	forced = append(forced, Message{Role: "user", Content: instruction})
 
 	// Build a ChatRequest with tools explicitly stripped so the
 	// model cannot emit another tool-call even if it wanted to.
