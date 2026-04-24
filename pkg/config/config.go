@@ -86,6 +86,7 @@ type StorageConfig struct {
 type StorageMountConfig struct {
 	Label            string            `koanf:"label"`
 	Type             string            `koanf:"type"`
+	Path             string            `koanf:"path,omitempty"`
 	Bucket           string            `koanf:"bucket,omitempty"`
 	Endpoint         string            `koanf:"endpoint,omitempty"`
 	Account          string            `koanf:"account,omitempty"`

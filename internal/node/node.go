@@ -119,6 +119,12 @@ type Config struct {
 	// config silently drops Raft sink on non-Raft nodes.
 	Audit config.AuditConfig
 
+	// Storage carries the config-declared [[storage.mounts]]
+	// entries. On leader boot these are seeded into the Raft-
+	// backed storage bucket (idempotent — operators can still
+	// AddMount at runtime without collision).
+	Storage config.StorageConfig
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate
@@ -549,6 +555,9 @@ func (n *Node) Start(ctx context.Context) error {
 			if err := n.seedDefaultPolicyRules(ctx); err != nil {
 				n.log.Warn("policy: seed defaults failed", "err", err)
 			}
+			if err := n.seedStorageMountsFromConfig(ctx); err != nil {
+				n.log.Warn("storage: seed from config failed", "err", err)
+			}
 		}
 	}
 
@@ -827,6 +836,46 @@ func (n *Node) wireAudit(ctx context.Context) error {
 // nil after New; a zero-sink configuration returns a log that no-ops
 // on Append so callers don't need to nil-check.
 func (n *Node) Audit() *audit.AuditLog { return n.auditLog }
+
+// seedStorageMountsFromConfig propagates [[storage.mounts]]
+// config entries into the Raft-backed storage bucket so they
+// show up in the live Manager + debug_storage + skill resolver.
+// Idempotent: AddMount on an existing label is a no-op Replace,
+// and we skip labels already in the store via Get.
+//
+// Without this, operators who declare mounts in config.toml see
+// debug_storage return [] until they manually gRPC-call
+// StorageService.AddMount, which is silly for local dev.
+func (n *Node) seedStorageMountsFromConfig(ctx context.Context) error {
+	if n.storageSvc == nil || n.store == nil {
+		return nil
+	}
+	if !n.raft.IsLeader() {
+		return nil
+	}
+	for _, m := range n.cfg.Storage.Mounts {
+		if m.Label == "" || m.Type == "" {
+			continue
+		}
+		if _, err := n.store.Get(memory.BucketStorageMounts, m.Label); err == nil {
+			continue
+		}
+		req := &lobslawv1.AddMountRequest{
+			Mount: &lobslawv1.StorageMount{
+				Label:  m.Label,
+				Type:   m.Type,
+				Path:   m.Path,
+				Bucket: m.Bucket,
+			},
+		}
+		if _, err := n.storageSvc.AddMount(ctx, req); err != nil {
+			return fmt.Errorf("seed mount %q: %w", m.Label, err)
+		}
+		n.log.Info("storage: seeded mount from config",
+			"label", m.Label, "type", m.Type, "path", m.Path)
+	}
+	return nil
+}
 
 // seedDefaultPolicyRules writes a platform-trusted allow rule for
 // every stdlib builtin tool. Without these, the default-deny posture
