@@ -48,6 +48,12 @@ type ChatRequest struct {
 	// Empty slice → text-only completion (no tool calling).
 	Tools []Tool
 
+	// ServerTools are provider-executed entries (OpenRouter's
+	// openrouter:web_search etc.) merged into the wire tools array.
+	// Not dispatched through our Executor — the provider handles
+	// them and returns synthesised content.
+	ServerTools []ServerTool
+
 	// ToolChoice controls tool-use eagerness. Values:
 	// "auto" — model decides (default when Tools is non-empty)
 	// "none" — model must NOT call tools
@@ -87,6 +93,16 @@ type Tool struct {
 	// it from the lobslaw Tool registry; shape matches OpenAI's
 	// function-tool schema.
 	Parameters json.RawMessage
+}
+
+// ServerTool is a provider-side tool — the provider runs it and
+// synthesises a reply the model continues from; our Executor never
+// sees it. Example: OpenRouter's openrouter:web_search. Type is
+// the provider-specific discriminator; Parameters is an opaque
+// object the provider interprets.
+type ServerTool struct {
+	Type       string
+	Parameters map[string]any
 }
 
 // ToolCall is the model's request to invoke a tool. ID is the

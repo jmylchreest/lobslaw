@@ -110,6 +110,17 @@ type ComputeConfig struct {
 	ComplexityEstimator string           `koanf:"complexity_estimator"`
 	Budgets             BudgetsConfig    `koanf:"budgets"`
 	Plugins             []PluginConfig   `koanf:"plugins"`
+	WebSearch           WebSearchConfig  `koanf:"web_search,omitempty"`
+}
+
+// WebSearchConfig enables the Exa-backed web_search builtin. When
+// APIKeyRef is empty, the builtin is not registered and the model
+// sees no web_search tool. MCP-sourced web_search registrations
+// (future) override the builtin by virtue of later-registration
+// wins in the tool registry.
+type WebSearchConfig struct {
+	APIKeyRef string `koanf:"api_key_ref,omitempty"`
+	Endpoint  string `koanf:"endpoint,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -120,6 +131,22 @@ type ProviderConfig struct {
 	Capabilities []string              `koanf:"capabilities,omitempty"`
 	TrustTier    types.TrustTier       `koanf:"trust_tier"`
 	Pricing      types.ProviderPricing `koanf:"pricing,omitempty"`
+	// ServerTools are provider-side tools (e.g. OpenRouter's
+	// openrouter:web_search) merged into every request's tools
+	// array. Transparent to the Executor — the provider handles
+	// them server-side and returns synthesised results. Use for
+	// capabilities we don't want to implement ourselves.
+	ServerTools []ServerToolSpec `koanf:"server_tools,omitempty"`
+}
+
+// ServerToolSpec is one provider-side tool. Parameters is a
+// freeform JSON object the provider interprets — we don't validate
+// beyond "well-formed JSON". Example for OpenRouter web search:
+//
+//	{type = "openrouter:web_search", parameters = {max_results = 5}}
+type ServerToolSpec struct {
+	Type       string         `koanf:"type"`
+	Parameters map[string]any `koanf:"parameters,omitempty"`
 }
 
 type ChainConfig struct {

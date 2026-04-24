@@ -49,11 +49,12 @@ var (
 // LLMClient is the real OpenAI-compatible HTTP client. Stateless
 // per call; safe to share across goroutines. Implements LLMProvider.
 type LLMClient struct {
-	endpoint   string // resolved full URL to /chat/completions
-	apiKey     string // sent as "Authorization: Bearer ..."
-	model      string // default model when ChatRequest.Model is empty
-	httpClient *http.Client
-	log        *slog.Logger
+	endpoint    string // resolved full URL to /chat/completions
+	apiKey      string // sent as "Authorization: Bearer ..."
+	model       string // default model when ChatRequest.Model is empty
+	serverTools []ServerTool
+	httpClient  *http.Client
+	log         *slog.Logger
 }
 
 // LLMClientConfig tunes client construction. Zero-value is usable
@@ -82,6 +83,12 @@ type LLMClientConfig struct {
 	// proxies, keep-alive tuning, test doubles). Zero → a new client
 	// with Timeout applied.
 	HTTPClient *http.Client
+
+	// ServerTools is the static set of provider-side tools
+	// (OpenRouter's openrouter:web_search etc.) to merge into every
+	// request. Provider-static — configured once per provider, not
+	// per turn.
+	ServerTools []ServerTool
 
 	// Logger is used for structured DEBUG-level traces of each
 	// round-trip. Nil → slog.Default().
@@ -118,11 +125,12 @@ func NewLLMClient(cfg LLMClientConfig) (*LLMClient, error) {
 		logger = slog.Default()
 	}
 	return &LLMClient{
-		endpoint:   endpoint,
-		apiKey:     cfg.APIKey,
-		model:      cfg.Model,
-		httpClient: hc,
-		log:        logger,
+		endpoint:    endpoint,
+		apiKey:      cfg.APIKey,
+		model:       cfg.Model,
+		serverTools: cfg.ServerTools,
+		httpClient:  hc,
+		log:         logger,
 	}, nil
 }
 
@@ -164,6 +172,13 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 			"index", i,
 			"role", m.Role,
 			"content", truncateBody([]byte(m.Content)))
+	}
+
+	// Provider-static server tools layer onto whatever the caller
+	// supplied. Dedup would be caller's problem if they pass the
+	// same server tool twice; we just concat.
+	if len(c.serverTools) > 0 {
+		req.ServerTools = append(req.ServerTools, c.serverTools...)
 	}
 
 	body, err := json.Marshal(toOpenAIRequest(req, c.model))
@@ -266,8 +281,12 @@ type openAIRequest struct {
 	Messages    []openAIMessage `json:"messages"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
 	Temperature float32         `json:"temperature,omitempty"`
-	Tools       []openAITool    `json:"tools,omitempty"`
-	ToolChoice  any             `json:"tool_choice,omitempty"` // string ("auto"/"none"/"required") or object
+	// Tools is typed as []any so function-calling tools (openAITool)
+	// and provider server tools (OpenRouter's
+	// openrouter:web_search — flat {type, parameters}) can coexist
+	// in a single wire array.
+	Tools      []any `json:"tools,omitempty"`
+	ToolChoice any   `json:"tool_choice,omitempty"` // string ("auto"/"none"/"required") or object
 }
 
 type openAIMessage struct {
@@ -365,6 +384,17 @@ func toOpenAIRequest(req ChatRequest, defaultModel string) openAIRequest {
 				Parameters:  t.Parameters,
 			},
 		})
+	}
+	// Server tools use a different flat shape ({type, parameters})
+	// and live alongside function tools in the same array. Emitted
+	// as a map so json.Marshal produces the top-level keys without
+	// a wrapper.
+	for _, st := range req.ServerTools {
+		entry := map[string]any{"type": st.Type}
+		if len(st.Parameters) > 0 {
+			entry["parameters"] = st.Parameters
+		}
+		out.Tools = append(out.Tools, entry)
 	}
 	if req.ToolChoice != "" {
 		out.ToolChoice = req.ToolChoice

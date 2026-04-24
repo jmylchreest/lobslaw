@@ -147,8 +147,19 @@ func TestLLMClientToolCallsRoundTrip(t *testing.T) {
 		if len(req.Tools) != 1 {
 			t.Errorf("want 1 tool, got %d", len(req.Tools))
 		}
-		if req.Tools[0].Function.Name != "bash" {
-			t.Errorf("tool name: %q", req.Tools[0].Function.Name)
+		// Tools is []any on the wire-shape struct so function +
+		// server tools can coexist; JSON decode delivers a
+		// map[string]any we dig into.
+		first, ok := req.Tools[0].(map[string]any)
+		if !ok {
+			t.Fatalf("tool[0] is not an object: %T", req.Tools[0])
+		}
+		fn, ok := first["function"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool[0].function missing: %+v", first)
+		}
+		if fn["name"] != "bash" {
+			t.Errorf("tool name: %v", fn["name"])
 		}
 		resp := openAIResponse{
 			Choices: []openAIChoice{{

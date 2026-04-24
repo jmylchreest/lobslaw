@@ -8,6 +8,7 @@ import (
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -846,7 +847,18 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	if !n.raft.IsLeader() {
 		return nil
 	}
-	for _, td := range compute.StdlibToolDefs() {
+	// Seed for every registered builtin — includes web_search when
+	// Exa is configured, plus any future builtin registrations. We
+	// iterate the live registry rather than the static StdlibToolDefs
+	// so additive wiring in node.New doesn't need to update a second
+	// list here.
+	seedTargets := []*types.ToolDef{}
+	for _, td := range n.toolRegistry.List() {
+		if strings.HasPrefix(td.Path, compute.BuiltinScheme) {
+			seedTargets = append(seedTargets, td)
+		}
+	}
+	for _, td := range seedTargets {
 		ruleID := "lobslaw-builtin-" + td.Name
 		if _, err := n.store.Get(memory.BucketPolicyRules, ruleID); err == nil {
 			// Already present (prior boot seeded it, or operator
@@ -1068,6 +1080,29 @@ func (n *Node) wireCompute() error {
 		}
 	}
 
+	// Web search: only registered when an Exa API key is
+	// configured. Skipped silently when absent so deployments that
+	// don't want web access don't need to redact anything — they
+	// just don't set the key.
+	if n.cfg.Compute.WebSearch.APIKeyRef != "" {
+		exaKey, err := n.resolveAPIKey(n.cfg.Compute.WebSearch.APIKeyRef)
+		if err != nil {
+			return fmt.Errorf("web_search api key: %w", err)
+		}
+		if exaKey != "" {
+			if err := compute.RegisterWebSearchBuiltin(builtins, compute.WebSearchConfig{
+				APIKey:   exaKey,
+				Endpoint: n.cfg.Compute.WebSearch.Endpoint,
+			}); err != nil {
+				return fmt.Errorf("register web_search: %w", err)
+			}
+			if err := n.toolRegistry.Register(compute.WebSearchToolDef()); err != nil {
+				return fmt.Errorf("register web_search tool def: %w", err)
+			}
+			n.log.Info("compute: web_search (Exa) registered")
+		}
+	}
+
 	// Wire the skill registry's PolicySink so skill-bundled policy.d/
 	// subtrees apply to the tool registry during scan. Order matters:
 	// skills scanned BEFORE operator's policy.d load means
@@ -1110,10 +1145,11 @@ func (n *Node) wireCompute() error {
 			return fmt.Errorf("api key for provider %q: %w", first.Label, err)
 		}
 		client, err := compute.NewLLMClient(compute.LLMClientConfig{
-			Endpoint: first.Endpoint,
-			APIKey:   apiKey,
-			Model:    first.Model,
-			Logger:   n.log,
+			Endpoint:    first.Endpoint,
+			APIKey:      apiKey,
+			Model:       first.Model,
+			ServerTools: serverToolsFromConfig(first.ServerTools),
+			Logger:      n.log,
 		})
 		if err != nil {
 			return fmt.Errorf("llm client for %q: %w", first.Label, err)
@@ -1297,6 +1333,23 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 // the task/commitment so audit can distinguish "alice scheduled
 // this" from "bob did." Scope defaults to "scheduler" so policies
 // can gate what scheduled tasks are allowed to touch.
+// serverToolsFromConfig converts the TOML-shaped ServerToolSpec
+// list into the compute-layer ServerTool shape. Trivial mapper; the
+// separation just keeps config types out of internal/compute.
+func serverToolsFromConfig(in []config.ServerToolSpec) []compute.ServerTool {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]compute.ServerTool, 0, len(in))
+	for _, s := range in {
+		out = append(out, compute.ServerTool{
+			Type:       s.Type,
+			Parameters: s.Parameters,
+		})
+	}
+	return out
+}
+
 func (n *Node) schedulerClaims(creator string) *types.Claims {
 	if creator == "" {
 		creator = "scheduler"
