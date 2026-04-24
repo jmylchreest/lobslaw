@@ -28,7 +28,7 @@ func StdlibToolDefs() []*types.ToolDef {
 		{
 			Name:        "current_time",
 			Path:        BuiltinScheme + "current_time",
-			Description: "Returns the current wall-clock time as JSON with fields utc (RFC3339), local (RFC3339), zone (IANA name), offset_secs, and unix (epoch seconds). Pass optional zones=[\"America/Los_Angeles\",\"Asia/Tokyo\"] to additionally return the time in each IANA timezone under the zones field. Call this when the user asks about the time or date; do not guess.",
+			Description: "Returns the current wall-clock time as JSON with fields utc (RFC3339), local (RFC3339), zone (IANA name), offset_secs, and unix (epoch seconds). Pass optional zones=[\"America/Los_Angeles\",\"Asia/Tokyo\"] to additionally return the time in each IANA timezone under the zones field. Call this when the user asks about the time or date; do not guess. INFER IANA zone names yourself from city or region names the user provides — do NOT ask the user for IANA names. Examples: California → America/Los_Angeles, Chennai → Asia/Kolkata, London → Europe/London, New York → America/New_York, Tokyo → Asia/Tokyo, Sydney → Australia/Sydney, Berlin → Europe/Berlin, Paris → Europe/Paris, Moscow → Europe/Moscow, Dubai → Asia/Dubai, Singapore → Asia/Singapore, UTC → UTC.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
