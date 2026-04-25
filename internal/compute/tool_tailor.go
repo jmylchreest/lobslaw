@@ -38,11 +38,13 @@ func tailoredToolsFor(userMessage string, available []Tool) []Tool {
 			out = append(out, t)
 		}
 	}
-	// Safety net: if the heuristic ended up returning fewer than
-	// the default set (e.g. the registry doesn't actually have
-	// current_time), fall back to advertising everything. Better
-	// to bloat the prompt than hand the model zero tools.
-	if len(out) < len(toolTailorDefaults) {
+	// Safety net: if NO tool came through the heuristic, fall back
+	// to advertising everything. The previous shape compared
+	// against len(defaults), which over-fired whenever the
+	// registry held a strict subset of the default set (e.g. a
+	// test fixture without all debug_* tools). Bare-zero is the
+	// real failure mode worth catching.
+	if len(out) == 0 {
 		return available
 	}
 	return out

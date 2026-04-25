@@ -21,10 +21,23 @@ import "regexp"
 // toolTailorDefaults are tools that stay in every turn's list
 // regardless of classifier output. Cheap to advertise, broadly
 // applicable. Removing entries here is almost always wrong.
+//
+// debug_tools / debug_memory / debug_storage are included so the
+// bot can ALWAYS self-introspect when asked "what can you do" or
+// "is memory empty". Without these as defaults, the bot looked
+// at its (tailored) function-calling schema, saw 3-4 tools, and
+// confidently reported those as its full capability — falsely
+// "I only have memory_search and current_time" when 30 tools
+// were registered. Self-introspection is not optional.
 var toolTailorDefaults = map[string]bool{
-	"current_time":  true,
-	"memory_search": true,
-	"memory_write":  true,
+	"current_time":   true,
+	"memory_search":  true,
+	"memory_write":   true,
+	"memory_recent":  true,
+	"debug_tools":    true,
+	"debug_memory":   true,
+	"debug_storage":  true,
+	"debug_providers": true,
 }
 
 // toolCategoryPatterns groups tools by intent category.
