@@ -117,8 +117,27 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		}
 
 		id := ulid.MustNew(ulid.Now(), commitmentIDEntropy).String()
+		// Auto-capture channel context from synthetic args injected
+		// by agent.runToolCall. The bot doesn't reliably remember
+		// to pass chat_id explicitly, so we lift it from the
+		// originating turn's context. The firing turn's
+		// runCommitmentAsAgentTurn reads params.chat_id back into
+		// the agent request's ChannelID, which renders into the
+		// Runtime section of the firing turn's system prompt.
+		channel := strings.TrimSpace(args["__channel"])
+		chatID := strings.TrimSpace(args["__chat_id"])
+		// Prefix the stored prompt with an explicit how-to-message-
+		// back instruction. Without this, the bot's stored prompt
+		// is often generic ("Send a message saying X") and the
+		// firing turn generates text that goes nowhere.
+		if channel == "telegram" && chatID != "" {
+			prompt = fmt.Sprintf("This commitment was scheduled by user in telegram chat %s. To deliver any reply to them you MUST call notify_telegram(chat_id=\"%s\", text=\"...\") — without this call the user will not see your reply, since this turn has no chat to auto-reply into.\n\nYour task: %s", chatID, chatID, prompt)
+		}
 		params := map[string]string{"prompt": prompt}
-		if chatID := strings.TrimSpace(args["__chat_id"]); chatID != "" {
+		if channel != "" {
+			params["channel"] = channel
+		}
+		if chatID != "" {
 			params["chat_id"] = chatID
 		}
 		c := &lobslawv1.AgentCommitment{

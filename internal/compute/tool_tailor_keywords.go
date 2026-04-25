@@ -30,14 +30,20 @@ import "regexp"
 // "I only have memory_search and current_time" when 30 tools
 // were registered. Self-introspection is not optional.
 var toolTailorDefaults = map[string]bool{
-	"current_time":   true,
-	"memory_search":  true,
-	"memory_write":   true,
-	"memory_recent":  true,
-	"debug_tools":    true,
-	"debug_memory":   true,
-	"debug_storage":  true,
+	"current_time":    true,
+	"memory_search":   true,
+	"memory_write":    true,
+	"memory_recent":   true,
+	"debug_tools":     true,
+	"debug_memory":    true,
+	"debug_storage":   true,
 	"debug_providers": true,
+	// notify_telegram is the proactive-push primitive; always
+	// admitted because the firing-turn user message of a
+	// commitment / scheduled task usually doesn't match any
+	// keyword (it's the bot's own stored prompt). Without this,
+	// fired commitments generate text that goes nowhere.
+	"notify_telegram": true,
 }
 
 // toolCategoryPatterns groups tools by intent category.

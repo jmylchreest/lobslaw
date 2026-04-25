@@ -761,6 +761,23 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	}
 
 	params, err := parseToolArgs(tc.Arguments)
+	// Inject synthetic args from the request context so builtins
+	// like commitment_create can capture the originating channel
+	// without the LLM having to reliably remember to pass them.
+	// Names are __-prefixed to avoid colliding with bot-provided
+	// args. Builtins that care look up the prefixed key; others
+	// ignore it (Go map access is forgiving). Done even on parse
+	// errors below since the resulting empty params still
+	// benefits from the synthetic context.
+	if params == nil {
+		params = make(map[string]string)
+	}
+	if req.Channel != "" {
+		params["__channel"] = req.Channel
+	}
+	if req.ChannelID != "" {
+		params["__chat_id"] = req.ChannelID
+	}
 	if err != nil {
 		return ToolInvocation{
 			CallID:   tc.ID,

@@ -1636,10 +1636,12 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 		return fmt.Errorf("budget: %w", err)
 	}
 	req := compute.ProcessMessageRequest{
-		Message: prompt,
-		Claims:  n.schedulerClaims(task.CreatedBy),
-		TurnID:  fmt.Sprintf("task-%s-%d", task.Id, time.Now().UnixNano()),
-		Budget:  budget,
+		Message:   prompt,
+		Claims:    n.schedulerClaims(task.CreatedBy),
+		TurnID:    fmt.Sprintf("task-%s-%d", task.Id, time.Now().UnixNano()),
+		Budget:    budget,
+		Channel:   task.Params["channel"],
+		ChannelID: task.Params["chat_id"],
 	}
 	resp, err := n.agent.RunToolCallLoop(ctx, req)
 	if err != nil {
@@ -1671,10 +1673,12 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 		return fmt.Errorf("budget: %w", err)
 	}
 	req := compute.ProcessMessageRequest{
-		Message: prompt,
-		Claims:  n.schedulerClaims(c.CreatedFor),
-		TurnID:  fmt.Sprintf("commitment-%s-%d", c.Id, time.Now().UnixNano()),
-		Budget:  budget,
+		Message:   prompt,
+		Claims:    n.schedulerClaims(c.CreatedFor),
+		TurnID:    fmt.Sprintf("commitment-%s-%d", c.Id, time.Now().UnixNano()),
+		Budget:    budget,
+		Channel:   c.Params["channel"],
+		ChannelID: c.Params["chat_id"],
 	}
 	resp, err := n.agent.RunToolCallLoop(ctx, req)
 	if err != nil {
