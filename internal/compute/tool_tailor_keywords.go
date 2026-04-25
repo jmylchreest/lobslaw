@@ -44,6 +44,15 @@ var toolTailorDefaults = map[string]bool{
 	// keyword (it's the bot's own stored prompt). Without this,
 	// fired commitments generate text that goes nowhere.
 	"notify_telegram": true,
+	// commitment_create + schedule_create always admitted so the
+	// bot knows its scheduling primitives exist regardless of
+	// how the user phrased the request. Live test showed
+	// Sonnet declining 'in 30 seconds' as 'no scheduler tool
+	// available' because the keyword didn't match — but the
+	// real constraint (sub-minute granularity) is best surfaced
+	// by the tool's own error rather than tool absence.
+	"commitment_create": true,
+	"schedule_create":   true,
 }
 
 // toolCategoryPatterns groups tools by intent category.

@@ -59,13 +59,27 @@ func NotifyToolDefs() []*types.ToolDef {
 
 func newNotifyTelegramHandler(notifier TelegramNotifier) BuiltinFunc {
 	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+		// Prefer the bot-supplied chat_id, but if it's empty OR
+		// matches a placeholder pattern that Anthropic + other
+		// privacy-trained models substitute for phone-shaped
+		// numbers ([PHONE], [PHONE_NUMBER], <chat_id>, etc.),
+		// fall back to the __chat_id synthetic arg the agent
+		// injects from request context. This makes the bot's
+		// "I'm responsibly redacting PII" behaviour harmless —
+		// the actual chat_id is recovered from the originating
+		// channel rather than being lost through the placeholder.
 		chatIDStr := strings.TrimSpace(args["chat_id"])
+		if chatIDStr == "" || isPlaceholder(chatIDStr) {
+			if syn := strings.TrimSpace(args["__chat_id"]); syn != "" {
+				chatIDStr = syn
+			}
+		}
 		if chatIDStr == "" {
-			return nil, 2, errors.New("notify_telegram: chat_id is required")
+			return nil, 2, errors.New("notify_telegram: chat_id is required (and no synthetic context available)")
 		}
 		chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
 		if err != nil {
-			return nil, 2, fmt.Errorf("notify_telegram: chat_id must be numeric: %w", err)
+			return nil, 2, fmt.Errorf("notify_telegram: chat_id must be numeric (got %q): %w", chatIDStr, err)
 		}
 		text := args["text"]
 		if strings.TrimSpace(text) == "" {
@@ -80,4 +94,19 @@ func newNotifyTelegramHandler(notifier TelegramNotifier) BuiltinFunc {
 		})
 		return out, 0, nil
 	}
+}
+
+// isPlaceholder spots the privacy-redaction tokens that
+// Anthropic + similar models substitute for phone-shaped numbers
+// when constructing tool-call arguments. List grown as we
+// observe more variants in the wild.
+func isPlaceholder(s string) bool {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	switch s {
+	case "[PHONE]", "[PHONE_NUMBER]", "<PHONE>", "<PHONE_NUMBER>",
+		"[NUMBER]", "<NUMBER>", "[CHAT_ID]", "<CHAT_ID>",
+		"[USER_ID]", "<USER_ID>", "[REDACTED]", "<REDACTED>":
+		return true
+	}
+	return false
 }
