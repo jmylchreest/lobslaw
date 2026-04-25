@@ -102,9 +102,10 @@ var toolCategoryPatterns = []toolCategory{
 			regexp.MustCompile(`https?://`),
 		},
 	},
-	// ---- Scheduler ------------------------------------------
-	// Recurring / time-based intents. Single-shot reminders map
-	// to commitments (Phase 7), recurring ones to scheduled tasks.
+	// ---- Scheduler (recurring) ------------------------------
+	// Cron-style recurring tasks: 'every 5m check mail',
+	// 'every morning at 8am'. For one-shot 'in 2 minutes', use
+	// the commitment category below instead.
 	{
 		category: "scheduler",
 		tools:    []string{"schedule_create", "schedule_list", "schedule_get", "schedule_delete"},
@@ -115,6 +116,27 @@ var toolCategoryPatterns = []toolCategory{
 			"scheduled task", "scheduled tasks", "my schedules",
 			"cancel schedule", "stop schedule", "remove schedule",
 			"list schedule", "what schedules", "running tasks",
+		},
+	},
+	// ---- Commitments (one-shot) -----------------------------
+	// One-shot future actions: 'in 2 minutes', 'in an hour',
+	// 'tomorrow at 9am', 'later', 'when I'm done'. notify_telegram
+	// is admitted alongside because most commitments need to
+	// deliver their result back to the user proactively (the
+	// firing turn has no chat to reply into automatically).
+	{
+		category: "commitment",
+		tools:    []string{"commitment_create", "commitment_list", "commitment_cancel", "notify_telegram"},
+		keywords: []string{
+			"in 1 minute", "in 2 minute", "in 5 minute", "in 10 minute",
+			"in 15 minute", "in 30 minute", "in 1 hour", "in 2 hour",
+			"in an hour", "in half an hour", "in a minute",
+			"remind me to ", "remind me in ", "remind me at ",
+			"remind me tomorrow", "ping me when", "ping me in",
+			"message me in", "message me when", "tell me in",
+			"in a bit", "later today", "tonight", "tomorrow morning",
+			"my commitments", "my reminders", "what reminders",
+			"cancel reminder", "cancel commitment",
 		},
 	},
 	// ---- Provider council -----------------------------------
