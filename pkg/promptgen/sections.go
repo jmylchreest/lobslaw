@@ -355,6 +355,14 @@ type RuntimeInfo struct {
 	OS       string
 	NodeID   string
 	Model    string
+
+	// Channel + ChannelID identify where this turn came from. The
+	// agent uses these to address proactive messages back to the
+	// originating user via notify_telegram (or whichever channel
+	// supports push). Empty when the turn is internally
+	// originated (scheduler-driven, no inbound channel).
+	Channel   string
+	ChannelID string
 }
 
 // BuildRuntime renders host, OS, node-id, model-in-use. Same
@@ -372,6 +380,17 @@ func BuildRuntime(info RuntimeInfo) Section {
 	}
 	if info.Model != "" {
 		fmt.Fprintf(&b, "- model: %s\n", info.Model)
+	}
+	if info.Channel != "" {
+		fmt.Fprintf(&b, "- channel: %s\n", info.Channel)
+	}
+	if info.ChannelID != "" {
+		fmt.Fprintf(&b, "- channel_id: %s\n", info.ChannelID)
+		// Hint the proactive-messaging address pattern so the bot
+		// uses the right tool when storing prompts in commitments
+		// or scheduled tasks (where the firing turn has no chat
+		// to reply into automatically).
+		fmt.Fprintf(&b, "  (use this as chat_id when calling notify_%s for proactive messages)\n", info.Channel)
 	}
 	if b.Len() == 0 {
 		b.WriteString("(runtime info unavailable)\n")

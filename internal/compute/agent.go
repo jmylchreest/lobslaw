@@ -239,6 +239,14 @@ type ProcessMessageRequest struct {
 	// through request IDs in logs + audit.
 	TurnID string
 
+	// Channel + ChannelID identify the gateway origin of the turn.
+	// Threaded into the assembled system prompt so the agent can
+	// address proactive replies (notify_telegram) back to the
+	// correct chat when storing prompts in commitments / scheduled
+	// tasks. Empty for internally-originated turns (scheduler).
+	Channel   string
+	ChannelID string
+
 	// SystemPrompt is the pre-assembled system prompt from
 	// promptgen.Generate(). Callers build this once per turn (it's
 	// deterministic per context) and pass it in — avoids re-building
@@ -351,6 +359,10 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
 				Soul:  soul,
 				Tools: toPromptgenTools(req.Tools),
+				Runtime: promptgen.RuntimeInfo{
+					Channel:   req.Channel,
+					ChannelID: req.ChannelID,
+				},
 			})
 		}
 	}

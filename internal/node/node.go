@@ -1266,6 +1266,23 @@ func (n *Node) wireCompute() error {
 			}
 		}
 		n.log.Info("compute: schedule_create/list/get/delete registered")
+
+		// Commitments: one-shot due-at jobs (the right primitive for
+		// "in 2 minutes message me"). Same Store + Raft pattern;
+		// dispatches through the existing runCommitmentAsAgentTurn
+		// handler.
+		if err := compute.RegisterCommitmentBuiltins(builtins, compute.CommitmentConfig{
+			Store: n.store,
+			Raft:  n.raft,
+		}); err != nil {
+			return fmt.Errorf("register commitment builtins: %w", err)
+		}
+		for _, td := range compute.CommitmentToolDefs() {
+			if err := n.toolRegistry.Register(td); err != nil {
+				return fmt.Errorf("register commitment tool %q: %w", td.Name, err)
+			}
+		}
+		n.log.Info("compute: commitment_create/list/cancel registered")
 	}
 
 	// Council tools: list_providers + council_review. Only wire
@@ -1775,6 +1792,25 @@ func (n *Node) wireGateway() error {
 	// HTTPPort defaults to 8443 when unset. ListenAddr uses 0.0.0.0
 	// unless the operator supplies a specific bind via future config
 	// (Phase 6h keeps it simple; a bind-address setting lands with
+	// notify_telegram builtin: now that telegram handler exists,
+	// register the proactive-push builtin so commitments and
+	// scheduled tasks can deliver out-of-band messages back to
+	// chats. Skipped silently if Telegram isn't configured.
+	if tg != nil && n.builtinsRegistry != nil && n.toolRegistry != nil {
+		if err := compute.RegisterNotifyBuiltins(n.builtinsRegistry, compute.NotifyConfig{
+			Telegram: tg,
+		}); err != nil {
+			n.log.Warn("notify: builtin register failed", "err", err)
+		} else {
+			for _, td := range compute.NotifyToolDefs() {
+				if err := n.toolRegistry.Register(td); err != nil {
+					n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
+				}
+			}
+			n.log.Info("compute: notify_telegram registered")
+		}
+	}
+
 	// rest-of-cluster operator polish).
 	port := n.cfg.Gateway.HTTPPort
 	if port == 0 {

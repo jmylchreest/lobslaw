@@ -314,6 +314,8 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		TurnID:              turnID,
 		Budget:              budget,
 		ConversationHistory: priorHistory,
+		Channel:             "telegram",
+		ChannelID:           strconv.FormatInt(msg.Chat.ID, 10),
 	}
 
 	// Wrap the agent call with the responsiveness guards: typing
@@ -580,6 +582,34 @@ func (h *TelegramHandler) resolveScope(from *tgUser) (string, bool) {
 // logged but don't propagate — there's nothing useful to do with a
 // failed send at this layer. Telegram will deliver eventually if
 // it's a transient network issue.
+// Send is the public proactive-message entry point. Identical to
+// sendText except errors propagate to the caller instead of being
+// logged and swallowed. Used by the compute-layer notify_telegram
+// builtin so scheduled tasks can deliver replies to chats they
+// weren't invoked from. Safe to call concurrently — the underlying
+// http.Client is a pool.
+func (h *TelegramHandler) Send(chatID int64, text string) error {
+	body := map[string]any{
+		"chat_id": chatID,
+		"text":    text,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("telegram: marshal sendMessage: %w", err)
+	}
+	url := fmt.Sprintf("%s/bot%s/sendMessage", h.base, h.cfg.BotToken)
+	resp, err := h.client.Post(url, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("telegram: POST sendMessage: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("telegram: sendMessage non-2xx (HTTP %d): %s", resp.StatusCode, string(raw))
+	}
+	return nil
+}
+
 func (h *TelegramHandler) sendText(chatID int64, text string) {
 	body := map[string]any{
 		"chat_id": chatID,
