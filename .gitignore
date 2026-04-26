@@ -11,6 +11,23 @@ coverage.*
 # Local dev
 .env
 .envrc
+**/.env
+**/.env.*
+!**/.env.example
+
+# Secret material — anywhere in the tree. Belt and braces over the
+# per-directory .gitignores: a stray secrets/ dir or *-key.pem at
+# any depth gets caught here too.
+**/secrets/*.pem
+**/secrets/*.key
+**/secrets/*-key.pem
+*-key.pem
+*.token
+*.bot-token
+
+# mTLS material kept locally (init flow drops these in ~/.config/lobslaw/certs/)
+certs/*.pem
+certs/*.key
 
 # OS / editor
 .DS_Store

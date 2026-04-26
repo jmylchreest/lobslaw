@@ -1,0 +1,273 @@
+# lobslaw container config.
+# Paths are container-internal. Edit on the host; bind-mounted ro.
+
+[cluster]
+listen_addr = "0.0.0.0:7443"
+data_dir    = "/var/lobslaw/data"
+# bootstrap (default true): solo-bootstrap if no seed reachable.
+# Flip to false on multi-node joiners that must not split-brain.
+# bootstrap = true
+# bootstrap_timeout = "30s"
+
+[cluster.mtls]
+ca_cert   = "/etc/lobslaw/certs/ca.pem"
+node_cert = "/etc/lobslaw/certs/node-cert.pem"
+node_key  = "/etc/lobslaw/certs/node-key.pem"
+
+[memory]
+enabled = true
+
+[memory.encryption]
+key_ref = "env:LOBSLAW_MEMORY_KEY"
+
+[memory.snapshot]
+target    = "storage:local-snapshots"
+cadence   = "1h"
+retention = "7d"
+
+[storage]
+enabled = true
+
+# ----- Internal: cluster-private storage (snapshot target) ---------
+# Snapshot target lives inside the data volume so raft snapshots
+# land on the same persistent disk as raft.db / state.db. Off-host
+# durability is a separate concern — add an [[storage.mounts]] of
+# type "rclone"/"s3"/"r2" and re-point [memory.snapshot] target.
+[[storage.mounts]]
+label = "local-snapshots"
+type  = "local"
+path  = "/var/lobslaw/data/snapshots"
+
+# ----- Read-only system surfaces -----------------------------------
+# Read-only baseline of shell utilities the tools-init container
+# populated. Lets the agent introspect "what tools do I have" via
+# the list/glob/read builtins. shell_command exec doesn't go
+# through storage — it uses PATH directly — so this mount is purely
+# for self-discovery.
+[[storage.mounts]]
+label = "system-bin"
+type  = "local"
+path  = "/lobslaw/bin"
+
+# Operator-managed extension dir. Mounted ro at the storage layer
+# even though the underlying volume is rw — only the operator (or
+# the `tools` sidecar) should drop binaries here, not the agent
+# itself. shell_command finds them via PATH regardless.
+[[storage.mounts]]
+label = "system-usr-bin"
+type  = "local"
+path  = "/lobslaw/usr/bin"
+
+# Self-introspection mount. The agent can read its own config +
+# soul. certs/ is excluded wholesale because node-key.pem is
+# sensitive and the agent has no legitimate use for cert material.
+[[storage.mounts]]
+label    = "lobslaw-config"
+type     = "local"
+path     = "/etc/lobslaw"
+excludes = ["certs/**"]
+
+# ----- Writable: user content + skills -----------------------------
+# Workspace bind-mounted from ~/.config/lobslaw/workspace on the
+# host. This is the agent's home for scratch files, notes, and
+# anything write_file/edit_file produces.
+[[storage.mounts]]
+label    = "workspace"
+type     = "local"
+path     = "/workspace"
+writable = true
+
+[policy]
+enabled = true
+
+# Soul self-tuning tools default-deny via the seedDefaultPolicyRules
+# layer (priority=10 deny). This rule opens them for the owner scope
+# only — strangers chatting with the bot still can't ask it to
+# rename itself or rewrite its personality. resource="soul_*" uses
+# the policy engine's prefix-glob to cover all six builtins
+# (soul_get, soul_tune, soul_fragment_{add,remove,list},
+# soul_history_rollback) with one entry.
+[[policy.rules]]
+id       = "owner-soul-tools"
+subject  = "owner"
+action   = "tool:exec"
+resource = "soul_*"
+effect   = "allow"
+priority = 5
+
+[compute]
+enabled = true
+
+# Providers self-declare their capabilities. The modality builtins
+# (read_image, read_audio, read_pdf) auto-discover by capability tag
+# — operators don't wire each builtin separately. Higher `priority`
+# wins when multiple providers claim the same capability; declaration
+# order breaks ties.
+#
+# Capability tokens lobslaw consumes:
+#   chat, function-calling — main agent loop
+#   vision                 — read_image
+#   audio-transcription    — read_audio (Whisper-style multipart)
+#   audio-multimodal       — read_audio (chat-completions input_audio)
+#   pdf                    — read_pdf
+#   embeddings             — vector embedding endpoint
+
+[[compute.providers]]
+label        = "fast"
+endpoint     = "https://api.minimaxi.chat/v1"
+model        = "MiniMax-M2"
+api_key_ref  = "env:LOBSLAW_FAST_API_KEY"
+trust_tier   = "public"
+capabilities = ["chat", "function-calling"]
+priority     = 10
+
+[[compute.providers]]
+label        = "fast-vision"
+endpoint     = "https://api.minimaxi.chat/v1/chat/completions"
+model        = "abab6.5s-chat"
+api_key_ref  = "env:LOBSLAW_FAST_API_KEY"
+trust_tier   = "public"
+capabilities = ["vision"]
+priority     = 5
+
+[[compute.providers]]
+label        = "fast-audio"
+endpoint     = "https://api.minimaxi.chat/v1/audio/transcriptions"
+model        = "speech-01"
+api_key_ref  = "env:LOBSLAW_FAST_API_KEY"
+trust_tier   = "public"
+capabilities = ["audio-transcription"]
+priority     = 5
+
+[compute.budgets]
+max_tool_calls_per_turn   = 30
+max_spend_usd_per_turn    = 0.50
+max_egress_bytes_per_turn = 10000000
+
+# Exa-backed web_search builtin. Gated on api_key_ref — empty value
+# means no registration (operator opt-in). Endpoint defaults to
+# Exa's public API; override for self-hosted Exa proxies.
+[compute.web_search]
+api_key_ref = "env:LOBSLAW_EXA_API_KEY"
+
+# Vision: read_image builtin so the agent can actually inspect
+# attached images even when the main model is text-only. Uses an
+# OpenAI-compatible /chat/completions multimodal call. MiniMax's
+# abab6.5s-chat accepts the same wire shape as OpenAI's vision
+# models. Reusing LOBSLAW_FAST_API_KEY since both endpoints share
+# MiniMax billing.
+# Modality blocks are no longer needed when capability tags are
+# declared above. Uncomment to pin a specific provider for a
+# modality, bypassing the capability+priority auto-discovery:
+#
+#   [compute.vision]
+#   provider = "fast-vision"
+#
+#   [compute.audio]
+#   provider = "fast-audio"
+#
+#   [compute.pdf]
+#   provider = "openrouter-multi"
+
+[gateway]
+enabled              = true
+http_port            = 8443
+confirmation_timeout = "5m"
+
+[[gateway.channels]]
+type = "rest"
+
+# Telegram long-poll. Only the raft leader actually polls (gated by
+# singleton.LeaderGate), so multi-node clusters don't fight for the
+# bot token. Set LOBSLAW_TELEGRAM_BOT_TOKEN in .env; leave empty to
+# disable cleanly (handler refuses to construct on empty token).
+[[gateway.channels]]
+type           = "telegram"
+mode           = "poll"
+bot_token_ref  = "env:LOBSLAW_TELEGRAM_BOT_TOKEN"
+
+# Allowlist of Telegram user IDs (numeric, never usernames — those
+# can change). Anyone not in this map is dropped per the strict
+# unknown_user_scope default. Get your ID by DMing @userinfobot or
+# from the gateway's own "telegram: unknown user" log when you message.
+[gateway.channels.user_scopes]
+"6972251926" = "owner"
+
+[soul]
+path  = "/etc/lobslaw/SOUL.md"
+scope = "default"
+
+# Skills auto-discover under the workspace mount via fsnotify —
+# drop a manifest at $HOME/.config/lobslaw/workspace/skills/<name>/
+# on the host and the registry picks it up without restart.
+[skills]
+storage_label  = "workspace"
+signing_policy = "prefer"
+
+[scheduler]
+enabled       = true
+tick_interval = "1m"
+claim_lease   = "5m"
+
+[audit.local]
+enabled     = true
+path        = "/var/lobslaw/audit/audit.jsonl"
+max_size_mb = 100
+max_files   = 10
+
+[audit.raft]
+enabled = true
+
+[discovery]
+# Broadcast is the default discovery channel — every node announces
+# its hostname:port on the local network and a fresh empty-state
+# node uses what it hears as join candidates. Combined with the
+# pre-provisioned mTLS cert (the actual auth boundary), this lets
+# a new node join the cluster without an explicit seed_nodes entry.
+# Set seed_nodes too if your network blocks broadcast (cross-VPC,
+# many cloud setups). Either source is enough.
+broadcast         = true
+broadcast_port    = 7445
+broadcast_address = "255.255.255.255"
+# seed_nodes = ["lobslaw-1:7443"]
+
+# ----- MCP servers --------------------------------------------------
+# Each [[mcp.servers]] entry is spawned as a stdio subprocess by
+# lobslaw at boot. The agent gets the server's tools auto-merged into
+# its tool registry under "<server>.<tool>" namespacing. secret_env
+# values are resolved via lobslaw's secret resolver (env:VAR /
+# file:/path) so keys never appear in plaintext in this file.
+
+# MiniMax MCP — installed at runtime by lobslaw via the `uv` binary
+# the uv-init container dropped into /lobslaw/usr/bin (static Rust,
+# runs fine under distroless). uv brings its own self-contained
+# Python interpreter (python-build-standalone) so the MCP server's
+# Python deps don't need any system libs from lobslaw's runtime.
+#
+# All uv state — managed Pythons, the tool's venv, the download
+# cache — lives under /workspace/tools (a host bind-mount via the
+# existing $HOME/.config/lobslaw/workspace mount). Installs persist
+# across container restarts, are host-visible, and host-deletable.
+#
+# `install` is the supply-chain boundary: pin a specific version or
+# uv pulls whatever PyPI's `latest` resolves to.
+[mcp.servers.minimax]
+install    = ["uv", "tool", "install", "minimax-mcp==0.0.18"]
+command    = "uvx"
+args       = ["minimax-mcp"]
+env        = { UV_TOOL_DIR = "/workspace/tools/uv-tools", UV_PYTHON_INSTALL_DIR = "/workspace/tools/uv-python", UV_CACHE_DIR = "/workspace/tools/uv-cache", MINIMAX_API_HOST = "https://api.minimaxi.chat", MINIMAX_MCP_BASE_PATH = "/workspace/minimax", MINIMAX_API_RESOURCE_MODE = "local" }
+secret_env = { MINIMAX_API_KEY = "env:LOBSLAW_FAST_API_KEY" }
+# Tools exposed (see github.com/MiniMax-AI/MiniMax-MCP):
+#   text_to_audio, voice_clone, voice_design, list_voices,
+#   text_to_image, generate_video, query_video_generation,
+#   music_generation
+# Outputs land under MINIMAX_MCP_BASE_PATH (/workspace/minimax)
+# which is bind-mounted from the host workspace, so generated files
+# are immediately addressable by other tools + visible on the host.
+
+[observability]
+tracing_exporter = "stdout"
+
+[config]
+watch       = true
+debounce_ms = 1500

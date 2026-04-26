@@ -1,0 +1,314 @@
+# 3-node lobslaw cluster on a single host. For local testing of the
+# bootstrap/join flow + raft replication. Production multi-node
+# deployments run one node per host (or per pod), each with its own
+# copy of the single-node docker-compose.yml + a shared CA.
+#
+# Topology:
+#   tools-init                one-shot, populates the shared tools-bin
+#                             volume the three nodes mount at /lobslaw/bin.
+#   cert-init-{1,2,3}         one-shot per node — signs that node's mTLS
+#                             cert against the cluster CA (same CA for
+#                             all three).
+#   lobslaw-{1,2,3}           identical config (config.toml). The
+#                             cert is the credential — having one
+#                             signed by the cluster CA is what makes
+#                             a node "trusted." Discovery is via UDP
+#                             broadcast; the bootstrap-vs-join
+#                             decision is automatic per node:
+#                               - empty data dir + peer heard → join
+#                               - empty data dir + no peer → bootstrap
+#                                 (when [cluster] bootstrap=true)
+#                               - existing data dir → resume
+#                             Bring up node-1 alone first to avoid the
+#                             cold-start race (multiple new nodes that
+#                             all hear each other but have no leader);
+#                             nodes 2 + 3 then discover it ambiently.
+#   tools                     shared shell sidecar.
+#
+# Bring up:
+#   podman compose -f cluster.yml up -d lobslaw-1
+#   # wait ~3-5s for it to elect itself
+#   podman compose -f cluster.yml up -d lobslaw-2 lobslaw-3 tools
+#
+# Watch:
+#   podman compose -f cluster.yml logs -f lobslaw-1 lobslaw-2 lobslaw-3
+#
+# Expected:
+#   lobslaw-1: "raft: bootstrapped a new cluster as sole voter"
+#              "election won"
+#              "cluster member added" peer_id=lobslaw-2
+#              "cluster member added" peer_id=lobslaw-3
+#   lobslaw-{2,3}: "raft: joined existing cluster"
+
+x-lobslaw-defaults: &lobslaw-defaults
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  image: lobslaw:dev
+  volumes:
+    - tools-bin:/lobslaw/bin:ro
+    - tools-runtime:/lobslaw/usr/bin
+    - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
+    - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+    - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
+  restart: unless-stopped
+
+x-cert-init-defaults: &cert-init-defaults
+  build:
+    context: ../..
+    dockerfile: Dockerfile.tools
+  image: lobslaw-tools:dev
+  user: "0:0"
+  entrypoint: []
+  secrets:
+    - ca_cert
+    - ca_key
+  restart: "no"
+
+services:
+
+  # ---- shared tools-init -------------------------------------------
+  # Populates two shared volumes:
+  #   - tools-bin (ro mounted into lobslaw at /lobslaw/bin): busybox
+  #     baseline, here purely so old workflows still resolve. Distroless
+  #     lobslaw doesn't need this.
+  #   - tools-runtime (rw, also mounted into lobslaw at /lobslaw/usr/bin):
+  #     drop-in tools the runtime can exec. We seed it with `uv` and
+  #     `uvx` (static Rust binaries from the lobslaw-tools image) so
+  #     lobslaw at startup can install/upgrade MCP servers via
+  #     [[mcp.servers]] install commands. The installed MCP venvs land
+  #     under $UV_TOOL_DIR=/workspace/tools (host bind-mount), so
+  #     installs are persistent + host-visible.
+  tools-init:
+    image: busybox:glibc
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        rm -rf /out/bin/* /out/bin/.[!.]* 2>/dev/null || true
+        cp -a /bin/. /out/bin/
+        chown -R 65532:65532 /out/bin /out/usr-bin
+        chmod -R a+rX /out/bin
+        chmod 0775 /out/usr-bin
+    volumes:
+      - tools-bin:/out/bin
+      - tools-runtime:/out/usr-bin
+    restart: "no"
+
+  # ---- uv-init: copy uv + uvx into the runtime tools volume --------
+  # Sourced from lobslaw-tools (which already has uv installed) so we
+  # don't duplicate the install step. The binaries are static Rust —
+  # no library deps — so they run fine under distroless lobslaw.
+  uv-init:
+    image: lobslaw-tools:dev
+    build:
+      context: ../..
+      dockerfile: Dockerfile.tools
+    user: "0:0"
+    entrypoint: []
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        cp /usr/local/bin/uv /usr/local/bin/uvx /out/usr-bin/
+        chown 65532:65532 /out/usr-bin/uv /out/usr-bin/uvx
+        chmod 0755 /out/usr-bin/uv /out/usr-bin/uvx
+        echo "uv-init: copied uv $(/usr/local/bin/uv --version)"
+    volumes:
+      - tools-runtime:/out/usr-bin
+    restart: "no"
+
+  # ---- node 1: bootstrap leader ------------------------------------
+  cert-init-1:
+    <<: *cert-init-defaults
+    hostname: lobslaw-1
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        /usr/local/bin/lobslaw cluster sign-node \
+          --ca-cert=/run/secrets/ca_cert --ca-key=/run/secrets/ca_key \
+          --node-cert=/etc/lobslaw/certs/node-cert.pem \
+          --node-key=/etc/lobslaw/certs/node-key.pem \
+          --copy-ca-public=true
+        chown -R 65532:65532 /etc/lobslaw/certs
+        chmod 0755 /etc/lobslaw/certs
+        chmod 0644 /etc/lobslaw/certs/node-cert.pem /etc/lobslaw/certs/ca.pem
+        chmod 0600 /etc/lobslaw/certs/node-key.pem
+    volumes:
+      - certs-1:/etc/lobslaw/certs
+
+  lobslaw-1:
+    <<: *lobslaw-defaults
+    hostname: lobslaw-1
+    environment:
+      - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
+      - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
+      - LOBSLAW_FAST_API_KEY=${LOBSLAW_FAST_API_KEY:-}
+      - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
+      - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
+      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - TZ=${TZ:-UTC}
+      - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
+      - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
+      # AdvertiseAddr must be the resolvable hostname, not the
+      # listen address. Without this the bootstrap registers as
+      # [::]:7443 and every joiner collides on duplicate-address.
+      - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-1:7443
+      - LOBSLAW__CLUSTER__BOOTSTRAP=true
+    volumes:
+      - tools-bin:/lobslaw/bin:ro
+      - tools-runtime:/lobslaw/usr/bin
+      - certs-1:/etc/lobslaw/certs:ro
+      - data-1:/var/lobslaw/data
+      - audit-1:/var/lobslaw/audit
+      - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
+      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+      - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
+    ports:
+      # Only node-1's gateway is published on the host; nodes 2 and 3
+      # are reachable via `podman compose exec` if you want to test
+      # gateway behaviour on followers.
+      - "${LOBSLAW_GATEWAY_PORT:-8443}:8443"
+    depends_on:
+      tools-init: { condition: service_completed_successfully }
+      cert-init-1: { condition: service_completed_successfully }
+
+  # ---- node 2: joiner ----------------------------------------------
+  cert-init-2:
+    <<: *cert-init-defaults
+    hostname: lobslaw-2
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        /usr/local/bin/lobslaw cluster sign-node \
+          --ca-cert=/run/secrets/ca_cert --ca-key=/run/secrets/ca_key \
+          --node-cert=/etc/lobslaw/certs/node-cert.pem \
+          --node-key=/etc/lobslaw/certs/node-key.pem \
+          --copy-ca-public=true
+        chown -R 65532:65532 /etc/lobslaw/certs
+        chmod 0755 /etc/lobslaw/certs
+        chmod 0644 /etc/lobslaw/certs/node-cert.pem /etc/lobslaw/certs/ca.pem
+        chmod 0600 /etc/lobslaw/certs/node-key.pem
+    volumes:
+      - certs-2:/etc/lobslaw/certs
+
+  lobslaw-2:
+    <<: *lobslaw-defaults
+    hostname: lobslaw-2
+    environment:
+      - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
+      - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
+      - LOBSLAW_FAST_API_KEY=${LOBSLAW_FAST_API_KEY:-}
+      - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
+      - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
+      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - TZ=${TZ:-UTC}
+      - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
+      - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
+      - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-2:7443
+    volumes:
+      - tools-bin:/lobslaw/bin:ro
+      - tools-runtime:/lobslaw/usr/bin
+      - certs-2:/etc/lobslaw/certs:ro
+      - data-2:/var/lobslaw/data
+      - audit-2:/var/lobslaw/audit
+      - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
+      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+      - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
+    depends_on:
+      tools-init: { condition: service_completed_successfully }
+      cert-init-2: { condition: service_completed_successfully }
+      lobslaw-1: { condition: service_started }
+
+  # ---- node 3: joiner ----------------------------------------------
+  cert-init-3:
+    <<: *cert-init-defaults
+    hostname: lobslaw-3
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        /usr/local/bin/lobslaw cluster sign-node \
+          --ca-cert=/run/secrets/ca_cert --ca-key=/run/secrets/ca_key \
+          --node-cert=/etc/lobslaw/certs/node-cert.pem \
+          --node-key=/etc/lobslaw/certs/node-key.pem \
+          --copy-ca-public=true
+        chown -R 65532:65532 /etc/lobslaw/certs
+        chmod 0755 /etc/lobslaw/certs
+        chmod 0644 /etc/lobslaw/certs/node-cert.pem /etc/lobslaw/certs/ca.pem
+        chmod 0600 /etc/lobslaw/certs/node-key.pem
+    volumes:
+      - certs-3:/etc/lobslaw/certs
+
+  lobslaw-3:
+    <<: *lobslaw-defaults
+    hostname: lobslaw-3
+    environment:
+      - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
+      - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
+      - LOBSLAW_FAST_API_KEY=${LOBSLAW_FAST_API_KEY:-}
+      - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
+      - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
+      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - TZ=${TZ:-UTC}
+      - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
+      - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
+      - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-3:7443
+    volumes:
+      - tools-bin:/lobslaw/bin:ro
+      - tools-runtime:/lobslaw/usr/bin
+      - certs-3:/etc/lobslaw/certs:ro
+      - data-3:/var/lobslaw/data
+      - audit-3:/var/lobslaw/audit
+      - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
+      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+      - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
+    depends_on:
+      tools-init: { condition: service_completed_successfully }
+      cert-init-3: { condition: service_completed_successfully }
+      lobslaw-1: { condition: service_started }
+
+  # ---- shared tools sidecar ----------------------------------------
+  tools:
+    image: busybox:glibc
+    hostname: tools
+    command: ["sleep", "infinity"]
+    environment:
+      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+    volumes:
+      - tools-runtime:/lobslaw/usr/bin
+      - data-1:/var/lobslaw/data-1:ro
+      - data-2:/var/lobslaw/data-2:ro
+      - data-3:/var/lobslaw/data-3:ro
+      - certs-1:/etc/lobslaw/certs-1:ro
+      - certs-2:/etc/lobslaw/certs-2:ro
+      - certs-3:/etc/lobslaw/certs-3:ro
+      - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
+    restart: unless-stopped
+
+secrets:
+  ca_cert:
+    file: ./secrets/ca.pem
+  ca_key:
+    file: ./secrets/ca-key.pem
+
+volumes:
+  tools-bin:
+  tools-runtime:
+  certs-1:
+  certs-2:
+  certs-3:
+  data-1:
+  data-2:
+  data-3:
+  audit-1:
+  audit-2:
+  audit-3:

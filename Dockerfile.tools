@@ -33,7 +33,7 @@
 ARG GO_VERSION=1.26
 
 # ---- Build stage ---------------------------------------------------
-FROM golang:${GO_VERSION}-alpine AS build
+FROM golang:${GO_VERSION} AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -110,6 +110,24 @@ RUN set -e; \
 # npm`.
 RUN printf '#!/bin/sh\nexec /usr/local/bin/bunx "$@"\n' > /usr/local/bin/npx && \
     chmod +x /usr/local/bin/npx
+
+# uv (astral.sh) — required for `uvx <pkg>`-style MCP server
+# invocation. Most Python-based MCP servers (minimax-mcp,
+# elevenlabs-mcp, etc.) ship as `uvx <pkg>` because it sidesteps
+# the global pip/venv mess. Static binary, ~30MB.
+ARG UV_VERSION=0.5.18
+RUN set -e; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) uv_arch=x86_64-unknown-linux-musl ;; \
+        arm64) uv_arch=aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${uv_arch}.tar.gz" \
+        | tar -xz -C /tmp; \
+    mv "/tmp/uv-${uv_arch}/uv" /usr/local/bin/uv; \
+    mv "/tmp/uv-${uv_arch}/uvx" /usr/local/bin/uvx; \
+    rm -rf "/tmp/uv-${uv_arch}"
 
 # Non-root runtime user — matches the distroless nonroot UID/GID so
 # shared volumes mounted from a distroless-based peer have consistent
