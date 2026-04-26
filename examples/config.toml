@@ -11,9 +11,9 @@
 #   LOBSLAW__MEMORY__RAFT_PORT=9999 → memory.raft_port
 # See DESIGN.md for the full configuration reference.
 
-[node]
-# id is auto-generated and persisted on first start if unset.
-# id = "agent-1"
+# Node identity is derived at boot from $LOBSLAW_NODE_ID or the
+# short hostname; the cert from `lobslaw cluster sign-node` is bound
+# to that same value. There is no [node] section.
 
 [memory]
 enabled = true
@@ -134,10 +134,13 @@ listen_addr    = "0.0.0.0:7443"
 # Where state.db, raft.db and snapshots/ live. Required if memory or
 # policy function is enabled.
 data_dir = "/var/lobslaw/data"
-# Set true on exactly one node of a new cluster on its first-ever
-# start (bootstraps raft as a single voter). Harmless on restarts —
-# raft silently ignores re-bootstrap once state exists.
-initial_bootstrap = false
+# bootstrap (default true): if no existing cluster is reachable via
+# [discovery] seed_nodes within bootstrap_timeout, form a fresh
+# single-voter cluster. Solo nodes leave this true. Production
+# joiners flip it to false so a startup-time partition can't
+# accidentally create a second cluster — they fail-fast instead.
+# bootstrap = true
+# bootstrap_timeout = "30s"
 
 [cluster.mtls]
 # Public CA cert, node cert + node key. CA private key is NOT here —

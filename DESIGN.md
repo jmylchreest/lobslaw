@@ -1178,10 +1178,13 @@ JWT default: RS256 or EdDSA via JWKS. HS256 only if `auth.allow_hs256 = true` an
 
 Soul lives in `SOUL.md` (see Soul). Everything else in `config.toml`. All keys map to env vars.
 
-```toml
-[node]
-id = "agent-1"  # env: LOBSLAW_NODE_ID (auto-generated if unset)
+Node identity is derived at boot from `$LOBSLAW_NODE_ID` or the
+short hostname (FQDN stripped at the first `.`). The cert from
+`lobslaw cluster sign-node` is bound to that same value, and the
+node refuses to start if cert CN and derived ID disagree. There
+is no `[node]` section.
 
+```toml
 [memory]
 enabled = true
 raft_port = 2380
@@ -1376,7 +1379,6 @@ debounce_ms = 1500
 
 All config values available as env vars. Double underscore separates hierarchy levels; single underscores stay inside a key name:
 
-- `LOBSLAW__NODE__ID` → `node.id`
 - `LOBSLAW__MEMORY__RAFT_PORT` → `memory.raft_port`
 - `LOBSLAW__MEMORY__ENCRYPTION__KEY_REF` → `memory.encryption.key_ref`
 - Array elements: `LOBSLAW__SECTION__KEY__N` (zero-indexed) or use a TOML file for array-heavy config
