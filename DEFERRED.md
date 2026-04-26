@@ -4,15 +4,21 @@ Items consciously deferred past MVP. Each has a short note on why it's deferred 
 
 ## Modality routing
 
-### OpenRouter capability auto-discovery
+### Capability auto-discovery via models.dev
 
-`[[compute.providers]]` carries declared `capabilities = [...]` tags today. Operators have to keep those in sync with what the model actually supports. OpenRouter's `/api/v1/models` endpoint returns `architecture.input_modalities = ["text","image","audio","file"]` per model — we could fetch that on boot and merge into the declared caps so operators don't have to.
+`[[compute.providers]]` carries declared `capabilities = [...]` tags today. Operators keep those in sync with what the model actually supports. Auto-discovery would close that drift gap.
 
-**Why deferred:** Per-provider integration (each vendor has a different model-metadata endpoint, or none); declared caps already work for everyone today. OpenRouter is the obvious first beneficiary because it brokers many models with varying multimodality.
+**Best source:** [models.dev](https://models.dev) — community-maintained unified catalog (~200 models across providers) at `https://models.dev/api.json`. Returns structured `modalities`, `cost`, `limit`, `attachment` fields per model. No auth required, single shape for every vendor. Better than per-provider `/models` endpoints because OpenRouter has rich metadata, OpenAI/Anthropic just return model IDs, and MiniMax has nothing.
 
-**Trigger to revisit:** First time an operator forgets to add a capability tag and a `read_*` builtin doesn't register despite the model supporting it. Or whenever someone wants the cluster to auto-pick the cheapest vision-capable model on OpenRouter without manual tagging.
+**Why deferred:** Declared caps work for everyone today. The gain is UX (operator doesn't forget a tag) not capability — nothing's blocked. Adds an external dependency (network at boot) and a freshness story (models.dev cache lag for new model releases).
 
-**How:** Add `auto_capabilities = true` flag on `ProviderConfig`. At boot, fetch the provider's models list (one call, hostname-sniffed dispatcher: `openrouter.ai/api/v1/models`, `api.openai.com/v1/models`, etc.), look up the configured `model`, merge `input_modalities` into `Capabilities`. Cache result. Declared caps always win on conflict.
+**Trigger to revisit:** First time an operator forgets to add a capability tag and a `read_*` builtin silently doesn't register despite the model supporting it.
+
+**How:**
+1. Add `auto_capabilities = true` flag on `ProviderConfig`.
+2. At boot, for each provider with the flag set: fetch `https://models.dev/api.json` (cache to disk for 24h), look up the configured `model` by name, merge discovered `modalities` into `Capabilities`. Declared caps always win on conflict.
+3. Fallback chain when models.dev doesn't list the model: try the provider's native `/models` endpoint (per-vendor dispatcher) → still missing → use declared caps only + log INFO.
+4. Config flag also enables pricing auto-pull from the same catalog, replacing the hardcoded pricing table over time.
 
 ---
 
