@@ -2704,6 +2704,10 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		gate = n.leaderGate
 	}
 
+	var channelState gateway.ChannelStateStore
+	if n.raft != nil && n.store != nil {
+		channelState = memory.NewChannelStateService(n.raft, n.store)
+	}
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
 		BotToken:         botToken,
 		Mode:             mode,
@@ -2719,6 +2723,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		Soul:             n.soulProvider,
 		Logger:           n.log,
 		Gate:             gate,
+		ChannelState:     channelState,
 	}, n.agent)
 }
 

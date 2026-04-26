@@ -489,6 +489,21 @@ message RemoveMountResponse {}
 message ListMountsRequest {}
 message ListMountsResponse { repeated StorageMount mounts = 1; }
 
+// ChannelStateRecord is a generic per-channel raft-replicated key-value
+// pair. Used by gateway channels to persist resume state across
+// restarts (Telegram update offset, REST cursors, webhook last-seen
+// timestamps). The bbolt key is "<channel>:<key>"; that lets a single
+// bucket hold every channel's state without a per-channel bucket
+// proliferation. Value is opaque bytes — the channel handler chooses
+// the encoding (typically just decimal int64 for offsets, JSON for
+// richer state).
+message ChannelStateRecord {
+  string channel = 1;     // "telegram" | "rest" | "webhook" | future channels
+  string key = 2;         // channel-defined key, e.g. "offset", "last_seen"
+  bytes value = 3;        // opaque bytes
+  google.protobuf.Timestamp updated_at = 4;
+}
+
 // -----------------------------------------------------------------------------
 // Raft log entry envelope
 // -----------------------------------------------------------------------------
@@ -524,6 +539,7 @@ message LogEntry {
     VectorRecord vector_record = 14;
     EpisodicRecord episodic_record = 15;
     StorageMount storage_mount = 16;
+    ChannelStateRecord channel_state = 17;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

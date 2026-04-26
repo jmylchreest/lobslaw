@@ -113,6 +113,24 @@ type TelegramConfig struct {
 	// own the "telegram-poll" singleton — typically the raft leader.
 	// Nil → poll unconditionally (single-node / gateway-only setups).
 	Gate singleton.Gate
+
+	// ChannelState persists the Telegram update_id offset across
+	// restarts. Without it every restart calls getUpdates(offset=0),
+	// Telegram replays its 24h backlog, the agent re-processes every
+	// recent message including request-completion replies, and the
+	// user gets duplicate commitments + duplicate replies. Nil → no
+	// persistence (the legacy in-memory-only behaviour, fine for
+	// tests + ephemeral single-shot runs).
+	ChannelState ChannelStateStore
+}
+
+// ChannelStateStore is a minimal raft-backed key-value interface for
+// gateway channels to persist resume state (Telegram update offset,
+// REST cursors, webhook timestamps). Implemented by the memory
+// package; gateway just consumes the contract.
+type ChannelStateStore interface {
+	Get(ctx context.Context, channel, key string) ([]byte, error)
+	Put(ctx context.Context, channel, key string, value []byte) error
 }
 
 // TelegramHandler is the webhook receiver. Mounted on the REST
@@ -915,9 +933,22 @@ func (h *TelegramHandler) pollLoop(ctx context.Context) error {
 	h.log.Info("telegram: long-poll loop starting")
 
 	var (
-		nextOffset int64
+		nextOffset = h.loadPersistedOffset(ctx)
 		backoff    = pollInitialBackoff
+		// firstFlush handles the no-persisted-offset case: rather
+		// than re-processing Telegram's 24h buffered backlog (which
+		// causes duplicate agent turns + duplicate replies on every
+		// restart), do an ack-only first call. We learn the latest
+		// update_id, persist it, and start LIVE polling from there.
+		// Operators with channel-state-store=nil keep the legacy
+		// "process backlog" behaviour for backwards compat.
+		firstFlush = nextOffset == 0 && h.cfg.ChannelState != nil
 	)
+	if nextOffset > 0 {
+		h.log.Info("telegram: resuming from persisted offset", "offset", nextOffset)
+	} else if firstFlush {
+		h.log.Info("telegram: no persisted offset; first-run flush will discard buffered backlog without processing")
+	}
 	for {
 		if ctx.Err() != nil {
 			h.log.Info("telegram: long-poll loop exiting", "reason", ctx.Err())
@@ -963,12 +994,58 @@ func (h *TelegramHandler) pollLoop(ctx context.Context) error {
 		}
 		backoff = pollInitialBackoff
 
-		for i := range updates {
-			h.dispatchUpdate(ctx, &updates[i])
+		if firstFlush {
+			if len(updates) > 0 {
+				h.log.Info("telegram: first-run flush discarded buffered updates",
+					"count", len(updates), "ack_offset", newOffset)
+			}
+			firstFlush = false
+		} else {
+			for i := range updates {
+				h.dispatchUpdate(ctx, &updates[i])
+			}
 		}
 		if newOffset > nextOffset {
 			nextOffset = newOffset
+			h.persistOffset(ctx, nextOffset)
 		}
+	}
+}
+
+// loadPersistedOffset reads the last-known offset from the
+// raft-backed channel store. Missing-state or any read error
+// returns 0, falling back to the legacy behaviour. Surface non-
+// not-found errors at WARN so a misconfigured store is visible.
+func (h *TelegramHandler) loadPersistedOffset(ctx context.Context) int64 {
+	if h.cfg.ChannelState == nil {
+		return 0
+	}
+	raw, err := h.cfg.ChannelState.Get(ctx, "telegram", "offset")
+	if err != nil {
+		if !errors.Is(err, types.ErrNotFound) {
+			h.log.Warn("telegram: load persisted offset failed; resuming from 0", "err", err)
+		}
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil {
+		h.log.Warn("telegram: parse persisted offset failed; resuming from 0", "err", err)
+		return 0
+	}
+	return n
+}
+
+// persistOffset writes nextOffset via the raft-backed channel store.
+// Best-effort: a write failure logs WARN but doesn't abort the
+// poll loop. The next successful write covers any missed updates
+// because we always persist the LATEST observed offset.
+func (h *TelegramHandler) persistOffset(ctx context.Context, nextOffset int64) {
+	if h.cfg.ChannelState == nil {
+		return
+	}
+	value := []byte(strconv.FormatInt(nextOffset, 10))
+	if err := h.cfg.ChannelState.Put(ctx, "telegram", "offset", value); err != nil {
+		h.log.Warn("telegram: persist offset failed", "offset", nextOffset, "err", err)
 	}
 }
 
