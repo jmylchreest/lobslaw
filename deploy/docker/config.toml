@@ -113,13 +113,14 @@ enabled = true
 #   embeddings             — vector embedding endpoint
 
 [[compute.providers]]
-label        = "fast"
-endpoint     = "https://api.minimaxi.chat/v1"
-model        = "MiniMax-M2"
-api_key_ref  = "env:LOBSLAW_FAST_API_KEY"
-trust_tier   = "public"
-capabilities = ["chat", "function-calling"]
-priority     = 10
+label             = "fast"
+endpoint          = "https://api.minimaxi.chat/v1"
+model             = "MiniMax-M2"
+api_key_ref       = "env:LOBSLAW_FAST_API_KEY"
+trust_tier        = "public"
+capabilities      = ["chat", "function-calling"]
+priority          = 10
+auto_capabilities = true                  # let models.dev fill in modalities
 
 [[compute.providers]]
 label        = "fast-vision"

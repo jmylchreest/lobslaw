@@ -30,6 +30,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/modelsdev"
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
@@ -1684,6 +1685,15 @@ func (n *Node) wireCompute() error {
 		}
 	}
 
+	// models.dev capability auto-discovery: when any provider has
+	// auto_capabilities = true, fetch the catalog (24h disk cache),
+	// look up each opt-in provider's model, MERGE discovered modalities
+	// into the declared capabilities. Declared always wins on conflict.
+	// No-op when no provider opts in. Failures are non-fatal — operator
+	// keeps whatever they declared. Boot-time fetch — own 30s timeout
+	// inside the fetcher, no parent ctx needed.
+	n.applyModelsDevAutoCapabilities(context.Background())
+
 	// Vision: read_image builtin. Resolution order:
 	//   1. provider="<label>" → inherit endpoint/model/key/format
 	//      from that [[compute.providers]] entry.
@@ -2097,6 +2107,91 @@ func (n *Node) resolveAudioEndpoint() *llmEndpoint {
 
 func (n *Node) resolvePDFEndpoint() *llmEndpoint {
 	return n.resolveModalityEndpoint("pdf", n.cfg.Compute.PDF.Provider, compute.CapabilityPDF)
+}
+
+// applyModelsDevAutoCapabilities mutates n.cfg.Compute.Providers in
+// place, merging discovered capabilities for entries with
+// auto_capabilities = true. No-op when no provider opts in. The
+// catalog fetch is shared across all opted-in providers (single
+// HTTP call, 24h disk cache). Failures degrade gracefully — operator
+// keeps whatever they declared.
+func (n *Node) applyModelsDevAutoCapabilities(ctx context.Context) {
+	wantsDiscovery := false
+	for _, p := range n.cfg.Compute.Providers {
+		if p.AutoCapabilities {
+			wantsDiscovery = true
+			break
+		}
+	}
+	if !wantsDiscovery {
+		return
+	}
+
+	fetcher := modelsdev.NewFetcher()
+	if n.cfg.DataDir != "" {
+		fetcher.CacheDir = filepath.Join(n.cfg.DataDir, "cache")
+	}
+	cat, err := fetcher.Fetch(ctx)
+	if err != nil {
+		n.log.Warn("modelsdev: fetch failed; auto_capabilities providers fall back to declared caps only",
+			"err", err)
+		if cat == nil {
+			return
+		}
+		// err non-nil but cat returned → stale-cache path. Continue.
+		n.log.Info("modelsdev: using stale cache")
+	}
+
+	for i := range n.cfg.Compute.Providers {
+		p := &n.cfg.Compute.Providers[i]
+		if !p.AutoCapabilities {
+			continue
+		}
+		// Provider hint = endpoint hostname (lookupInProvider does
+		// substring match against catalog providers' API URLs).
+		hint := p.Endpoint
+		matches := cat.LookupAll(p.Model)
+		if len(matches) == 0 {
+			if hinted, ok := cat.Lookup(hint, p.Model); ok {
+				matches = []modelsdev.Model{hinted}
+			}
+		}
+		if len(matches) == 0 {
+			n.log.Info("modelsdev: model not found in catalog; using declared caps only",
+				"label", p.Label, "model", p.Model)
+			continue
+		}
+		discovered := compute.CapabilitiesFromConsensus(matches)
+		merged := compute.MergeCapabilities(p.Capabilities, discovered)
+		if len(merged) == len(p.Capabilities) {
+			n.log.Debug("modelsdev: no new capabilities discovered",
+				"label", p.Label, "model", p.Model, "matches", len(matches))
+			continue
+		}
+		added := diffCapabilities(merged, p.Capabilities)
+		n.log.Info("modelsdev: capabilities augmented from catalog",
+			"label", p.Label, "model", p.Model,
+			"matches", len(matches),
+			"added", added, "all", merged)
+		p.Capabilities = merged
+	}
+}
+
+// diffCapabilities returns the items in `merged` not present in
+// `original`. Used purely for the INFO log so operators can see
+// what auto-discovery added vs. what was already declared.
+func diffCapabilities(merged, original []string) []string {
+	have := make(map[string]struct{}, len(original))
+	for _, c := range original {
+		have[c] = struct{}{}
+	}
+	var added []string
+	for _, c := range merged {
+		if _, ok := have[c]; !ok {
+			added = append(added, c)
+		}
+	}
+	return added
 }
 
 // registerSessionPruneHandler wires SessionPruner into the scheduler

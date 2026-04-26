@@ -4,21 +4,15 @@ Items consciously deferred past MVP. Each has a short note on why it's deferred 
 
 ## Modality routing
 
-### Capability auto-discovery via models.dev
+### Capability auto-discovery via models.dev — LANDED
 
-`[[compute.providers]]` carries declared `capabilities = [...]` tags today. Operators keep those in sync with what the model actually supports. Auto-discovery would close that drift gap.
+Implemented in `internal/modelsdev/` (catalog fetch + 24h disk cache + lookup with provider-hint and suffix-fallback) and `internal/compute/capability_modelsdev.go` (model→capability mapping + intersection-consensus across multi-listed models + union-with-declared-precedence merge). Wired into `node.applyModelsDevAutoCapabilities` which runs once at boot before the modality builtins resolve.
 
-**Best source:** [models.dev](https://models.dev) — community-maintained unified catalog (~200 models across providers) at `https://models.dev/api.json`. Returns structured `modalities`, `cost`, `limit`, `attachment` fields per model. No auth required, single shape for every vendor. Better than per-provider `/models` endpoints because OpenRouter has rich metadata, OpenAI/Anthropic just return model IDs, and MiniMax has nothing.
+Opt in per provider via `auto_capabilities = true` on `[[compute.providers]]`. Off by default — declared capabilities continue to work unchanged for any provider that doesn't opt in. Declared capabilities ALWAYS win on conflict (operator authority preserved).
 
-**Why deferred:** Declared caps work for everyone today. The gain is UX (operator doesn't forget a tag) not capability — nothing's blocked. Adds an external dependency (network at boot) and a freshness story (models.dev cache lag for new model releases).
+Conservative discovery: when a model name appears in multiple provider listings (the common case for popular models), we use the INTERSECTION rather than UNION — only claim a capability when every catalog entry for that model agrees on it. This guards against catalog bugs (we observed e.g. one source claiming MiniMax-M2.7 was multimodal when every other source correctly listed it as text-only).
 
-**Trigger to revisit:** First time an operator forgets to add a capability tag and a `read_*` builtin silently doesn't register despite the model supporting it.
-
-**How:**
-1. Add `auto_capabilities = true` flag on `ProviderConfig`.
-2. At boot, for each provider with the flag set: fetch `https://models.dev/api.json` (cache to disk for 24h), look up the configured `model` by name, merge discovered `modalities` into `Capabilities`. Declared caps always win on conflict.
-3. Fallback chain when models.dev doesn't list the model: try the provider's native `/models` endpoint (per-vendor dispatcher) → still missing → use declared caps only + log INFO.
-4. Config flag also enables pricing auto-pull from the same catalog, replacing the hardcoded pricing table over time.
+**Still deferred:** auto-pulling pricing from the same catalog to replace the hardcoded pricing table. The catalog has `cost.input` / `cost.output` for most models; would need to plumb into `internal/compute/pricing.go`.
 
 ---
 

@@ -277,6 +277,12 @@ type ProviderConfig struct {
 	Model        string                `koanf:"model"`
 	Format       string                `koanf:"format,omitempty"`
 	Priority     int                   `koanf:"priority,omitempty"`
+	// AutoCapabilities turns on models.dev capability discovery for
+	// this provider entry. At node boot the catalog is fetched (24h
+	// disk cache), the configured model is looked up, and the
+	// discovered modalities are MERGED with declared capabilities.
+	// Declared capabilities always win on conflict. Off by default.
+	AutoCapabilities bool                  `koanf:"auto_capabilities,omitempty"`
 	APIKeyRef    string                `koanf:"api_key_ref,omitempty"`
 	Capabilities []string              `koanf:"capabilities,omitempty"`
 	TrustTier    types.TrustTier       `koanf:"trust_tier"`
