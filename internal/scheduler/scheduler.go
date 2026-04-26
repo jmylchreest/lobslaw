@@ -56,6 +56,12 @@ type Config struct {
 type Raft interface {
 	Apply(data []byte, timeout time.Duration) (any, error)
 	FSM() *memory.FSM
+	// IsLeader reports whether this node holds raft leadership.
+	// Scheduler firing is a leader-only workload — followers don't
+	// scan, don't claim, don't fire. Without this gate, followers
+	// burn CPU + spam ErrNotLeader warns trying to claim past-due
+	// records that the leader already won.
+	IsLeader() bool
 }
 
 // Scheduler owns the sleep-until-due loop, the HandlerRegistry, and
@@ -105,7 +111,12 @@ func NewScheduler(cfg Config, raft Raft, handlers *HandlerRegistry) (*Scheduler,
 	// operator writes a 6-field expression with a seconds position
 	// it'll fail to parse — document and keep strict rather than
 	// guessing.
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	// Descriptor support (@hourly, @daily, @weekly, @monthly, @yearly,
+	// @midnight, @every) lets operators write less-cryptic schedules.
+	// Without it the parser rejects "@hourly" — which broke the
+	// auto-seeded session-prune task. Standard 5-field minute|hour|
+	// dom|month|dow expressions still work.
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 	s := &Scheduler{
 		cfg:        cfg,
@@ -177,7 +188,15 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // computeSleepDuration returns how long to sleep until either the
 // next due time or MaxSleep, whichever is sooner. Past-due tasks
 // return zero so the loop immediately fires.
+//
+// Followers always sleep MaxSleep — they have nothing to do (fireDue
+// is a no-op for them) and shouldn't burn CPU spinning on past-due
+// records they can't claim. They wake on leadership transition via
+// wakeCh.
 func (s *Scheduler) computeSleepDuration(now time.Time) time.Duration {
+	if !s.raft.IsLeader() {
+		return s.cfg.MaxSleep
+	}
 	next, err := s.nextDueTime(now)
 	if err != nil {
 		s.log.Warn("scheduler: compute next-due failed — using MaxSleep", "err", err)
@@ -266,7 +285,16 @@ func (s *Scheduler) taskNextRun(t *lobslawv1.ScheduledTaskRecord, now time.Time)
 // fireDue claims + dispatches everything due at now. Claim failures
 // mean someone else already won — skip silently. Dispatch runs in a
 // goroutine so one slow handler doesn't block the tick.
+//
+// Leader-only: followers return immediately. Without this gate the
+// follower's loop spins on past-due records (computeSleepDuration
+// returns 0 because they're still pending in the local FSM view;
+// fireDue calls applyClaim which gets ErrNotLeader; tight loop
+// burns CPU + log lines).
 func (s *Scheduler) fireDue(ctx context.Context, now time.Time) {
+	if !s.raft.IsLeader() {
+		return
+	}
 	tasks, err := s.listScheduledTasks()
 	if err != nil {
 		s.log.Error("scheduler: list tasks failed", "err", err)

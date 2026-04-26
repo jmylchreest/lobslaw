@@ -877,7 +877,17 @@ func (n *Node) wireRaft(advertise string) error {
 	// (telegram polling today; future: dream cycles, reindex) take
 	// this gate from n.leaderGate.
 	n.leaderGate = singleton.NewLeaderGate(rNode)
-	rNode.SetLeadershipCallback(n.leaderGate.Publish)
+	rNode.SetLeadershipCallback(func(isLeader bool) {
+		n.leaderGate.Publish(isLeader)
+		// Wake the scheduler immediately on leadership gain so the
+		// new leader doesn't sleep MaxSleep before scanning past-due
+		// records. Followers' scheduler loops sleep MaxSleep — without
+		// this nudge they'd miss the chance to fire anything that was
+		// already overdue at the moment of promotion.
+		if isLeader && n.scheduler != nil {
+			n.scheduler.Notify()
+		}
+	})
 	return nil
 }
 

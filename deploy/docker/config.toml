@@ -112,15 +112,29 @@ enabled = true
 #   pdf                    — read_pdf
 #   embeddings             — vector embedding endpoint
 
+# Primary: Qwen 3.6 Plus via OpenRouter. Strong general-purpose model
+# with native function-calling, falls back to MiniMax-M2.7 (also on
+# OpenRouter so we stay on the same key).
 [[compute.providers]]
-label             = "fast"
-endpoint          = "https://api.minimaxi.chat/v1"
-model             = "MiniMax-M2"
-api_key_ref       = "env:LOBSLAW_FAST_API_KEY"
-trust_tier        = "public"
+label             = "qwen3.6-plus"
+endpoint          = "https://openrouter.ai/api/v1"
+model             = "qwen/qwen3.6-plus"
+api_key_ref       = "env:LOBSLAW_OPENROUTER_API_KEY"
+trust_tier        = "private"
 capabilities      = ["chat", "function-calling"]
 priority          = 10
-auto_capabilities = true                  # let models.dev fill in modalities
+auto_capabilities = true
+
+# Fallback: MiniMax-M2.7 on OpenRouter — text-only but cheap + reliable.
+[[compute.providers]]
+label             = "minimax-m2.7"
+endpoint          = "https://openrouter.ai/api/v1"
+model             = "minimax/minimax-m2.7"
+api_key_ref       = "env:LOBSLAW_OPENROUTER_API_KEY"
+trust_tier        = "private"
+capabilities      = ["chat", "function-calling"]
+priority          = 5
+auto_capabilities = true
 
 [[compute.providers]]
 label        = "fast-vision"
@@ -144,6 +158,20 @@ priority     = 5
 max_tool_calls_per_turn   = 30
 max_spend_usd_per_turn    = 0.50
 max_egress_bytes_per_turn = 10000000
+
+# Embeddings — Qwen3 8B via OpenRouter. 4096 dims, ZDR-compliant
+# (DeepInfra + Nebius routes per https://openrouter.ai/api/v1/endpoints/zdr).
+# Same key as the chat models.
+[compute.embeddings]
+endpoint    = "https://openrouter.ai/api/v1"
+model       = "qwen/qwen3-embedding-8b"
+api_key_ref = "env:LOBSLAW_OPENROUTER_API_KEY"
+dims        = 4096
+
+[compute.roles]
+main      = "qwen3.6-plus"
+preflight = "minimax-m2.7"
+reranker  = "minimax-m2.7"
 
 # Exa-backed web_search builtin. Gated on api_key_ref — empty value
 # means no registration (operator opt-in). Endpoint defaults to
