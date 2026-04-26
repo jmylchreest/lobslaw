@@ -11,7 +11,6 @@ import (
 // validates its own slice — this layer only parses and resolves
 // secret references.
 type Config struct {
-	Node          NodeConfig          `koanf:"node"`
 	Memory        MemoryConfig        `koanf:"memory"`
 	Storage       StorageConfig       `koanf:"storage"`
 	Policy        PolicyConfig        `koanf:"policy"`
@@ -53,16 +52,33 @@ func (c *Config) Dir() string {
 	return filepath.Dir(c.resolvedPath)
 }
 
-type NodeConfig struct {
-	ID string `koanf:"id"`
-}
-
 type MemoryConfig struct {
 	Enabled    bool             `koanf:"enabled"`
 	RaftPort   int              `koanf:"raft_port"`
 	Encryption EncryptionConfig `koanf:"encryption"`
 	Snapshot   SnapshotConfig   `koanf:"snapshot"`
 	Dream      DreamConfig      `koanf:"dream"`
+	Session    SessionConfig    `koanf:"session"`
+}
+
+// SessionConfig governs the auto-seeded session retention pruner.
+// Distinct from DreamConfig: dream is consolidation (turns many
+// records into a summary); session prune is hard-deletion of
+// transient retention=session records past their TTL. Default ON
+// at hourly cadence with a 24h max-age.
+type SessionConfig struct {
+	// Enabled controls whether lobslaw auto-seeds the recurring
+	// session prune task. *bool so unset (default ON) is
+	// distinguishable from explicit disable.
+	Enabled *bool `koanf:"enabled"`
+	// Schedule is the cron expression for the auto-seeded prune
+	// task. Empty → "@hourly". Use a slower cadence on chatty
+	// deployments; the prune itself is cheap (linear bucket scan +
+	// per-stale-record raft.Apply).
+	Schedule string `koanf:"schedule"`
+	// MaxAge is the TTL beyond which a retention=session record
+	// becomes a prune candidate. Empty/zero → 24h.
+	MaxAge time.Duration `koanf:"max_age"`
 }
 
 type EncryptionConfig struct {
@@ -76,6 +92,17 @@ type SnapshotConfig struct {
 }
 
 type DreamConfig struct {
+	// Enabled controls whether lobslaw auto-seeds a recurring Dream
+	// pass at boot. *bool so we can distinguish "operator left it
+	// unset" (default ON) from "operator explicitly turned it off"
+	// (default OFF semantics impossible to recover otherwise).
+	Enabled *bool `koanf:"enabled"`
+	// Schedule is the cron expression for the auto-seeded Dream
+	// task. Empty → "0 2 * * *" (02:00 daily). Operators can also
+	// declare their own [[scheduler.tasks]] with handler="memory:dream"
+	// for non-recurring or differently-scoped passes; the auto-seed
+	// uses the well-known ID "lobslaw-builtin-dream" so it doesn't
+	// collide with operator-defined entries.
 	Schedule string `koanf:"schedule"`
 }
 
@@ -125,6 +152,9 @@ type ComputeConfig struct {
 	Limits              LimitsConfig     `koanf:"limits,omitempty"`
 	Plugins             []PluginConfig   `koanf:"plugins"`
 	WebSearch           WebSearchConfig  `koanf:"web_search,omitempty"`
+	Vision              VisionConfig     `koanf:"vision,omitempty"`
+	Audio               AudioConfig      `koanf:"audio,omitempty"`
+	PDF                 PDFConfig        `koanf:"pdf,omitempty"`
 	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
 	// Roles maps named functional roles (main, preflight,
 	// reranker, summariser, etc.) to provider labels. Internal
@@ -166,6 +196,37 @@ type WebSearchConfig struct {
 	Endpoint  string `koanf:"endpoint,omitempty"`
 }
 
+// VisionConfig enables the read_image builtin — a tool the agent
+// calls to get a textual description of an image at a local path.
+// Required when the main LLM is text-only (e.g. MiniMax-M2):
+// Telegram downloads the attachment to /workspace/incoming/<turn>/,
+// the prompt-decoration tells the agent the path, and read_image
+// is the tool the agent invokes to actually inspect it.
+//
+// The builtin POSTs to an OpenAI-compatible /chat/completions
+// endpoint with a multimodal user message ({type:"image_url",
+// image_url:{url:"data:image/jpeg;base64,..."}} + optional text
+// prompt). Any vision-capable provider works: MiniMax's
+// abab6.5s-chat / MiniMax-VL-01, Google Gemini Flash, OpenAI
+// gpt-4o-mini, Anthropic claude-3-5-haiku, etc.
+//
+// ModalityOverride pins a modality builtin to one specific provider
+// label, bypassing capability auto-discovery. Empty Provider →
+// auto-discovery picks from [[compute.providers]] entries tagged
+// with the matching capability (highest Priority wins). Operators
+// only need this when they have multiple capability-matching
+// providers and want a non-priority pick for a specific modality.
+type ModalityOverride struct {
+	Provider string `koanf:"provider,omitempty"`
+}
+
+// VisionConfig / AudioConfig / PDFConfig are thin override shells.
+// 99% of operators leave them empty — declaring a provider with
+// capabilities = ["vision"] (etc) is enough.
+type VisionConfig = ModalityOverride
+type AudioConfig = ModalityOverride
+type PDFConfig = ModalityOverride
+
 // EmbeddingsConfig points at an embeddings endpoint. Empty
 // Endpoint → no embedder wired, memory_search falls back to
 // substring match and auto-ingest skips vector-record writes.
@@ -191,10 +252,31 @@ type EmbeddingsConfig struct {
 	Format    string `koanf:"format,omitempty"`
 }
 
+// ProviderConfig describes one LLM endpoint. Format is the wire
+// protocol — "openai" (default) covers OpenAI, OpenRouter, MiniMax,
+// z.ai and any vendor that speaks /chat/completions; "anthropic"
+// covers Claude's native /v1/messages; "gemini" covers Google AI
+// Studio's generateContent. Modality builtins (read_image,
+// read_audio, read_pdf, embeddings) discover providers via the
+// Capabilities tags + Priority — operators don't wire each builtin
+// separately; they tag a provider and the right builtin picks it up.
+//
+// Capability tokens consumed today:
+//
+//	"chat", "function-calling" — main agent loop / chains
+//	"vision"                   — read_image
+//	"audio-transcription"      — read_audio (Whisper multipart)
+//	"audio-multimodal"         — read_audio (chat-completions input_audio)
+//	"pdf"                      — read_pdf (chat-completions file part)
+//	"embeddings"               — vector embedding endpoint
+//
+// Higher Priority wins ties; declaration order breaks Priority ties.
 type ProviderConfig struct {
 	Label        string                `koanf:"label"`
 	Endpoint     string                `koanf:"endpoint"`
 	Model        string                `koanf:"model"`
+	Format       string                `koanf:"format,omitempty"`
+	Priority     int                   `koanf:"priority,omitempty"`
 	APIKeyRef    string                `koanf:"api_key_ref,omitempty"`
 	Capabilities []string              `koanf:"capabilities,omitempty"`
 	TrustTier    types.TrustTier       `koanf:"trust_tier"`
@@ -278,6 +360,17 @@ type MCPServerConfig struct {
 	Env       map[string]string `koanf:"env,omitempty"`
 	SecretEnv map[string]string `koanf:"secret_env,omitempty"`
 	Disabled  bool              `koanf:"disabled,omitempty"`
+
+	// Install runs once before the server is spawned. Idempotent by
+	// design — `uv tool install` / `bun install` no-op when the
+	// requested version is already cached. Pinning the version here
+	// (e.g. `["uv","tool","install","minimax-mcp==1.27.0"]`) is the
+	// supply-chain boundary: lobslaw won't promote an arbitrary new
+	// release without an operator config change. Failure is fatal
+	// for that server (it doesn't spawn) but doesn't block boot.
+	// Empty → spawn directly without installing (assume the binary
+	// is already on PATH).
+	Install []string `koanf:"install,omitempty"`
 }
 
 // LimitsConfig holds non-cost safety valves. These are about
@@ -371,14 +464,23 @@ type ClusterConfig struct {
 	// memory/policy-enabled nodes.
 	DataDir string `koanf:"data_dir"`
 
-	// InitialBootstrap should be true on exactly one node of a new
-	// cluster (the first-ever start). hashicorp/raft returns
-	// ErrCantBootstrap silently on subsequent starts once state exists,
-	// so leaving this true on a restart is harmless.
-	InitialBootstrap bool `koanf:"initial_bootstrap"`
+	// Bootstrap (default true) lets a node form a brand-new cluster
+	// when it cannot join an existing one. On startup the node first
+	// tries to join via [discovery] seed_nodes; if every seed fails
+	// (or there are no seeds) within BootstrapTimeout, the node calls
+	// raft.BootstrapCluster as the sole voter. Set to false on
+	// joiners that must never form a fresh cluster on their own —
+	// they fail-fast instead, which is the right policy for
+	// production multi-node deployments where split-brain is worse
+	// than refusing to start.
+	Bootstrap *bool `koanf:"bootstrap"`
 
-	MTLS      MTLSConfig      `koanf:"mtls"`
-	Bootstrap BootstrapConfig `koanf:"bootstrap"`
+	// BootstrapTimeout caps how long the node spends trying to join
+	// an existing cluster before falling back to solo-bootstrap (or
+	// failing, if Bootstrap=false). Zero → 30s default.
+	BootstrapTimeout time.Duration `koanf:"bootstrap_timeout"`
+
+	MTLS MTLSConfig `koanf:"mtls"`
 }
 
 // MTLSConfig deliberately does NOT carry the CA private key path —
@@ -388,12 +490,6 @@ type MTLSConfig struct {
 	CACert   string `koanf:"ca_cert"`
 	NodeCert string `koanf:"node_cert"`
 	NodeKey  string `koanf:"node_key"`
-}
-
-// BootstrapConfig controls first-run CA auto-generation. Off by
-// default; single-node dev convenience only.
-type BootstrapConfig struct {
-	AutoInit bool `koanf:"auto_init"`
 }
 
 type SoulLoaderConfig struct {

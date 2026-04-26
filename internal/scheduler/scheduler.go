@@ -430,7 +430,15 @@ func (s *Scheduler) tryFireCommitment(ctx context.Context, c *lobslawv1.AgentCom
 	go s.runCommitmentHandler(ctx, updated)
 }
 
-// runCommitmentHandler dispatches + marks the commitment Done.
+// runCommitmentHandler marks the commitment Done in raft FIRST,
+// then runs the handler. This is at-most-once delivery: if the
+// handler errors, the user doesn't get the message — but we never
+// re-fire on a leader restart that happens between dispatch and
+// completion-apply (which was the bug before this ordering flip).
+// Re-running is the much worse failure mode for one-shots: a
+// "remind me at 9am" that fires twice is a worse user experience
+// than one that silently loses a single delivery on a transport
+// hiccup, which is rare and visible in the handler-error log.
 func (s *Scheduler) runCommitmentHandler(ctx context.Context, c *lobslawv1.AgentCommitment) {
 	handler, ok := s.handlers.GetCommitmentHandler(c.HandlerRef)
 	if !ok {
@@ -438,22 +446,28 @@ func (s *Scheduler) runCommitmentHandler(ctx context.Context, c *lobslawv1.Agent
 		s.releaseCommitmentClaim(ctx, c)
 		return
 	}
-	if err := handler(ctx, c); err != nil {
-		s.log.Error("scheduler: commitment handler error",
-			"id", c.Id, "handler_ref", c.HandlerRef, "err", err)
-	}
+
 	updated := proto.Clone(c).(*lobslawv1.AgentCommitment)
 	updated.Status = string(statusDone)
 	updated.ClaimedBy = ""
 	updated.ClaimExpiresAt = nil
-	err := s.applyClaim(&lobslawv1.LogEntry{
+	if err := s.applyClaim(&lobslawv1.LogEntry{
 		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
 		Id:              c.Id,
 		Payload:         &lobslawv1.LogEntry_Commitment{Commitment: updated},
 		ExpectedClaimer: s.cfg.NodeID,
-	})
-	if err != nil {
-		s.log.Warn("scheduler: complete commitment failed", "id", c.Id, "err", err)
+	}); err != nil {
+		// Couldn't mark done — typically means the claim TTL expired
+		// and another node took over. Skip handler; the new claimer
+		// will run it. Avoids a double-fire if our claim was stolen.
+		s.log.Warn("scheduler: complete commitment failed (skipping handler to avoid double-fire)",
+			"id", c.Id, "err", err)
+		return
+	}
+
+	if err := handler(ctx, c); err != nil {
+		s.log.Error("scheduler: commitment handler error (delivery lost — at-most-once)",
+			"id", c.Id, "handler_ref", c.HandlerRef, "err", err)
 	}
 }
 

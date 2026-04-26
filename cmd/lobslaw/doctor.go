@@ -17,10 +17,11 @@ import (
 
 // dispatchDoctor handles `lobslaw doctor`. Returns true if handled.
 func dispatchDoctor(args []string) bool {
-	if len(args) < 1 || args[0] != "doctor" {
+	idx := findSubcmd(args, "doctor")
+	if idx < 0 {
 		return false
 	}
-	lobslawDoctor(args[1:])
+	lobslawDoctor(args[idx+1:])
 	return true
 }
 

@@ -3,6 +3,9 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"google.golang.org/protobuf/proto"
@@ -106,12 +109,51 @@ func (d *debugInspector) DebugRaft() map[string]any {
 	if d.n.raft == nil {
 		return map[string]any{"enabled": false}
 	}
+	stats := d.n.raft.Raft.Stats()
+	leaderAddr, leaderID := d.n.raft.Raft.LeaderWithID()
+
+	// "caught_up" is true when this node has applied every entry the
+	// cluster has committed — the operator-facing answer to "has
+	// replication finished?". Followers lag by one commit cycle even
+	// in steady state, so a small applied < commit gap is normal
+	// momentarily; a large or growing gap is what to worry about.
+	commit := atoiSafe(stats["commit_index"])
+	applied := atoiSafe(stats["applied_index"])
+	lastLog := atoiSafe(stats["last_log_index"])
+
+	servers := []map[string]string{}
+	if cfg := d.n.raft.ConfigurationServers(); cfg != nil {
+		for _, s := range cfg {
+			servers = append(servers, map[string]string{
+				"id":       string(s.ID),
+				"address":  string(s.Address),
+				"suffrage": s.Suffrage.String(),
+			})
+		}
+	}
+
 	return map[string]any{
 		"enabled":        true,
 		"node_id":        d.n.cfg.NodeID,
+		"state":          stats["state"],
+		"term":           stats["term"],
 		"is_leader":      d.n.raft.IsLeader(),
-		"leader_address": string(d.n.raft.LeaderAddress()),
+		"leader_id":      string(leaderID),
+		"leader_address": string(leaderAddr),
+		"last_log_index": lastLog,
+		"commit_index":   commit,
+		"applied_index":  applied,
+		"applied_lag":    commit - applied,
+		"caught_up":      applied >= commit,
+		"last_contact":   stats["last_contact"],
+		"num_peers":      stats["num_peers"],
+		"servers":        servers,
 	}
+}
+
+func atoiSafe(s string) int64 {
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
 }
 
 func (d *debugInspector) DebugScheduler() []map[string]any {
@@ -190,5 +232,56 @@ func (d *debugInspector) DebugSandbox() map[string]any {
 		"cgroup_v2_mounted":      r.CgroupV2Mounted,
 		"daemon_under_sandbox":   r.DaemonUnderSandbox,
 		"sandbox_mode":           r.SandboxMode,
+	}
+}
+
+// DebugMCP exposes the live MCP registry: configured-vs-live counts,
+// per-server command/args/install spec and the tools each server
+// contributed. Tools are listed by their qualified name (e.g.
+// "minimax.text_to_image") so an agent answering "why isn't X
+// available?" can confirm whether the upstream server is even live.
+func (d *debugInspector) DebugMCP() map[string]any {
+	configured := []map[string]any{}
+	for name, s := range d.n.cfg.MCP.Servers {
+		entry := map[string]any{
+			"name":     name,
+			"command":  s.Command,
+			"args":     s.Args,
+			"disabled": s.Disabled,
+		}
+		if len(s.Install) > 0 {
+			entry["install"] = s.Install
+		}
+		configured = append(configured, entry)
+	}
+
+	live := []map[string]any{}
+	if d.n.mcpLoader != nil {
+		toolsByServer := map[string][]string{}
+		for _, t := range d.n.mcpLoader.ListTools() {
+			parts := strings.SplitN(t.Name, ".", 2)
+			if len(parts) == 2 {
+				toolsByServer[parts[0]] = append(toolsByServer[parts[0]], t.Name)
+			}
+		}
+		for _, srv := range d.n.mcpLoader.ListServers() {
+			tools := toolsByServer[srv.Name]
+			sort.Strings(tools)
+			live = append(live, map[string]any{
+				"name":       srv.Name,
+				"command":    srv.Command,
+				"args":       srv.Args,
+				"tool_count": srv.ToolCount,
+				"healthy":    srv.Healthy,
+				"tools":      tools,
+			})
+		}
+	}
+
+	return map[string]any{
+		"configured_count": len(configured),
+		"live_count":       len(live),
+		"configured":       configured,
+		"live":             live,
 	}
 }

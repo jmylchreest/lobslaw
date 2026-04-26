@@ -18,30 +18,32 @@ import (
 // the invocation was a plugin subcommand (caller should exit);
 // false falls through to the main agent.
 func dispatchPlugin(args []string) bool {
-	if len(args) < 1 || args[0] != "plugin" {
+	idx := findSubcmd(args, "plugin")
+	if idx < 0 {
 		return false
 	}
-	if len(args) < 2 {
+	sub := args[idx+1:]
+	if len(sub) == 0 {
 		pluginUsage()
 		os.Exit(2)
 	}
-	switch args[1] {
+	switch sub[0] {
 	case "install":
-		pluginInstall(args[2:])
+		pluginInstall(sub[1:])
 	case "uninstall", "remove":
-		pluginUninstall(args[2:])
+		pluginUninstall(sub[1:])
 	case "list", "ls":
-		pluginList(args[2:])
+		pluginList(sub[1:])
 	case "enable":
-		pluginEnable(args[2:])
+		pluginEnable(sub[1:])
 	case "disable":
-		pluginDisable(args[2:])
+		pluginDisable(sub[1:])
 	case "import":
-		pluginImport(args[2:])
+		pluginImport(sub[1:])
 	case "help", "-h", "--help":
 		pluginUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "lobslaw plugin: unknown subcommand %q\n", args[1])
+		fmt.Fprintf(os.Stderr, "lobslaw plugin: unknown subcommand %q\n", sub[0])
 		pluginUsage()
 		os.Exit(2)
 	}

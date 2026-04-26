@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -107,6 +108,11 @@ type TelegramConfig struct {
 
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
+
+	// Gate, when non-nil, restricts the long-poll loop to nodes that
+	// own the "telegram-poll" singleton — typically the raft leader.
+	// Nil → poll unconditionally (single-node / gateway-only setups).
+	Gate singleton.Gate
 }
 
 // TelegramHandler is the webhook receiver. Mounted on the REST
@@ -166,7 +172,39 @@ type tgMessage struct {
 	From      *tgUser `json:"from,omitempty"`
 	Chat      tgChat  `json:"chat"`
 	Text      string  `json:"text,omitempty"`
+	Caption   string  `json:"caption,omitempty"`
 	Date      int64   `json:"date"`
+
+	// Media — presence (non-nil/non-empty) means the user sent
+	// something we can't process as text yet. We acknowledge with a
+	// friendly reply rather than silently dropping. Full vision /
+	// audio handling (download + pass to a multi-modal model) is
+	// deferred — see DEFERRED.md → "telegram media handling".
+	Photo    []tgPhotoSize `json:"photo,omitempty"`
+	Voice    *tgFileMeta   `json:"voice,omitempty"`
+	Audio    *tgFileMeta   `json:"audio,omitempty"`
+	Video    *tgFileMeta   `json:"video,omitempty"`
+	Document *tgFileMeta   `json:"document,omitempty"`
+	Sticker  *tgFileMeta   `json:"sticker,omitempty"`
+}
+
+// tgPhotoSize is one rendition of a photo Telegram delivered. The
+// API returns multiple sizes; the largest is conventionally used.
+type tgPhotoSize struct {
+	FileID   string `json:"file_id"`
+	FileSize int    `json:"file_size,omitempty"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+}
+
+// tgFileMeta is the minimal shape we read for non-photo media. We
+// don't download anything from this today — the dispatcher just
+// detects the field's presence to give a useful reply.
+type tgFileMeta struct {
+	FileID   string `json:"file_id"`
+	MimeType string `json:"mime_type,omitempty"`
+	FileSize int    `json:"file_size,omitempty"`
+	Duration int    `json:"duration,omitempty"`
 }
 
 type tgUser struct {
@@ -308,8 +346,31 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		"chat_id", msg.Chat.ID,
 		"prior_turns", len(priorHistory))
 
+	// Convert wire format → channel-agnostic IncomingMessage and
+	// download any attachments to /workspace/incoming/<turn>/ so
+	// the agent's MCP tools (e.g. minimax.image_understanding) can
+	// open them by path. Best-effort: a download failure on one
+	// attachment doesn't fail the turn.
+	im := telegramMessageToIncoming(msg)
+	if err := h.downloadAttachments(ctx, turnID, &im); err != nil {
+		h.log.Warn("telegram: attachment download dir prep failed", "err", err, "turn_id", turnID)
+	}
+
+	// When the user sent media-only (no text), use the caption as
+	// the message body so the agent has something to anchor on.
+	// Falls back to a stub the agent can interpret as "user sent
+	// just media; do something useful with it".
+	turnText := msg.Text
+	if turnText == "" {
+		turnText = msg.Caption
+	}
+	if turnText == "" && im.HasMedia() {
+		turnText = "(no caption — please inspect the attached media and respond)"
+	}
+
 	agentReq := compute.ProcessMessageRequest{
-		Message:             msg.Text,
+		Message:             turnText,
+		Attachments:         im.Attachments,
 		Claims:              claims,
 		TurnID:              turnID,
 		Budget:              budget,
@@ -722,12 +783,82 @@ func (h *TelegramHandler) dispatchUpdate(ctx context.Context, up *tgUpdate) {
 		return
 	}
 	switch {
-	case up.Message != nil && up.Message.Text != "":
+	case up.Message != nil && (up.Message.Text != "" || messageHasMedia(up.Message)):
+		// Text, caption-with-media, and media-only all route to the
+		// agent. The agent sees attachment metadata + LocalPath
+		// (after download) and decides whether to reply directly or
+		// call an MCP tool (e.g. minimax.image_understanding) to
+		// inspect the media.
 		h.handleMessage(ctx, up.Message)
 	case up.CallbackQuery != nil:
 		h.handleCallbackQuery(ctx, up.CallbackQuery)
 	default:
 		h.log.Debug("telegram: unsupported update shape", "update_id", up.UpdateID)
+	}
+}
+
+// messageHasMedia reports whether the inbound carries any of the
+// attachment fields lobslaw recognises. Caption-without-media is
+// treated as text via the empty Text branch above; this only fires
+// when Text is empty AND a media field is present.
+func messageHasMedia(m *tgMessage) bool {
+	if m == nil {
+		return false
+	}
+	return len(m.Photo) > 0 || m.Voice != nil || m.Audio != nil ||
+		m.Video != nil || m.Document != nil || m.Sticker != nil
+}
+
+// telegramMessageToIncoming converts the wire format to the
+// channel-agnostic IncomingMessage. Used today by the media path
+// for friendly fallback; will become the entry to handleMessage as
+// the multi-modal refactor lands.
+func telegramMessageToIncoming(m *tgMessage) IncomingMessage {
+	out := IncomingMessage{
+		Text:      m.Text,
+		Caption:   m.Caption,
+		Channel:   "telegram",
+		ChatID:    fmt.Sprintf("%d", m.Chat.ID),
+		Timestamp: time.Unix(m.Date, 0),
+	}
+	if m.From != nil {
+		out.UserID = fmt.Sprintf("%d", m.From.ID)
+	}
+	for _, p := range m.Photo {
+		out.Attachments = append(out.Attachments, Attachment{
+			Kind:      AttachmentImage,
+			MimeType:  "image/jpeg",
+			Size:      p.FileSize,
+			Width:     p.Width,
+			Height:    p.Height,
+			Reference: p.FileID,
+		})
+	}
+	if m.Voice != nil {
+		out.Attachments = append(out.Attachments, fileMetaToAttachment(m.Voice, AttachmentVoice))
+	}
+	if m.Audio != nil {
+		out.Attachments = append(out.Attachments, fileMetaToAttachment(m.Audio, AttachmentAudio))
+	}
+	if m.Video != nil {
+		out.Attachments = append(out.Attachments, fileMetaToAttachment(m.Video, AttachmentVideo))
+	}
+	if m.Document != nil {
+		out.Attachments = append(out.Attachments, fileMetaToAttachment(m.Document, AttachmentDocument))
+	}
+	if m.Sticker != nil {
+		out.Attachments = append(out.Attachments, fileMetaToAttachment(m.Sticker, AttachmentSticker))
+	}
+	return out
+}
+
+func fileMetaToAttachment(f *tgFileMeta, kind AttachmentKind) Attachment {
+	return Attachment{
+		Kind:      kind,
+		MimeType:  f.MimeType,
+		Size:      f.FileSize,
+		Duration:  f.Duration,
+		Reference: f.FileID,
 	}
 }
 
@@ -771,6 +902,16 @@ func (h *TelegramHandler) RunLongPoll(ctx context.Context) error {
 	if h.cfg.Mode != TelegramModePoll {
 		return fmt.Errorf("telegram: RunLongPoll called with mode=%q", h.cfg.Mode)
 	}
+	if h.cfg.Gate != nil {
+		// Singleton-gated: poll only while we own the lease. The gate
+		// cancels owned() whenever this node loses raft leadership;
+		// pollLoop returns and singleton.Run waits for the next gain.
+		return singleton.Run(ctx, h.cfg.Gate, "telegram-poll", h.log, h.pollLoop)
+	}
+	return h.pollLoop(ctx)
+}
+
+func (h *TelegramHandler) pollLoop(ctx context.Context) error {
 	h.log.Info("telegram: long-poll loop starting")
 
 	var (
@@ -794,6 +935,20 @@ func (h *TelegramHandler) RunLongPoll(ctx context.Context) error {
 					h.log.Warn("telegram: deleteWebhook failed", "err", delErr)
 				}
 				// Don't sleep — jump straight back to getUpdates.
+				continue
+			}
+			if isPollerConflict(err) {
+				// Another lobslaw (or any client) is polling the same
+				// bot token. We can't fix this — only one long-poller
+				// wins. Log loudly once per backoff window and wait.
+				h.log.Warn("telegram: another instance is polling this bot token — only one long-poller wins; stop the other process or use a different token",
+					"backoff", backoff)
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(backoff):
+				}
+				backoff = nextBackoff(backoff)
 				continue
 			}
 			h.log.Warn("telegram: getUpdates error; backing off",
@@ -848,12 +1003,20 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusConflict {
-		return nil, 0, errWebhookConflict
-	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, 0, err
+	}
+	if resp.StatusCode == http.StatusConflict {
+		desc := strings.ToLower(strings.TrimSpace(string(raw)))
+		// Telegram returns 409 in two distinct shapes — webhook conflict
+		// is recoverable in-process (we just call deleteWebhook), the
+		// other-getUpdates conflict means a second client is polling
+		// the same bot token and only the operator can resolve it.
+		if strings.Contains(desc, "webhook") {
+			return nil, 0, errWebhookConflict
+		}
+		return nil, 0, fmt.Errorf("%w: %s", errPollerConflict, strings.TrimSpace(string(raw)))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, 0, fmt.Errorf("getUpdates: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
@@ -883,7 +1046,15 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 // RunLongPoll by calling deleteWebhook.
 var errWebhookConflict = errors.New("telegram: getUpdates returned 409 (webhook conflict)")
 
+// errPollerConflict signals a 409 because a second process is polling
+// the same bot token. Telegram only delivers updates to one
+// long-poller at a time. We can't recover in-process — back off and
+// keep trying so whichever instance the operator stops will let this
+// one resume.
+var errPollerConflict = errors.New("telegram: getUpdates returned 409 (another instance is polling the same bot token)")
+
 func isWebhookConflict(err error) bool { return errors.Is(err, errWebhookConflict) }
+func isPollerConflict(err error) bool  { return errors.Is(err, errPollerConflict) }
 
 // deleteWebhook clears any registered webhook so getUpdates works.
 // No-op if no webhook is set.

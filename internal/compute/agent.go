@@ -269,6 +269,18 @@ type ProcessMessageRequest struct {
 	// conversation. Appended to before the current user turn so the
 	// LLM has context. Empty for first turn.
 	ConversationHistory []Message
+
+	// Attachments are media the channel received with this turn.
+	// Channel handlers (gateway/telegram, gateway/rest, etc.)
+	// populate this from their native payload + downloader. The
+	// agent surfaces attachment metadata in the user-message turn
+	// so a non-vision LLM can still reason about "the user sent
+	// an image at /workspace/incoming/abc.jpg" and call MCP tools
+	// (e.g. minimax.image_understanding) to actually inspect it.
+	// Provider-native vision passthrough is a future addition (gated
+	// on ProviderConfig.Capabilities including "vision"); today's
+	// path is text-decoration + tool-driven inspection.
+	Attachments []types.Attachment
 }
 
 // ProcessMessageResponse is the per-turn output.
@@ -601,16 +613,77 @@ func (a *Agent) forceSummaryReply(
 
 // seedMessages builds the initial message list from the system
 // prompt + conversation history + the user's current message.
+// When the channel delivered attachments alongside the message, we
+// decorate the user-turn with a structured note so the LLM can
+// reason about + reference them via tool calls (e.g. open the image
+// with minimax.image_understanding, transcribe the voice note with
+// a future STT MCP). The decoration is deterministic across turns
+// so prompt caches stay warm.
 func (a *Agent) seedMessages(req ProcessMessageRequest) []Message {
 	out := make([]Message, 0, len(req.ConversationHistory)+2)
 	if req.SystemPrompt != "" {
 		out = append(out, Message{Role: "system", Content: req.SystemPrompt})
 	}
 	out = append(out, req.ConversationHistory...)
-	if req.Message != "" {
-		out = append(out, Message{Role: "user", Content: req.Message})
+	userText := decorateWithAttachments(req.Message, req.Attachments)
+	if userText != "" {
+		out = append(out, Message{Role: "user", Content: userText})
 	}
 	return out
+}
+
+// decorateWithAttachments appends an "[attached: ...]" block to the
+// user's text so a text-only LLM can still reason about the media
+// and pick the right tool to inspect it. When there are no
+// attachments, returns text unchanged.
+//
+// The hint after the attachment list nudges the agent toward the
+// right action: when read_image is registered, calling it on the
+// LocalPath is the only way for a text-only main model to actually
+// see an image. Without this, the model would reply "I can't view
+// images" — accurate but unhelpful when a vision tool is sitting
+// right there in its tool list.
+func decorateWithAttachments(text string, attachments []types.Attachment) string {
+	if len(attachments) == 0 {
+		return text
+	}
+	var b strings.Builder
+	if text != "" {
+		b.WriteString(text)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("[user attached ")
+	for i, a := range attachments {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(a.Describe())
+	}
+	b.WriteString("]")
+
+	var hasImage, hasAudio, hasPDF bool
+	for _, a := range attachments {
+		switch {
+		case a.Kind == types.AttachmentImage, a.Kind == types.AttachmentSticker, strings.HasPrefix(a.MimeType, "image/"):
+			hasImage = true
+		case a.Kind == types.AttachmentVoice, a.Kind == types.AttachmentAudio,
+			strings.HasPrefix(a.MimeType, "audio/"):
+			hasAudio = true
+		case strings.HasSuffix(strings.ToLower(a.Filename), ".pdf"),
+			a.MimeType == "application/pdf":
+			hasPDF = true
+		}
+	}
+	if hasImage {
+		b.WriteString("\n[hint: call read_image(path=...) on the path above to view the image. If read_image is not in your tool list, no vision tool is wired — say so plainly rather than pretending to see it.]")
+	}
+	if hasAudio {
+		b.WriteString("\n[hint: call read_audio(path=...) on the path above to transcribe the audio. If read_audio is not in your tool list, no audio tool is wired — say so plainly rather than pretending to hear it.]")
+	}
+	if hasPDF {
+		b.WriteString("\n[hint: call read_pdf(path=...) on the path above to read the document. If read_pdf is not in your tool list, no PDF tool is wired — say so plainly rather than pretending to read it.]")
+	}
+	return b.String()
 }
 
 // chatWithCost wraps ChatResponse with the CostRecord computed

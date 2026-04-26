@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -138,6 +140,12 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 		return err
 	}
 
+	if len(cfg.Install) > 0 {
+		if err := l.runInstall(ctx, name, cfg.Install, env); err != nil {
+			return err
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 	if len(env) > 0 {
 		cmd.Env = env
@@ -185,6 +193,31 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 	l.log.Info("mcp: server ready",
 		"name", name, "server_name", client.ServerInfo().Name,
 		"tools", len(tools))
+	return nil
+}
+
+// runInstall executes the configured install command before the
+// server is spawned. Output is captured + logged; install timeout
+// is generous (5 min) since first-run package fetches can be slow
+// over a cold pip/npm cache. Subsequent boots are fast because
+// uv/bun cache hits are no-ops.
+func (l *Loader) runInstall(ctx context.Context, name string, install []string, env []string) error {
+	if len(install) == 0 {
+		return nil
+	}
+	installCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(installCtx, install[0], install[1:]...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	l.log.Info("mcp: install starting", "server", name, "command", install)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("mcp: server %q install %v failed: %w (output: %s)", name, install, err, strings.TrimSpace(string(out)))
+	}
+	l.log.Info("mcp: install complete", "server", name)
 	return nil
 }
 
@@ -241,11 +274,50 @@ func (l *Loader) Invoke(ctx context.Context, req compute.SkillInvokeRequest) (*c
 	if !ok {
 		return nil, fmt.Errorf("mcp: tool %q not found", req.Name)
 	}
-	// Upstream MCP server doesn't know about the namespace prefix
-	// we added locally — pass its bare name back over the wire.
+
+	// Diagnostic telemetry. Arg keys only (no values) at INFO so
+	// secrets/PII don't leak into logs; full arg payload + duration
+	// + result size at DEBUG for deep debugging. Error path always
+	// at WARN with the upstream message so operators can tell why a
+	// turn went sideways without enabling debug.
+	argKeys := make([]string, 0, len(req.Params))
+	for k := range req.Params {
+		argKeys = append(argKeys, k)
+	}
+	l.log.Info("mcp: tool call",
+		"server", t.server.name,
+		"tool", t.rawName,
+		"qualified", req.Name,
+		"arg_keys", argKeys)
+	start := time.Now()
+
 	res, err := t.server.client.CallTool(ctx, t.rawName, req.Params)
+	dur := time.Since(start)
 	if err != nil {
+		l.log.Warn("mcp: tool call failed",
+			"server", t.server.name,
+			"tool", t.rawName,
+			"duration_ms", dur.Milliseconds(),
+			"err", err)
 		return nil, err
+	}
+
+	resultBytes := 0
+	for _, c := range res.Content {
+		resultBytes += len(c.Text)
+	}
+	if res.IsError {
+		l.log.Warn("mcp: tool returned error",
+			"server", t.server.name,
+			"tool", t.rawName,
+			"duration_ms", dur.Milliseconds(),
+			"result_bytes", resultBytes)
+	} else {
+		l.log.Debug("mcp: tool call ok",
+			"server", t.server.name,
+			"tool", t.rawName,
+			"duration_ms", dur.Milliseconds(),
+			"result_bytes", resultBytes)
 	}
 	var stdout, stderr []byte
 	for _, chunk := range res.Content {

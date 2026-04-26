@@ -270,9 +270,6 @@ func TestLoadMergesEnvProviders(t *testing.T) {
 	// Empty TOML config + env-declared provider → provider appears
 	// in the final Config.Compute.Providers slice.
 	path := writeTempConfig(t, `
-[node]
-id = "env-test"
-
 [compute]
 default_chain = "only"
 
@@ -304,8 +301,7 @@ func TestLoadSkipEnvAlsoSkipsEnvProviders(t *testing.T) {
 	// Opt-out: SkipEnv = true should bypass env-provider collection
 	// too (env-overlay infrastructure stays consistent).
 	path := writeTempConfig(t, `
-[node]
-id = "skip-env-test"
+[compute]
 `)
 	t.Setenv("LOBSLAW_PROVIDER_ghost_ENDPOINT", "https://should-not-apply")
 

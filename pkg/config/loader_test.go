@@ -11,9 +11,6 @@ import (
 )
 
 const miniConfig = `
-[node]
-id = "agent-1"
-
 [memory]
 enabled = true
 raft_port = 2380
@@ -80,9 +77,6 @@ func TestLoadFromExplicitPath(t *testing.T) {
 		t.Error("Dir() should be non-empty when Path() is set")
 	}
 
-	if cfg.Node.ID != "agent-1" {
-		t.Errorf("Node.ID = %q, want agent-1", cfg.Node.ID)
-	}
 	if !cfg.Memory.Enabled {
 		t.Error("Memory.Enabled should be true")
 	}
@@ -115,7 +109,6 @@ func TestLoadFromExplicitPath(t *testing.T) {
 func TestLoadEnvOverride(t *testing.T) {
 	path := writeTempConfig(t, miniConfig)
 
-	t.Setenv("LOBSLAW__NODE__ID", "overridden-node")
 	t.Setenv("LOBSLAW__MEMORY__RAFT_PORT", "9999")
 
 	cfg, err := Load(LoadOptions{Path: path})
@@ -123,9 +116,6 @@ func TestLoadEnvOverride(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Node.ID != "overridden-node" {
-		t.Errorf("Node.ID = %q, want overridden-node (env override lost)", cfg.Node.ID)
-	}
 	if cfg.Memory.RaftPort != 9999 {
 		t.Errorf("Memory.RaftPort = %d, want 9999 (env override lost)", cfg.Memory.RaftPort)
 	}
@@ -182,14 +172,14 @@ func TestLoadNoFileEnvOnly(t *testing.T) {
 	}
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	t.Setenv("LOBSLAW__NODE__ID", "env-only-node")
+	t.Setenv("LOBSLAW__MEMORY__RAFT_PORT", "4242")
 
 	cfg, err := Load(LoadOptions{})
 	if err != nil {
 		t.Fatalf("Load without config file should succeed: %v", err)
 	}
-	if cfg.Node.ID != "env-only-node" {
-		t.Errorf("Node.ID = %q, want env-only-node", cfg.Node.ID)
+	if cfg.Memory.RaftPort != 4242 {
+		t.Errorf("Memory.RaftPort = %d, want 4242 (env-only load failed)", cfg.Memory.RaftPort)
 	}
 	// Path()/Dir() should be empty when Load ran env-only — downstream
 	// discovery code uses this as the "fall back to CWD" signal.

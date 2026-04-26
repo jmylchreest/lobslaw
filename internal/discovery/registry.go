@@ -34,14 +34,20 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register adds or updates the peer. LastSeen is set to now.
-func (r *Registry) Register(info types.NodeInfo) {
+// Register adds or updates the peer. LastSeen is set to now. Returns
+// true when this was the first time the peer was seen — the broadcast
+// listener uses this to trigger an immediate response announce so a
+// just-joined node doesn't have to wait a full announce interval to
+// discover its neighbours.
+func (r *Registry) Register(info types.NodeInfo) (added bool) {
 	if info.ID == "" {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	_, existed := r.peers[info.ID]
 	r.peers[info.ID] = &Peer{NodeInfo: info, LastSeen: r.now()}
+	return !existed
 }
 
 // Deregister removes a peer by id. No error when the id is absent —

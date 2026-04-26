@@ -38,6 +38,14 @@ type ServerConfig struct {
 	// temporarily turned off without removing the config. Skipped by
 	// the loader.
 	Disabled bool `json:"disabled,omitempty"`
+
+	// Install runs once before the server spawns. Used to materialise
+	// the server's binary into the cache (e.g. `uv tool install
+	// minimax-mcp==1.27.0`). Idempotent — uvx/bunx no-op when the
+	// version is already cached, so this is cheap on subsequent
+	// boots. Pinning the version here is the supply-chain boundary;
+	// loose pins ("latest") bypass the protection.
+	Install []string `json:"install,omitempty"`
 }
 
 // LoadManifest reads + parses a .mcp.json file. Returns the parsed

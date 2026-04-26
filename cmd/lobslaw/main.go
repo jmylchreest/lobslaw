@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	logfilter "github.com/jmylchreest/slog-logfilter"
 
 	"github.com/jmylchreest/lobslaw/internal/logging"
+	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/node"
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -59,8 +61,8 @@ func parseFlags(args []string, out *flags) error {
 			out.policyDirs = append(out.policyDirs, v)
 			return nil
 		})
-	fs.StringVar(&out.logLevel, "log-level", "info", "log level: debug|info|warn|error")
-	fs.StringVar(&out.logFormat, "log-format", "auto", "log format: auto|json|text")
+	fs.StringVar(&out.logLevel, "log-level", envOr("LOBSLAW_LOG_LEVEL", "info"), "log level: debug|info|warn|error (env: LOBSLAW_LOG_LEVEL)")
+	fs.StringVar(&out.logFormat, "log-format", envOr("LOBSLAW_LOG_FORMAT", "auto"), "log format: auto|json|text (env: LOBSLAW_LOG_FORMAT)")
 	fs.BoolVar(&out.all, "all", false, "enable all node functions")
 	fs.BoolVar(&out.memory, "memory", false, "enable memory function")
 	fs.BoolVar(&out.policy, "policy", false, "enable policy function")
@@ -178,7 +180,11 @@ func main() {
 
 	// Subcommand dispatch: `lobslaw cluster <subcmd> ...` is handled
 	// before main-agent flag parsing so subcommands can own their own
-	// flag sets and never touch the main Config.
+	// flag sets and never touch the main Config. hoistGlobalFlagsToEnv
+	// makes `lobslaw --config X cluster sign-node` behave the same as
+	// `lobslaw cluster sign-node --config X` — the global flag value
+	// reaches the subcommand via $LOBSLAW_CONFIG.
+	hoistGlobalFlagsToEnv(os.Args[1:])
 	if dispatchCluster(os.Args[1:]) {
 		return
 	}
@@ -241,14 +247,15 @@ func main() {
 		"source", policyDirsSource(f.policyDirs, cfg))
 
 	funcs := resolveFunctions(f, cfg)
+	nodeID := derivedNodeID()
 	logger.Info("lobslaw starting",
 		"version", Version,
 		"commit", Commit,
-		"node_id", cfg.Node.ID,
+		"node_id", nodeID,
 		"functions", funcs,
 	)
 
-	nodeCfg, err := buildNodeConfig(cfg, funcs, logger)
+	nodeCfg, err := buildNodeConfig(cfg, nodeID, funcs, logger)
 	if err != nil {
 		logger.Error("node config", "error", err)
 		os.Exit(1)
@@ -274,8 +281,47 @@ func main() {
 // the other fields node.New needs from the parsed config. The main
 // binary intentionally does NOT read the CA private key — that field
 // isn't present on MTLSConfig in the first place.
-func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slog.Logger) (node.Config, error) {
+func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFunction, logger *slog.Logger) (node.Config, error) {
 	needsRaft := containsFn(funcs, types.FunctionMemory) || containsFn(funcs, types.FunctionPolicy)
+
+	// Merge .mcp.json from the same dir as config.toml. Trust model
+	// is identical to the [[mcp.servers]] block: operator-controlled
+	// path. Same file perms guard the file; on k8s a ConfigMap drops
+	// the file at /etc/lobslaw/.mcp.json next to config.toml. Names
+	// in config.toml win on collision (first-write semantics).
+	if cfg.Dir() != "" {
+		manifestPath := filepath.Join(cfg.Dir(), ".mcp.json")
+		if _, err := os.Stat(manifestPath); err == nil {
+			m, err := mcp.LoadManifest(manifestPath)
+			if err != nil {
+				return node.Config{}, fmt.Errorf("load %s: %w", manifestPath, err)
+			}
+			if cfg.MCP.Servers == nil {
+				cfg.MCP.Servers = make(map[string]config.MCPServerConfig, len(m.MCPServers))
+			}
+			added := []string{}
+			for name, s := range m.MCPServers {
+				if _, exists := cfg.MCP.Servers[name]; exists {
+					logger.Warn("mcp: .mcp.json entry shadowed by config.toml", "name", name, "source", manifestPath)
+					continue
+				}
+				cfg.MCP.Servers[name] = config.MCPServerConfig{
+					Command:   s.Command,
+					Args:      s.Args,
+					Env:       s.Env,
+					SecretEnv: s.SecretEnv,
+					Disabled:  s.Disabled,
+					Install:   s.Install,
+				}
+				added = append(added, name)
+			}
+			if len(added) > 0 {
+				logger.Info("mcp: merged servers from .mcp.json", "path", manifestPath, "count", len(added), "names", added)
+			}
+		} else if !os.IsNotExist(err) {
+			return node.Config{}, fmt.Errorf("stat %s: %w", manifestPath, err)
+		}
+	}
 
 	var creds *mtls.NodeCreds
 	if cfg.Cluster.MTLS.CACert != "" || cfg.Cluster.MTLS.NodeCert != "" {
@@ -319,14 +365,17 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 	}
 
 	return node.Config{
-		NodeID:              cfg.Node.ID,
+		NodeID:              nodeID,
 		Functions:           funcs,
 		ListenAddr:          listen,
 		AdvertiseAddr:       cfg.Cluster.AdvertiseAddr,
 		SeedNodes:           cfg.Discovery.SeedNodes,
 		DataDir:             cfg.Cluster.DataDir,
-		Bootstrap:           cfg.Cluster.InitialBootstrap,
+		Bootstrap:           resolveBootstrap(cfg.Cluster.Bootstrap),
+		BootstrapTimeout:    cfg.Cluster.BootstrapTimeout,
 		SnapshotTarget:      cfg.Memory.Snapshot.Target,
+		MemoryDream:         cfg.Memory.Dream,
+		MemorySession:       cfg.Memory.Session,
 		BroadcastEnabled:    cfg.Discovery.Broadcast,
 		BroadcastAddress:    fmt.Sprintf("%s:%d", bcastAddr, bcastPort),
 		BroadcastListenAddr: fmt.Sprintf(":%d", bcastPort),
@@ -340,9 +389,20 @@ func buildNodeConfig(cfg *config.Config, funcs []types.NodeFunction, logger *slo
 		Audit:               cfg.Audit,
 		Storage:             cfg.Storage,
 		Skills:              cfg.Skills,
+		MCP:                 cfg.MCP,
 		SoulPath:            cfg.Soul.Path,
 		Logger:              logger,
 	}, nil
+}
+
+// resolveBootstrap defaults the [cluster] bootstrap flag to true so
+// solo and first-of-cluster runs Just Work; operators flip it to
+// false on production joiners to forbid accidental split-brain.
+func resolveBootstrap(v *bool) bool {
+	if v == nil {
+		return true
+	}
+	return *v
 }
 
 func containsFn(fns []types.NodeFunction, target types.NodeFunction) bool {

@@ -74,6 +74,7 @@ func Generate(in GenerateInput) string {
 		BuildIdentity(in.Soul),
 		BuildSafety(),
 		BuildPersonality(in.Soul),
+		BuildFragments(in.Soul),
 		BuildTooling(in.Tools),
 		BuildSkills(in.Skills),
 		BuildCurrentTime(now, in.Timezone),
@@ -82,6 +83,9 @@ func Generate(in GenerateInput) string {
 		BuildEnvironment(discoverSpecialtyCommands()),
 	}
 	for _, s := range sections {
+		if s.Title == "" {
+			continue
+		}
 		b.WriteString(s.Format())
 		b.WriteByte('\n')
 	}

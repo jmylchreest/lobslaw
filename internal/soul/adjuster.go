@@ -229,12 +229,17 @@ func (a *Adjuster) dimensionPointers(name string) (*int, *int) {
 // markdown body verbatim and re-serialises only the YAML frontmatter
 // so operator comments / blank lines in the body don't get lost on
 // every adjustment. Caller must hold a.mu.
+//
+// Before overwriting, snapshots the current on-disk file to
+// soul.d/history/<ts>.md so HistoryRollback can recover a known-good
+// version after a regrettable agent self-edit.
 func (a *Adjuster) persistLocked() error {
 	if a.soul.Path == "" {
 		// No on-disk representation (e.g. DefaultSoul). In-memory
 		// mutation only. Safe outcome: nothing to persist.
 		return nil
 	}
+	a.snapshotHistoryLocked()
 	encoded, err := encodeFrontmatter(a.soul.Config)
 	if err != nil {
 		return err

@@ -19,6 +19,15 @@ type SoulConfig struct {
 
 	MinTrustTier TrustTier      `yaml:"min_trust_tier,omitempty" json:"min_trust_tier,omitempty"`
 	Feedback     FeedbackConfig `yaml:"feedback" json:"feedback"`
+
+	// Fragments are short anecdotal facts the agent has been asked
+	// to remember about itself or the user ("user supports
+	// Liverpool", "prefers tea over coffee"). Agent-writable via the
+	// soul_fragment_* builtins; capped + sanitised on write to
+	// prevent prompt-injection through self-modified prose. Rendered
+	// into the system prompt as escaped bullets inside a clearly
+	// delimited block — never as free-form prose.
+	Fragments []string `yaml:"fragments,omitempty" json:"fragments,omitempty"`
 }
 
 type Language struct {

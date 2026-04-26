@@ -27,10 +27,11 @@ const applyTimeout = 5 * time.Second
 type Service struct {
 	lobslawv1.UnimplementedMemoryServiceServer
 
-	raft        *RaftNode
-	store       *Store
-	logger      *slog.Logger
-	dreamRunner *DreamRunner
+	raft          *RaftNode
+	store         *Store
+	logger        *slog.Logger
+	dreamRunner   *DreamRunner
+	sessionPruner *SessionPruner
 }
 
 // NewService wires a MemoryService against an existing Raft stack.
@@ -44,6 +45,7 @@ func NewService(raft *RaftNode, store *Store, logger *slog.Logger) *Service {
 	s := &Service{raft: raft, store: store, logger: logger}
 	if raft != nil {
 		s.dreamRunner = NewDreamRunner(raft, store, nil, DreamConfig{}, logger)
+		s.sessionPruner = NewSessionPruner(raft, store, SessionPruneConfig{}, logger)
 	}
 	return s
 }
@@ -52,6 +54,21 @@ func NewService(raft *RaftNode, store *Store, logger *slog.Logger) *Service {
 // (via DreamRunner.SetSummarizer). Returns nil on nodes without
 // raft (compute-only, gateway-only).
 func (s *Service) DreamRunner() *DreamRunner { return s.dreamRunner }
+
+// SessionPruner exposes the pruner so node.go can register its
+// scheduler handler. Returns nil on raft-less nodes.
+func (s *Service) SessionPruner() *SessionPruner { return s.sessionPruner }
+
+// ConfigureSessionPruner replaces the pruner with one tuned by the
+// supplied MaxAge. Called from node.go once the operator's
+// [memory.session] block has been parsed. Zero MaxAge → default 24h
+// (same as NewSessionPruner).
+func (s *Service) ConfigureSessionPruner(maxAge time.Duration) {
+	if s.raft == nil {
+		return
+	}
+	s.sessionPruner = NewSessionPruner(s.raft, s.store, SessionPruneConfig{MaxAge: maxAge}, s.logger)
+}
 
 // Store persists a VectorRecord through Raft. Writes must run on the
 // leader — followers return FailedPrecondition with the leader's address

@@ -53,9 +53,10 @@ type packet struct {
 // Broadcaster runs one announce goroutine + one listen goroutine.
 // Stop via context cancellation. Close idempotently releases the socket.
 type Broadcaster struct {
-	cfg  BroadcastConfig
-	conn *net.UDPConn
-	log  *slog.Logger
+	cfg    BroadcastConfig
+	conn   *net.UDPConn
+	log    *slog.Logger
+	target *net.UDPAddr
 }
 
 // NewBroadcaster binds the listen socket and enables SO_BROADCAST so
@@ -88,7 +89,28 @@ func NewBroadcaster(cfg BroadcastConfig) (*Broadcaster, error) {
 		return nil, fmt.Errorf("enable SO_BROADCAST: %w", err)
 	}
 
-	return &Broadcaster{cfg: cfg, conn: conn, log: cfg.Logger}, nil
+	target, err := net.ResolveUDPAddr("udp4", cfg.Address)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("resolve target %q: %w", cfg.Address, err)
+	}
+
+	return &Broadcaster{cfg: cfg, conn: conn, log: cfg.Logger, target: target}, nil
+}
+
+// announceOnce sends a single announce packet. Used by both the
+// periodic ticker in runAnnouncer and the new-peer-seen path in
+// runListener. UDP writes are goroutine-safe so no extra sync.
+func (b *Broadcaster) announceOnce() {
+	p := packet{
+		Type:    "announce",
+		NodeID:  string(b.cfg.Local.ID),
+		Address: b.cfg.Local.Address,
+	}
+	data, _ := json.Marshal(&p)
+	if _, err := b.conn.WriteToUDP(data, b.target); err != nil {
+		b.log.Debug("broadcast write", "err", err)
+	}
 }
 
 // Start spawns the announce + listen goroutines and blocks until ctx
@@ -126,27 +148,12 @@ func (b *Broadcaster) LocalAddr() net.Addr {
 	return b.conn.LocalAddr()
 }
 
-// runAnnouncer sends one announce immediately then on each Interval.
+// runAnnouncer fires an announce immediately, then on each Interval.
+// runListener also calls announceOnce directly when it hears a new
+// peer — that makes a fresh joiner visible within milliseconds
+// rather than having to wait up to a full interval tick.
 func (b *Broadcaster) runAnnouncer(ctx context.Context) {
-	target, err := net.ResolveUDPAddr("udp4", b.cfg.Address)
-	if err != nil {
-		b.log.Warn("broadcast: resolve target", "addr", b.cfg.Address, "err", err)
-		return
-	}
-
-	announce := func() {
-		p := packet{
-			Type:    "announce",
-			NodeID:  string(b.cfg.Local.ID),
-			Address: b.cfg.Local.Address,
-		}
-		data, _ := json.Marshal(&p)
-		if _, err := b.conn.WriteToUDP(data, target); err != nil {
-			b.log.Debug("broadcast write", "err", err)
-		}
-	}
-
-	announce() // don't wait a full Interval for the first ping
+	b.announceOnce()
 
 	t := time.NewTicker(b.cfg.Interval)
 	defer t.Stop()
@@ -155,7 +162,7 @@ func (b *Broadcaster) runAnnouncer(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			announce()
+			b.announceOnce()
 		}
 	}
 }
@@ -189,10 +196,18 @@ func (b *Broadcaster) runListener(ctx context.Context) {
 		if p.NodeID == string(b.cfg.Local.ID) {
 			continue
 		}
-		b.cfg.Registry.Register(types.NodeInfo{
+		added := b.cfg.Registry.Register(types.NodeInfo{
 			ID:      types.NodeID(p.NodeID),
 			Address: p.Address,
 		})
+		if added {
+			// First sighting — fire our own announce so the new peer
+			// learns about us immediately rather than waiting for the
+			// next Interval tick. This is the bit that prevents
+			// cold-start nodes from solo-bootstrapping in parallel
+			// when bootstrap=true is set everywhere.
+			b.announceOnce()
+		}
 	}
 }
 

@@ -17,14 +17,21 @@ import (
 // against a running cluster uses the AuditService gRPC surface
 // directly; adding a client-side wrapper is follow-up work.
 func dispatchAudit(args []string) bool {
-	if len(args) < 2 || args[0] != "audit" {
+	idx := findSubcmd(args, "audit")
+	if idx < 0 {
 		return false
 	}
-	switch args[1] {
+	sub := args[idx+1:]
+	if len(sub) == 0 {
+		fmt.Fprintln(os.Stderr, "lobslaw audit: subcommand required")
+		fmt.Fprintln(os.Stderr, "available subcommands: verify")
+		os.Exit(2)
+	}
+	switch sub[0] {
 	case "verify":
-		auditVerify(args[2:])
+		auditVerify(sub[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "lobslaw audit: unknown subcommand %q\n", args[1])
+		fmt.Fprintf(os.Stderr, "lobslaw audit: unknown subcommand %q\n", sub[0])
 		fmt.Fprintln(os.Stderr, "available subcommands: verify")
 		os.Exit(2)
 	}

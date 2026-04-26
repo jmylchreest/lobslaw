@@ -12,12 +12,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	cryptorand "crypto/rand"
+
 	"github.com/fsnotify/fsnotify"
 	"github.com/hashicorp/raft"
+	"github.com/oklog/ulid/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/audit"
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/compute/research"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
@@ -27,6 +33,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/internal/storage"
@@ -53,10 +60,17 @@ type Config struct {
 	SeedNodes     []string
 	DataDir       string // Raft log + state.db + snapshots/ live here
 
-	// Bootstrap should be true on exactly one node of a new cluster on
-	// its first-ever start. On restarts it's ignored via
-	// raft.ErrCantBootstrap.
+	// Bootstrap (default true at the config layer) lets this node
+	// form a brand-new cluster as a sole voter when it cannot join
+	// an existing one via SeedNodes within BootstrapTimeout. False
+	// means refuse to start unless we successfully join — the right
+	// policy for joiner nodes in production where split-brain is
+	// worse than a missing node.
 	Bootstrap bool
+
+	// BootstrapTimeout caps the join attempt before falling back to
+	// solo-bootstrap (or failing). Zero → 30s.
+	BootstrapTimeout time.Duration
 
 	// SnapshotTarget is a reference like "storage:r2-backup" to a
 	// target that receives periodic Raft snapshots. Required when the
@@ -64,6 +78,15 @@ type Config struct {
 	// (meaning this node will join a multi-node cluster where durability
 	// comes from replication). See lobslaw-single-node-durability.
 	SnapshotTarget string
+
+	// MemoryDream is the [memory.dream] sub-block — controls the
+	// auto-seeded recurring Dream/REM consolidation pass. Empty
+	// values fall back to the seed defaults (enabled, 02:00 daily).
+	MemoryDream config.DreamConfig
+
+	// MemorySession is the [memory.session] sub-block — controls
+	// the auto-seeded session retention pruner.
+	MemorySession config.SessionConfig
 
 	// UDP broadcast auto-discovery. Leave Enabled=false for production
 	// clusters that use seed lists.
@@ -177,6 +200,7 @@ type Node struct {
 	// can hot-swap SOUL.md edits without racing readers. Callers
 	// go through the Soul() accessor; never read soul directly.
 	soul         atomic.Pointer[soul.Soul]
+	soulAdjuster *soul.Adjuster
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -214,6 +238,11 @@ type Node struct {
 	gatewaySrv      *gateway.Server
 	telegramHandler *gateway.TelegramHandler
 	promptRegistry  *gateway.PromptRegistry
+
+	// leaderGate fans raft leadership transitions out to leader-pinned
+	// singleton workloads (currently just the telegram long-poller).
+	// Constructed when this node hosts raft; nil otherwise.
+	leaderGate *singleton.LeaderGate
 
 	// Audit log coordinator and gRPC surface. Present whenever at
 	// least one sink is enabled; nil otherwise (operator explicitly
@@ -298,6 +327,11 @@ func New(cfg Config) (*Node, error) {
 		shutdownOnce: make(chan struct{}),
 	}
 	n.soul.Store(loadedSoul)
+	if adj, err := soul.NewAdjuster(soul.AdjusterConfig{Soul: loadedSoul}); err == nil {
+		n.soulAdjuster = adj
+	} else {
+		log.Warn("soul: adjuster construction failed; soul_* tools unavailable", "err", err)
+	}
 
 	// Wire the Raft stack iff we're running memory or policy. Services
 	// that need it (NodeService's AddMember, the minimal PolicyService)
@@ -341,6 +375,14 @@ func New(cfg Config) (*Node, error) {
 		// scheduler's CAS-claim model picks one node per fire and the
 		// runner's leader-gate makes non-leader wins a soft-skip.
 		n.registerDreamHandler()
+	n.registerSessionPruneHandler()
+
+		// Deep-research commitment handler. Fires on the leader when
+		// a research_start builtin invocation creates a commitment
+		// with HandlerRef=research:run. Tools come from the live
+		// registry at fire time so MCP-supplied tools (e.g.
+		// minimax.image_understanding) are available to workers.
+		n.registerResearchHandler()
 
 		// Storage service piggybacks on the Raft stack — every voter
 		// serves ListMounts from its local replica, AddMount /
@@ -512,11 +554,35 @@ func (n *Node) Start(ctx context.Context) error {
 		"functions", n.cfg.Functions,
 	)
 
-	// Dial seeds. Failures are non-fatal: even if every seed is down,
-	// we keep serving so other nodes can dial us.
+	// Dial seeds for peer-registry exchange (Register + GetPeers).
+	// Failures are non-fatal: even if every seed is down, we keep
+	// serving so other nodes can dial us. Membership-join (raft
+	// AddVoter) is a separate flow handled by establishRaftMembership
+	// below.
 	if len(n.cfg.SeedNodes) > 0 {
 		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, 5*time.Second); err != nil {
 			n.log.Warn("seed-list bootstrap incomplete", "err", err)
+		}
+	}
+
+	// Start broadcast BEFORE establishRaftMembership so an empty-state
+	// node has a chance to hear ambient announces and dial those peers
+	// instead of needing an explicit seed_nodes entry. Listen-only
+	// mode at this stage would also work; running both lets us also
+	// be discoverable to anyone else that's coming up alongside us.
+	if n.broadcaster != nil {
+		go func() {
+			if err := n.broadcaster.Start(ctx); err != nil {
+				n.log.Warn("broadcast exited", "err", err)
+			}
+		}()
+	}
+
+	// Decide raft membership: resume / join / bootstrap. Only runs
+	// on raft-hosting nodes (memory or policy function).
+	if n.raft != nil {
+		if err := n.establishRaftMembership(ctx); err != nil {
+			return fmt.Errorf("raft membership: %w", err)
 		}
 	}
 
@@ -527,15 +593,6 @@ func (n *Node) Start(ctx context.Context) error {
 	// swap handlers).
 	if n.cfg.SoulPath != "" {
 		go n.runSoulWatcher(ctx)
-	}
-
-	// Optional UDP broadcast. Runs until ctx is cancelled.
-	if n.broadcaster != nil {
-		go func() {
-			if err := n.broadcaster.Start(ctx); err != nil {
-				n.log.Warn("broadcast exited", "err", err)
-			}
-		}()
 	}
 
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
@@ -574,6 +631,12 @@ func (n *Node) Start(ctx context.Context) error {
 			if err := n.seedStorageMountsFromConfig(ctx); err != nil {
 				n.log.Warn("storage: seed from config failed", "err", err)
 			}
+			if err := n.seedDreamTask(ctx); err != nil {
+				n.log.Warn("memory: seed dream task failed", "err", err)
+			}
+			if err := n.seedSessionPruneTask(ctx); err != nil {
+				n.log.Warn("memory: seed session prune task failed", "err", err)
+			}
 		}
 	}
 
@@ -595,6 +658,7 @@ func (n *Node) Start(ctx context.Context) error {
 	// manifests can also declare servers; the loader dedupes by
 	// name (first-registered wins). Failures per server are
 	// isolated — a misconfigured integration doesn't block boot.
+	n.log.Info("mcp: wireup", "configured_servers", len(n.cfg.MCP.Servers))
 	if len(n.cfg.MCP.Servers) > 0 {
 		if err := n.startMCPFromConfig(ctx); err != nil {
 			n.log.Warn("mcp: direct servers failed to start", "err", err)
@@ -789,8 +853,12 @@ func (n *Node) wireRaft(advertise string) error {
 		NodeID:    n.cfg.NodeID,
 		LocalAddr: raft.ServerAddress(advertise),
 		DataDir:   n.cfg.DataDir,
-		Bootstrap: n.cfg.Bootstrap,
+		// Bootstrap is decided by the orchestration in Start() after
+		// the gRPC listener is up and a join attempt has run; we
+		// never let NewRaft auto-bootstrap a fresh cluster.
+		Bootstrap: false,
 		Transport: transport.RaftTransport(),
+		Logger:    n.log,
 	}, fsm)
 	if err != nil {
 		_ = store.Close()
@@ -801,7 +869,140 @@ func (n *Node) wireRaft(advertise string) error {
 	n.fsm = fsm
 	n.transport = transport
 	n.raft = rNode
+
+	// Leader-pinned singleton coordinator. Constructed here because
+	// it needs the raft handle to seed initial state and to receive
+	// transitions. Workloads that want exactly-one-owner semantics
+	// (telegram polling today; future: dream cycles, reindex) take
+	// this gate from n.leaderGate.
+	n.leaderGate = singleton.NewLeaderGate(rNode)
+	rNode.SetLeadershipCallback(n.leaderGate.Publish)
 	return nil
+}
+
+// establishRaftMembership runs the bootstrap/join decision tree.
+// (1) Existing state + we're in config → resume.
+// (2) Existing state + we're NOT in config → fail-fast (orphan; data
+// dir came from a different identity). (3) No state + seeds → try
+// JoinCluster (AddMember w/ leader redirect) until BootstrapTimeout,
+// then WaitForConfigInclusion. (4) No state + no/failed seeds +
+// cfg.Bootstrap → solo bootstrap. (5) No state + cfg.Bootstrap=false
+// → fail-fast. Cases 4/5 protect against split-brain: production
+// joiners run with Bootstrap=false so a startup-time partition
+// can't create two independent clusters.
+func (n *Node) establishRaftMembership(ctx context.Context) error {
+	timeout := n.cfg.BootstrapTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+
+	if n.raft.HadStateOnBoot() {
+		if n.raft.IsInConfiguration() {
+			n.log.Info("raft: resuming with existing state",
+				"node_id", n.cfg.NodeID,
+				"servers", formatServers(n.raft.ConfigurationServers()))
+			return nil
+		}
+		return fmt.Errorf("raft data dir at %q has prior state but does not list this node (%q) as a voter — current servers: %v. "+
+			"this typically means the data dir was carried over from a different node identity; "+
+			"either point at a clean data dir, or wipe raft.db + snapshots/ to start fresh",
+			n.cfg.DataDir, n.cfg.NodeID, formatServers(n.raft.ConfigurationServers()))
+	}
+
+	// Virgin data dir from here on. Combine the operator-supplied
+	// seed list with anything the broadcaster has heard so far —
+	// either source is enough to find a peer to dial. Brief wait
+	// (≤2s) gives the broadcast listener a chance to populate the
+	// registry on container/LAN startups where everyone races up.
+	candidates := n.collectJoinCandidates(ctx, 2*time.Second)
+	if len(candidates) > 0 {
+		joinCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := n.discCli.JoinCluster(joinCtx, candidates, 5*time.Second)
+		cancel()
+		if err == nil {
+			waitCtx, waitCancel := context.WithTimeout(ctx, timeout)
+			defer waitCancel()
+			if err := n.raft.WaitForConfigInclusion(waitCtx, 200*time.Millisecond); err != nil {
+				return fmt.Errorf("joined via candidates but never observed self in committed config within %s: %w", timeout, err)
+			}
+			n.log.Info("raft: joined existing cluster",
+				"node_id", n.cfg.NodeID,
+				"candidates", candidates)
+			return nil
+		}
+		n.log.Warn("raft: join via discovered candidates failed",
+			"err", err,
+			"candidates", candidates,
+			"will_bootstrap", n.cfg.Bootstrap)
+	}
+
+	if !n.cfg.Bootstrap {
+		return fmt.Errorf("no existing raft state, no seed or broadcast peer reachable, and bootstrap=false — refusing to form a fresh cluster on my own. "+
+			"either set [discovery] seed_nodes / broadcast=true with a reachable peer, or set [cluster] bootstrap=true to allow solo-bootstrap (candidates=%v)",
+			candidates)
+	}
+
+	if err := n.raft.BootstrapSelf(); err != nil {
+		return fmt.Errorf("solo bootstrap: %w", err)
+	}
+	n.log.Info("raft: bootstrapped a new cluster as sole voter",
+		"node_id", n.cfg.NodeID,
+		"reason", bootstrapReason(candidates))
+	return nil
+}
+
+func bootstrapReason(candidates []string) string {
+	if len(candidates) == 0 {
+		return "no seeds configured and no broadcast peer heard"
+	}
+	return "all reachable candidates rejected the join (likely cold-start race; bringing nodes up sequentially avoids this)"
+}
+
+// collectJoinCandidates returns the merged set of operator-supplied
+// seed_nodes and broadcast-discovered peer addresses. When the
+// broadcaster is enabled, sleeps up to waitFor to give the listener
+// a chance to populate the registry — typical announce interval is
+// 30s but the first packet usually arrives within 1-2s of boot.
+// Self is excluded; duplicates are de-duped while preserving order
+// (operator seeds first, then discovered peers).
+func (n *Node) collectJoinCandidates(ctx context.Context, waitFor time.Duration) []string {
+	if n.broadcaster != nil && waitFor > 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(waitFor):
+		}
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, s := range n.cfg.SeedNodes {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	if n.registry != nil {
+		for _, p := range n.registry.List() {
+			if string(p.ID) == n.cfg.NodeID {
+				continue
+			}
+			if p.Address == "" || seen[p.Address] {
+				continue
+			}
+			seen[p.Address] = true
+			out = append(out, p.Address)
+		}
+	}
+	return out
+}
+
+
+func formatServers(servers []raft.Server) []string {
+	out := make([]string, 0, len(servers))
+	for _, s := range servers {
+		out = append(out, fmt.Sprintf("%s@%s(%s)", s.ID, s.Address, s.Suffrage))
+	}
+	return out
 }
 
 // wireAudit constructs the AuditLog coordinator and registers the
@@ -900,6 +1101,7 @@ func (n *Node) seedStorageMountsFromConfig(ctx context.Context) error {
 	if !n.raft.IsLeader() {
 		return nil
 	}
+	seeded := []string{}
 	for _, m := range n.cfg.Storage.Mounts {
 		if m.Label == "" || m.Type == "" {
 			continue
@@ -918,8 +1120,12 @@ func (n *Node) seedStorageMountsFromConfig(ctx context.Context) error {
 		if _, err := n.storageSvc.AddMount(ctx, req); err != nil {
 			return fmt.Errorf("seed mount %q: %w", m.Label, err)
 		}
-		n.log.Info("storage: seeded mount from config",
+		n.log.Debug("storage: seeded mount from config",
 			"label", m.Label, "type", m.Type, "path", m.Path)
+		seeded = append(seeded, m.Label)
+	}
+	if len(seeded) > 0 {
+		n.log.Info("storage: seeded mounts from config", "count", len(seeded), "labels", seeded)
 	}
 	return nil
 }
@@ -973,14 +1179,36 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	if n.toolRegistry == nil {
 		return nil
 	}
+	// defaultDenyBuiltins = builtins that need explicit operator
+	// allow before the agent can call them. Their priority>1 deny
+	// seed beats the priority=1 allow seed below; operators add an
+	// allow rule (any priority ≥2) to enable per scope.
+	defaultDenyBuiltins := map[string]bool{
+		"research_start":        true,
+		"soul_get":              true,
+		"soul_tune":             true,
+		"soul_fragment_add":     true,
+		"soul_fragment_remove":  true,
+		"soul_fragment_list":    true,
+		"soul_history_rollback": true,
+	}
+
 	seedTargets := []*types.ToolDef{}
 	for _, td := range n.toolRegistry.List() {
 		if strings.HasPrefix(td.Path, compute.BuiltinScheme) {
 			seedTargets = append(seedTargets, td)
 		}
 	}
+	seeded := []string{}
 	for _, td := range seedTargets {
+		effect := "allow"
+		priority := int32(1)
 		ruleID := "lobslaw-builtin-" + td.Name
+		if defaultDenyBuiltins[td.Name] {
+			effect = "deny"
+			priority = 10
+			ruleID = "lobslaw-builtin-deny-" + td.Name
+		}
 		if _, err := n.store.Get(memory.BucketPolicyRules, ruleID); err == nil {
 			// Already present (prior boot seeded it, or operator
 			// wrote a rule with this ID explicitly). Skip.
@@ -992,16 +1220,72 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 				Subject:  "*",
 				Action:   "tool:exec",
 				Resource: td.Name,
-				Effect:   "allow",
-				Priority: 1,
+				Effect:   effect,
+				Priority: priority,
 			},
 		})
 		if err != nil {
 			return fmt.Errorf("seed %q: %w", ruleID, err)
 		}
-		n.log.Info("policy: seeded default builtin allow rule",
-			"tool", td.Name, "rule_id", ruleID)
+		n.log.Debug("policy: seeded default builtin rule",
+			"tool", td.Name, "rule_id", ruleID, "effect", effect)
+		seeded = append(seeded, td.Name)
 	}
+	if len(seeded) > 0 {
+		n.log.Info("policy: seeded default builtin rules", "count", len(seeded))
+	}
+	return nil
+}
+
+// seedDreamTask installs a recurring memory:dream task in the
+// scheduler if one isn't already present under the well-known
+// "lobslaw-builtin-dream" ID. Default cadence: 02:00 daily. Operator
+// turns it off via [memory.dream] enabled = false. Operators who
+// want a different cadence override [memory.dream] schedule, or
+// declare their own [[scheduler.tasks]] (different ID) for parallel
+// passes. Idempotent — won't overwrite an existing entry, so a
+// schedule change requires deleting the seeded task first (which
+// the next boot will then re-seed at the new cadence).
+func (n *Node) seedDreamTask(ctx context.Context) error {
+	if n.raft == nil || n.store == nil || n.scheduler == nil || n.memorySvc == nil {
+		return nil
+	}
+	if !n.raft.IsLeader() {
+		return nil
+	}
+	// Operator opt-out. *bool default-nil → enabled.
+	if n.cfg.MemoryDream.Enabled != nil && !*n.cfg.MemoryDream.Enabled {
+		return nil
+	}
+	const dreamTaskID = "lobslaw-builtin-dream"
+	if _, err := n.store.Get(memory.BucketScheduledTasks, dreamTaskID); err == nil {
+		return nil
+	}
+	schedule := strings.TrimSpace(n.cfg.MemoryDream.Schedule)
+	if schedule == "" {
+		schedule = "0 2 * * *"
+	}
+	task := &lobslawv1.ScheduledTaskRecord{
+		Id:         dreamTaskID,
+		Name:       "memory.dream (builtin)",
+		Schedule:   schedule,
+		HandlerRef: DreamHandlerRef,
+		Enabled:    true,
+		CreatedAt:  timestamppb.Now(),
+	}
+	entry := &lobslawv1.LogEntry{
+		Op:      lobslawv1.LogOp_LOG_OP_PUT,
+		Id:      dreamTaskID,
+		Payload: &lobslawv1.LogEntry_ScheduledTask{ScheduledTask: task},
+	}
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal dream task: %w", err)
+	}
+	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+		return fmt.Errorf("apply dream task: %w", err)
+	}
+	n.log.Info("memory: seeded dream task", "id", dreamTaskID, "schedule", schedule)
 	return nil
 }
 
@@ -1115,6 +1399,9 @@ func validateConfig(cfg Config) error {
 	if cfg.Creds == nil {
 		return errors.New("node.Config: Creds required (run `lobslaw cluster sign-node` first)")
 	}
+	if cfg.Creds.NodeID != cfg.NodeID {
+		return fmt.Errorf("node.Config: cert was signed for %q but this host resolves as %q — re-run `lobslaw cluster sign-node` on this host (or set LOBSLAW_NODE_ID to override)", cfg.Creds.NodeID, cfg.NodeID)
+	}
 	if needsRaft(cfg.Functions) {
 		if cfg.DataDir == "" {
 			return errors.New("node.Config: DataDir required when memory or policy function is enabled")
@@ -1224,7 +1511,7 @@ func (n *Node) wireCompute() error {
 		}
 		embedder = ec
 		n.embedder = ec
-		n.log.Info("compute: embedding client wired",
+		n.log.Debug("compute: embedding client wired",
 			"model", n.cfg.Compute.Embeddings.Model,
 			"dims", n.cfg.Compute.Embeddings.Dims)
 	}
@@ -1247,7 +1534,7 @@ func (n *Node) wireCompute() error {
 				return fmt.Errorf("register memory tool %q: %w", td.Name, err)
 			}
 		}
-		n.log.Info("compute: memory_search + memory_write registered")
+		n.log.Debug("compute: memory_search + memory_write registered")
 	}
 
 	// Schedule tools: schedule_create / list / get / delete. Need
@@ -1265,7 +1552,7 @@ func (n *Node) wireCompute() error {
 				return fmt.Errorf("register schedule tool %q: %w", td.Name, err)
 			}
 		}
-		n.log.Info("compute: schedule_create/list/get/delete registered")
+		n.log.Debug("compute: schedule_create/list/get/delete registered")
 
 		// Commitments: one-shot due-at jobs (the right primitive for
 		// "in 2 minutes message me"). Same Store + Raft pattern;
@@ -1282,7 +1569,22 @@ func (n *Node) wireCompute() error {
 				return fmt.Errorf("register commitment tool %q: %w", td.Name, err)
 			}
 		}
-		n.log.Info("compute: commitment_create/list/cancel registered")
+		n.log.Debug("compute: commitment_create/list/cancel registered")
+
+		// Deep-research builtin (research_start). Default-deny via
+		// the policy seed below; operators flip subject="*"/effect=allow
+		// when they want the agent to kick off async research runs.
+		if err := compute.RegisterResearchBuiltins(builtins, compute.ResearchConfig{
+			Raft: n.raft,
+		}); err != nil {
+			return fmt.Errorf("register research builtins: %w", err)
+		}
+		for _, td := range compute.ResearchToolDefs() {
+			if err := n.toolRegistry.Register(td); err != nil {
+				return fmt.Errorf("register research tool %q: %w", td.Name, err)
+			}
+		}
+		n.log.Debug("compute: research_start registered (default-deny)")
 	}
 
 	// Council tools: list_providers + council_review. Only wire
@@ -1299,7 +1601,7 @@ func (n *Node) wireCompute() error {
 				return fmt.Errorf("register council tool %q: %w", td.Name, err)
 			}
 		}
-		n.log.Info("compute: list_providers + council_review registered",
+		n.log.Debug("compute: list_providers + council_review registered",
 			"provider_count", len(n.providerRegistry.List()))
 	}
 
@@ -1313,7 +1615,7 @@ func (n *Node) wireCompute() error {
 	if err := n.toolRegistry.Register(compute.FetchToolDef()); err != nil {
 		return fmt.Errorf("register fetch_url tool def: %w", err)
 	}
-	n.log.Info("compute: fetch_url registered")
+	n.log.Debug("compute: fetch_url registered")
 
 	// Write + edit tools — destructive so they register with
 	// RiskIrreversible. Default policy seeding (below) adds an
@@ -1328,7 +1630,7 @@ func (n *Node) wireCompute() error {
 	if err := n.toolRegistry.Register(compute.EditToolDef()); err != nil {
 		return fmt.Errorf("register edit_file tool def: %w", err)
 	}
-	n.log.Info("compute: write_file + edit_file registered")
+	n.log.Debug("compute: write_file + edit_file registered")
 
 	// Debug tools expose internal state (tools, policy rules,
 	// memory stats, raft, scheduler, providers) so the agent can
@@ -1345,7 +1647,7 @@ func (n *Node) wireCompute() error {
 			return fmt.Errorf("register debug tool %q: %w", td.Name, err)
 		}
 	}
-	n.log.Info("compute: debug_* builtins registered")
+	n.log.Debug("compute: debug_* builtins registered")
 
 	// Shell access — most dangerous of all the stdlib tools.
 	// Denylist + compound-command gate + 30s default timeout
@@ -1357,7 +1659,7 @@ func (n *Node) wireCompute() error {
 	if err := n.toolRegistry.Register(compute.ShellToolDef()); err != nil {
 		return fmt.Errorf("register shell_command tool def: %w", err)
 	}
-	n.log.Info("compute: shell_command registered")
+	n.log.Debug("compute: shell_command registered")
 
 	// Web search: only registered when an Exa API key is
 	// configured. Skipped silently when absent so deployments that
@@ -1378,8 +1680,92 @@ func (n *Node) wireCompute() error {
 			if err := n.toolRegistry.Register(compute.WebSearchToolDef()); err != nil {
 				return fmt.Errorf("register web_search tool def: %w", err)
 			}
-			n.log.Info("compute: web_search (Exa) registered")
+			n.log.Debug("compute: web_search (Exa) registered")
 		}
+	}
+
+	// Vision: read_image builtin. Resolution order:
+	//   1. provider="<label>" → inherit endpoint/model/key/format
+	//      from that [[compute.providers]] entry.
+	//   2. inline endpoint+api_key_ref → use directly.
+	//   3. neither → builtin not registered; agent honestly tells
+	//      the user it can't view images.
+	if visionEP := n.resolveVisionEndpoint(); visionEP != nil {
+		if err := compute.RegisterVisionBuiltin(builtins, compute.VisionConfig{
+			Endpoint: visionEP.endpoint,
+			Model:    visionEP.model,
+			APIKey:   visionEP.apiKey,
+			Format:   compute.VisionFormat(visionEP.format),
+		}); err != nil {
+			return fmt.Errorf("register read_image: %w", err)
+		}
+		if err := n.toolRegistry.Register(compute.VisionToolDef()); err != nil {
+			return fmt.Errorf("register read_image tool def: %w", err)
+		}
+		n.log.Debug("compute: read_image registered",
+			"model", visionEP.model, "format", visionEP.format, "via", visionEP.via)
+	}
+
+	// Audio (STT): read_audio builtin, same provider-reference shape
+	// as vision. Whisper-compatible multipart POST regardless of
+	// whether the endpoint is OpenAI, MiniMax, or a self-hosted
+	// faster-whisper / parakeet sidecar exposing the same surface.
+	if audioEP := n.resolveAudioEndpoint(); audioEP != nil {
+		audioFmt := compute.AudioFormatWhisper
+		if audioEP.matchedCap == compute.CapabilityAudioMultimodal {
+			audioFmt = compute.AudioFormatChatMultimodal
+		}
+		if err := compute.RegisterAudioBuiltin(builtins, compute.AudioConfig{
+			Endpoint: audioEP.endpoint,
+			Model:    audioEP.model,
+			APIKey:   audioEP.apiKey,
+			Format:   audioFmt,
+		}); err != nil {
+			return fmt.Errorf("register read_audio: %w", err)
+		}
+		if err := n.toolRegistry.Register(compute.AudioToolDef()); err != nil {
+			return fmt.Errorf("register read_audio tool def: %w", err)
+		}
+		n.log.Debug("compute: read_audio registered",
+			"model", audioEP.model, "format", audioFmt, "via", audioEP.via)
+	}
+
+	// Soul self-tuning builtins. Default-deny via the seedDefault
+	// rules below — operators open per-scope so only the owner's
+	// chat can mutate the agent's identity. soul_get +
+	// soul_fragment_list are also default-deny by virtue of being
+	// in the soul_* namespace; tighten/loosen per scope as needed.
+	if n.soulAdjuster != nil {
+		if err := compute.RegisterSoulBuiltins(builtins, compute.SoulBuiltinsConfig{
+			Mutator: n.soulAdjuster,
+		}); err != nil {
+			return fmt.Errorf("register soul builtins: %w", err)
+		}
+		for _, td := range compute.SoulToolDefs() {
+			if err := n.toolRegistry.Register(td); err != nil {
+				return fmt.Errorf("register soul tool def %q: %w", td.Name, err)
+			}
+		}
+		n.log.Debug("compute: soul_* builtins registered")
+	}
+
+	// PDF: read_pdf builtin, capability="pdf". Same chat-completions
+	// shape as audio-multimodal — content part {type:"file"} with
+	// base64 PDF data. OpenRouter is the easy on-ramp; Anthropic
+	// native PDF and Gemini PDF can land as additional formats.
+	if pdfEP := n.resolvePDFEndpoint(); pdfEP != nil {
+		if err := compute.RegisterPDFBuiltin(builtins, compute.PDFConfig{
+			Endpoint: pdfEP.endpoint,
+			Model:    pdfEP.model,
+			APIKey:   pdfEP.apiKey,
+		}); err != nil {
+			return fmt.Errorf("register read_pdf: %w", err)
+		}
+		if err := n.toolRegistry.Register(compute.PDFToolDef()); err != nil {
+			return fmt.Errorf("register read_pdf tool def: %w", err)
+		}
+		n.log.Debug("compute: read_pdf registered",
+			"model", pdfEP.model, "via", pdfEP.via)
 	}
 
 	// Wire the skill registry's PolicySink so skill-bundled policy.d/
@@ -1580,6 +1966,12 @@ const AgentTurnHandlerRef = "agent:turn"
 // subprocess; it's an internal Go operation).
 const DreamHandlerRef = "memory:dream"
 
+// SessionPruneHandlerRef is the well-known HandlerRef for the
+// retention=session hard-prune pass. Like dream, every node's
+// scheduler races to claim the task; the pruner itself soft-skips
+// on non-leaders so duplicate claims are safe.
+const SessionPruneHandlerRef = "memory:session-prune"
+
 // registerDreamHandler wires DreamRunner into the scheduler so an
 // operator's `handler = "memory:dream"` ScheduledTask actually fires
 // the Dream pass. Called from node.New when both memorySvc and
@@ -1611,6 +2003,181 @@ func (n *Node) registerDreamHandler() {
 		})
 }
 
+// llmEndpoint is a fully-resolved LLM endpoint — endpoint URL +
+// model + already-resolved API key + wire format. Modality blocks
+// (vision, audio, future STT) all reduce to one of these.
+//
+// matchedCap is the capability tag that selected this endpoint
+// (e.g. "audio-transcription" vs "audio-multimodal"); modality
+// dispatch can switch on it to pick the right wire shape.
+type llmEndpoint struct {
+	endpoint   string
+	model      string
+	apiKey     string
+	format     string
+	via        string // "override:<label>", "capability:<label>"
+	matchedCap string // empty if override; else the capability that matched
+}
+
+// findProvider scans cfg.Compute.Providers for one matching label.
+// Returns nil when not found — caller decides whether to fall back
+// to inline or surface an error.
+func (n *Node) findProvider(label string) *config.ProviderConfig {
+	if label == "" {
+		return nil
+	}
+	for i := range n.cfg.Compute.Providers {
+		p := &n.cfg.Compute.Providers[i]
+		if p.Label == label {
+			return p
+		}
+	}
+	return nil
+}
+
+// resolveModalityEndpoint discovers a provider for the given
+// modality. Resolution order:
+//
+//  1. If override.Provider is set, pin to that label.
+//  2. Otherwise scan [[compute.providers]] for any matching
+//     capability (anyOf), highest Priority first.
+//  3. Skip cleanly (return nil) when nothing matches — the caller
+//     omits the builtin and the agent honestly reports it can't.
+func (n *Node) resolveModalityEndpoint(modality, overrideLabel string, anyOf ...string) *llmEndpoint {
+	if overrideLabel != "" {
+		p := n.findProvider(overrideLabel)
+		if p == nil {
+			n.log.Warn("compute: "+modality+" override references unknown provider; skipping",
+				"label", overrideLabel)
+			return nil
+		}
+		return n.endpointFromProvider(modality, *p, "override:"+overrideLabel)
+	}
+	for _, want := range anyOf {
+		matches := compute.SelectByCapability(n.cfg.Compute.Providers, want)
+		for _, p := range matches {
+			ep := n.endpointFromProvider(modality, p, "capability:"+p.Label)
+			if ep != nil {
+				ep.matchedCap = want
+				return ep
+			}
+		}
+	}
+	return nil
+}
+
+func (n *Node) endpointFromProvider(modality string, p config.ProviderConfig, via string) *llmEndpoint {
+	key, err := n.resolveAPIKey(p.APIKeyRef)
+	if err != nil || key == "" {
+		n.log.Warn("compute: "+modality+" provider key not resolvable; skipping",
+			"label", p.Label, "err", err)
+		return nil
+	}
+	format := p.Format
+	if format == "" {
+		format = "openai"
+	}
+	return &llmEndpoint{
+		endpoint: p.Endpoint,
+		model:    p.Model,
+		apiKey:   key,
+		format:   format,
+		via:      via,
+	}
+}
+
+func (n *Node) resolveVisionEndpoint() *llmEndpoint {
+	return n.resolveModalityEndpoint("vision", n.cfg.Compute.Vision.Provider, compute.CapabilityVision)
+}
+
+func (n *Node) resolveAudioEndpoint() *llmEndpoint {
+	return n.resolveModalityEndpoint("audio", n.cfg.Compute.Audio.Provider,
+		compute.CapabilityAudioTranscribe, compute.CapabilityAudioMultimodal)
+}
+
+func (n *Node) resolvePDFEndpoint() *llmEndpoint {
+	return n.resolveModalityEndpoint("pdf", n.cfg.Compute.PDF.Provider, compute.CapabilityPDF)
+}
+
+// registerSessionPruneHandler wires SessionPruner into the scheduler
+// so the auto-seeded `memory:session-prune` task runs on the leader.
+// Configures the pruner from cfg.MemorySession.MaxAge before wiring
+// so operator overrides take effect.
+func (n *Node) registerSessionPruneHandler() {
+	if n.memorySvc == nil || n.scheduler == nil {
+		return
+	}
+	if maxAge := n.cfg.MemorySession.MaxAge; maxAge > 0 {
+		n.memorySvc.ConfigureSessionPruner(maxAge)
+	}
+	pruner := n.memorySvc.SessionPruner()
+	if pruner == nil {
+		return
+	}
+	_ = n.scheduler.Handlers().RegisterTask(SessionPruneHandlerRef,
+		func(ctx context.Context, _ *lobslawv1.ScheduledTaskRecord) error {
+			result, err := pruner.Run(ctx)
+			if err != nil {
+				return fmt.Errorf("session-prune: %w", err)
+			}
+			if result == nil {
+				return nil
+			}
+			n.log.Info("scheduler: session prune completed",
+				"episodic_pruned", result.EpisodicPruned,
+				"vector_pruned", result.VectorPruned,
+			)
+			return nil
+		})
+}
+
+// seedSessionPruneTask installs a recurring memory:session-prune
+// task under "lobslaw-builtin-session-prune" if not already present.
+// Default cadence: hourly. Operator opt-out via [memory.session]
+// enabled = false. Idempotent — schedule changes require deleting
+// the seeded task first (next boot re-seeds).
+func (n *Node) seedSessionPruneTask(ctx context.Context) error {
+	if n.raft == nil || n.store == nil || n.scheduler == nil || n.memorySvc == nil {
+		return nil
+	}
+	if !n.raft.IsLeader() {
+		return nil
+	}
+	if n.cfg.MemorySession.Enabled != nil && !*n.cfg.MemorySession.Enabled {
+		return nil
+	}
+	const taskID = "lobslaw-builtin-session-prune"
+	if _, err := n.store.Get(memory.BucketScheduledTasks, taskID); err == nil {
+		return nil
+	}
+	schedule := strings.TrimSpace(n.cfg.MemorySession.Schedule)
+	if schedule == "" {
+		schedule = "@hourly"
+	}
+	task := &lobslawv1.ScheduledTaskRecord{
+		Id:         taskID,
+		Name:       "memory.session-prune (builtin)",
+		Schedule:   schedule,
+		HandlerRef: SessionPruneHandlerRef,
+		Enabled:    true,
+		CreatedAt:  timestamppb.Now(),
+	}
+	entry := &lobslawv1.LogEntry{
+		Op:      lobslawv1.LogOp_LOG_OP_PUT,
+		Id:      taskID,
+		Payload: &lobslawv1.LogEntry_ScheduledTask{ScheduledTask: task},
+	}
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal session prune task: %w", err)
+	}
+	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+		return fmt.Errorf("apply session prune task: %w", err)
+	}
+	n.log.Info("memory: seeded session prune task", "id", taskID, "schedule", schedule)
+	return nil
+}
+
 // registerAgentTurnHandlers installs the default task + commitment
 // handlers that drive compute.Agent.RunToolCallLoop with the
 // scheduler-originated request. Intended to be called once during
@@ -1619,6 +2186,131 @@ func (n *Node) registerDreamHandler() {
 func (n *Node) registerAgentTurnHandlers() {
 	_ = n.scheduler.Handlers().RegisterTask(AgentTurnHandlerRef, n.runTaskAsAgentTurn)
 	_ = n.scheduler.Handlers().RegisterCommitment(AgentTurnHandlerRef, n.runCommitmentAsAgentTurn)
+}
+
+// researchIDEntropy is a process-wide ULID monotonic source for
+// research record IDs. Each adapter call hits this.
+var researchIDEntropy = ulid.Monotonic(cryptorand.Reader, 0)
+
+// registerResearchHandler wires the research:run commitment
+// handler that drives the deep-research pipeline. Only registered
+// when the agent + memory + tool registry are all present (i.e.
+// memory-function nodes that also host compute). Worker tools come
+// from the live registry at fire time so MCP-supplied tools are
+// usable by research workers automatically.
+func (n *Node) registerResearchHandler() {
+	if n.agent == nil || n.memorySvc == nil || n.scheduler == nil || n.toolRegistry == nil {
+		return
+	}
+	_ = n.scheduler.Handlers().RegisterCommitment(compute.ResearchHandlerRef, n.runResearchCommitment)
+}
+
+// runResearchCommitment unpacks the commitment params + dispatches
+// to the research.Coordinator. Tool list captured at fire time so
+// any MCP tools registered after boot are picked up.
+func (n *Node) runResearchCommitment(ctx context.Context, c *lobslawv1.AgentCommitment) error {
+	question := c.Params["question"]
+	if question == "" {
+		return fmt.Errorf("research: commitment %q missing question", c.Id)
+	}
+	depth := 3
+	if d := c.Params["depth"]; d != "" {
+		if n, err := strconv.Atoi(d); err == nil {
+			depth = n
+		}
+	}
+	tools := buildResearchToolList(n.toolRegistry)
+	coord := research.NewCoordinator(research.Config{
+		Agent:       n.agent,
+		Memory:      &researchMemoryAdapter{svc: n.memorySvc},
+		Notify:      &researchNotifyAdapter{tg: n.telegramHandler, log: n.log},
+		WorkerTools: tools,
+		Logger:      n.log,
+	})
+	_, err := coord.Run(ctx, research.Request{
+		TaskID:            c.Id,
+		Question:          question,
+		Depth:             depth,
+		OriginatorChannel: c.Params["originator_channel"],
+		OriginatorChatID:  c.Params["originator_chat_id"],
+		Claims:            schedulerClaims(),
+	})
+	return err
+}
+
+// buildResearchToolList scopes the tool list to read-oriented
+// builtins + every MCP tool. Excludes write_file/edit_file/
+// shell_command — research workers should fetch + summarise, not
+// mutate the workspace. Future: an explicit `[research] allow_tools`
+// config to override this.
+func buildResearchToolList(reg *compute.Registry) []compute.Tool {
+	allowed := map[string]bool{
+		"web_search":       true,
+		"fetch_url":        true,
+		"memory_search":    true,
+		"memory_write":     true,
+		"list_providers":   true,
+		"council_review":   true,
+	}
+	defs := reg.List()
+	out := make([]compute.Tool, 0, len(defs))
+	for _, d := range defs {
+		// Allow all MCP-namespaced tools (have a dot in the name).
+		if strings.Contains(d.Name, ".") || allowed[d.Name] {
+			out = append(out, compute.Tool{
+				Name:        d.Name,
+				Description: d.Description,
+				Parameters:  d.ParametersSchema,
+			})
+		}
+	}
+	return out
+}
+
+// researchMemoryAdapter satisfies research.MemoryWriter using the
+// node's memory.Service. Records get a fresh ULID + episodic
+// retention; tags flow through verbatim.
+type researchMemoryAdapter struct{ svc *memory.Service }
+
+func (a *researchMemoryAdapter) WriteEpisodic(ctx context.Context, content string, tags []string) (string, error) {
+	id := "research-" + ulid.MustNew(ulid.Now(), researchIDEntropy).String()
+	rec := &lobslawv1.EpisodicRecord{
+		Id:         id,
+		Event:      "research-finding",
+		Context:    content,
+		Tags:       tags,
+		Importance: 7, // research output ranks above default-5
+	}
+	resp, err := a.svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec})
+	if err != nil {
+		return "", err
+	}
+	return resp.Id, nil
+}
+
+// researchNotifyAdapter satisfies research.Notifier. Today only
+// Telegram is wired; REST/webhook notification follow when those
+// channels gain proactive-message helpers.
+type researchNotifyAdapter struct {
+	tg  *gateway.TelegramHandler
+	log *slog.Logger
+}
+
+func (a *researchNotifyAdapter) Notify(_ context.Context, channel, channelID, body string) error {
+	if channel != "telegram" || a.tg == nil || channelID == "" {
+		a.log.Warn("research: notification skipped (channel unsupported / not wired)",
+			"channel", channel, "channel_id_set", channelID != "")
+		return nil
+	}
+	chatID, err := strconv.ParseInt(channelID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid telegram chat_id %q: %w", channelID, err)
+	}
+	return a.tg.Send(chatID, body)
+}
+
+func schedulerClaims() *types.Claims {
+	return &types.Claims{UserID: "scheduler", Scope: "default"}
 }
 
 // runTaskAsAgentTurn dispatches a scheduled task's Params["prompt"]
@@ -1811,7 +2503,7 @@ func (n *Node) wireGateway() error {
 					n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
 				}
 			}
-			n.log.Info("compute: notify_telegram registered")
+			n.log.Debug("compute: notify_telegram registered")
 		}
 	}
 
@@ -1897,6 +2589,16 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		return nil, fmt.Errorf("user_scopes: %w", err)
 	}
 
+	// Leader-pinned long-poll: only the raft leader polls so multi-
+	// node deployments don't fight over the bot token (Telegram only
+	// delivers to one long-poller). Nil gate when raft isn't local
+	// (gateway-only nodes) → today's behaviour, operator must ensure
+	// only one such node runs the bot.
+	var gate singleton.Gate
+	if n.leaderGate != nil && mode == gateway.TelegramModePoll {
+		gate = n.leaderGate
+	}
+
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
 		BotToken:         botToken,
 		Mode:             mode,
@@ -1911,6 +2613,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		HardTimeout:      n.cfg.Gateway.HardTimeout,
 		Soul:             n.soulProvider,
 		Logger:           n.log,
+		Gate:             gate,
 	}, n.agent)
 }
 
@@ -1981,7 +2684,7 @@ func (n *Node) registerMCPToolsWithCompute() {
 						"name", td.Name, "err", err)
 				}
 			}
-			n.log.Info("compute: mcp_list + mcp_add + mcp_remove registered")
+			n.log.Debug("compute: mcp_list + mcp_add + mcp_remove registered")
 		}
 	}
 }
@@ -1989,7 +2692,8 @@ func (n *Node) registerMCPToolsWithCompute() {
 func (n *Node) startMCPFromConfig(ctx context.Context) error {
 	if n.mcpLoader == nil {
 		n.mcpLoader = mcp.NewLoader(mcp.LoaderConfig{
-			Logger: n.log,
+			Logger:         n.log,
+			SecretResolver: config.ResolveSecret,
 		})
 	}
 	servers := make(map[string]mcp.ServerConfig, len(n.cfg.MCP.Servers))
@@ -2000,6 +2704,7 @@ func (n *Node) startMCPFromConfig(ctx context.Context) error {
 			Env:       s.Env,
 			SecretEnv: s.SecretEnv,
 			Disabled:  s.Disabled,
+			Install:   s.Install,
 		}
 	}
 	return n.mcpLoader.StartDirect(ctx, servers)

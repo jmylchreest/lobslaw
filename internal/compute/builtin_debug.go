@@ -24,6 +24,7 @@ type DebugInspector interface {
 	DebugProviders() []map[string]any
 	DebugVersion() string
 	DebugSandbox() map[string]any
+	DebugMCP() map[string]any
 }
 
 // RegisterDebugBuiltins installs debug_* builtins. Nil inspector
@@ -67,6 +68,9 @@ func RegisterDebugBuiltins(b *Builtins, insp DebugInspector) error {
 	if err := b.Register("debug_sandbox", wrapDebug(func() any { return insp.DebugSandbox() })); err != nil {
 		return err
 	}
+	if err := b.Register("debug_mcp", wrapDebug(func() any { return insp.DebugMCP() })); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -95,6 +99,7 @@ func DebugToolDefs() []*types.ToolDef {
 		mk("debug_providers", "List configured LLM providers with label, model, endpoint (not the API key). Shows which role each serves."),
 		mk("debug_version", "Return node_id + enabled functions. Takes no arguments."),
 		mk("debug_sandbox", "Return kernel sandbox capabilities: whether landlock (filesystem LSM), seccomp (syscall filter), PR_SET_NO_NEW_PRIVS, and cgroup v2 are available on this host, plus whether the lobslaw daemon itself is running under a seccomp filter. Use when the operator asks 'is the sandbox active?' or wants to verify tool isolation. Takes no arguments. Present the booleans as a markdown table; call out sandbox_mode ('enforces-tools' vs 'none') prominently."),
+		mk("debug_mcp", "Return live MCP registry state: per-server command/args/install spec/tool count + the full tool list under each server (qualified name + raw name + risk tier). Use when diagnosing 'why isn't tool X available' or 'did this server come up cleanly'. Complements mcp_list (which is operator-facing and doesn't expose tool names) by giving the agent its own view of what's installed."),
 	}
 }
 

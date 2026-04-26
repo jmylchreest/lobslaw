@@ -9,8 +9,9 @@ import (
 	"testing"
 )
 
-// TestDispatchClusterRecognition checks dispatchCluster routes by the
-// first two args without consuming the main flag set.
+// TestDispatchClusterRecognition checks dispatchCluster falls through
+// to the main agent when no `cluster` token appears among the
+// positionals (after global flags have been skipped).
 func TestDispatchClusterRecognition(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -19,19 +20,47 @@ func TestDispatchClusterRecognition(t *testing.T) {
 	}{
 		{nil, false},
 		{[]string{}, false},
-		{[]string{"cluster"}, false},              // no subcommand
 		{[]string{"--config", "foo.toml"}, false}, // main-agent args
 		{[]string{"--all"}, false},
+		// `cluster` as the first positional WOULD dispatch and os.Exit
+		// (no sub-subcommand) — covered indirectly by TestBuildAndRoundTrip.
 	}
 	for _, tc := range cases {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			t.Parallel()
-			// Only verify negatives here — positive cases would call
-			// os.Exit via the subcommand handlers. Positive paths are
-			// covered by TestBuildAndRoundTrip below.
 			got := dispatchCluster(tc.args)
 			if got != tc.expected {
 				t.Errorf("dispatchCluster(%v) = %v, want %v", tc.args, got, tc.expected)
+			}
+		})
+	}
+}
+
+// TestFindSubcmdSkipsGlobalFlags is the unit-level coverage for the
+// new flag-aware dispatch — `lobslaw --config X cluster sign-node`
+// should locate `cluster` past `--config X`.
+func TestFindSubcmdSkipsGlobalFlags(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{"empty", nil, -1},
+		{"plain", []string{"cluster", "sign-node"}, 0},
+		{"after value flag (separate)", []string{"--config", "foo.toml", "cluster", "sign-node"}, 2},
+		{"after value flag (equals)", []string{"--config=foo.toml", "cluster"}, 1},
+		{"after bool flag", []string{"--all", "cluster"}, 1},
+		{"after double-dash terminator", []string{"--config", "foo.toml", "--", "cluster"}, 3},
+		{"first positional isn't subcommand", []string{"--config", "foo.toml", "other"}, -1},
+		{"value flag sits between two positionals", []string{"--log-level", "debug", "cluster"}, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := findSubcmd(tc.args, "cluster")
+			if got != tc.want {
+				t.Errorf("findSubcmd(%v, cluster) = %d, want %d", tc.args, got, tc.want)
 			}
 		})
 	}
