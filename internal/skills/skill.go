@@ -40,9 +40,22 @@ const (
 // StorageAccess declares one label the skill requires access to.
 // Raw paths are never permitted — operators wire a storage mount
 // pointing at the desired path first.
+//
+// Subpath narrows the access to a sub-directory under the mount
+// root. This is what lets multiple clawhub-installed skills share
+// one operator-declared mount: each skill claims a different
+// subpath under the shared "skill-tools" + "skill-data" labels.
+// Empty Subpath grants the full mount root (legacy behaviour).
+//
+// Example manifest fragment:
+//
+//	storage:
+//	  - { label: skill-tools, subpath: gws-workspace, mode: read }
+//	  - { label: skill-data,  subpath: gws-workspace, mode: write }
 type StorageAccess struct {
-	Label string      `yaml:"label"`
-	Mode  StorageMode `yaml:"mode,omitempty"` // default: read
+	Label   string      `yaml:"label"`
+	Subpath string      `yaml:"subpath,omitempty"`
+	Mode    StorageMode `yaml:"mode,omitempty"` // default: read
 }
 
 // Manifest is the on-disk shape of skills/<name>/manifest.yaml.
@@ -203,6 +216,16 @@ func validateManifest(m *Manifest, dir string) error {
 		}
 		if m.Storage[i].Mode != StorageRead && m.Storage[i].Mode != StorageWrite {
 			return fmt.Errorf("manifest.storage[%d].mode %q must be read|write", i, m.Storage[i].Mode)
+		}
+		if sp := m.Storage[i].Subpath; sp != "" {
+			// Subpath is appended under the mount root by the
+			// resolver; reject traversal attempts at parse time so
+			// a malicious manifest can't smuggle "../etc" past
+			// the resolver's check via odd encodings.
+			cleaned := filepath.Clean(sp)
+			if cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "/../") || filepath.IsAbs(cleaned) {
+				return fmt.Errorf("manifest.storage[%d].subpath %q must be relative and not escape the mount root", i, sp)
+			}
 		}
 	}
 	return nil

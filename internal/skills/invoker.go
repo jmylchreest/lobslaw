@@ -295,6 +295,12 @@ func buildPolicy(skill *Skill, runtimePath string, mgr *storage.Manager, mounts 
 	// requested mode is intersected with the mount's actual rwx
 	// ceiling — a skill claiming write against an "rx"-only mount
 	// fails at policy build time, not silently downgraded.
+	//
+	// Subpath narrows the access: a skill that declares
+	// {label: skill-tools, subpath: gws-workspace} gets Landlock
+	// access to <skill-tools-root>/gws-workspace ONLY, not the
+	// whole shared mount. This is what lets multiple clawhub-
+	// installed skills share one operator-declared mount root.
 	for _, s := range skill.Manifest.Storage {
 		if mgr == nil {
 			return nil, fmt.Errorf("skills: skill %q declares storage access but no Manager configured", skill.Name())
@@ -322,6 +328,13 @@ func buildPolicy(skill *Skill, runtimePath string, mgr *storage.Manager, mounts 
 			}
 			want.Path = root
 			want.Exec = x // inherit exec from mount when granted; manifest doesn't yet model exec separately
+		}
+		// Apply subpath AFTER mode/path resolution so the final
+		// Landlock allowlist points at the narrowed directory.
+		// Manifest validation already rejected ".." so the join
+		// can't escape the mount root.
+		if s.Subpath != "" {
+			want.Path = filepath.Join(want.Path, filepath.Clean(s.Subpath))
 		}
 		policy.Mounts = append(policy.Mounts, want)
 	}

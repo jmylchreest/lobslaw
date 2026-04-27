@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -372,12 +374,75 @@ func TestPolicyRejectsWriteOnReadOnlyMount(t *testing.T) {
 	}
 	resolver := &fakeMountResolver{
 		known: map[string]struct {
-			root             string
-			r, w, x          bool
+			root    string
+			r, w, x bool
 		}{"config": {root: "/etc/lobslaw", r: true}},
 	}
 	if _, err := buildPolicy(skill, "/bin/bash", mgr, resolver); err == nil {
 		t.Fatal("write on read-only mount should fail policy build")
+	}
+}
+
+// TestPolicyStorageSubpathNarrowsLandlock — a skill declaring a
+// subpath under a shared mount must end up with Landlock pointed at
+// the narrowed directory, not the whole mount root. This is what
+// lets multiple clawhub-installed skills co-exist under one
+// operator-declared "skill-tools" / "skill-data" mount.
+func TestPolicyStorageSubpathNarrowsLandlock(t *testing.T) {
+	t.Parallel()
+	mgr := storage.NewManager()
+	_ = mgr.Register(context.Background(), &fakeStorageMount{label: "skill-tools", path: "/srv/skills"})
+
+	skill := &Skill{
+		Manifest: Manifest{
+			Name: "gws-workspace", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h",
+			Storage: []StorageAccess{
+				{Label: "skill-tools", Subpath: "gws-workspace", Mode: StorageRead},
+			},
+		},
+		ManifestDir: "/mnt/skills/gws-workspace",
+		HandlerPath: "/mnt/skills/gws-workspace/h",
+	}
+	resolver := &fakeMountResolver{
+		known: map[string]struct {
+			root    string
+			r, w, x bool
+		}{"skill-tools": {root: "/srv/skills", r: true, x: true}},
+	}
+	p, err := buildPolicy(skill, "/bin/bash", mgr, resolver)
+	if err != nil {
+		t.Fatalf("buildPolicy: %v", err)
+	}
+	want := "/srv/skills/gws-workspace"
+	got := findMount(p.Mounts, want)
+	if got == nil {
+		t.Fatalf("expected mount at %q in policy: %+v", want, p.Mounts)
+	}
+	// Sibling skill must NOT see the broader root in its allowlist.
+	if findMount(p.Mounts, "/srv/skills") != nil {
+		t.Errorf("skill should NOT see the unsubpath'd root /srv/skills")
+	}
+}
+
+// TestSubpathRejectsTraversal — manifest validation must catch
+// "../etc" before the resolver ever sees it.
+func TestSubpathRejectsTraversal(t *testing.T) {
+	t.Parallel()
+	cases := []string{"../etc", "/abs/path", "foo/../../etc", ".."}
+	for _, sp := range cases {
+		t.Run(sp, func(t *testing.T) {
+			m := Manifest{
+				Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h.sh",
+				Storage: []StorageAccess{{Label: "skill-tools", Subpath: sp, Mode: StorageRead}},
+			}
+			tmp := t.TempDir()
+			if err := os.WriteFile(filepath.Join(tmp, "h.sh"), []byte("#!/bin/sh"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := validateManifest(&m, tmp); err == nil {
+				t.Errorf("subpath %q should be rejected by manifest validation", sp)
+			}
+		})
 	}
 }
 
