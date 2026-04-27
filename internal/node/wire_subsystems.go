@@ -148,6 +148,7 @@ func (n *Node) wireSkills() error {
 		Registry: n.skillRegistry,
 		Storage:  n.storageMgr,
 		Mounts:   n.mountResolver,
+		ProxyURL: n.subprocessProxyURL,
 	})
 	if err != nil {
 		return fmt.Errorf("skills invoker: %w", err)

@@ -23,6 +23,7 @@ import (
 type Loader struct {
 	secretResolver SecretResolver
 	clientInfo     ClientInfo
+	proxyURL       func(role string) string
 	log            *slog.Logger
 
 	mu      sync.Mutex
@@ -37,6 +38,13 @@ type LoaderConfig struct {
 	SecretResolver SecretResolver
 	ClientInfo     ClientInfo
 	Logger         *slog.Logger
+
+	// ProxyURL returns the HTTPS_PROXY URL for a given role
+	// ("mcp/<server-name>"). Wired to the egress provider's
+	// SubprocessProxyURL in production. Nil → no proxy injected
+	// (subprocess egresses directly; only safe when smokescreen
+	// isn't running, e.g. tests).
+	ProxyURL func(role string) string
 }
 
 // NewLoader constructs an empty loader. No servers are spawned
@@ -49,9 +57,32 @@ func NewLoader(cfg LoaderConfig) *Loader {
 	return &Loader{
 		secretResolver: cfg.SecretResolver,
 		clientInfo:     cfg.ClientInfo,
+		proxyURL:       cfg.ProxyURL,
 		log:            logger,
 		servers:        make(map[string]*managedServer),
 		tools:          make(map[string]*managedTool),
+	}
+}
+
+// proxyEnv returns HTTPS_PROXY/HTTP_PROXY/NO_PROXY env entries for
+// the given server-role. Returns nil when no proxyURL function is
+// wired. Both upper- and lower-case forms emitted because different
+// HTTP libraries honour different casings.
+func (l *Loader) proxyEnv(role string) []string {
+	if l.proxyURL == nil {
+		return nil
+	}
+	url := l.proxyURL(role)
+	if url == "" {
+		return nil
+	}
+	return []string{
+		"HTTPS_PROXY=" + url,
+		"https_proxy=" + url,
+		"HTTP_PROXY=" + url,
+		"http_proxy=" + url,
+		"NO_PROXY=",
+		"no_proxy=",
 	}
 }
 
@@ -146,6 +177,7 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 		}
 	}
 
+	env = append(env, l.proxyEnv("mcp/"+name)...)
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 	if len(env) > 0 {
 		cmd.Env = env
@@ -208,6 +240,7 @@ func (l *Loader) runInstall(ctx context.Context, name string, install []string, 
 	installCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	env = append(env, l.proxyEnv("mcp/"+name)...)
 	cmd := exec.CommandContext(installCtx, install[0], install[1:]...)
 	if len(env) > 0 {
 		cmd.Env = env

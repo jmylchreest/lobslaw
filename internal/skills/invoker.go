@@ -107,6 +107,14 @@ type Invoker struct {
 	mounts  MountResolver
 	runner  SubprocessRunner
 
+	// proxyURL, when non-nil, returns the HTTPS_PROXY URL for a
+	// per-skill role. The invoker injects HTTPS_PROXY + HTTP_PROXY
+	// + NO_PROXY into the subprocess env so honest skills (curl,
+	// python requests, gws-cli, etc.) route through the egress
+	// proxy automatically. Nil → no proxy env injected (legacy
+	// path; only safe in test/dev where smokescreen isn't running).
+	proxyURL func(role string) string
+
 	defaultTimeout time.Duration
 }
 
@@ -120,6 +128,12 @@ type InvokerConfig struct {
 	Mounts         MountResolver    // optional; required when manifest declares storage
 	Runner         SubprocessRunner // default: CmdBuilder{}
 	DefaultTimeout time.Duration    // default: 30s
+
+	// ProxyURL returns the HTTPS_PROXY URL the subprocess should use
+	// for outbound HTTP. Wired to the egress provider's
+	// SubprocessProxyURL("skill/<name>") in production. Nil disables
+	// proxy injection — only safe when no smokescreen is running.
+	ProxyURL func(role string) string
 }
 
 // NewInvoker constructs an invoker.
@@ -138,6 +152,7 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 		storage:        cfg.Storage,
 		mounts:         cfg.Mounts,
 		runner:         cfg.Runner,
+		proxyURL:       cfg.ProxyURL,
 		defaultTimeout: cfg.DefaultTimeout,
 	}, nil
 }
@@ -167,6 +182,23 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		return nil, err
 	}
 	env := buildEnv(skill, i.storage)
+	if i.proxyURL != nil {
+		role := "skill/" + skill.Name()
+		proxy := i.proxyURL(role)
+		// Both lower-case and upper-case forms — different HTTP
+		// libraries honour different casings (curl reads lower,
+		// Go reads either, Python's requests reads upper). NO_PROXY
+		// is empty so the subprocess can't bypass the proxy by
+		// hardcoding a no-proxy hostname.
+		env = append(env,
+			"HTTPS_PROXY="+proxy,
+			"https_proxy="+proxy,
+			"HTTP_PROXY="+proxy,
+			"http_proxy="+proxy,
+			"NO_PROXY=",
+			"no_proxy=",
+		)
+	}
 	policy, err := buildPolicy(skill, argv[0], i.storage, i.mounts)
 	if err != nil {
 		return nil, err

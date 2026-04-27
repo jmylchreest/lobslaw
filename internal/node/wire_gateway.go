@@ -263,6 +263,7 @@ func (n *Node) startMCPFromConfig(ctx context.Context) error {
 		n.mcpLoader = mcp.NewLoader(mcp.LoaderConfig{
 			Logger:         n.log,
 			SecretResolver: config.ResolveSecret,
+			ProxyURL:       n.subprocessProxyURL,
 		})
 	}
 	servers := make(map[string]mcp.ServerConfig, len(n.cfg.MCP.Servers))

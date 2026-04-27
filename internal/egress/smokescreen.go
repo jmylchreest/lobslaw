@@ -2,12 +2,14 @@ package egress
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -221,11 +223,26 @@ func (p *SmokescreenProvider) Stop(ctx context.Context) error {
 	return p.server.Shutdown(ctx)
 }
 
-// ProxyURL returns the URL subprocesses should use as HTTPS_PROXY.
-// Format: "http://127.0.0.1:<port>". When Phase E.5 lands UDS, the
-// scheme becomes "unix:///run/lobslaw/egress.sock" and call-sites
-// that materialise this for child processes need to translate.
+// ProxyURL returns the URL subprocesses should use as HTTPS_PROXY
+// WITHOUT a role embedded — for callers that handle role identity
+// some other way. Most spawned subprocesses should use
+// SubprocessProxyURL(role) instead so smokescreen's ACL receives a
+// role identifier from the Proxy-Authorization header.
 func (p *SmokescreenProvider) ProxyURL() *url.URL { return p.proxyURL }
+
+// SubprocessProxyURL returns the URL form a spawned subprocess
+// should set as HTTPS_PROXY. Encodes the role into the user-info:
+// "http://skill%2Fgws-workspace:_@127.0.0.1:<port>". The subprocess's
+// HTTP library puts that into Proxy-Authorization Basic, smokescreen
+// extracts the role, and the right per-role ACL applies.
+//
+// The password field is the literal "_" — smokescreen's role
+// extraction ignores it. Subprocesses that examine the env var see
+// a non-secret string (the role isn't a secret).
+func (p *SmokescreenProvider) SubprocessProxyURL(role string) string {
+	encoded := url.QueryEscape(role)
+	return fmt.Sprintf("http://%s:_@%s", encoded, p.bindAddr)
+}
 
 // buildClient constructs the per-role http.Client. The Transport
 // uses ProxyConnectHeader to inject the role header into the CONNECT
@@ -271,15 +288,71 @@ type smokeClient struct {
 func (c *smokeClient) HTTPClient() *http.Client { return c.client }
 func (c *smokeClient) Role() string             { return c.role }
 
-// roleFromRequest extracts the lobslaw role from the X-Lobslaw-Role
-// header. Returns smokescreen.MissingRoleError when the header is
-// absent — smokescreen treats that as a hard deny.
+// roleFromRequest extracts the lobslaw role from the request, using
+// two paths:
+//
+//  1. X-Lobslaw-Role header — set by in-process Go clients via the
+//     roleInjector RoundTripper + ProxyConnectHeader.
+//
+//  2. Proxy-Authorization Basic — username field. Subprocess HTTP
+//     libraries (curl, python requests, gws-cli, etc.) all set this
+//     automatically when HTTPS_PROXY is configured with embedded
+//     user-info: HTTPS_PROXY=http://role@127.0.0.1:port. The role
+//     appears as the basic-auth username; we ignore the password
+//     field (subprocesses can put anything there). This is how the
+//     egress proxy authenticates spawned skills + MCP servers + any
+//     binary the operator wires through HTTPS_PROXY env.
+//
+// Returns smokescreen.MissingRoleError when neither path yields a
+// role — smokescreen treats that as a hard deny.
 func roleFromRequest(req *http.Request) (string, error) {
-	role := req.Header.Get(roleHeader)
-	if role == "" {
-		return "", smokescreen.MissingRoleError("no " + roleHeader + " header")
+	if role := req.Header.Get(roleHeader); role != "" {
+		return role, nil
 	}
-	return role, nil
+	if user, _, ok := proxyBasicAuth(req); ok && user != "" {
+		// Subprocesses URL-escape slashes in the role so the proxy
+		// URL is valid; reverse that here so smokescreen sees the
+		// canonical "skill/gws-workspace" form against its ACL.
+		if decoded, err := decodeRole(user); err == nil {
+			return decoded, nil
+		}
+		return user, nil
+	}
+	return "", smokescreen.MissingRoleError("no " + roleHeader + " header or Proxy-Authorization role")
+}
+
+// proxyBasicAuth extracts the basic-auth user/pass from a CONNECT
+// or HTTP-proxy request. Mirrors http.Request.BasicAuth except it
+// reads Proxy-Authorization rather than Authorization (proxy auth
+// uses a different header per RFC 7235).
+func proxyBasicAuth(req *http.Request) (string, string, bool) {
+	auth := req.Header.Get("Proxy-Authorization")
+	if auth == "" {
+		return "", "", false
+	}
+	const prefix = "Basic "
+	if len(auth) < len(prefix) || !strings.EqualFold(auth[:len(prefix)], prefix) {
+		return "", "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(auth[len(prefix):])
+	if err != nil {
+		return "", "", false
+	}
+	cs := string(decoded)
+	idx := strings.IndexByte(cs, ':')
+	if idx < 0 {
+		return cs, "", true
+	}
+	return cs[:idx], cs[idx+1:], true
+}
+
+// decodeRole reverses the URL-escaping subprocesses apply to the
+// role identifier so smokescreen sees the canonical slash-separated
+// form. Round-trips skill/gws-workspace ↔ skill%2Fgws-workspace.
+func decodeRole(s string) (string, error) {
+	// We only need to decode %xx escapes; queryunescape is cheap and
+	// matches what url.UserPassword writes on the egress side.
+	return url.QueryUnescape(s)
 }
 
 // buildSmokescreenConfig assembles the smokescreen.Config from our

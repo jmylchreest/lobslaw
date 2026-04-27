@@ -37,6 +37,18 @@ func (n *Node) wireEgress() error {
 	return nil
 }
 
+// subprocessProxyURL returns the HTTPS_PROXY URL a skill or other
+// spawned subprocess should use, encoded with the per-role identity
+// so smokescreen sees the right ACL. Returns "" when no provider
+// is wired (e.g. boot-time noop) — callers treat empty as "no
+// proxy" and the subprocess egresses directly (only safe in tests).
+func (n *Node) subprocessProxyURL(role string) string {
+	if n.egressProvider == nil {
+		return ""
+	}
+	return n.egressProvider.SubprocessProxyURL(role)
+}
+
 // buildEgressInputs aggregates the live config + skill registry
 // into the ACL builder's input shape. Called at boot and on every
 // config hot-reload (Phase E.6 wires the reload trigger).
