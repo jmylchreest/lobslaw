@@ -58,10 +58,16 @@ type Raft interface {
 	FSM() *memory.FSM
 	// IsLeader reports whether this node holds raft leadership.
 	// Scheduler firing is a leader-only workload — followers don't
-	// scan, don't claim, don't fire. Without this gate, followers
-	// burn CPU + spam ErrNotLeader warns trying to claim past-due
-	// records that the leader already won.
+	// scan, don't claim, don't fire.
 	IsLeader() bool
+	// Barrier appends a no-op log entry and blocks until applied.
+	// Used after each leadership transition to ensure the FSM has
+	// fully caught up before fireDue scans — without this guarantee,
+	// the scheduler reads mid-replay state (e.g. a CLAIM that put
+	// the record in pending+claimed-by-X but before the matching
+	// mark-done) and re-fires already-completed commitments. That
+	// race produced the "commitment fires on every restart" bug.
+	Barrier(timeout time.Duration) error
 }
 
 // Scheduler owns the sleep-until-due loop, the HandlerRegistry, and
@@ -80,6 +86,15 @@ type Scheduler struct {
 	// wasteful.
 	startedMu sync.Mutex
 	started   bool
+
+	// barrierMu guards barrierDone — flipped true after the first
+	// successful Barrier() following each leadership transition.
+	// Reset to false when leadership is lost or we observe we're
+	// no longer the leader. Used to gate fireDue: don't fire until
+	// the post-election barrier has been applied (which guarantees
+	// FSM has caught up to the leader's view).
+	barrierMu   sync.Mutex
+	barrierDone bool
 }
 
 // NewScheduler constructs a scheduler. Fails when required config
@@ -183,6 +198,39 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// ensureBarrierDone calls raft.Barrier once per leadership term to
+// guarantee the FSM has caught up to this leader's view. Returns
+// true once the barrier has succeeded (now safe to scan + fire).
+// Returns false on barrier failure (timeout, leadership loss) — we
+// retry on the next tick. The Barrier blocks for up to 5s; that's
+// our tolerance for boot-time replay completion.
+func (s *Scheduler) ensureBarrierDone() bool {
+	s.barrierMu.Lock()
+	if s.barrierDone {
+		s.barrierMu.Unlock()
+		return true
+	}
+	s.barrierMu.Unlock()
+
+	if err := s.raft.Barrier(5 * time.Second); err != nil {
+		s.log.Warn("scheduler: barrier failed; deferring fire to next tick",
+			"err", err)
+		return false
+	}
+
+	s.barrierMu.Lock()
+	s.barrierDone = true
+	s.barrierMu.Unlock()
+	s.log.Info("scheduler: barrier complete; FSM caught up — fire enabled")
+	return true
+}
+
+func (s *Scheduler) resetBarrierDone() {
+	s.barrierMu.Lock()
+	s.barrierDone = false
+	s.barrierMu.Unlock()
 }
 
 // computeSleepDuration returns how long to sleep until either the
@@ -291,8 +339,23 @@ func (s *Scheduler) taskNextRun(t *lobslawv1.ScheduledTaskRecord, now time.Time)
 // returns 0 because they're still pending in the local FSM view;
 // fireDue calls applyClaim which gets ErrNotLeader; tight loop
 // burns CPU + log lines).
+//
+// FSM-caught-up gate: also returns if the FSM hasn't applied every
+// committed log entry yet. hashicorp/raft can elect this node
+// leader the moment its log is up to date, but FSM.Apply runs
+// asynchronously after that — so a scheduler fire that happens
+// during the "FSM still catching up" window reads intermediate
+// replay state (e.g. a CLAIM that put the record in
+// pending+claimed-by-X but the matching mark-done isn't applied
+// yet) and re-fires what's actually a completed commitment. That
+// race produced the user-observed "commitment fires on every
+// restart" bug.
 func (s *Scheduler) fireDue(ctx context.Context, now time.Time) {
 	if !s.raft.IsLeader() {
+		s.resetBarrierDone()
+		return
+	}
+	if !s.ensureBarrierDone() {
 		return
 	}
 	tasks, err := s.listScheduledTasks()
@@ -325,6 +388,13 @@ func (s *Scheduler) fireDue(ctx context.Context, now time.Time) {
 		return
 	}
 	for _, c := range commits {
+		due := time.Time{}
+		if c.DueAt != nil {
+			due = c.DueAt.AsTime()
+		}
+		s.log.Debug("scheduler: scan commitment",
+			"id", c.Id, "status", c.Status, "due_at", due,
+			"claimed_by", c.ClaimedBy, "now", now)
 		if c.Status != string(statusPending) {
 			continue
 		}
@@ -334,6 +404,9 @@ func (s *Scheduler) fireDue(ctx context.Context, now time.Time) {
 		if c.DueAt == nil || c.DueAt.AsTime().After(now) {
 			continue
 		}
+		s.log.Info("scheduler: firing commitment",
+			"id", c.Id, "handler_ref", c.HandlerRef,
+			"due_at", due, "lateness", now.Sub(due))
 		s.tryFireCommitment(ctx, c, now)
 	}
 }
@@ -342,8 +415,14 @@ func (s *Scheduler) fireDue(ctx context.Context, now time.Time) {
 // back the updated record (NextRun advanced, LastRun set, claim
 // cleared for the next tick). Any step failing aborts the firing;
 // future ticks retry.
+//
+// ExpectedClaimer is the EXACT stored ClaimedBy value (from the
+// scanned record), not the expiry-aware "" reinterpretation. The
+// FSM does deterministic CAS — expiry handling lives here at the
+// scan layer (extractClaimer above filters out expired holders so
+// fireDue chooses to attempt the claim) but the on-the-wire CAS
+// must match the actual stored value or the entry won't replay.
 func (s *Scheduler) tryFireTask(ctx context.Context, t *lobslawv1.ScheduledTaskRecord, now time.Time) {
-	prev := extractClaimer(t.ClaimedBy, t.ClaimExpiresAt, now)
 	updated := proto.Clone(t).(*lobslawv1.ScheduledTaskRecord)
 	updated.ClaimedBy = s.cfg.NodeID
 	updated.ClaimExpiresAt = timestamppb.New(now.Add(s.cfg.ClaimTTL))
@@ -354,7 +433,7 @@ func (s *Scheduler) tryFireTask(ctx context.Context, t *lobslawv1.ScheduledTaskR
 		Payload: &lobslawv1.LogEntry_ScheduledTask{
 			ScheduledTask: updated,
 		},
-		ExpectedClaimer: prev,
+		ExpectedClaimer: t.ClaimedBy,
 	}); err != nil {
 		if errors.Is(err, memory.ErrClaimConflict) {
 			s.log.Debug("scheduler: task claimed by another node", "task_id", t.Id)
@@ -437,8 +516,11 @@ func (s *Scheduler) releaseTaskClaim(ctx context.Context, t *lobslawv1.Scheduled
 
 // tryFireCommitment mirrors tryFireTask for one-shot commitments.
 // On success the handler runs + commitment is marked Done.
+//
+// ExpectedClaimer is c.ClaimedBy (exact value), not the expiry-
+// aware reinterpretation. See tryFireTask for the rationale —
+// FSM CAS must be deterministic for replay correctness.
 func (s *Scheduler) tryFireCommitment(ctx context.Context, c *lobslawv1.AgentCommitment, now time.Time) {
-	prev := extractClaimer(c.ClaimedBy, c.ClaimExpiresAt, now)
 	updated := proto.Clone(c).(*lobslawv1.AgentCommitment)
 	updated.ClaimedBy = s.cfg.NodeID
 	updated.ClaimExpiresAt = timestamppb.New(now.Add(s.cfg.ClaimTTL))
@@ -447,7 +529,7 @@ func (s *Scheduler) tryFireCommitment(ctx context.Context, c *lobslawv1.AgentCom
 		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
 		Id:              c.Id,
 		Payload:         &lobslawv1.LogEntry_Commitment{Commitment: updated},
-		ExpectedClaimer: prev,
+		ExpectedClaimer: c.ClaimedBy,
 	}); err != nil {
 		if errors.Is(err, memory.ErrClaimConflict) {
 			return

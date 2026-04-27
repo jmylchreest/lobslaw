@@ -807,6 +807,13 @@ func isRetryableProviderError(err error, ctx context.Context) bool {
 		"rate limit", "429", "500", "502", "503", "504",
 		"connection refused", "timeout", "deadline",
 		"minimax status 1002", // MiniMax RPM limit
+		// OpenRouter returns 404 with "no endpoints available
+		// matching your guardrail restrictions and data policy"
+		// when the user's privacy settings exclude the providers
+		// that serve this model. Semantically equivalent to 503 —
+		// THIS endpoint can't serve THIS model right now; the
+		// backup chain may have a model with compliant providers.
+		"no endpoints available", "data policy",
 	} {
 		if strings.Contains(msg, sig) {
 			return true

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/protobuf/proto"
@@ -144,8 +143,25 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 
 // applyClaim is the CAS primitive: the write goes through only when
 // the record's current claimed_by field matches entry.ExpectedClaimer.
-// Expired claims count as unclaimed (empty) for the check, so a
-// crashed node's abandoned claim can be picked up by the next tick.
+//
+// **CRITICAL: this MUST be deterministic.** It runs both for live
+// raft.Apply calls (during normal operation) AND during raft log
+// replay at restart (which can happen hours/days/weeks after the
+// original entry was written). Any time-dependent logic — like
+// "an expired claim counts as unclaimed" — produces different
+// results between the original apply and the replay, silently
+// dropping writes during replay. This was the source of the
+// "commitment fires on every restart" bug: the original mark-done
+// CLAIM was applied successfully on the leader (where the prior
+// claim was still fresh), but on replay the prior claim looked
+// expired, so the CAS failed, the mark-done payload was dropped,
+// and the FSM stayed at Status=pending after every replay.
+//
+// The "claim expiry" semantics (a crashed node's abandoned record
+// becomes available to a new claimer) belong at the SCHEDULER
+// scan layer, NOT here. The scheduler's own extractClaimer in
+// internal/scheduler/scheduler.go is the right place — it runs
+// only at scan time on the leader and uses time.Now() correctly.
 //
 // Only ScheduledTaskRecord and AgentCommitment are claimable today;
 // other payload types return an error so a misrouted CLAIM can't
@@ -162,18 +178,14 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 		return fmt.Errorf("CLAIM %s: bucket does not support claim semantics", bucket)
 	}
 
-	// Read the current record. Not-found is acceptable when the
-	// caller's expected_claimer is also empty ("I expect this to be
-	// a fresh insert"); otherwise refuse.
 	raw, getErr := f.store.Get(bucket, entry.Id)
 	if getErr != nil {
 		if entry.ExpectedClaimer != "" {
 			return fmt.Errorf("CLAIM %s/%s: record missing, expected prior claimer %q",
 				bucket, entry.Id, entry.ExpectedClaimer)
 		}
-		// fall through to write as a fresh insert
 	} else {
-		currentClaimer, err := extractClaimer(bucket, raw)
+		currentClaimer, err := extractClaimerExact(bucket, raw)
 		if err != nil {
 			return fmt.Errorf("CLAIM %s/%s: inspect current: %w", bucket, entry.Id, err)
 		}
@@ -190,34 +202,22 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	return f.store.Put(bucket, entry.Id, bytes)
 }
 
-// extractClaimer pulls the current (id-active) claimed_by value out
-// of a serialized ScheduledTaskRecord or AgentCommitment. An expired
-// claim is treated as unclaimed ("") so a crashed node's abandoned
-// record naturally becomes available on the next tick.
-func extractClaimer(bucket string, raw []byte) (string, error) {
+// extractClaimerExact pulls the current claimed_by value out of a
+// serialized ScheduledTaskRecord or AgentCommitment. Returns the
+// raw value WITHOUT any expiry-based reinterpretation — see the
+// applyClaim doc for why this matters (replay determinism).
+func extractClaimerExact(bucket string, raw []byte) (string, error) {
 	switch bucket {
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
 			return "", err
 		}
-		if r.ClaimedBy == "" {
-			return "", nil
-		}
-		if r.ClaimExpiresAt != nil && r.ClaimExpiresAt.AsTime().Before(time.Now()) {
-			return "", nil
-		}
 		return r.ClaimedBy, nil
 	case BucketCommitments:
 		var r lobslawv1.AgentCommitment
 		if err := proto.Unmarshal(raw, &r); err != nil {
 			return "", err
-		}
-		if r.ClaimedBy == "" {
-			return "", nil
-		}
-		if r.ClaimExpiresAt != nil && r.ClaimExpiresAt.AsTime().Before(time.Now()) {
-			return "", nil
 		}
 		return r.ClaimedBy, nil
 	default:

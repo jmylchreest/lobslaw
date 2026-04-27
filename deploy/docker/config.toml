@@ -82,18 +82,15 @@ enabled = true
 
 # Soul self-tuning tools default-deny via the seedDefaultPolicyRules
 # layer (priority=10 deny). This rule opens them for the owner scope
-# only — strangers chatting with the bot still can't ask it to
-# rename itself or rewrite its personality. resource="soul_*" uses
-# the policy engine's prefix-glob to cover all six builtins
-# (soul_get, soul_tune, soul_fragment_{add,remove,list},
-# soul_history_rollback) with one entry.
+# only — priority 20 beats the deny seed's 10 so owner-scope agent
+# turns can mutate; strangers stay read-only.
 [[policy.rules]]
 id       = "owner-soul-tools"
 subject  = "owner"
 action   = "tool:exec"
 resource = "soul_*"
 effect   = "allow"
-priority = 5
+priority = 20
 
 [compute]
 enabled = true
@@ -112,24 +109,32 @@ enabled = true
 #   pdf                    — read_pdf
 #   embeddings             — vector embedding endpoint
 
-# Primary: Qwen 3.6 Plus via OpenRouter. Strong general-purpose model
-# with native function-calling, falls back to MiniMax-M2.7 (also on
-# OpenRouter so we stay on the same key).
+# Primary: MiniMax-M2.7 via the MiniMax Token Plan API directly.
+# api.minimax.io/v1 is the Token Plan endpoint (sk-cp-* keys) — DO
+# NOT confuse with api.minimaxi.chat/v1 which is pay-as-you-go.
+# Was qwen3.6-plus on OpenRouter but the operator's OpenRouter
+# privacy settings (https://openrouter.ai/settings/privacy) exclude
+# every endpoint that serves it, returning 404 "no endpoints
+# available matching your guardrail restrictions and data policy".
+# Once the operator opens those settings, swap priorities.
 [[compute.providers]]
-label             = "qwen3.6-plus"
-endpoint          = "https://openrouter.ai/api/v1"
-model             = "qwen/qwen3.6-plus"
-api_key_ref       = "env:LOBSLAW_OPENROUTER_API_KEY"
+label             = "minimax-m2.7"
+endpoint          = "https://api.minimax.io/v1"
+model             = "MiniMax-M2.7"
+api_key_ref       = "env:LOBSLAW_MINIMAX_API_KEY"
 trust_tier        = "private"
 capabilities      = ["chat", "function-calling"]
 priority          = 10
 auto_capabilities = true
+backup            = "qwen3.6-plus"
 
-# Fallback: MiniMax-M2.7 on OpenRouter — text-only but cheap + reliable.
+# Fallback: Qwen 3.6 Plus via OpenRouter. Currently 404s on this
+# operator's account; left here for when their privacy settings
+# allow it (or as a fallback when MiniMax has an outage).
 [[compute.providers]]
-label             = "minimax-m2.7"
+label             = "qwen3.6-plus"
 endpoint          = "https://openrouter.ai/api/v1"
-model             = "minimax/minimax-m2.7"
+model             = "qwen/qwen3.6-plus"
 api_key_ref       = "env:LOBSLAW_OPENROUTER_API_KEY"
 trust_tier        = "private"
 capabilities      = ["chat", "function-calling"]
@@ -140,7 +145,7 @@ auto_capabilities = true
 label        = "fast-vision"
 endpoint     = "https://api.minimaxi.chat/v1/chat/completions"
 model        = "abab6.5s-chat"
-api_key_ref  = "env:LOBSLAW_FAST_API_KEY"
+api_key_ref  = "env:LOBSLAW_MINIMAX_API_KEY"
 trust_tier   = "public"
 capabilities = ["vision"]
 priority     = 5
@@ -149,7 +154,7 @@ priority     = 5
 label        = "fast-audio"
 endpoint     = "https://api.minimaxi.chat/v1/audio/transcriptions"
 model        = "speech-01"
-api_key_ref  = "env:LOBSLAW_FAST_API_KEY"
+api_key_ref  = "env:LOBSLAW_MINIMAX_API_KEY"
 trust_tier   = "public"
 capabilities = ["audio-transcription"]
 priority     = 5
@@ -169,7 +174,7 @@ api_key_ref = "env:LOBSLAW_OPENROUTER_API_KEY"
 dims        = 4096
 
 [compute.roles]
-main      = "qwen3.6-plus"
+main      = "minimax-m2.7"
 preflight = "minimax-m2.7"
 reranker  = "minimax-m2.7"
 
@@ -183,7 +188,7 @@ api_key_ref = "env:LOBSLAW_EXA_API_KEY"
 # attached images even when the main model is text-only. Uses an
 # OpenAI-compatible /chat/completions multimodal call. MiniMax's
 # abab6.5s-chat accepts the same wire shape as OpenAI's vision
-# models. Reusing LOBSLAW_FAST_API_KEY since both endpoints share
+# models. Reusing LOBSLAW_MINIMAX_API_KEY since both endpoints share
 # MiniMax billing.
 # Modality blocks are no longer needed when capability tags are
 # declared above. Uncomment to pin a specific provider for a
@@ -285,7 +290,7 @@ install    = ["uv", "tool", "install", "minimax-mcp==0.0.18"]
 command    = "uvx"
 args       = ["minimax-mcp"]
 env        = { UV_TOOL_DIR = "/workspace/tools/uv-tools", UV_PYTHON_INSTALL_DIR = "/workspace/tools/uv-python", UV_CACHE_DIR = "/workspace/tools/uv-cache", MINIMAX_API_HOST = "https://api.minimaxi.chat", MINIMAX_MCP_BASE_PATH = "/workspace/minimax", MINIMAX_API_RESOURCE_MODE = "local" }
-secret_env = { MINIMAX_API_KEY = "env:LOBSLAW_FAST_API_KEY" }
+secret_env = { MINIMAX_API_KEY = "env:LOBSLAW_MINIMAX_API_KEY" }
 # Tools exposed (see github.com/MiniMax-AI/MiniMax-MCP):
 #   text_to_audio, voice_clone, voice_design, list_voices,
 #   text_to_image, generate_video, query_video_generation,

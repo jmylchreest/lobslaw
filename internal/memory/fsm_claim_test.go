@@ -109,10 +109,15 @@ func TestFSMApplyClaimRejectsMismatch(t *testing.T) {
 	}
 }
 
-// TestFSMApplyClaimExpiredCountsAsUnclaimed — a crashed node's
-// abandoned claim (past ExpiresAt) MUST be picked up by the next
-// tick. Verifies the expiry bypass in extractClaimer.
-func TestFSMApplyClaimExpiredCountsAsUnclaimed(t *testing.T) {
+// TestFSMApplyClaimExactCASIgnoresExpiry — the FSM does
+// deterministic CAS using the exact stored ClaimedBy. Expiry-based
+// "stolen claim" semantics live at the SCHEDULER scan layer, not
+// in the FSM apply path (otherwise log replay non-determinism
+// silently drops writes — see internal/memory/fsm.go applyClaim
+// doc for the full story). A fresh node that wants to take over
+// an expired claim MUST pass ExpectedClaimer = the actual stored
+// ClaimedBy of the prior holder.
+func TestFSMApplyClaimExactCASIgnoresExpiry(t *testing.T) {
 	t.Parallel()
 	_, fsm := newClaimTestStore(t)
 
@@ -132,8 +137,9 @@ func TestFSMApplyClaimExpiredCountsAsUnclaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Fresh node claims with ExpectedClaimer="" — should succeed
-	// because the existing claim has expired.
+	// Fresh node claims with ExpectedClaimer="" — must FAIL because
+	// FSM CAS is exact, not expiry-aware. A real scheduler would
+	// pass ExpectedClaimer="crashed-node" instead.
 	res := applyEntry(t, fsm, &lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_CLAIM,
 		Id: "task-1",
@@ -145,8 +151,26 @@ func TestFSMApplyClaimExpiredCountsAsUnclaimed(t *testing.T) {
 		},
 		ExpectedClaimer: "",
 	})
+	if err, ok := res.(error); !ok || err == nil {
+		t.Errorf("expected ErrClaimConflict (FSM CAS is exact, no expiry magic); got %v", res)
+	} else if !errors.Is(err, ErrClaimConflict) {
+		t.Errorf("want ErrClaimConflict, got %v", err)
+	}
+
+	// Same fresh node passing the actual stored claimer SUCCEEDS.
+	res = applyEntry(t, fsm, &lobslawv1.LogEntry{
+		Op: lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id: "task-1",
+		Payload: &lobslawv1.LogEntry_ScheduledTask{
+			ScheduledTask: &lobslawv1.ScheduledTaskRecord{
+				Id: "task-1", ClaimedBy: "fresh-node",
+				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
+			},
+		},
+		ExpectedClaimer: "crashed-node",
+	})
 	if err, ok := res.(error); ok && err != nil {
-		t.Errorf("fresh node should take over expired claim; got %v", err)
+		t.Errorf("exact-CAS take-over with ExpectedClaimer=crashed-node should succeed; got %v", err)
 	}
 }
 

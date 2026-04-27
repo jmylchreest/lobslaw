@@ -99,7 +99,7 @@ services:
     environment:
       - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
       - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
-      - LOBSLAW_FAST_API_KEY=${LOBSLAW_FAST_API_KEY:-}
+      - LOBSLAW_MINIMAX_API_KEY=${LOBSLAW_MINIMAX_API_KEY:-}
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       # PATH puts /lobslaw/bin (ro baseline) and /lobslaw/usr/bin (rw

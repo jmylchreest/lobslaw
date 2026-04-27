@@ -148,9 +148,10 @@ services:
     environment:
       - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
       - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
-      - LOBSLAW_FAST_API_KEY=${LOBSLAW_FAST_API_KEY:-}
+      - LOBSLAW_MINIMAX_API_KEY=${LOBSLAW_MINIMAX_API_KEY:-}
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
+      - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
       - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
@@ -205,9 +206,10 @@ services:
     environment:
       - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
       - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
-      - LOBSLAW_FAST_API_KEY=${LOBSLAW_FAST_API_KEY:-}
+      - LOBSLAW_MINIMAX_API_KEY=${LOBSLAW_MINIMAX_API_KEY:-}
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
+      - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
       - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
@@ -254,9 +256,10 @@ services:
     environment:
       - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
       - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
-      - LOBSLAW_FAST_API_KEY=${LOBSLAW_FAST_API_KEY:-}
+      - LOBSLAW_MINIMAX_API_KEY=${LOBSLAW_MINIMAX_API_KEY:-}
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
+      - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
       - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}

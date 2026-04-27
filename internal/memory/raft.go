@@ -399,6 +399,27 @@ func (n *RaftNode) FSM() *FSM {
 	return n.fsm
 }
 
+// AppliedIndex returns the highest log index that has been applied
+// to the FSM. Used by the scheduler to detect "FSM still catching
+// up after election" — fireDue waits for AppliedIndex to reach
+// LastIndex before scanning, otherwise it reads mid-replay state
+// and re-fires already-completed commitments.
+func (n *RaftNode) AppliedIndex() uint64 { return n.Raft.AppliedIndex() }
+
+// LastIndex returns the highest log index that has been COMMITTED
+// to the raft log (durable, replicated to a quorum). Pair with
+// AppliedIndex to determine FSM catch-up.
+func (n *RaftNode) LastIndex() uint64 { return n.Raft.LastIndex() }
+
+// Barrier is a hashicorp/raft primitive: appends a no-op log entry
+// AND blocks until that entry is applied to the FSM. Used by the
+// scheduler at startup to guarantee the FSM has caught up to the
+// leader's view before scanning. Returns ErrLeadershipTransferInProgress
+// or context errors if not the leader / cancelled. Leader-only.
+func (n *RaftNode) Barrier(timeout time.Duration) error {
+	return n.Raft.Barrier(timeout).Error()
+}
+
 // IsLeader reports whether this node currently holds Raft leadership.
 // Non-leader writes through raft.Apply return ErrNotLeader; callers
 // that want to be polite check IsLeader first and redirect.

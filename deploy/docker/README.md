@@ -59,7 +59,7 @@ cp .env.example .env
 # Generate a memory key.
 echo "LOBSLAW_MEMORY_KEY=$(head -c 32 /dev/urandom | base64)" >> .env
 
-# Edit .env: set LOBSLAW_HOSTNAME, LOBSLAW_FAST_API_KEY, etc.
+# Edit .env: set LOBSLAW_HOSTNAME, LOBSLAW_MINIMAX_API_KEY, etc.
 $EDITOR .env
 ```
 
@@ -146,7 +146,7 @@ go run ../../cmd/lobslaw cluster ca-init \
 # 2. .env (memory key + LLM key shared by all three nodes)
 cp .env.example .env
 echo "LOBSLAW_MEMORY_KEY=$(head -c 32 /dev/urandom | base64)" >> .env
-$EDITOR .env       # set LOBSLAW_FAST_API_KEY
+$EDITOR .env       # set LOBSLAW_MINIMAX_API_KEY
 
 mkdir -p ~/.config/lobslaw/workspace
 
