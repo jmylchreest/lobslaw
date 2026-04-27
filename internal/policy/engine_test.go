@@ -104,6 +104,49 @@ func TestEnginePriorityOrderingWins(t *testing.T) {
 	}
 }
 
+// TestEngineSoulToolsScopedAllowBeatsBuiltinDeny mirrors the EXACT
+// rule pair the deploy seeds for the soul_* tools — a wildcard deny
+// at priority 10 (from seedDefaultPolicyRules) and an operator-allow
+// at priority 20 scoped to the owner. This is the configuration that
+// led to the user's "agent keeps saying soul_tune is policy-blocked"
+// loop; once the operator allow rule's subject was changed from bare
+// "owner" to "scope:owner" the engine evaluates allow as the winner.
+// Regression-guard so the same misconfiguration can't slip back in.
+func TestEngineSoulToolsScopedAllowBeatsBuiltinDeny(t *testing.T) {
+	t.Parallel()
+	eng, store := newTestEngine(t)
+	seedRule(t, store, &lobslawv1.PolicyRule{
+		Id: "lobslaw-builtin-deny-soul_tune",
+		Subject: "*", Action: "tool:exec", Resource: "soul_tune",
+		Effect: "deny", Priority: 10,
+	})
+	seedRule(t, store, &lobslawv1.PolicyRule{
+		Id: "owner-soul-tools",
+		Subject: "scope:owner", Action: "tool:exec", Resource: "soul_*",
+		Effect: "allow", Priority: 20,
+	})
+	dec, err := eng.Evaluate(context.Background(),
+		&types.Claims{Scope: "owner"}, "tool:exec", "soul_tune")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Effect != "allow" || dec.RuleID != "owner-soul-tools" {
+		t.Errorf("expected owner-soul-tools allow to win; got rule=%q effect=%q",
+			dec.RuleID, dec.Effect)
+	}
+
+	// Same evaluation with claims.Scope="default" must HIT THE DENY
+	// — strangers in default scope don't get owner-level tools.
+	dec, err = eng.Evaluate(context.Background(),
+		&types.Claims{Scope: "default"}, "tool:exec", "soul_tune")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Effect != "deny" {
+		t.Errorf("non-owner scope must still be denied; got %q", dec.Effect)
+	}
+}
+
 func TestEnginePriorityTieBreaksByID(t *testing.T) {
 	t.Parallel()
 	eng, store := newTestEngine(t)

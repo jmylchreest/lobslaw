@@ -1198,8 +1198,30 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	// allow before the agent can call them. Their priority>1 deny
 	// seed beats the priority=1 allow seed below; operators add an
 	// allow rule (any priority ≥2) to enable per scope.
+	// Default-deny builtins: get a priority=10 deny seed at boot.
+	// Operators open per-scope by adding an [[policy.rules]] allow
+	// entry at higher priority (typically 20+).
+	//
+	// soul_* tools were here originally but moved out: the deny
+	// seed keeps tripping models that reason about the rule before
+	// trying the call ("there's a deny rule, so I won't try"). The
+	// owner-scope allow rule is the ONLY guard now — strangers
+	// without scope:owner claims still can't call them because the
+	// allow rule's subject won't match. A/B test for whether the
+	// stacked-deny+allow design was making models over-cautious.
 	defaultDenyBuiltins := map[string]bool{
-		"research_start":        true,
+		"research_start": true,
+	}
+
+	// noSeedBuiltins: tools that get NEITHER a default-allow nor a
+	// default-deny seed. The engine returns "default-deny (no rule
+	// matched)" when scanned, so strangers can't call them — but
+	// an operator [[policy.rules]] allow for a specific scope
+	// passes cleanly without fighting a stacked deny seed at
+	// priority 10. Used for sensitive owner-scoped tools where
+	// "permission lives entirely in the operator config" is the
+	// cleanest model.
+	noSeedBuiltins := map[string]bool{
 		"soul_get":              true,
 		"soul_tune":             true,
 		"soul_fragment_add":     true,
@@ -1210,9 +1232,13 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 
 	seedTargets := []*types.ToolDef{}
 	for _, td := range n.toolRegistry.List() {
-		if strings.HasPrefix(td.Path, compute.BuiltinScheme) {
-			seedTargets = append(seedTargets, td)
+		if !strings.HasPrefix(td.Path, compute.BuiltinScheme) {
+			continue
 		}
+		if noSeedBuiltins[td.Name] {
+			continue
+		}
+		seedTargets = append(seedTargets, td)
 	}
 	seeded := []string{}
 	for _, td := range seedTargets {
@@ -1248,6 +1274,38 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	}
 	if len(seeded) > 0 {
 		n.log.Info("policy: seeded default builtin rules", "count", len(seeded))
+	}
+
+	// Garbage-collect stale seed rules for tools now in noSeedBuiltins.
+	// Without this, a tool that was previously default-allow- or
+	// default-deny-seeded would keep its seed rule forever even after
+	// being moved to "operator-config-only" semantics, and that stale
+	// seed could fight the operator's allow rule (e.g. priority 10
+	// deny still influences the scan). DELETE via raft so the change
+	// replicates.
+	for name := range noSeedBuiltins {
+		for _, prefix := range []string{"lobslaw-builtin-", "lobslaw-builtin-deny-"} {
+			id := prefix + name
+			if _, err := n.store.Get(memory.BucketPolicyRules, id); err != nil {
+				continue
+			}
+			entry := &lobslawv1.LogEntry{
+				Op:      lobslawv1.LogOp_LOG_OP_DELETE,
+				Id:      id,
+				Payload: &lobslawv1.LogEntry_PolicyRule{PolicyRule: &lobslawv1.PolicyRule{Id: id}},
+			}
+			data, err := proto.Marshal(entry)
+			if err != nil {
+				n.log.Warn("policy: marshal GC entry failed", "id", id, "err", err)
+				continue
+			}
+			if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+				n.log.Warn("policy: GC stale seed rule failed", "id", id, "err", err)
+				continue
+			}
+			n.log.Info("policy: removed stale seed rule (tool now operator-config-only)",
+				"id", id)
+		}
 	}
 
 	// Operator-declared [[policy.rules]] from config.toml. These get
