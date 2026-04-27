@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/egress"
 )
 
 // EmbeddingProvider returns a vector embedding for an input string.
@@ -109,11 +111,19 @@ func NewEmbeddingClient(cfg EmbeddingClientConfig) (*EmbeddingClient, error) {
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
+		// Embedding traffic shares the "embedding" role in the
+		// egress ACL — by default the same hosts as "llm" since
+		// most providers bundle embeddings with chat. Operators
+		// who run a separate embedding provider get its host
+		// rolled into the same allowlist by the ACL builder.
+		base := egress.For("embedding").HTTPClient()
+		wrapped := *base
 		timeout := cfg.Timeout
 		if timeout <= 0 {
 			timeout = 30 * time.Second
 		}
-		hc = &http.Client{Timeout: timeout}
+		wrapped.Timeout = timeout
+		hc = &wrapped
 	}
 	logger := cfg.Logger
 	if logger == nil {

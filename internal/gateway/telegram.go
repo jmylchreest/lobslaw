@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -266,7 +267,14 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	}
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		// Telegram poll + send traffic routes through egress under
+		// role "gateway/telegram" — ACL is hardcoded to
+		// api.telegram.org so a compromised process can't redirect
+		// our bot's traffic to an attacker-controlled host.
+		base := egress.For("gateway/telegram").HTTPClient()
+		wrapped := *base
+		wrapped.Timeout = 30 * time.Second
+		client = &wrapped
 	}
 	base := cfg.APIBase
 	if base == "" {
@@ -356,7 +364,6 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		"username", usernameOf(msg.From),
 		"scope", scope,
 		"text_len", len(msg.Text))
-
 
 	priorHistory := h.history.Load(msg.Chat.ID)
 	h.log.Debug("telegram: conversation history loaded",
@@ -884,7 +891,7 @@ func fileMetaToAttachment(f *tgFileMeta, kind AttachmentKind) Attachment {
 // API etiquette (long-poll timeout 25s = a quarter of their 60s
 // server-side max) against backoff behaviour on flaky networks.
 const (
-	pollLongTimeout   = 25 * time.Second
+	pollLongTimeout    = 25 * time.Second
 	pollInitialBackoff = 1 * time.Second
 	pollMaxBackoff     = 30 * time.Second
 	pollBackoffFactor  = 1.8
@@ -903,14 +910,14 @@ type tgGetUpdatesResp struct {
 // Only valid in poll mode; returns an error immediately otherwise.
 //
 // Algorithm mirrors openclaw/openclaw's polling session:
-//   1. loop getUpdates(offset=next, timeout=25s) — Telegram holds
-//      the connection until updates arrive or the timeout expires
-//   2. for each update: advance offset, dispatch through the same
-//      path the webhook uses (dispatchUpdate)
-//   3. on transport error: exponential backoff 1s→30s (factor 1.8)
-//   4. on HTTP 409 Conflict: a webhook is registered — call
-//      deleteWebhook, then resume. Telegram refuses getUpdates while
-//      a webhook is live, so this recovers the stuck state.
+//  1. loop getUpdates(offset=next, timeout=25s) — Telegram holds
+//     the connection until updates arrive or the timeout expires
+//  2. for each update: advance offset, dispatch through the same
+//     path the webhook uses (dispatchUpdate)
+//  3. on transport error: exponential backoff 1s→30s (factor 1.8)
+//  4. on HTTP 409 Conflict: a webhook is registered — call
+//     deleteWebhook, then resume. Telegram refuses getUpdates while
+//     a webhook is live, so this recovers the stuck state.
 //
 // Offset is kept in-memory only. A restart re-calls getUpdates with
 // offset=0, which returns everything Telegram has buffered

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 )
@@ -173,7 +174,15 @@ func lobslawDoctor(args []string) {
 				if err != nil {
 					return "", err
 				}
-				resp, err := http.DefaultClient.Do(req)
+				// `lobslaw doctor` runs as a one-shot CLI command,
+				// not inside a node process, so no smokescreen is
+				// running. The egress factory's noop provider returns
+				// a vanilla http.Client — which is what we want for
+				// a connectivity probe (the whole point is to verify
+				// the operator's endpoint is reachable from this host
+				// before they boot the node, where smokescreen would
+				// then enforce the ACL).
+				resp, err := egress.For("doctor").HTTPClient().Do(req)
 				if err != nil {
 					return "", fmt.Errorf("dial %q: %w", first.Endpoint, err)
 				}

@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/egress"
 )
 
 // DefaultURL is the public catalog endpoint. Override via Fetcher
@@ -53,20 +55,20 @@ type Provider struct {
 // Model is the per-model record. Field tags follow models.dev's
 // JSON shape exactly so unmarshaling is one-shot.
 type Model struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Family       string     `json:"family,omitempty"`
-	Attachment   bool       `json:"attachment"`
-	Reasoning    bool       `json:"reasoning"`
-	ToolCall     bool       `json:"tool_call"`
-	Temperature  bool       `json:"temperature,omitempty"`
-	Knowledge    string     `json:"knowledge,omitempty"`
-	ReleaseDate  string     `json:"release_date,omitempty"`
-	LastUpdated  string     `json:"last_updated,omitempty"`
-	OpenWeights  bool       `json:"open_weights,omitempty"`
-	Modalities   Modalities `json:"modalities"`
-	Cost         Cost       `json:"cost,omitempty"`
-	Limit        Limit      `json:"limit,omitempty"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Family      string     `json:"family,omitempty"`
+	Attachment  bool       `json:"attachment"`
+	Reasoning   bool       `json:"reasoning"`
+	ToolCall    bool       `json:"tool_call"`
+	Temperature bool       `json:"temperature,omitempty"`
+	Knowledge   string     `json:"knowledge,omitempty"`
+	ReleaseDate string     `json:"release_date,omitempty"`
+	LastUpdated string     `json:"last_updated,omitempty"`
+	OpenWeights bool       `json:"open_weights,omitempty"`
+	Modalities  Modalities `json:"modalities"`
+	Cost        Cost       `json:"cost,omitempty"`
+	Limit       Limit      `json:"limit,omitempty"`
 }
 
 // Modalities lists the input/output content types the model accepts
@@ -109,12 +111,15 @@ type Fetcher struct {
 
 // NewFetcher constructs a Fetcher with sensible defaults: the
 // public URL, no cache (caller passes CacheDir to enable), 24h
-// freshness, and a 30s HTTP timeout.
+// freshness, and a 30s HTTP timeout via the egress proxy.
 func NewFetcher() *Fetcher {
+	base := egress.For("modelsdev").HTTPClient()
+	wrapped := *base
+	wrapped.Timeout = 30 * time.Second
 	return &Fetcher{
 		URL:    DefaultURL,
 		MaxAge: DefaultCacheMaxAge,
-		HTTP:   &http.Client{Timeout: 30 * time.Second},
+		HTTP:   &wrapped,
 	}
 }
 
@@ -220,7 +225,10 @@ func (f *Fetcher) fetchHTTP(ctx context.Context) (Catalog, error) {
 	req.Header.Set("Accept", "application/json")
 	client := f.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		base := egress.For("modelsdev").HTTPClient()
+		wrapped := *base
+		wrapped.Timeout = 30 * time.Second
+		client = &wrapped
 	}
 	resp, err := client.Do(req)
 	if err != nil {
