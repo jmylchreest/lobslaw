@@ -17,9 +17,44 @@ linters:
     - gocyclo
     - gocritic
     - revive
+    - forbidigo
+  exclusions:
+    rules:
+      # internal/egress/ is the chokepoint package — it legitimately
+      # constructs http.Client and uses http.* functions. The lint
+      # rule blocks new call sites elsewhere from doing the same.
+      - path: ^internal/egress/
+        linters: [forbidigo]
+      # Test files commonly use httptest + http.DefaultClient; the
+      # rule only matters for production code paths.
+      - path: _test\.go$
+        linters: [forbidigo]
   settings:
     gocyclo:
       min-complexity: 15
+    forbidigo:
+      # Egress chokepoint: every outbound HTTPS must go via
+      # internal/egress/. Block direct http.Client construction +
+      # the package-level convenience functions (http.Get, http.Post,
+      # http.PostForm) so a new caller can't accidentally bypass
+      # the proxy. Tests inside internal/egress/ are exempt; the
+      # smokescreen provider also constructs an http.Server which
+      # is not blocked here (only http.Client is).
+      forbid:
+        - pattern: 'http\.Client\{'
+          msg: 'use egress.For(role) instead of constructing http.Client directly — see internal/egress/'
+        - pattern: '^http\.Get$'
+          msg: 'use egress.For(role).HTTPClient().Get instead of http.Get — see internal/egress/'
+        - pattern: '^http\.Post$'
+          msg: 'use egress.For(role).HTTPClient().Post instead of http.Post — see internal/egress/'
+        - pattern: '^http\.PostForm$'
+          msg: 'use egress.For(role).HTTPClient().PostForm instead of http.PostForm — see internal/egress/'
+        - pattern: '^http\.Head$'
+          msg: 'use egress.For(role).HTTPClient().Head instead of http.Head — see internal/egress/'
+        - pattern: '^http\.DefaultClient$'
+          msg: 'use egress.For(role) instead of http.DefaultClient — see internal/egress/'
+      exclude-godoc-examples: true
+      analyze-types: true
     revive:
       rules:
         - name: exported
