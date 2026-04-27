@@ -1,7 +1,7 @@
 ---
 topic: lobslaw-promptgen
 decision: "promptgen package: GeneratorInput (soul/tools/skills/mode/env) → Prompt (system + context blocks). Section builders for each prompt part. Bootstrap loader with per-file and total truncation. Clean separation from agent loop, independently testable"
-date: 2026-04-22
+date: 2026-04-26
 ---
 
 # lobslaw-promptgen

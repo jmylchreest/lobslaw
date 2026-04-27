@@ -1,7 +1,7 @@
 ---
 topic: lobslaw-llm-providers
 decision: "OpenAI API-compatible multi-provider: OpenRouter, MiniMax, Anthropic, etc via OpenAI-compatible API. Multiple endpoints with labels for task routing, complexity selection, and failover"
-date: 2026-04-22
+date: 2026-04-26
 ---
 
 # lobslaw-llm-providers

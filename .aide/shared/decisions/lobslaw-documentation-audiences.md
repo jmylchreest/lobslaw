@@ -1,0 +1,10 @@
+---
+topic: lobslaw-documentation-audiences
+decision: "lobslaw maintains TWO distinct documentation audiences, kept in separate top-level layouts: (1) **End-user docs** under docs/user/ — how to install, configure, run, and interact with lobslaw. Audience is an operator or end-user, NOT a lobslaw developer. Topics: installation, config.toml reference, channel setup (REST/Telegram), skill install/usage, backup/restore, troubleshooting. Tone: actionable, task-oriented, minimal internal architecture. (2) **Developer docs** under docs/dev/ — architecture, design decisions, contribution guide. Audience is someone modifying lobslaw itself. Topics: component-level architecture, each subsystem's internal design, extension points (skill interface, plugin model, reranker/adjudicator interfaces), testing patterns, release process. Both MUST be maintained in sync with code. SANDBOX.md / MEMORY.md / AGENT.md-style subsystem docs belong under docs/dev/. README.md at repo root serves as an entry fork — links to both."
+date: 2026-04-23
+---
+
+# lobslaw-documentation-audiences
+
+**Decision:** lobslaw maintains TWO distinct documentation audiences, kept in separate top-level layouts: (1) **End-user docs** under docs/user/ — how to install, configure, run, and interact with lobslaw. Audience is an operator or end-user, NOT a lobslaw developer. Topics: installation, config.toml reference, channel setup (REST/Telegram), skill install/usage, backup/restore, troubleshooting. Tone: actionable, task-oriented, minimal internal architecture. (2) **Developer docs** under docs/dev/ — architecture, design decisions, contribution guide. Audience is someone modifying lobslaw itself. Topics: component-level architecture, each subsystem's internal design, extension points (skill interface, plugin model, reranker/adjudicator interfaces), testing patterns, release process. Both MUST be maintained in sync with code. SANDBOX.md / MEMORY.md / AGENT.md-style subsystem docs belong under docs/dev/. README.md at repo root serves as an entry fork — links to both.
+
