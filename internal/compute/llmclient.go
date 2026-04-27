@@ -162,6 +162,13 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 		"temperature", req.Temperature,
 		"max_tokens", req.MaxTokens,
 		"tool_choice", req.ToolChoice)
+	for _, t := range req.Tools {
+		c.log.Debug("llm: tool sent",
+			"name", t.Name,
+			"desc_len", len(t.Description),
+			"params_len", len(t.Parameters),
+			"params", string(t.Parameters))
+	}
 	// System prompt + first user turn get logged at DEBUG so
 	// operators can see exactly what the model is reasoning over.
 	// Each message body is truncated at 2KB; the full prompt goes
