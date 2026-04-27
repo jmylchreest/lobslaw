@@ -183,6 +183,39 @@ var toolCategoryPatterns = []toolCategory{
 			"new memories", "recent learnings",
 		},
 	},
+	// ---- Soul self-tuning -----------------------------------
+	// Operator-driven personality + identity adjustments. Keywords
+	// are deliberately specific because "name", "personality",
+	// "fragment" all have plenty of unrelated uses; we want this
+	// to fire on actual self-tune asks like "be more sarcastic" or
+	// "what's your name", not every conversation that mentions
+	// the word "name". soul_get + soul_fragment_list also admit
+	// on broad introspection prompts so the agent can ask itself
+	// "what do I currently know" before tuning.
+	{
+		category: "soul",
+		tools: []string{
+			"soul_get", "soul_tune",
+			"soul_fragment_add", "soul_fragment_remove", "soul_fragment_list",
+			"soul_history_rollback",
+		},
+		keywords: []string{
+			"your name", "your identity", "yourself ", "your soul",
+			"your personality", "your character", "your style",
+			"call yourself", "rename yourself", "you should be called",
+			"be more ", "be less ", "more sarcastic", "less sarcastic",
+			"more formal", "less formal", "more direct", "less direct",
+			"more humour", "more humor", "less humour", "less humor",
+			"more excited", "more emoji", "less emoji",
+			"tune your", "tune yourself", "tune our", "adjust your",
+			"sarcasm", "humour", "humor", "formality", "directness",
+			"excitement", "emoji_usage",
+			"remember that ", "remember about me",
+			"forget that ", "forget the ",
+			"undo your", "undo last", "rollback",
+			"fragment", "anecdotal", "what do you know about me",
+		},
+	},
 	// ---- Debug / introspection ------------------------------
 	{
 		category: "debug",
