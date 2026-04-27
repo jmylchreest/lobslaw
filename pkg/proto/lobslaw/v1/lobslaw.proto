@@ -560,6 +560,45 @@ message EmotiveStyleTune {
   optional string emoji_usage = 6;
 }
 
+// CredentialRecord holds an OAuth (or other-provider) credential
+// the operator has connected to lobslaw. Tokens are encrypted at
+// rest with the cluster MemoryKey — the bytes on the wire and on
+// disk are ciphertext. Decryption happens only inside the
+// CredentialService when handing tokens to skill subprocesses.
+//
+// One record per (provider, subject) tuple. ID is a ULID for
+// stable referencing; bucket key is "<provider>:<subject>" for
+// human-debuggable lookup.
+//
+// AllowedSkills + AllowedScopesPerSkill are populated only by
+// operator CLI / chat commands ("credentials_grant"). New records
+// from oauth_start arrive with empty ACL — they're inert until
+// explicitly granted to a skill. This is the trust gate.
+message CredentialRecord {
+  string id = 1;
+  string provider = 2;       // "google" | "github" | "openai-managed" | ...
+  string subject = 3;        // user@example.com — the entity authenticated
+  bytes access_token = 4;    // encrypted with cluster MemoryKey
+  bytes refresh_token = 5;   // encrypted with cluster MemoryKey
+  repeated string scopes = 6; // OAuth scopes granted on first authorize
+  google.protobuf.Timestamp expires_at = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp last_rotated = 9;
+  google.protobuf.Timestamp last_used = 10;
+
+  // ACL fields — operator-controlled.
+  repeated string allowed_skills = 11;
+  // Per-skill scope subset. Each entry is "skill:scope1,scope2,..."
+  // (ASCII, no nested message because protobuf maps with repeated
+  // values are a syntactic dead-end). Parsed by the credential
+  // service into the in-memory ACL.
+  map<string, AllowedScopes> allowed_scopes_per_skill = 12;
+}
+
+message AllowedScopes {
+  repeated string scopes = 1;
+}
+
 // -----------------------------------------------------------------------------
 // Raft log entry envelope
 // -----------------------------------------------------------------------------
@@ -597,6 +636,7 @@ message LogEntry {
     StorageMount storage_mount = 16;
     ChannelStateRecord channel_state = 17;
     SoulTuneRecord soul_tune = 18;
+    CredentialRecord credential = 19;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

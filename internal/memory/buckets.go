@@ -21,6 +21,12 @@ const (
 	// SoulTuneRecordID. Replaces the local SOUL.md write path so
 	// container deployments don't need a writable file mount.
 	BucketSoulTune = "soul_tune"
+	// BucketCredentials holds OAuth (and other) credentials the
+	// operator has connected to the cluster. Tokens are encrypted
+	// at rest with the cluster MemoryKey; the bucket bytes are
+	// ciphertext. Keyed by "<provider>:<subject>" — one record per
+	// (provider, authenticated-user) tuple.
+	BucketCredentials = "credentials"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -38,4 +44,5 @@ var allBuckets = []string{
 	BucketStorageMounts,
 	BucketChannelState,
 	BucketSoulTune,
+	BucketCredentials,
 }

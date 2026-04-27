@@ -295,6 +295,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketChannelState, p.ChannelState, nil
 	case *lobslawv1.LogEntry_SoulTune:
 		return BucketSoulTune, p.SoulTune, nil
+	case *lobslawv1.LogEntry_Credential:
+		return BucketCredentials, p.Credential, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:
