@@ -37,6 +37,24 @@ func (n *Node) wireEgress() error {
 	return nil
 }
 
+// refreshEgressACL regenerates the egress ACL from current config
+// and live registries (skills, MCP servers, storage mounts) and
+// applies it atomically via SmokescreenProvider.SetACL. Idempotent
+// and safe to call from any goroutine.
+//
+// Trigger sources today: NodeService.Reload sections=["egress"]
+// (operator-driven). Future: skill registry change hook fires this
+// when a skill is added/removed; storage change hook fires it when
+// a mount's network config changes.
+func (n *Node) refreshEgressACL() error {
+	if n.egressProvider == nil {
+		return nil
+	}
+	rules := egress.Build(buildEgressInputs(n))
+	n.egressProvider.SetACL(rules)
+	return nil
+}
+
 // subprocessProxyURL returns the HTTPS_PROXY URL a skill or other
 // spawned subprocess should use, encoded with the per-role identity
 // so smokescreen sees the right ACL. Returns "" when no provider

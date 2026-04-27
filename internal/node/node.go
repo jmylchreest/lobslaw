@@ -568,12 +568,13 @@ func (n *Node) Shutdown(ctx context.Context) error {
 // dispatch. Kept as named constants so the CLI + docs don't drift
 // from the switch below.
 const (
-	ReloadSoul = "soul"
+	ReloadSoul   = "soul"
+	ReloadEgress = "egress"
 )
 
 // allReloadable lists sections reloaded when the caller passes an
 // empty section list.
-var allReloadable = []string{ReloadSoul}
+var allReloadable = []string{ReloadSoul, ReloadEgress}
 
 // reloadSections is the ReloadFunc handed to discovery.Service. It
 // dispatches per-section: known sections reload in place; unknown
@@ -607,6 +608,12 @@ func (n *Node) reloadSections(_ context.Context, sections []string) (reloaded, r
 			n.log.Info("reload: soul replaced",
 				"name", loaded.Config.Name,
 				"path", n.cfg.SoulPath)
+		case ReloadEgress:
+			if err := n.refreshEgressACL(); err != nil {
+				errs[section] = err.Error()
+				continue
+			}
+			reloaded = append(reloaded, section)
 		default:
 			errs[section] = "unknown section"
 		}
