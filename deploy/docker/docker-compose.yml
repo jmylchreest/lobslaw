@@ -127,7 +127,7 @@ services:
       # Operator-edited config + soul. Bind-mounted ro so changes on
       # the host take effect on restart (or via the [config] watcher).
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
-      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:rw
       # Workspace storage mount — agent reads/writes user files here.
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
     ports:

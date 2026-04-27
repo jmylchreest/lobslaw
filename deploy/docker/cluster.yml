@@ -49,7 +49,7 @@ x-lobslaw-defaults: &lobslaw-defaults
     - tools-bin:/lobslaw/bin:ro
     - tools-runtime:/lobslaw/usr/bin
     - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
-    - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+    - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:rw
     - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
   restart: unless-stopped
 
@@ -168,7 +168,7 @@ services:
       - data-1:/var/lobslaw/data
       - audit-1:/var/lobslaw/audit
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
-      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:rw
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
     ports:
       # Only node-1's gateway is published on the host; nodes 2 and 3
@@ -222,7 +222,7 @@ services:
       - data-2:/var/lobslaw/data
       - audit-2:/var/lobslaw/audit
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
-      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:rw
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
     depends_on:
       tools-init: { condition: service_completed_successfully }
@@ -272,7 +272,7 @@ services:
       - data-3:/var/lobslaw/data
       - audit-3:/var/lobslaw/audit
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
-      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
+      - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:rw
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
     depends_on:
       tools-init: { condition: service_completed_successfully }
