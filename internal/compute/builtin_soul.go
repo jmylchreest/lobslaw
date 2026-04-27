@@ -79,7 +79,7 @@ func SoulToolDefs() []*types.ToolDef {
 		{
 			Name:        "soul_tune",
 			Path:        BuiltinScheme + "soul_tune",
-			Description: "Tune your own soul. The user is allowed to ask you to change your name, emotive dimensions (sarcasm, humour, formality, directness, excitement, emoji_usage) — when they do, CALL THIS TOOL. Don't refuse on the grounds that 'I can't change myself' — this tool exists exactly to let you change yourself. Examples:\n  - 'call yourself Snarkle' → soul_tune(field=\"name\", value=\"Snarkle\")\n  - 'be more sarcastic' → soul_tune(field=\"sarcasm\", delta=1)\n  - 'sarcasm 7' → soul_tune(field=\"sarcasm\", delta=2) if current is 5, etc.\n  - 'use more emoji' → soul_tune(field=\"emoji_usage\", value=\"generous\")\nPass EITHER value (string set) OR delta (int adjust) — not both. Numeric dimensions clamp to 0-10 and ±3 of baseline. The only fields you CAN'T change here are persona_description and body (the markdown system-prompt slot) — for those, tell the user the operator must edit the file. Everything else listed above IS yours to tune.",
+			Description: "Tune one bounded soul field. Use cases: rename (field=\"name\", value=\"Lobs\"), nudge an emotive dimension (field=\"sarcasm\", delta=1 or delta=-1 — capped to 0-10 and ±3 of baseline), or set emoji_usage (field=\"emoji_usage\", value=\"moderate\"). Pass EITHER value (string set) OR delta (int adjust) — not both. Cannot edit persona_description, body, scope, trust_tier, or any structural field — those are operator-only.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
