@@ -197,9 +197,12 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	// PostToolUse hook.
 	if e.hooks != nil {
 		// Cap the output handed to hooks at 4 KiB per stream so large
-		// tool output doesn't bloat hook stdin.
+		// tool output doesn't bloat hook stdin. Hook dispatch is best-
+		// effort observability — surfacing failures here would block
+		// the tool result returning to the agent for "the audit hook
+		// timed out," which is the wrong tradeoff.
 		const hookOutputCap = 4 * 1024
-		_, _ = e.hooks.Dispatch(ctx, types.HookPostToolUse, hooks.Payload{
+		_, _ = e.hooks.Dispatch(ctx, types.HookPostToolUse, hooks.Payload{ //nolint:errcheck // best-effort
 			"session_id":  req.TurnID,
 			"tool_name":   tool.Name,
 			"exit_code":   result.ExitCode,

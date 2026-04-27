@@ -88,6 +88,15 @@ func (CmdBuilder) Run(ctx context.Context, spec RunSpec) (int, error) {
 	return 0, nil
 }
 
+// MountResolver returns the per-label rwx mode + resolved root for
+// the active storage mounts. The skill invoker uses this to enforce
+// "skill can't claim more than mount grants" at boot. Defining the
+// shape here as an interface keeps internal/skills free of the
+// internal/compute dependency that would otherwise be a cycle.
+type MountResolver interface {
+	ModeForLabel(label string) (root string, read, write, exec bool, ok bool)
+}
+
 // Invoker owns the registry + storage manager + runner. The agent
 // (and tests) call Invoke; the invoker looks up the skill, resolves
 // storage labels to paths, builds argv, and dispatches the
@@ -95,6 +104,7 @@ func (CmdBuilder) Run(ctx context.Context, spec RunSpec) (int, error) {
 type Invoker struct {
 	reg     *Registry
 	storage *storage.Manager
+	mounts  MountResolver
 	runner  SubprocessRunner
 
 	defaultTimeout time.Duration
@@ -107,6 +117,7 @@ type Invoker struct {
 type InvokerConfig struct {
 	Registry       *Registry
 	Storage        *storage.Manager
+	Mounts         MountResolver    // optional; required when manifest declares storage
 	Runner         SubprocessRunner // default: CmdBuilder{}
 	DefaultTimeout time.Duration    // default: 30s
 }
@@ -125,6 +136,7 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 	return &Invoker{
 		reg:            cfg.Registry,
 		storage:        cfg.Storage,
+		mounts:         cfg.Mounts,
 		runner:         cfg.Runner,
 		defaultTimeout: cfg.DefaultTimeout,
 	}, nil
@@ -155,7 +167,7 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		return nil, err
 	}
 	env := buildEnv(skill, i.storage)
-	policy, err := buildPolicy(skill, argv[0], i.storage)
+	policy, err := buildPolicy(skill, argv[0], i.storage, i.mounts)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +230,7 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 // there's no storage access — equivalent to "run as tools do with
 // no policy." In practice we always produce a non-nil policy
 // because we always want NoNewPrivs + default seccomp for skills.
-func buildPolicy(skill *Skill, runtimePath string, mgr *storage.Manager) (*sandbox.Policy, error) {
+func buildPolicy(skill *Skill, runtimePath string, mgr *storage.Manager, mounts MountResolver) (*sandbox.Policy, error) {
 	policy := &sandbox.Policy{
 		Namespaces: sandbox.NamespaceSet{
 			User: true, PID: true, IPC: true, UTS: true,
@@ -226,34 +238,60 @@ func buildPolicy(skill *Skill, runtimePath string, mgr *storage.Manager) (*sandb
 		NoNewPrivs: true,
 	}
 
-	// Handler directory — the interpreter reads the handler script
-	// and any sibling files the skill author included.
+	// Handler directory — interpreter needs read+exec to load the
+	// handler script and exec the bytecode it compiles.
 	if filepath.IsAbs(skill.ManifestDir) {
-		policy.AllowedPaths = append(policy.AllowedPaths, skill.ManifestDir)
-		policy.ReadOnlyPaths = append(policy.ReadOnlyPaths, skill.ManifestDir)
+		policy.Mounts = append(policy.Mounts, sandbox.PolicyMount{
+			Path: skill.ManifestDir, Read: true, Exec: true,
+		})
 	}
 
+	// Interpreter binary directory — read+exec so python3/bash + its
+	// stdlib can load.
 	if filepath.IsAbs(runtimePath) {
-		policy.AllowedPaths = append(policy.AllowedPaths, filepath.Dir(runtimePath))
-		policy.ReadOnlyPaths = append(policy.ReadOnlyPaths, filepath.Dir(runtimePath))
+		policy.Mounts = append(policy.Mounts, sandbox.PolicyMount{
+			Path: filepath.Dir(runtimePath), Read: true, Exec: true,
+		})
 	}
 
-	// /tmp must be writable so interpreters have somewhere for
-	// scratch (bytecode caches, lockfiles, temp extractions).
-	policy.AllowedPaths = append(policy.AllowedPaths, "/tmp")
+	// /tmp: scratch (bytecode caches, lockfiles, temp extractions).
+	policy.Mounts = append(policy.Mounts, sandbox.PolicyMount{
+		Path: "/tmp", Read: true, Write: true,
+	})
 
+	// Storage mounts. Skill manifest's StorageRead/StorageWrite
+	// requested mode is intersected with the mount's actual rwx
+	// ceiling — a skill claiming write against an "rx"-only mount
+	// fails at policy build time, not silently downgraded.
 	for _, s := range skill.Manifest.Storage {
 		if mgr == nil {
-			return nil, fmt.Errorf("skills: storage access without manager")
+			return nil, fmt.Errorf("skills: skill %q declares storage access but no Manager configured", skill.Name())
 		}
-		p, err := mgr.Resolve(s.Label)
+		resolved, err := mgr.Resolve(s.Label)
 		if err != nil {
 			return nil, fmt.Errorf("skills: resolve storage %q: %w", s.Label, err)
 		}
-		policy.AllowedPaths = append(policy.AllowedPaths, p)
-		if s.Mode == StorageRead {
-			policy.ReadOnlyPaths = append(policy.ReadOnlyPaths, p)
+		want := sandbox.PolicyMount{Path: resolved, Read: true}
+		if s.Mode == StorageWrite {
+			want.Write = true
 		}
+		// When a MountResolver is wired we cap by mount mode;
+		// otherwise (legacy / test) we accept the requested mode as-is.
+		if mounts != nil {
+			root, r, w, x, ok := mounts.ModeForLabel(s.Label)
+			if !ok {
+				return nil, fmt.Errorf("skills: skill %q references storage mount %q which is not registered", skill.Name(), s.Label)
+			}
+			if want.Read && !r {
+				return nil, fmt.Errorf("skills: skill %q wants read on %q but mount has no read", skill.Name(), s.Label)
+			}
+			if want.Write && !w {
+				return nil, fmt.Errorf("skills: skill %q wants write on %q but mount mode forbids it", skill.Name(), s.Label)
+			}
+			want.Path = root
+			want.Exec = x // inherit exec from mount when granted; manifest doesn't yet model exec separately
+		}
+		policy.Mounts = append(policy.Mounts, want)
 	}
 
 	if err := policy.Validate(); err != nil {

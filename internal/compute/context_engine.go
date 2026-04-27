@@ -95,7 +95,7 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 			"err", err)
 		return ContextAssembly{}
 	}
-	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2, "", "")
+	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		e.log.Warn("context-engine: vector search failed",
 			"err", err)

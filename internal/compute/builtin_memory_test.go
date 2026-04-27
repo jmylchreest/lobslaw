@@ -76,17 +76,17 @@ func TestMemorySearchMatchesEventAndContext(t *testing.T) {
 	store := newMemoryStoreForTest(t)
 	seedEpisodic(t, store, &lobslawv1.EpisodicRecord{
 		Id: "a", Event: "user prefers strong coffee",
-		Context: "Discussed brewing methods.",
+		Context:    "Discussed brewing methods.",
 		Importance: 7, Timestamp: timestamppb.Now(),
 	})
 	seedEpisodic(t, store, &lobslawv1.EpisodicRecord{
 		Id: "b", Event: "bought new keyboard",
-		Context: "Mentioned the coffee stains on the old one.",
+		Context:    "Mentioned the coffee stains on the old one.",
 		Importance: 3, Timestamp: timestamppb.Now(),
 	})
 	seedEpisodic(t, store, &lobslawv1.EpisodicRecord{
 		Id: "c", Event: "went running",
-		Context: "5k in the park",
+		Context:    "5k in the park",
 		Importance: 4, Timestamp: timestamppb.Now(),
 	})
 

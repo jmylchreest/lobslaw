@@ -323,4 +323,3 @@ func (c *fetchCache) set(key, body string, links []fetchLink) {
 	}
 	c.entries[key] = &fetchCacheEntry{body: body, links: links, cachedAt: time.Now()}
 }
-

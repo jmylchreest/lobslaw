@@ -81,8 +81,8 @@ func TestServiceStoreAndRecall(t *testing.T) {
 	if got.Record.Text != "hello" {
 		t.Errorf("text = %q, want hello", got.Record.Text)
 	}
-	if got.Record.Retention != "episodic" {
-		t.Errorf("retention = %q, want episodic (default)", got.Record.Retention)
+	if got.Record.Retention != lobslawv1.Retention_RETENTION_EPISODIC {
+		t.Errorf("retention = %v, want episodic (default)", got.Record.Retention)
 	}
 	if got.Record.CreatedAt == nil {
 		t.Error("CreatedAt should have been auto-populated")
@@ -159,8 +159,8 @@ func TestServiceEpisodicAdd(t *testing.T) {
 	if got.Importance != 5 {
 		t.Errorf("Importance = %d, want 5 (default)", got.Importance)
 	}
-	if got.Retention != "episodic" {
-		t.Errorf("Retention = %q, want episodic (default)", got.Retention)
+	if got.Retention != lobslawv1.Retention_RETENTION_EPISODIC {
+		t.Errorf("Retention = %v, want episodic (default)", got.Retention)
 	}
 	if got.Timestamp == nil {
 		t.Error("Timestamp should have been auto-populated")

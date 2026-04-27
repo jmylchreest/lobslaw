@@ -148,7 +148,7 @@ func TestDreamPrunePreservesLongTerm(t *testing.T) {
 			Event:      "old grocery list",
 			Importance: 1, // score stays tiny after decay
 			Timestamp:  timestamppb.New(old),
-			Retention:  "episodic",
+			Retention:  lobslawv1.Retention_RETENTION_EPISODIC,
 		},
 	})
 	if err != nil {
@@ -162,7 +162,7 @@ func TestDreamPrunePreservesLongTerm(t *testing.T) {
 			Event:      "user's wedding anniversary",
 			Importance: 1,
 			Timestamp:  timestamppb.New(old),
-			Retention:  "long-term",
+			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
 		},
 	})
 	if err != nil {
@@ -239,7 +239,7 @@ func TestDreamRunWithSummarizer(t *testing.T) {
 		}
 		if len(v.SourceIds) == 2 && v.Text == "met alice and bob" {
 			found = true
-			gotRetention = v.Retention
+			gotRetention = types.RetentionString(v.Retention)
 		}
 		return nil
 	})
@@ -263,9 +263,9 @@ func TestDreamConsolidationInheritsHighestRetention(t *testing.T) {
 	// Mix of retentions: one long-term, two episodic. Consolidation
 	// should inherit long-term (the highest).
 	for _, rec := range []*lobslawv1.EpisodicRecord{
-		{Id: "e-1", Event: "routine A", Importance: 9, Timestamp: timestamppb.New(now), Retention: "episodic"},
-		{Id: "e-2", Event: "anniversary", Importance: 9, Timestamp: timestamppb.New(now), Retention: "long-term"},
-		{Id: "e-3", Event: "routine B", Importance: 9, Timestamp: timestamppb.New(now), Retention: "episodic"},
+		{Id: "e-1", Event: "routine A", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_EPISODIC},
+		{Id: "e-2", Event: "anniversary", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_LONG_TERM},
+		{Id: "e-3", Event: "routine B", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_EPISODIC},
 	} {
 		if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
 			t.Fatal(err)
@@ -285,7 +285,7 @@ func TestDreamConsolidationInheritsHighestRetention(t *testing.T) {
 			return err
 		}
 		if v.Text == "mixed-retention summary" {
-			gotRetention = v.Retention
+			gotRetention = types.RetentionString(v.Retention)
 		}
 		return nil
 	})
@@ -301,16 +301,16 @@ func TestHighestRetention(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
-		in   []types.Retention
-		want types.Retention
+		in   []lobslawv1.Retention
+		want lobslawv1.Retention
 	}{
-		{"empty", nil, types.RetentionSession},
-		{"only session", []types.Retention{types.RetentionSession}, types.RetentionSession},
-		{"only episodic", []types.Retention{types.RetentionEpisodic}, types.RetentionEpisodic},
-		{"only long-term", []types.Retention{types.RetentionLongTerm}, types.RetentionLongTerm},
-		{"session + episodic", []types.Retention{types.RetentionSession, types.RetentionEpisodic}, types.RetentionEpisodic},
-		{"episodic + long-term", []types.Retention{types.RetentionEpisodic, types.RetentionLongTerm}, types.RetentionLongTerm},
-		{"all three", []types.Retention{types.RetentionSession, types.RetentionEpisodic, types.RetentionLongTerm}, types.RetentionLongTerm},
+		{"empty", nil, lobslawv1.Retention_RETENTION_UNSPECIFIED},
+		{"only session", []lobslawv1.Retention{lobslawv1.Retention_RETENTION_SESSION}, lobslawv1.Retention_RETENTION_SESSION},
+		{"only episodic", []lobslawv1.Retention{lobslawv1.Retention_RETENTION_EPISODIC}, lobslawv1.Retention_RETENTION_EPISODIC},
+		{"only long-term", []lobslawv1.Retention{lobslawv1.Retention_RETENTION_LONG_TERM}, lobslawv1.Retention_RETENTION_LONG_TERM},
+		{"session + episodic", []lobslawv1.Retention{lobslawv1.Retention_RETENTION_SESSION, lobslawv1.Retention_RETENTION_EPISODIC}, lobslawv1.Retention_RETENTION_EPISODIC},
+		{"episodic + long-term", []lobslawv1.Retention{lobslawv1.Retention_RETENTION_EPISODIC, lobslawv1.Retention_RETENTION_LONG_TERM}, lobslawv1.Retention_RETENTION_LONG_TERM},
+		{"all three", []lobslawv1.Retention{lobslawv1.Retention_RETENTION_SESSION, lobslawv1.Retention_RETENTION_EPISODIC, lobslawv1.Retention_RETENTION_LONG_TERM}, lobslawv1.Retention_RETENTION_LONG_TERM},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

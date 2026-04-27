@@ -12,7 +12,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // Summarizer turns a set of source events into a consolidated
@@ -191,7 +190,7 @@ type scoredRecord struct {
 	id        string
 	record    *lobslawv1.EpisodicRecord
 	score     float32
-	retention types.Retention
+	retention lobslawv1.Retention
 }
 
 func (d *DreamRunner) scoreAll(now time.Time) ([]scoredRecord, error) {
@@ -226,7 +225,7 @@ func (d *DreamRunner) scoreAll(now time.Time) ([]scoredRecord, error) {
 			id:        id,
 			record:    &rec,
 			score:     score,
-			retention: types.Retention(rec.Retention),
+			retention: rec.Retention,
 		})
 		return nil
 	})
@@ -255,7 +254,7 @@ func (d *DreamRunner) selectTopN(scored []scoredRecord, n int) []scoredRecord {
 func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord, now time.Time) error {
 	events := make([]string, 0, len(candidates))
 	sourceIDs := make([]string, 0, len(candidates))
-	retentions := make([]types.Retention, 0, len(candidates))
+	retentions := make([]lobslawv1.Retention, 0, len(candidates))
 	for _, c := range candidates {
 		events = append(events, c.record.Event)
 		sourceIDs = append(sourceIDs, c.id)
@@ -279,7 +278,7 @@ func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord
 		Id:        fmt.Sprintf("dream-%d", now.UnixNano()),
 		Embedding: embedding,
 		Text:      summary,
-		Retention: string(highestRetention(retentions)),
+		Retention: highestRetention(retentions),
 		SourceIds: sourceIDs,
 		CreatedAt: timestamppb.New(now),
 	}
@@ -291,19 +290,17 @@ func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord
 }
 
 // highestRetention returns the most durable retention among sources.
-// long-term > episodic > session.
-func highestRetention(rs []types.Retention) types.Retention {
-	has := make(map[types.Retention]bool, len(rs))
+// long-term > episodic > session > unspecified.
+func highestRetention(rs []lobslawv1.Retention) lobslawv1.Retention {
+	best := lobslawv1.Retention_RETENTION_UNSPECIFIED
 	for _, r := range rs {
-		has[r] = true
+		// Enum values are ordered: UNSPECIFIED=0, SESSION=1,
+		// EPISODIC=2, LONG_TERM=3 — higher = more durable.
+		if r > best {
+			best = r
+		}
 	}
-	if has[types.RetentionLongTerm] {
-		return types.RetentionLongTerm
-	}
-	if has[types.RetentionEpisodic] {
-		return types.RetentionEpisodic
-	}
-	return types.RetentionSession
+	return best
 }
 
 // prune deletes records whose score is below the threshold, unless
@@ -311,7 +308,7 @@ func highestRetention(rs []types.Retention) types.Retention {
 func (d *DreamRunner) prune(scored []scoredRecord) (int, error) {
 	count := 0
 	for _, r := range scored {
-		if r.retention == types.RetentionLongTerm {
+		if r.retention == lobslawv1.Retention_RETENTION_LONG_TERM {
 			continue
 		}
 		if r.score >= d.cfg.PruneThreshold {
@@ -339,7 +336,7 @@ func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, p
 		Importance: 3, // modest; dream sessions aren't the memories themselves
 		Timestamp:  timestamppb.New(now),
 		Tags:       []string{"dream-session"},
-		Retention:  string(types.RetentionLongTerm), // survive consolidation so audit trail persists
+		Retention:  lobslawv1.Retention_RETENTION_LONG_TERM, // survive consolidation so audit trail persists
 	}
 	return d.applyEntry(&lobslawv1.LogEntry{
 		Op:      lobslawv1.LogOp_LOG_OP_PUT,

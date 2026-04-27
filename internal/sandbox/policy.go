@@ -17,11 +17,24 @@ type Policy struct {
 	// AllowedPaths are RW paths visible to the sandbox. Landlock
 	// enforces the restriction once Phase 4.5.5 lands. Paths must be
 	// absolute; verified by Validate.
+	//
+	// Legacy field, retained for back-compat. New callers should
+	// populate Mounts instead — it expresses per-path read/write/exec
+	// independently, which matches the storage MountMode (rwx) model
+	// the rest of the codebase uses.
 	AllowedPaths []string `json:"allowed_paths,omitempty"`
 
 	// ReadOnlyPaths subset of AllowedPaths restricted to read access.
 	// Every entry MUST appear in AllowedPaths. Verified by Validate.
 	ReadOnlyPaths []string `json:"read_only_paths,omitempty"`
+
+	// Mounts is the per-path rwx mode list that drives Landlock when
+	// populated. Preferred over AllowedPaths/ReadOnlyPaths because it
+	// distinguishes "rx" (read+exec, no write) from "rw" (read+write,
+	// no exec) cleanly, matching the storage layer's MountMode. The
+	// install layer prefers Mounts over the legacy fields when both
+	// are set; mixing them is allowed (additive) but not recommended.
+	Mounts []PolicyMount `json:"mounts,omitempty"`
 
 	// NetworkAllowCIDR is the list of egress destinations the tool
 	// may reach. Empty → no outbound network. Enforcement via
@@ -60,6 +73,17 @@ type Policy struct {
 	Seccomp SeccompPolicy `json:"seccomp,omitzero"`
 }
 
+// PolicyMount is one filesystem area the subprocess may access,
+// expressed as a path + a read/write/exec mask. Mirrors the storage
+// layer's MountMode so Landlock enforcement and mount-resolver
+// enforcement use the same vocabulary.
+type PolicyMount struct {
+	Path  string `json:"path"`
+	Read  bool   `json:"read,omitempty"`
+	Write bool   `json:"write,omitempty"`
+	Exec  bool   `json:"exec,omitempty"`
+}
+
 // NamespaceSet selects CLONE_NEW* flags. User namespace is the gate —
 // on most modern kernels (Debian 11+, Ubuntu 24+, Fedora 32+, Arch)
 // unprivileged processes can create user namespaces, which enables
@@ -89,7 +113,7 @@ func (n NamespaceSet) Enabled() bool {
 //
 // A zero-value Policy stays zero-value (the "no sandbox" case).
 func (p *Policy) Normalise() {
-	enforcementRequested := p.NoNewPrivs || len(p.AllowedPaths) > 0 || p.Seccomp.HasRules()
+	enforcementRequested := p.NoNewPrivs || len(p.AllowedPaths) > 0 || len(p.Mounts) > 0 || p.Seccomp.HasRules()
 	if !enforcementRequested {
 		return
 	}
@@ -116,6 +140,14 @@ func (p *Policy) Validate() error {
 	for _, path := range p.ReadOnlyPaths {
 		if _, ok := allowed[path]; !ok {
 			return fmt.Errorf("ReadOnlyPaths: %q is not in AllowedPaths", path)
+		}
+	}
+	for i, m := range p.Mounts {
+		if len(m.Path) == 0 || m.Path[0] != '/' {
+			return fmt.Errorf("Mounts[%d]: %q is not absolute", i, m.Path)
+		}
+		if !m.Read && !m.Write && !m.Exec {
+			return fmt.Errorf("Mounts[%d]: %q has no access bits set", i, m.Path)
 		}
 	}
 	if p.CPUQuota < 0 {

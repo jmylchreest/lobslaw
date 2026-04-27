@@ -17,13 +17,13 @@ import (
 // constructing a full Adjuster + on-disk file.
 type SoulMutator interface {
 	Soul() soul.Soul
-	SetName(name string) (string, error)
-	Tune(dimension string, delta int) (prev, next int, err error)
-	SetEmojiUsage(value string) error
-	AddFragment(text string) (cleaned string, total int, err error)
-	RemoveFragment(needle string) (removed string, err error)
+	SetName(ctx context.Context, name string) (string, error)
+	Tune(ctx context.Context, dimension string, delta int) (prev, next int, err error)
+	SetEmojiUsage(ctx context.Context, value string) error
+	AddFragment(ctx context.Context, text string) (cleaned string, total int, err error)
+	RemoveFragment(ctx context.Context, needle string) (removed string, err error)
 	ListFragments() []string
-	HistoryRollback(steps int) (timestamp string, err error)
+	HistoryRollback(ctx context.Context, steps int) (timestamp string, err error)
 }
 
 // SoulBuiltinsConfig wires the soul_* builtins. Mutator is required.
@@ -70,9 +70,9 @@ func RegisterSoulBuiltins(b *Builtins, cfg SoulBuiltinsConfig) error {
 func SoulToolDefs() []*types.ToolDef {
 	return []*types.ToolDef{
 		{
-			Name:        "soul_get",
-			Path:        BuiltinScheme + "soul_get",
-			Description: "Read the agent's current soul: name, persona description, emotive style dimensions (excitement/formality/directness/sarcasm/humor 0-10), emoji_usage, and the list of anecdotal fragments. Use this before tuning so you reason from the live state rather than guessing what's set.",
+			Name:             "soul_get",
+			Path:             BuiltinScheme + "soul_get",
+			Description:      "Read the agent's current soul: name, persona description, emotive style dimensions (excitement/formality/directness/sarcasm/humor 0-10), emoji_usage, and the list of anecdotal fragments. Use this before tuning so you reason from the live state rather than guessing what's set.",
 			ParametersSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`),
 			RiskTier:         types.RiskReversible,
 		},
@@ -121,9 +121,9 @@ func SoulToolDefs() []*types.ToolDef {
 			RiskTier: types.RiskCommunicating,
 		},
 		{
-			Name:        "soul_fragment_list",
-			Path:        BuiltinScheme + "soul_fragment_list",
-			Description: "List all currently remembered anecdotal fragments. Useful when the user asks 'what do you remember about me?' or before pruning.",
+			Name:             "soul_fragment_list",
+			Path:             BuiltinScheme + "soul_fragment_list",
+			Description:      "List all currently remembered anecdotal fragments. Useful when the user asks 'what do you remember about me?' or before pruning.",
 			ParametersSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`),
 			RiskTier:         types.RiskReversible,
 		},
@@ -158,7 +158,7 @@ func soulGetHandler(m SoulMutator) BuiltinFunc {
 }
 
 func soulTuneHandler(m SoulMutator) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		field := strings.TrimSpace(args["field"])
 		if field == "" {
 			return nil, 2, errors.New("soul_tune: field required")
@@ -171,7 +171,7 @@ func soulTuneHandler(m SoulMutator) BuiltinFunc {
 			if value == "" {
 				return nil, 2, errors.New("soul_tune: value required for field=name")
 			}
-			cleaned, err := m.SetName(value)
+			cleaned, err := m.SetName(ctx, value)
 			if err != nil {
 				return nil, 2, err
 			}
@@ -182,7 +182,7 @@ func soulTuneHandler(m SoulMutator) BuiltinFunc {
 			if value == "" {
 				return nil, 2, errors.New("soul_tune: value required for field=emoji_usage")
 			}
-			if err := m.SetEmojiUsage(value); err != nil {
+			if err := m.SetEmojiUsage(ctx, value); err != nil {
 				return nil, 2, err
 			}
 			out, _ := json.Marshal(map[string]any{"field": "emoji_usage", "value": value})
@@ -196,7 +196,7 @@ func soulTuneHandler(m SoulMutator) BuiltinFunc {
 			if err != nil {
 				return nil, 2, fmt.Errorf("soul_tune: delta must be integer, got %q", rawDelta)
 			}
-			prev, next, err := m.Tune(field, delta)
+			prev, next, err := m.Tune(ctx, field, delta)
 			if err != nil {
 				out, _ := json.Marshal(map[string]any{
 					"field": field, "prev": prev, "next": next, "applied": false, "reason": err.Error(),
@@ -213,12 +213,12 @@ func soulTuneHandler(m SoulMutator) BuiltinFunc {
 }
 
 func soulFragmentAddHandler(m SoulMutator) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		text := strings.TrimSpace(args["text"])
 		if text == "" {
 			return nil, 2, errors.New("soul_fragment_add: text required")
 		}
-		cleaned, total, err := m.AddFragment(text)
+		cleaned, total, err := m.AddFragment(ctx, text)
 		if err != nil {
 			return nil, 2, err
 		}
@@ -228,12 +228,12 @@ func soulFragmentAddHandler(m SoulMutator) BuiltinFunc {
 }
 
 func soulFragmentRemoveHandler(m SoulMutator) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		needle := strings.TrimSpace(args["needle"])
 		if needle == "" {
 			return nil, 2, errors.New("soul_fragment_remove: needle required")
 		}
-		removed, err := m.RemoveFragment(needle)
+		removed, err := m.RemoveFragment(ctx, needle)
 		if err != nil {
 			return nil, 2, err
 		}
@@ -250,7 +250,7 @@ func soulFragmentListHandler(m SoulMutator) BuiltinFunc {
 }
 
 func soulHistoryRollbackHandler(m SoulMutator) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		steps := 1
 		if raw := strings.TrimSpace(args["steps"]); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -259,7 +259,7 @@ func soulHistoryRollbackHandler(m SoulMutator) BuiltinFunc {
 			}
 			steps = n
 		}
-		ts, err := m.HistoryRollback(steps)
+		ts, err := m.HistoryRollback(ctx, steps)
 		if err != nil {
 			return nil, 1, err
 		}

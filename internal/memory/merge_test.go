@@ -8,7 +8,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // fixedAdjudicator returns a preset MergeDecision for every cluster,
@@ -31,13 +30,13 @@ func seedLongTermPair(t *testing.T, s *Store, idA, idB string) {
 		Id:        idA,
 		Embedding: []float32{1.00, 0, 0},
 		Text:      "Jen likes cheese",
-		Retention: string(types.RetentionLongTerm),
+		Retention: lobslawv1.Retention_RETENTION_LONG_TERM,
 	})
 	seedVectorFull(t, s, &lobslawv1.VectorRecord{
 		Id:        idB,
 		Embedding: []float32{0.99, 0.01, 0},
 		Text:      "Jen enjoys cheese",
-		Retention: string(types.RetentionLongTerm),
+		Retention: lobslawv1.Retention_RETENTION_LONG_TERM,
 	})
 }
 
@@ -228,10 +227,10 @@ func TestMergePhaseOnlyLongTermRecords(t *testing.T) {
 
 	// Two near-identical SESSION records — should be ignored entirely.
 	seedVectorFull(t, s, &lobslawv1.VectorRecord{
-		Id: "sess-a", Embedding: []float32{1, 0, 0}, Retention: string(types.RetentionSession),
+		Id: "sess-a", Embedding: []float32{1, 0, 0}, Retention: lobslawv1.Retention_RETENTION_SESSION,
 	})
 	seedVectorFull(t, s, &lobslawv1.VectorRecord{
-		Id: "sess-b", Embedding: []float32{0.99, 0.01, 0}, Retention: string(types.RetentionSession),
+		Id: "sess-b", Embedding: []float32{0.99, 0.01, 0}, Retention: lobslawv1.Retention_RETENTION_SESSION,
 	})
 
 	result, err := d.mergePhase(context.Background())

@@ -115,12 +115,15 @@ type StorageMountConfig struct {
 	Label            string            `koanf:"label"`
 	Type             string            `koanf:"type"`
 	Path             string            `koanf:"path,omitempty"`
-	// Writable controls whether the agent can write/edit files
-	// inside this mount via builtin fs tools. Default false — the
-	// operator must opt in explicitly, because a default-writable
-	// mount could corrupt internal state (snapshots, bbolt files)
-	// if its path overlaps with cluster-private directories.
-	Writable bool `koanf:"writable,omitempty"`
+	// Mode is the access bits granted to the agent for this mount,
+	// expressed as any subset of "rwx" (case-insensitive). Empty or
+	// "r"/"ro" → read-only (the safe default). "rw" enables write,
+	// "rx" enables exec (binaries the agent may run but not modify),
+	// "rwx" enables all three. Mount mode is the single source of
+	// truth — the MountResolver gates fs builtins by it AND the
+	// Landlock helper builds skill / shell_command sandboxes from
+	// the same table.
+	Mode string `koanf:"mode,omitempty"`
 	// Excludes is a list of glob patterns (e.g. ".git/**", "*.key",
 	// "node_modules/**") hidden from list/glob/grep/read inside
 	// this mount. Hardcoded internal excludes (.snapshot, state.db,

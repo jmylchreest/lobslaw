@@ -379,8 +379,8 @@ type minimaxEmbeddingRequest struct {
 }
 
 type minimaxEmbeddingResponse struct {
-	Vectors  [][]float32      `json:"vectors"`
-	BaseResp minimaxBaseResp  `json:"base_resp"`
+	Vectors  [][]float32     `json:"vectors"`
+	BaseResp minimaxBaseResp `json:"base_resp"`
 }
 
 type minimaxBaseResp struct {

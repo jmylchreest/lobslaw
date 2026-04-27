@@ -10,13 +10,13 @@ import (
 // strings on the wire (operators can declare anything in their
 // config) but these are the ones lobslaw itself looks for.
 const (
-	CapabilityChat              = "chat"
-	CapabilityFunctionCalling   = "function-calling"
-	CapabilityVision            = "vision"
-	CapabilityAudioTranscribe   = "audio-transcription"
-	CapabilityAudioMultimodal   = "audio-multimodal"
-	CapabilityPDF               = "pdf"
-	CapabilityEmbeddings        = "embeddings"
+	CapabilityChat            = "chat"
+	CapabilityFunctionCalling = "function-calling"
+	CapabilityVision          = "vision"
+	CapabilityAudioTranscribe = "audio-transcription"
+	CapabilityAudioMultimodal = "audio-multimodal"
+	CapabilityPDF             = "pdf"
+	CapabilityEmbeddings      = "embeddings"
 )
 
 // SelectByCapability returns providers carrying any of the given

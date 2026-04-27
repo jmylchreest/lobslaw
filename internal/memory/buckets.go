@@ -16,7 +16,16 @@ const (
 	// bucket avoids per-channel bucket proliferation while keeping
 	// scans cheap and predictable.
 	BucketChannelState = "channel_state"
+	// BucketSoulTune holds the cluster-wide agent personality overlay
+	// — name, emotive dimensions, fragments. Single record keyed by
+	// SoulTuneRecordID. Replaces the local SOUL.md write path so
+	// container deployments don't need a writable file mount.
+	BucketSoulTune = "soul_tune"
 )
+
+// SoulTuneRecordID is the constant key under BucketSoulTune. There
+// is one tune record per cluster — the agent has one identity.
+const SoulTuneRecordID = "soul:tune"
 
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
@@ -28,4 +37,5 @@ var allBuckets = []string{
 	BucketEpisodicRecords,
 	BucketStorageMounts,
 	BucketChannelState,
+	BucketSoulTune,
 }

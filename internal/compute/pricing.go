@@ -31,9 +31,9 @@ var BuiltinPricing = map[string]types.ProviderPricing{
 	"gpt-3.5-turbo": {InputUSDPer1K: 0.0005, OutputUSDPer1K: 0.0015},
 
 	// Anthropic (via OpenAI-compat gateway or direct once supported)
-	"claude-opus-4-7":    {InputUSDPer1K: 0.015, OutputUSDPer1K: 0.075, CachedUSDPer1K: 0.0015},
-	"claude-sonnet-4-6":  {InputUSDPer1K: 0.003, OutputUSDPer1K: 0.015, CachedUSDPer1K: 0.0003},
-	"claude-haiku-4-5":   {InputUSDPer1K: 0.0008, OutputUSDPer1K: 0.004, CachedUSDPer1K: 0.00008},
+	"claude-opus-4-7":   {InputUSDPer1K: 0.015, OutputUSDPer1K: 0.075, CachedUSDPer1K: 0.0015},
+	"claude-sonnet-4-6": {InputUSDPer1K: 0.003, OutputUSDPer1K: 0.015, CachedUSDPer1K: 0.0003},
+	"claude-haiku-4-5":  {InputUSDPer1K: 0.0008, OutputUSDPer1K: 0.004, CachedUSDPer1K: 0.00008},
 
 	// Local (Ollama) — assumed zero cost; operators running self-hosted
 	// can override to account for GPU-hour amortisation if needed.

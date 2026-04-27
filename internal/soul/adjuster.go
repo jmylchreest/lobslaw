@@ -5,56 +5,66 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"sync"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// Adjuster owns the live Soul state and mutates emotive dimensions
-// in response to user feedback. One instance per node — the soul is
-// node-local state (not Raft-replicated) because personalization is
-// inherently a local conversation, and an operator running N nodes
-// with the same SOUL.md stays consistent through the shared file
-// rather than through Raft.
+// Adjuster owns the live Soul state. The agent's tunable subset
+// (name, emotive dimensions, emoji_usage, fragments) is overlaid on
+// the operator's immutable SOUL.md baseline at read time. Mutations
+// write through a TuneStore — production wires a raft-backed store
+// so cluster nodes converge; tests use MemoryTuneStore.
+//
+// SOUL.md on disk is read-only. The Adjuster never writes to it.
+// This means container deployments don't need a writable file mount,
+// configmap-as-symlink edge cases disappear, and the agent's
+// personality stays consistent across nodes.
 type Adjuster struct {
 	mu         sync.RWMutex
-	soul       *Soul
+	baseline   *Soul      // operator-curated, immutable for the lifetime of the process
+	tune       *TuneState // cached overlay; refreshed on every Put
+	store      TuneStore  // raft-backed in prod, in-memory in tests
 	classifier Classifier
-	now        func() time.Time // clock injection for tests
+	now        func() time.Time
 
-	// baseline is the EmotiveStyle as originally loaded. The ±3 cap
-	// is measured against THIS, not the current (mutated) state, so
-	// drift can't accumulate past the bound over many adjustments.
-	baseline types.EmotiveStyle
+	// baselineEmotive is the EmotiveStyle as originally loaded.
+	// MaxDriftFromBaseline is measured against THIS so drift can't
+	// accumulate past ±3 over many adjustments.
+	baselineEmotive types.EmotiveStyle
 
-	// lastAdjusted per-dimension so we can enforce the cooldown. Map
-	// key is the dimension name; absent = never adjusted.
+	// lastAdjusted per-dimension powers the cooldown for natural-
+	// language feedback. Tune (the explicit operator/owner action)
+	// bypasses cooldown intentionally.
 	lastAdjusted map[string]time.Time
 }
 
-// MaxDriftFromBaseline is the ±3 cap any single dimension can move
-// from its baseline value. Matches the PLAN.md requirement. Made a
-// package-level constant so it's obvious + changeable at one site.
+// MaxDriftFromBaseline is the ±3 cap any single emotive dimension
+// can move from its baseline. Made a package-level constant so it's
+// obvious + changeable at one site.
 const MaxDriftFromBaseline = 3
 
-// AdjusterConfig bundles the dependencies. Classifier defaults to
-// RegexClassifier when nil; now defaults to time.Now.
+// AdjusterConfig bundles the dependencies. Store is REQUIRED — pass
+// MemoryTuneStore for tests that don't want raft. Classifier
+// defaults to RegexClassifier when nil; now defaults to time.Now.
 type AdjusterConfig struct {
 	Soul       *Soul
+	Store      TuneStore
 	Classifier Classifier
 	Now        func() time.Time
 }
 
-// NewAdjuster wires the adjuster. A nil Soul is a boot error
-// (callers should route through LoadOrDefault first); nil
-// Classifier falls back to the offline regex path.
+// NewAdjuster wires the Adjuster. Loads the current tune from the
+// store at construction so Soul() reflects cluster state from boot
+// (rather than transiently serving baseline-only until the first
+// mutator runs).
 func NewAdjuster(cfg AdjusterConfig) (*Adjuster, error) {
 	if cfg.Soul == nil {
-		return nil, errors.New("soul: Adjuster requires a Soul")
+		return nil, errors.New("soul: Adjuster requires a Soul (baseline)")
+	}
+	if cfg.Store == nil {
+		return nil, errors.New("soul: Adjuster requires a TuneStore")
 	}
 	classifier := cfg.Classifier
 	if classifier == nil {
@@ -64,50 +74,151 @@ func NewAdjuster(cfg AdjusterConfig) (*Adjuster, error) {
 	if now == nil {
 		now = time.Now
 	}
-	baseline := cfg.Soul.Config.EmotiveStyle
-	return &Adjuster{
-		soul:         cfg.Soul,
-		classifier:   classifier,
-		now:          now,
-		baseline:     baseline,
-		lastAdjusted: make(map[string]time.Time),
-	}, nil
+	a := &Adjuster{
+		baseline:        cfg.Soul,
+		store:           cfg.Store,
+		classifier:      classifier,
+		now:             now,
+		baselineEmotive: cfg.Soul.Config.EmotiveStyle,
+		lastAdjusted:    make(map[string]time.Time),
+	}
+	current, err := cfg.Store.Get(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("soul: load current tune: %w", err)
+	}
+	a.tune = current
+	return a, nil
 }
 
-// Soul returns a snapshot of the current Soul. Safe for concurrent
-// reads; callers should not mutate the returned struct.
+// Soul returns the merged baseline+tune view. The returned struct
+// is a snapshot — callers must not mutate it.
 func (a *Adjuster) Soul() Soul {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return *a.soul
+	return a.mergedLocked()
 }
 
-// ApplyResult describes the outcome of an Apply call. Applied=true
-// means the dimension moved AND the soul was persisted. When
-// Applied=false, Reason explains why — cooldown active, cap
-// reached, unclassifiable feedback, etc. The channel handler
-// surfaces Reason to the user so "I heard you but didn't change"
-// is distinguishable from "I didn't understand you."
+// mergedLocked builds the live Soul by overlaying tune on baseline.
+// Caller holds a.mu (read or write).
+func (a *Adjuster) mergedLocked() Soul {
+	out := *a.baseline
+	out.Config = a.baseline.Config
+	out.Config.Fragments = append([]string(nil), a.baseline.Config.Fragments...)
+	if a.tune == nil {
+		return out
+	}
+	if a.tune.Name != nil {
+		out.Config.Name = *a.tune.Name
+	}
+	if a.tune.Excitement != nil {
+		out.Config.EmotiveStyle.Excitement = *a.tune.Excitement
+	}
+	if a.tune.Formality != nil {
+		out.Config.EmotiveStyle.Formality = *a.tune.Formality
+	}
+	if a.tune.Directness != nil {
+		out.Config.EmotiveStyle.Directness = *a.tune.Directness
+	}
+	if a.tune.Sarcasm != nil {
+		out.Config.EmotiveStyle.Sarcasm = *a.tune.Sarcasm
+	}
+	if a.tune.Humor != nil {
+		out.Config.EmotiveStyle.Humor = *a.tune.Humor
+	}
+	if a.tune.EmojiUsage != nil {
+		out.Config.EmotiveStyle.EmojiUsage = *a.tune.EmojiUsage
+	}
+	if a.tune.Fragments != nil {
+		out.Config.Fragments = append([]string(nil), (*a.tune.Fragments)...)
+	}
+	return out
+}
+
+// emotiveValueLocked returns the current effective value for an
+// emotive dimension — tune override if present, baseline otherwise.
+// Caller holds a.mu.
+func (a *Adjuster) emotiveValueLocked(name string) (current, baseline int, ok bool) {
+	switch name {
+	case "excitement":
+		baseline = a.baselineEmotive.Excitement
+		current = baseline
+		if a.tune != nil && a.tune.Excitement != nil {
+			current = *a.tune.Excitement
+		}
+		return current, baseline, true
+	case "formality":
+		baseline = a.baselineEmotive.Formality
+		current = baseline
+		if a.tune != nil && a.tune.Formality != nil {
+			current = *a.tune.Formality
+		}
+		return current, baseline, true
+	case "directness":
+		baseline = a.baselineEmotive.Directness
+		current = baseline
+		if a.tune != nil && a.tune.Directness != nil {
+			current = *a.tune.Directness
+		}
+		return current, baseline, true
+	case "sarcasm":
+		baseline = a.baselineEmotive.Sarcasm
+		current = baseline
+		if a.tune != nil && a.tune.Sarcasm != nil {
+			current = *a.tune.Sarcasm
+		}
+		return current, baseline, true
+	case "humor":
+		baseline = a.baselineEmotive.Humor
+		current = baseline
+		if a.tune != nil && a.tune.Humor != nil {
+			current = *a.tune.Humor
+		}
+		return current, baseline, true
+	}
+	return 0, 0, false
+}
+
+// setEmotiveLocked writes a new value to the named field on a tune
+// state copy. Returns an error for unknown dimensions.
+func setEmotiveLocked(state *TuneState, name string, value int) error {
+	v := value
+	switch name {
+	case "excitement":
+		state.Excitement = &v
+	case "formality":
+		state.Formality = &v
+	case "directness":
+		state.Directness = &v
+	case "sarcasm":
+		state.Sarcasm = &v
+	case "humor":
+		state.Humor = &v
+	default:
+		return fmt.Errorf("unknown dimension %q", name)
+	}
+	return nil
+}
+
+// ApplyResult describes the outcome of an Apply call. See the
+// per-field semantics in the existing comment.
 type ApplyResult struct {
-	Applied    bool
-	Dimension  string
-	Direction  Direction
-	PrevValue  int
-	NewValue   int
-	Reason     string
+	Applied   bool
+	Dimension string
+	Direction Direction
+	PrevValue int
+	NewValue  int
+	Reason    string
 }
 
-// Apply processes one feedback utterance end-to-end: classify →
-// cooldown check → clamp to ±3 from baseline → write new value →
-// persist to SOUL.md. Returns ApplyResult describing the outcome
-// (including the reason when no change happened).
+// Apply processes one feedback utterance: classify → cooldown check →
+// clamp to ±3 from baseline → persist new tune state. The cooldown
+// state is in-memory per process so it doesn't replicate; that's
+// intentional — natural-language feedback should be node-local
+// because two nodes won't see the same utterance.
 func (a *Adjuster) Apply(ctx context.Context, utterance string) (*ApplyResult, error) {
 	fb, err := a.classifier.Classify(ctx, utterance)
 	if err != nil {
-		return &ApplyResult{
-			Applied: false,
-			Reason:  "could not classify feedback",
-		}, nil
+		return &ApplyResult{Applied: false, Reason: "could not classify feedback"}, nil
 	}
 
 	a.mu.Lock()
@@ -115,41 +226,28 @@ func (a *Adjuster) Apply(ctx context.Context, utterance string) (*ApplyResult, e
 
 	if last, ok := a.lastAdjusted[fb.Dimension]; ok {
 		elapsed := a.now().Sub(last)
-		cooldown := a.soul.Config.Adjustments.CooldownPeriod
+		cooldown := a.baseline.Config.Adjustments.CooldownPeriod
 		if cooldown > 0 && elapsed < cooldown {
 			return &ApplyResult{
 				Applied:   false,
 				Dimension: fb.Dimension,
 				Direction: fb.Direction,
-				Reason: fmt.Sprintf("%s adjustment cooling down (%v remaining)",
-					fb.Dimension, cooldown-elapsed),
+				Reason:    fmt.Sprintf("%s adjustment cooling down (%v remaining)", fb.Dimension, cooldown-elapsed),
 			}, nil
 		}
 	}
 
-	currentPtr, baselinePtr := a.dimensionPointers(fb.Dimension)
-	if currentPtr == nil {
-		return &ApplyResult{
-			Applied:   false,
-			Dimension: fb.Dimension,
-			Reason:    "dimension not addressable — internal error",
-		}, nil
+	prev, baseline, ok := a.emotiveValueLocked(fb.Dimension)
+	if !ok {
+		return &ApplyResult{Applied: false, Dimension: fb.Dimension, Reason: "dimension not addressable — internal error"}, nil
 	}
-	prev := *currentPtr
 
-	// Direction's sign drives the direction of the change:
-	//   decrease (−1) × coef × 10 → negative delta → lower value
-	//   increase (+1) × coef × 10 → positive delta → higher value
-	// Coefficient is a 0–1 fraction of the 0–10 scale, rounded to
-	// an int for a crisp user-facing value.
-	coefficient := a.soul.Config.Adjustments.FeedbackCoefficient
+	coefficient := a.baseline.Config.Adjustments.FeedbackCoefficient
 	if coefficient <= 0 {
 		coefficient = 0.15
 	}
 	delta := int(math.Round(coefficient * 10 * float64(fb.Direction)))
 	if delta == 0 {
-		// Coefficient × 10 < 0.5 rounds to zero — treat as "too
-		// small to matter this turn" rather than a silent no-op.
 		return &ApplyResult{
 			Applied:   false,
 			Dimension: fb.Dimension,
@@ -159,20 +257,7 @@ func (a *Adjuster) Apply(ctx context.Context, utterance string) (*ApplyResult, e
 		}, nil
 	}
 
-	newValue := prev + delta
-	baseline := *baselinePtr
-	if newValue > baseline+MaxDriftFromBaseline {
-		newValue = baseline + MaxDriftFromBaseline
-	}
-	if newValue < baseline-MaxDriftFromBaseline {
-		newValue = baseline - MaxDriftFromBaseline
-	}
-	if newValue < 0 {
-		newValue = 0
-	}
-	if newValue > 10 {
-		newValue = 10
-	}
+	newValue := clamp(prev+delta, baseline)
 	if newValue == prev {
 		return &ApplyResult{
 			Applied:   false,
@@ -184,15 +269,16 @@ func (a *Adjuster) Apply(ctx context.Context, utterance string) (*ApplyResult, e
 		}, nil
 	}
 
-	*currentPtr = newValue
-	a.lastAdjusted[fb.Dimension] = a.now()
-
-	if err := a.persistLocked(); err != nil {
-		// Roll back the in-memory change — otherwise the agent's
-		// Soul view and the on-disk file would diverge.
-		*currentPtr = prev
+	state := a.tune.Clone()
+	if err := setEmotiveLocked(state, fb.Dimension, newValue); err != nil {
+		return nil, err
+	}
+	state.UpdatedBy = "feedback"
+	if err := a.store.Put(ctx, state); err != nil {
 		return nil, fmt.Errorf("soul: persist: %w", err)
 	}
+	a.tune = state
+	a.lastAdjusted[fb.Dimension] = a.now()
 
 	return &ApplyResult{
 		Applied:   true,
@@ -204,90 +290,27 @@ func (a *Adjuster) Apply(ctx context.Context, utterance string) (*ApplyResult, e
 	}, nil
 }
 
-// dimensionPointers returns in-place pointers to the live
-// EmotiveStyle field + its baseline counterpart so Apply can mutate
-// + clamp in one place. Returns (nil, nil) for unknown names.
-func (a *Adjuster) dimensionPointers(name string) (*int, *int) {
-	style := &a.soul.Config.EmotiveStyle
-	base := &a.baseline
-	switch name {
-	case "excitement":
-		return &style.Excitement, &base.Excitement
-	case "formality":
-		return &style.Formality, &base.Formality
-	case "directness":
-		return &style.Directness, &base.Directness
-	case "sarcasm":
-		return &style.Sarcasm, &base.Sarcasm
-	case "humor":
-		return &style.Humor, &base.Humor
+// clamp enforces the 0..10 hard bounds AND ±MaxDriftFromBaseline
+// from baseline. Centralised so Apply + Tune use identical logic.
+func clamp(value, baseline int) int {
+	if value > baseline+MaxDriftFromBaseline {
+		value = baseline + MaxDriftFromBaseline
 	}
-	return nil, nil
+	if value < baseline-MaxDriftFromBaseline {
+		value = baseline - MaxDriftFromBaseline
+	}
+	if value < 0 {
+		value = 0
+	}
+	if value > 10 {
+		value = 10
+	}
+	return value
 }
 
-// persistLocked writes the current Soul back to disk. Preserves the
-// markdown body verbatim and re-serialises only the YAML frontmatter
-// so operator comments / blank lines in the body don't get lost on
-// every adjustment. Caller must hold a.mu.
-//
-// Before overwriting, snapshots the current on-disk file to
-// soul.d/history/<ts>.md so HistoryRollback can recover a known-good
-// version after a regrettable agent self-edit.
-func (a *Adjuster) persistLocked() error {
-	if a.soul.Path == "" {
-		// No on-disk representation (e.g. DefaultSoul). In-memory
-		// mutation only. Safe outcome: nothing to persist.
-		return nil
-	}
-	a.snapshotHistoryLocked()
-	encoded, err := encodeFrontmatter(a.soul.Config)
-	if err != nil {
-		return err
-	}
-	// Trailing newline on the body keeps the file POSIX-compliant
-	// (last line ends in newline) and means diffs only show the
-	// frontmatter changes, not a shifted EOF marker.
-	out := "---\n" + string(encoded) + "---\n\n" + a.soul.Body
-	if len(a.soul.Body) > 0 && a.soul.Body[len(a.soul.Body)-1] != '\n' {
-		out += "\n"
-	}
-	return os.WriteFile(a.soul.Path, []byte(out), 0o644)
-}
-
-// encodeFrontmatter serialises SoulConfig as YAML with deterministic
-// key ordering so diffs between adjustments are minimal (one line
-// changed rather than a full rewrite). yaml.Marshal uses the struct
-// field order which is stable across runs.
-func encodeFrontmatter(cfg types.SoulConfig) ([]byte, error) {
-	var buf yamlBuffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&cfg); err != nil {
-		return nil, err
-	}
-	if err := enc.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// yamlBuffer is a minimal bytes.Buffer shim that satisfies
-// io.Writer. Wrapping the standard library type avoids pulling
-// "bytes" into this file's imports just for one stanza.
-type yamlBuffer struct{ buf []byte }
-
-func (b *yamlBuffer) Write(p []byte) (int, error) {
-	b.buf = append(b.buf, p...)
-	return len(p), nil
-}
-
-func (b *yamlBuffer) Bytes() []byte { return b.buf }
-
-// CooldownRemaining reports how long before the given dimension
-// can be adjusted again. Returns 0 when the dimension has never
-// been adjusted OR its cooldown has elapsed. Exposed for UI / CLI
-// surfaces that want to show "you already adjusted sarcasm — next
-// available in 4h."
+// CooldownRemaining reports how long before the named dimension can
+// be adjusted again via natural-language feedback. Tune (explicit
+// owner action) is not gated by cooldown.
 func (a *Adjuster) CooldownRemaining(dimension string) time.Duration {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -295,7 +318,7 @@ func (a *Adjuster) CooldownRemaining(dimension string) time.Duration {
 	if !ok {
 		return 0
 	}
-	cooldown := a.soul.Config.Adjustments.CooldownPeriod
+	cooldown := a.baseline.Config.Adjustments.CooldownPeriod
 	if cooldown <= 0 {
 		return 0
 	}
@@ -304,4 +327,12 @@ func (a *Adjuster) CooldownRemaining(dimension string) time.Duration {
 		return 0
 	}
 	return cooldown - elapsed
+}
+
+// touch is exposed only for tests so they can advance the internal
+// clock without exporting Now().
+func (a *Adjuster) touch(t time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastAdjusted["__touch"] = t
 }

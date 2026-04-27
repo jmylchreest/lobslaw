@@ -1,8 +1,8 @@
 package compute
 
 import (
-	cryptorand "crypto/rand"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -225,7 +225,7 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr
 	}
-	hits, err := memory.VectorSearch(store, vec, limit*2, "", "")
+	hits, err := memory.VectorSearch(store, vec, limit*2, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr
@@ -511,7 +511,7 @@ func newMemoryWriteHandler(raft memoryRaftApplier) BuiltinFunc {
 			Importance: importance,
 			Tags:       tags,
 			Timestamp:  timestamppb.Now(),
-			Retention:  "long",
+			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -708,7 +708,7 @@ func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter) 
 			Importance: 5,
 			Tags:       []string{"corrects:" + oldID},
 			Timestamp:  timestamppb.Now(),
-			Retention:  "long",
+			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -759,7 +759,11 @@ func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
 				limit = n
 			}
 		}
-		retentionFilter := strings.TrimSpace(strings.ToLower(args["retention"]))
+		retentionFilterEnum, retErr := types.ParseRetention(args["retention"])
+		if retErr != nil {
+			return nil, 2, retErr
+		}
+		retentionFilter := types.RetentionString(retentionFilterEnum)
 
 		var cutoff time.Time
 		if raw, ok := args["since"]; ok && raw != "" {
@@ -787,7 +791,7 @@ func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
 			if err := proto.Unmarshal(raw, &rec); err != nil {
 				return nil
 			}
-			if retentionFilter != "" && !strings.EqualFold(rec.Retention, retentionFilter) {
+			if retentionFilterEnum != lobslawv1.Retention_RETENTION_UNSPECIFIED && rec.Retention != retentionFilterEnum {
 				return nil
 			}
 			t := rec.Timestamp.AsTime()
@@ -798,7 +802,7 @@ func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
 				ID:         rec.Id,
 				Event:      rec.Event,
 				Context:    rec.Context,
-				Retention:  rec.Retention,
+				Retention:  types.RetentionString(rec.Retention),
 				Importance: rec.Importance,
 				Tags:       rec.Tags,
 				Timestamp:  t.Format(time.RFC3339),

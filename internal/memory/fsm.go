@@ -25,6 +25,33 @@ type FSM struct {
 	mu    sync.RWMutex
 	store *Store
 
+	// CALLBACK CONTRACT (applies to every *Change field below):
+	//
+	// Callbacks fire SYNCHRONOUSLY under f.mu after a successful Apply.
+	// They MUST NOT block AND they MUST NOT acquire any lock that the
+	// caller of raft.Apply might hold — doing so deadlocks because the
+	// mutator is currently waiting for raft.Apply to return.
+	//
+	// Concrete deadlock pattern (caught by the soul-tune callback):
+	//
+	//   goroutine A (mutator):
+	//     a.mu.Lock()              // user-side lock
+	//     raft.Apply(...)          // blocks until FSM applies + replicates
+	//
+	//   goroutine B (FSM Apply, fired by raft):
+	//     f.mu.Lock()
+	//     f.<bucket>Change()       // synchronous callback
+	//       a.mu.Lock()            // ← deadlock: A holds it, never releases
+	//                              //   because A is waiting on raft.Apply
+	//                              //   which is blocked on this Apply.
+	//
+	// Callback authors should either (a) take no user-side locks at all,
+	// (b) defer the work onto a goroutine, or (c) use a trylock pattern
+	// and skip the update when contended (the next callback fire will
+	// catch up). The soul-tune callback uses (b); the storage callback
+	// is safe under (a) because Reconcile takes the storage manager's
+	// lock which no caller of AddMount/RemoveMount holds during apply.
+
 	// schedulerChange is fired (if non-nil) after every successful
 	// apply that touched scheduled_tasks or commitments. Lets the
 	// scheduler wake on remote-originated writes without polling.
@@ -35,6 +62,12 @@ type FSM struct {
 	// touched storage_mounts. Lets the storage Service reconcile
 	// the local Manager with the replicated config.
 	storageChange func()
+
+	// soulTuneChange is fired after every successful apply that
+	// touched soul_tune. Lets the Adjuster refresh its in-memory
+	// view so a remote leader's mutation propagates without a
+	// process restart.
+	soulTuneChange func()
 }
 
 // NewFSM wraps a Store as a Raft FSM.
@@ -62,6 +95,16 @@ func (f *FSM) SetStorageChangeCallback(cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.storageChange = cb
+}
+
+// SetSoulTuneChangeCallback registers a callback that fires after
+// each FSM.Apply that touches BucketSoulTune. Used by the Adjuster
+// to refresh its in-memory view when a remote node's mutation lands
+// here via raft replication.
+func (f *FSM) SetSoulTuneChangeCallback(cb func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.soulTuneChange = cb
 }
 
 // Store returns the underlying store. Intended for read-path code;
@@ -106,6 +149,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 			case BucketStorageMounts:
 				if f.storageChange != nil {
 					f.storageChange()
+				}
+			case BucketSoulTune:
+				if f.soulTuneChange != nil {
+					f.soulTuneChange()
 				}
 			}
 		}
@@ -246,6 +293,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketStorageMounts, p.StorageMount, nil
 	case *lobslawv1.LogEntry_ChannelState:
 		return BucketChannelState, p.ChannelState, nil
+	case *lobslawv1.LogEntry_SoulTune:
+		return BucketSoulTune, p.SoulTune, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

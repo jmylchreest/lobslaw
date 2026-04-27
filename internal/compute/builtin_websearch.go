@@ -97,10 +97,10 @@ type exaSearchResponse struct {
 }
 
 type exaResult struct {
-	Title         string `json:"title"`
-	URL           string `json:"url"`
-	PublishedDate string `json:"publishedDate,omitempty"`
-	Text          string `json:"text,omitempty"`
+	Title         string  `json:"title"`
+	URL           string  `json:"url"`
+	PublishedDate string  `json:"publishedDate,omitempty"`
+	Text          string  `json:"text,omitempty"`
 	Score         float64 `json:"score,omitempty"`
 }
 

@@ -8,7 +8,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // MergeResult carries the post-merge counts. Populated per Dream
@@ -44,7 +43,7 @@ func (d *DreamRunner) mergePhase(ctx context.Context) (MergeResult, error) {
 	}
 	clusters, err := findClusters(d.store, clusterQuery{
 		threshold:       defaultClusterThreshold,
-		retentionFilter: string(types.RetentionLongTerm),
+		retentionFilter: lobslawv1.Retention_RETENTION_LONG_TERM,
 	})
 	if err != nil {
 		return MergeResult{}, fmt.Errorf("find clusters: %w", err)
@@ -112,10 +111,10 @@ func (d *DreamRunner) applyMerge(c *lobslawv1.Cluster, decision MergeDecision) e
 	}
 
 	sourceIDs := make([]string, len(c.Records))
-	retentions := make([]types.Retention, 0, len(c.Records))
+	retentions := make([]lobslawv1.Retention, 0, len(c.Records))
 	for i, r := range c.Records {
 		sourceIDs[i] = r.Id
-		retentions = append(retentions, types.Retention(r.Retention))
+		retentions = append(retentions, r.Retention)
 	}
 
 	centroid := computeCentroid(c.Records)
@@ -125,7 +124,7 @@ func (d *DreamRunner) applyMerge(c *lobslawv1.Cluster, decision MergeDecision) e
 		Id:        "merged-" + c.Id,
 		Embedding: centroid,
 		Text:      decision.MergedText,
-		Retention: string(highestRetention(retentions)),
+		Retention: highestRetention(retentions),
 		SourceIds: sourceIDs,
 		CreatedAt: timestamppb.New(now),
 		Scope:     c.Records[0].Scope,

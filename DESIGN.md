@@ -277,6 +277,24 @@ Right-to-be-forgotten is first-class. The aggressive sweep is what keeps data fr
 
 Operators can override `poll_interval` per-mount. rclone's own `--vfs-cache-poll-interval` is enabled on `rclone:` mounts for VFS cache consistency, but we don't depend on it for the event stream.
 
+#### Storage Isolation Contract
+
+The agent's filesystem reach is bounded by the storage mount table. **Mount mode (`r` / `rw` / `rx` / `rwx`) is the single source of truth** — both the in-process MountResolver and the Landlock sandbox derive their enforcement from the same per-mount mode bits.
+
+| Surface | Reachable paths | Mode enforcement |
+|---|---|---|
+| Builtin fs tools (read_file, list_files, glob, grep, edit_file, write_file) | mount-label-prefixed (`workspace/x.md`) OR absolute paths that fall inside a registered mount root | `MountResolver.Resolve` checks the mount's `read`/`write` bits |
+| `shell_command` builtin | unrestricted process FS access **subject to** kernel-enforced Landlock | Landlock policy built from `MountResolver.Mounts()` plus a small system-paths floor (`/lib`, `/usr/bin`, `/tmp` rw, etc.) |
+| Skill subprocesses | manifest-declared `storage:` labels only | Landlock policy built per-invocation; skill's requested mode is intersected with the mount's mode (skill claiming `write` on an `rx` mount fails policy build, not silently dropped) |
+
+Rules every fs-touching code path must follow:
+
+1. Builtins inside `internal/compute/` route every user-supplied path through `resolveFsPath`. Bare `os.Open` / `os.ReadFile` / `os.WriteFile` against a user-supplied path is a bug.
+2. Cluster-internal state files (raft snapshots, bbolt store, mTLS keys) live outside `internal/compute/` and never appear in any storage mount. The `internalExcludes` basename block-list in `builtin_fs.go` is defence-in-depth — it catches `state.db`, `*.pem`, `.raft`, etc., but the primary defence is "this path isn't reachable through any registered mount."
+3. New builtins that exec subprocesses must apply a `sandbox.Policy` derived from `LandlockMounts()` (the helper in `internal/compute/landlock_mounts.go`). Skills go through `skills.Invoker`'s policy builder, which already does this.
+4. Mount mode `mode = "rx"` grants exec but not write, suitable for shipped binary directories. `mode = "rw"` grants write but not exec — workspace mounts that the agent edits but doesn't run code from. Both `MountResolver` and Landlock honour the distinction.
+5. Bare absolute paths outside every mount root are rejected by `MountResolver`. There is no escape hatch for "but I really need /etc/passwd" — wire a mount or use a different approach.
+
 **Layout:**
 
 ```
@@ -1117,13 +1135,19 @@ Agent detects inbound-message language (1–2 sentence sample) and replies in th
 
 ### Dynamic Soul Adjustment
 
+`SOUL.md` is the operator-curated **read-only** baseline — persona description, body, scope, trust tier, default emotive style, default fragments. The agent never writes to it.
+
+The agent's mutable subset (name, the five emotive dimensions, emoji_usage, fragments) lives in a Raft-replicated `soul_tune` bucket. One record per cluster; pointer-typed fields encode "explicitly set" vs "inherit baseline" so an operator edit to SOUL.md propagates to untuned dimensions while explicit tunings stay pinned.
+
 User feedback like "don't be snarky":
 
 1. Classify feedback as adjustment to a specific emotive dimension.
 2. Look up coefficient from soul config.
-3. Apply: `new = current - (coefficient × feedback_delta)`.
-4. Persist to local SOUL.md.
+3. Apply: `new = current - (coefficient × feedback_delta)`, clamped to `0..10` and `baseline ± 3`.
+4. Propose a `soul_tune` Raft entry through the leader; FSM applies; followers refresh via the FSM change hook.
 5. Confirm: "Got it — dialling back the sarcasm."
+
+Soul history rollback walks the in-record `history` array (capped at 20 versions). No filesystem writes, no per-node disk state — container deployments don't need a writable SOUL.md mount, k8s configmap-as-symlink edge cases disappear, and the agent's identity is consistent across cluster nodes.
 
 Cooldown prevents oscillation. Max adjustment ±3 from baseline.
 
@@ -1385,6 +1409,31 @@ All config values available as env vars. Double underscore separates hierarchy l
 - Secret refs: values like `env:VAR_NAME` or `file:/path` are resolved at load time
 
 Env vars override TOML values. Secret values always come from `env:` or `file:` refs — literal plaintext secrets in config files are rejected.
+
+---
+
+## Error Handling Norm
+
+Every `(value, error)` return must do exactly one of three things:
+
+1. **Propagate** — `return ..., fmt.Errorf("context: %w", err)`. Default. The caller decides what to do with the failure.
+2. **Log and continue** — `log.Warn("context", "err", err)` followed by a sentinel value. Use only when continuing makes sense; the log call must include enough context to debug from a single log line.
+3. **Intentionally drop** — `_, _ = fn()` with an *adjacent comment* explaining why ignoring is correct. No comment = treat as a bug.
+
+The blanket `_, _ = fn()` without a comment is a code-review-blocker. Specific patterns where ignoring is conventional and correct:
+
+| Pattern | Reason |
+|---|---|
+| `defer resp.Body.Close()` | The body has been read; close failure is unrecoverable and unactionable |
+| `_, _ = io.Copy(io.Discard, resp.Body)` | Draining for connection reuse — the response was already consumed |
+| `_, _ = w.Write(...)` in HTTP healthcheck handlers | Write failure means the client disconnected; surfacing would just log noise |
+| `_, _ = rand.Read(b)` (crypto/rand) | The Linux backend is documented infallible; `math/rand` is different |
+| `_, _ = hooks.Dispatch(ctx, ...)` | Hooks are best-effort observability; failures are surfaced through the hook's own log |
+| Build-tag stubs (`_, _, _ = a, b, c`) to silence unused-param warnings | Cross-platform parity |
+
+Anything not on this list needs the case-specific justification comment. `errcheck` is enabled in `.golangci.yml` and will flag bare drops; the comment must accompany an `//nolint:errcheck` if the drop is intentional. Use `nolint` sparingly — preferring an explicit `_ = fn()` with a comment is usually clearer.
+
+The `gateway`, `compute/agent`, and `memory/episodic_ingest` paths historically dropped errors silently; review when touching those files and convert to one of the three options above.
 
 ---
 

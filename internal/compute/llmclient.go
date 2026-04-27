@@ -304,15 +304,15 @@ type openAIRequest struct {
 }
 
 type openAIMessage struct {
-	Role       string                `json:"role"`
-	Content    string                `json:"content,omitempty"`
-	ToolCalls  []openAIToolCall      `json:"tool_calls,omitempty"`
-	ToolCallID string                `json:"tool_call_id,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
 }
 
 type openAITool struct {
-	Type     string           `json:"type"` // always "function" for now
-	Function openAIToolFunc   `json:"function"`
+	Type     string         `json:"type"` // always "function" for now
+	Function openAIToolFunc `json:"function"`
 }
 
 type openAIToolFunc struct {

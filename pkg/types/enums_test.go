@@ -91,20 +91,26 @@ func TestRiskTierIsValid(t *testing.T) {
 	}
 }
 
-func TestRetentionIsValid(t *testing.T) {
+func TestParseRetention(t *testing.T) {
 	t.Parallel()
-	cases := map[Retention]bool{
-		RetentionSession:     true,
-		RetentionEpisodic:    true,
-		RetentionLongTerm:    true,
-		Retention(""):        false,
-		Retention("forever"): false,
+	cases := []struct {
+		in        string
+		wantValid bool
+	}{
+		{"session", true},
+		{"episodic", true},
+		{"long-term", true},
+		{"long_term", true},
+		{"LONG-TERM", true},
+		{"", true}, // empty parses to UNSPECIFIED, no error
+		{"forever", false},
 	}
-	for in, want := range cases {
-		t.Run(string(in), func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
 			t.Parallel()
-			if got := in.IsValid(); got != want {
-				t.Errorf("Retention(%q).IsValid() = %v, want %v", in, got, want)
+			_, err := ParseRetention(tc.in)
+			if (err == nil) != tc.wantValid {
+				t.Errorf("ParseRetention(%q): got err=%v, wantValid=%v", tc.in, err, tc.wantValid)
 			}
 		})
 	}

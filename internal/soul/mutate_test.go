@@ -1,6 +1,7 @@
 package soul
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-func newTestAdjuster(t *testing.T) (*Adjuster, string) {
+func newTestAdjuster(t *testing.T) (*Adjuster, *MemoryTuneStore) {
 	t.Helper()
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "SOUL.md")
@@ -40,43 +41,47 @@ freeform body here
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := NewAdjuster(AdjusterConfig{Soul: s, Now: func() time.Time { return time.Now() }})
+	store := NewMemoryTuneStore()
+	a, err := NewAdjuster(AdjusterConfig{Soul: s, Store: store, Now: func() time.Time { return time.Now() }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return a, path
+	return a, store
 }
 
-func TestSetNamePersists(t *testing.T) {
+func TestSetNamePersistsToStore(t *testing.T) {
 	t.Parallel()
-	a, path := newTestAdjuster(t)
-	got, err := a.SetName("Lobs")
+	a, store := newTestAdjuster(t)
+	got, err := a.SetName(context.Background(), "Lobs")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "Lobs" {
 		t.Errorf("got %q", got)
 	}
-	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), "name: Lobs") {
-		t.Errorf("name not persisted: %s", raw)
+	persisted, err := store.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "freeform body here") {
-		t.Error("body lost on rewrite")
+	if persisted == nil || persisted.Name == nil || *persisted.Name != "Lobs" {
+		t.Errorf("name not persisted to store: %+v", persisted)
+	}
+	// Soul() should reflect the override; baseline body unchanged.
+	if a.Soul().Config.Name != "Lobs" {
+		t.Errorf("Soul() didn't reflect SetName: %+v", a.Soul().Config)
 	}
 }
 
 func TestTuneClampsToBaselineDrift(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
-	// Push sarcasm to baseline+3 (max drift), then try +1 more — should refuse.
 	for i := 0; i < 3; i++ {
-		_, _, err := a.Tune("sarcasm", 1)
+		_, _, err := a.Tune(context.Background(), "sarcasm", 1)
 		if err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}
 	}
-	prev, next, err := a.Tune("sarcasm", 1)
+	prev, next, err := a.Tune(context.Background(), "sarcasm", 1)
 	if err == nil {
 		t.Errorf("expected cap-reached error; got prev=%d next=%d", prev, next)
 	}
@@ -85,15 +90,15 @@ func TestTuneClampsToBaselineDrift(t *testing.T) {
 func TestTuneRejectsUnknownDimension(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
-	if _, _, err := a.Tune("arrogance", 1); err == nil {
+	if _, _, err := a.Tune(context.Background(), "arrogance", 1); err == nil {
 		t.Error("expected error for unknown dimension")
 	}
 }
 
 func TestAddFragmentSanitisesAndPersists(t *testing.T) {
 	t.Parallel()
-	a, path := newTestAdjuster(t)
-	cleaned, total, err := a.AddFragment("  user supports `Liverpool` FC  ")
+	a, store := newTestAdjuster(t)
+	cleaned, total, err := a.AddFragment(context.Background(), "  user supports `Liverpool` FC  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,19 +108,19 @@ func TestAddFragmentSanitisesAndPersists(t *testing.T) {
 	if total != 1 {
 		t.Errorf("total = %d, want 1", total)
 	}
-	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), "Liverpool") {
-		t.Errorf("fragment not persisted: %s", raw)
+	persisted, _ := store.Get(context.Background())
+	if persisted == nil || persisted.Fragments == nil || len(*persisted.Fragments) != 1 {
+		t.Errorf("fragment not persisted: %+v", persisted)
 	}
 }
 
 func TestAddFragmentRefusesDuplicates(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
-	if _, _, err := a.AddFragment("likes coffee"); err != nil {
+	if _, _, err := a.AddFragment(context.Background(), "likes coffee"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := a.AddFragment("likes coffee"); err == nil {
+	if _, _, err := a.AddFragment(context.Background(), "likes coffee"); err == nil {
 		t.Error("expected duplicate rejection")
 	}
 }
@@ -124,11 +129,11 @@ func TestAddFragmentRespectsCap(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
 	for i := 0; i < MaxFragments; i++ {
-		if _, _, err := a.AddFragment("fragment number " + strings.Repeat("x", i+1)); err != nil {
+		if _, _, err := a.AddFragment(context.Background(), "fragment number "+strings.Repeat("x", i+1)); err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}
 	}
-	if _, _, err := a.AddFragment("one too many"); err == nil {
+	if _, _, err := a.AddFragment(context.Background(), "one too many"); err == nil {
 		t.Error("expected cap to refuse extra fragment")
 	}
 }
@@ -136,9 +141,9 @@ func TestAddFragmentRespectsCap(t *testing.T) {
 func TestRemoveFragmentSubstring(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
-	_, _, _ = a.AddFragment("user supports Liverpool FC")
-	_, _, _ = a.AddFragment("prefers tea")
-	removed, err := a.RemoveFragment("liverpool")
+	_, _, _ = a.AddFragment(context.Background(), "user supports Liverpool FC")
+	_, _, _ = a.AddFragment(context.Background(), "prefers tea")
+	removed, err := a.RemoveFragment(context.Background(), "liverpool")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,36 +157,30 @@ func TestRemoveFragmentSubstring(t *testing.T) {
 
 func TestHistoryRollbackRestoresPriorVersion(t *testing.T) {
 	t.Parallel()
-	a, path := newTestAdjuster(t)
-	if _, err := a.SetName("Lobs"); err != nil {
+	a, _ := newTestAdjuster(t)
+	if _, err := a.SetName(context.Background(), "Lobs"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.SetName("Bobs"); err != nil {
+	if _, err := a.SetName(context.Background(), "Bobs"); err != nil {
 		t.Fatal(err)
 	}
-	// Two persists happened → one history entry exists (snapshotted
-	// the original file before the first overwrite, then the
-	// post-Lobs file before the Bobs overwrite). Step back 1 = "Lobs".
-	ts, err := a.HistoryRollback(1)
-	if err != nil {
+	// Two persists happened. Step back 1 → restore the state before
+	// the most recent Put, which is the "Lobs" state.
+	if _, err := a.HistoryRollback(context.Background(), 1); err != nil {
 		t.Fatalf("rollback: %v", err)
 	}
-	if ts == "" {
-		t.Error("expected timestamp")
-	}
-	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), "name: Lobs") {
-		t.Errorf("rollback didn't restore Lobs:\n%s", raw)
+	if got := a.Soul().Config.Name; got != "Lobs" {
+		t.Errorf("rollback didn't restore Lobs: got %q", got)
 	}
 }
 
 func TestSetEmojiUsageRejectsInvalid(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
-	if err := a.SetEmojiUsage("excessive"); err == nil {
+	if err := a.SetEmojiUsage(context.Background(), "excessive"); err == nil {
 		t.Error("expected rejection for invalid emoji_usage")
 	}
-	if err := a.SetEmojiUsage("generous"); err != nil {
+	if err := a.SetEmojiUsage(context.Background(), "generous"); err != nil {
 		t.Errorf("valid value rejected: %v", err)
 	}
 }

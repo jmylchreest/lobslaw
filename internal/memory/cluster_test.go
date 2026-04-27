@@ -150,7 +150,7 @@ func TestFindClustersRetentionFilter(t *testing.T) {
 
 	clusters, err := findClusters(s, clusterQuery{
 		threshold:       0.95,
-		retentionFilter: "long-term",
+		retentionFilter: lobslawv1.Retention_RETENTION_LONG_TERM,
 	})
 	if err != nil {
 		t.Fatal(err)

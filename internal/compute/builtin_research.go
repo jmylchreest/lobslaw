@@ -49,8 +49,8 @@ func RegisterResearchBuiltins(b *Builtins, cfg ResearchConfig) error {
 func ResearchToolDefs() []*types.ToolDef {
 	return []*types.ToolDef{
 		{
-			Name: "research_start",
-			Path: BuiltinScheme + "research_start",
+			Name:        "research_start",
+			Path:        BuiltinScheme + "research_start",
 			Description: "Kick off a deep-research run as a background async task. Use when the user asks for thorough investigation that warrants multiple searches + cross-referencing — 'find me everything about X', 'compare these approaches', 'what's the current state of Y'. NOT for quick lookups (use web_search) or single-page reads (use fetch_url). The research runs out-of-band: planner decomposes the question into sub-questions, workers run web_search + fetch_url per sub-question, a synthesiser merges into a report. Result is written to memory (tagged research:<id>) and the user is notified via their originating channel when complete (typically 1-3 minutes). Pass question (the topic) and optional depth (1-10, default 3 — controls sub-question count + total tool budget). Returns the task id for status tracking.\n\nDEFAULT-DENY: this builtin requires an explicit operator allow rule. If you get a policy denial, tell the user 'research is operator-gated; ask them to add an allow rule for research_start' rather than retrying.",
 			ParametersSchema: []byte(`{
 				"type": "object",

@@ -9,7 +9,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // SessionPruneConfig tunes the session retention pruner.
@@ -81,7 +80,7 @@ func (p *SessionPruner) Run(ctx context.Context) (*PruneResult, error) {
 		if err := proto.Unmarshal(value, &rec); err != nil {
 			return fmt.Errorf("unmarshal episodic %q: %w", id, err)
 		}
-		if rec.Retention != string(types.RetentionSession) {
+		if rec.Retention != lobslawv1.Retention_RETENTION_SESSION {
 			return nil
 		}
 		if rec.Timestamp == nil || !rec.Timestamp.AsTime().Before(cutoff) {
@@ -98,7 +97,7 @@ func (p *SessionPruner) Run(ctx context.Context) (*PruneResult, error) {
 		if err := proto.Unmarshal(value, &rec); err != nil {
 			return fmt.Errorf("unmarshal vector %q: %w", id, err)
 		}
-		if rec.Retention != string(types.RetentionSession) {
+		if rec.Retention != lobslawv1.Retention_RETENTION_SESSION {
 			return nil
 		}
 		if rec.CreatedAt == nil || !rec.CreatedAt.AsTime().Before(cutoff) {

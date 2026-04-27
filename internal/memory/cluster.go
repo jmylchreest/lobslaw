@@ -150,7 +150,7 @@ type clusterQuery struct {
 	minClusterSize  int
 	maxClusterSize  int
 	scopeFilter     string
-	retentionFilter string
+	retentionFilter lobslawv1.Retention
 	before          time.Time
 	limit           int
 }
@@ -180,7 +180,7 @@ func scanClusterCandidates(store *Store, req clusterQuery) ([]clusterCandidate, 
 		if req.scopeFilter != "" && v.Scope != req.scopeFilter {
 			return nil
 		}
-		if req.retentionFilter != "" && v.Retention != req.retentionFilter {
+		if req.retentionFilter != lobslawv1.Retention_RETENTION_UNSPECIFIED && v.Retention != req.retentionFilter {
 			return nil
 		}
 		if !req.before.IsZero() && v.CreatedAt != nil && !v.CreatedAt.AsTime().Before(req.before) {

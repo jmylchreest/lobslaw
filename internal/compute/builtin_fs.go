@@ -177,11 +177,11 @@ func readFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 	}
 
 	out, err := json.Marshal(map[string]any{
-		"path":        path,
-		"line_count":  total,
-		"offset":      offset,
-		"returned":    len(collected),
-		"content":     strings.Join(collected, "\n"),
+		"path":       path,
+		"line_count": total,
+		"offset":     offset,
+		"returned":   len(collected),
+		"content":    strings.Join(collected, "\n"),
 	})
 	if err != nil {
 		return nil, 1, err

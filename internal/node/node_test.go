@@ -330,10 +330,10 @@ func TestNodeBootsGatewayHTTPServer(t *testing.T) {
 	mockProvider := compute.NewMockProvider(compute.MockResponse{Content: "pong"})
 
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
-		ListenAddr: "127.0.0.1:0",
-		Creds:      creds,
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
 		LLMProvider: mockProvider,
 		Gateway: config.GatewayConfig{
 			Enabled:          true,
@@ -449,10 +449,10 @@ func TestNodeGatewayDisabledWhenFlagOff(t *testing.T) {
 	creds := signNodeCert(t, t.TempDir(), nodeID)
 
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
-		ListenAddr: "127.0.0.1:0",
-		Creds:      creds,
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
 		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "unused"}),
 		Gateway: config.GatewayConfig{
 			Enabled: false, // explicit opt-out
@@ -503,10 +503,10 @@ func TestNodeGatewayTelegramChannelConstructed(t *testing.T) {
 	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
 
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
-		ListenAddr: "127.0.0.1:0",
-		Creds:      creds,
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
 		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "pong"}),
 		ChannelSecretResolver: func(ref string) (string, error) {
 			switch ref {
@@ -586,10 +586,10 @@ func TestNodeGatewayUnknownChannelTypeSkipped(t *testing.T) {
 	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
 
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
-		ListenAddr: "127.0.0.1:0",
-		Creds:      creds,
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
 		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "pong"}),
 		Gateway: config.GatewayConfig{
 			Enabled:  true,
@@ -869,12 +869,12 @@ freeform body for testbot.
 	creds := signNodeCert(t, filepath.Join(tmp, "certs"), nodeID)
 
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
-		ListenAddr: "127.0.0.1:0",
-		Creds:      creds,
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute, types.FunctionGateway},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
 		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
-		SoulPath:   soulPath,
+		SoulPath:    soulPath,
 	}
 	n, err := node.New(cfg)
 	if err != nil {
@@ -896,10 +896,10 @@ func TestNodeSoulDefaultsWhenNoPath(t *testing.T) {
 	nodeID := "no-soul"
 	creds := signNodeCert(t, t.TempDir(), nodeID)
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionCompute},
-		ListenAddr: "127.0.0.1:0",
-		Creds:      creds,
+		NodeID:      nodeID,
+		Functions:   []types.NodeFunction{types.FunctionCompute},
+		ListenAddr:  "127.0.0.1:0",
+		Creds:       creds,
 		LLMProvider: compute.NewMockProvider(compute.MockResponse{Content: "ok"}),
 	}
 	n, err := node.New(cfg)

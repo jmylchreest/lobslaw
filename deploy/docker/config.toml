@@ -39,24 +39,24 @@ type  = "local"
 path  = "/var/lobslaw/data/snapshots"
 
 # ----- Read-only system surfaces -----------------------------------
-# Read-only baseline of shell utilities the tools-init container
-# populated. Lets the agent introspect "what tools do I have" via
-# the list/glob/read builtins. shell_command exec doesn't go
-# through storage — it uses PATH directly — so this mount is purely
-# for self-discovery.
+# Baseline shell utilities the tools-init container populated. Mode
+# "rx": the agent can read+exec these binaries (shell_command's
+# Landlock sandbox honours this) but not modify them. Self-discovery
+# via list/glob/read still works because Read is implicit in "rx".
 [[storage.mounts]]
 label = "system-bin"
 type  = "local"
 path  = "/lobslaw/bin"
+mode  = "rx"
 
-# Operator-managed extension dir. Mounted ro at the storage layer
-# even though the underlying volume is rw — only the operator (or
-# the `tools` sidecar) should drop binaries here, not the agent
-# itself. shell_command finds them via PATH regardless.
+# Operator-managed extension dir. Same shape as system-bin: agent
+# may exec but not write. Operators (or the `tools` sidecar) push
+# binaries here out-of-band.
 [[storage.mounts]]
 label = "system-usr-bin"
 type  = "local"
 path  = "/lobslaw/usr/bin"
+mode  = "rx"
 
 # Self-introspection mount. The agent can read its own config +
 # soul. certs/ is excluded wholesale because node-key.pem is
@@ -65,6 +65,7 @@ path  = "/lobslaw/usr/bin"
 label    = "lobslaw-config"
 type     = "local"
 path     = "/etc/lobslaw"
+mode     = "r"
 excludes = ["certs/**"]
 
 # ----- Writable: user content + skills -----------------------------
@@ -72,10 +73,10 @@ excludes = ["certs/**"]
 # host. This is the agent's home for scratch files, notes, and
 # anything write_file/edit_file produces.
 [[storage.mounts]]
-label    = "workspace"
-type     = "local"
-path     = "/workspace"
-writable = true
+label = "workspace"
+type  = "local"
+path  = "/workspace"
+mode  = "rw"
 
 [policy]
 enabled = true

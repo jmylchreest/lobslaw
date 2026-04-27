@@ -81,8 +81,8 @@ func (s *Service) Store(ctx context.Context, req *lobslawv1.StoreRequest) (*lobs
 	if rec.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "record.id required")
 	}
-	if rec.Retention == "" {
-		rec.Retention = string(types.RetentionEpisodic)
+	if rec.Retention == lobslawv1.Retention_RETENTION_UNSPECIFIED {
+		rec.Retention = lobslawv1.Retention_RETENTION_EPISODIC
 	}
 	if rec.CreatedAt == nil {
 		rec.CreatedAt = timestamppb.Now()
@@ -96,7 +96,7 @@ func (s *Service) Store(ctx context.Context, req *lobslawv1.StoreRequest) (*lobs
 	}); err != nil {
 		return nil, err
 	}
-	logging.From(ctx).Debug("vector record stored", "id", rec.Id, "scope", rec.Scope, "retention", rec.Retention)
+	logging.From(ctx).Debug("vector record stored", "id", rec.Id, "scope", rec.Scope, "retention", types.RetentionString(rec.Retention))
 	return &lobslawv1.StoreResponse{Id: rec.Id}, nil
 }
 
@@ -187,8 +187,8 @@ func (s *Service) EpisodicAdd(ctx context.Context, req *lobslawv1.EpisodicAddReq
 	if rec.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "record.id required")
 	}
-	if rec.Retention == "" {
-		rec.Retention = string(types.RetentionEpisodic)
+	if rec.Retention == lobslawv1.Retention_RETENTION_UNSPECIFIED {
+		rec.Retention = lobslawv1.Retention_RETENTION_EPISODIC
 	}
 	if rec.Timestamp == nil {
 		rec.Timestamp = timestamppb.Now()

@@ -101,13 +101,26 @@ service MemoryService {
   rpc FindClusters(FindClustersRequest) returns (FindClustersResponse);
 }
 
+// Retention governs how long a memory record lives before it's a
+// candidate for consolidation or pruning. Defined as a proto enum
+// (rather than a free-form string) so writers can't accidentally
+// emit "long" instead of "long-term" — the compiler binds the
+// constant to the field. UNSPECIFIED defaults to EPISODIC at the
+// service layer for legacy callers.
+enum Retention {
+  RETENTION_UNSPECIFIED = 0;
+  RETENTION_SESSION = 1;
+  RETENTION_EPISODIC = 2;
+  RETENTION_LONG_TERM = 3;
+}
+
 message VectorRecord {
   string id = 1;
   repeated float embedding = 2;
   string text = 3;
   map<string, string> metadata = 4;
   string scope = 5;
-  string retention = 6;            // "session" | "episodic" | "long-term"
+  Retention retention = 6;
   repeated string source_ids = 7;  // consolidation provenance
   google.protobuf.Timestamp created_at = 8;
 }
@@ -119,7 +132,7 @@ message EpisodicRecord {
   int32 importance = 4;            // 1..10
   google.protobuf.Timestamp timestamp = 5;
   repeated string tags = 6;
-  string retention = 7;
+  Retention retention = 7;
   repeated string source_ids = 8;
 }
 
@@ -135,7 +148,9 @@ message SearchRequest {
   string text = 2;
   int32 limit = 3;
   string scope_filter = 4;
-  string retention_filter = 5;
+  // RETENTION_UNSPECIFIED = no filter (matches all). Otherwise only
+  // records with the matching retention are returned.
+  Retention retention_filter = 5;
 }
 message SearchResponse { repeated VectorRecord hits = 1; }
 
@@ -176,7 +191,7 @@ message FindClustersRequest {
   int32 min_cluster_size = 2;     // default 2 (skip singletons)
   int32 max_cluster_size = 3;     // default 10 (split giant CCs)
   string scope_filter = 4;        // only records in this scope
-  string retention_filter = 5;    // e.g. "long-term"
+  Retention retention_filter = 5;
   google.protobuf.Timestamp before = 6;
   int32 limit = 7;                // cap returned cluster count
 }
@@ -504,6 +519,47 @@ message ChannelStateRecord {
   google.protobuf.Timestamp updated_at = 4;
 }
 
+// SoulTuneRecord holds the agent's mutable personality overlay.
+// SOUL.md on disk is the operator-curated baseline (read-only); this
+// record carries the bounded subset the agent may tune at runtime —
+// name, the five emotive dimensions, emoji_usage, fragments. Stored
+// in raft so cluster nodes agree on the agent's identity and so
+// containerised deployments don't need a writable file mount.
+//
+// One record per cluster, keyed by the constant id "soul:tune". A
+// per-field optional discriminator means an unset field falls back
+// to the baseline at merge time — so when the operator edits SOUL.md
+// to lower sarcasm, untuned dimensions follow the new baseline while
+// fields the agent has explicitly tuned stay pinned.
+message SoulTuneRecord {
+  // Latest applied tune.
+  SoulTuneState current = 1;
+  // Past tunes for HistoryRollback. Oldest first; capped at 20.
+  repeated SoulTuneState history = 2;
+}
+
+message SoulTuneState {
+  optional string name = 1;
+  EmotiveStyleTune emotive_style = 2;
+  // fragments_set discriminates "no fragment edits" from "explicitly
+  // empty fragment list" — the latter is the user clearing memory.
+  bool fragments_set = 3;
+  repeated string fragments = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  // updated_by carries the subject that proposed the change ("scope:owner",
+  // "user:alice"). Audit trail; not used for policy decisions.
+  string updated_by = 6;
+}
+
+message EmotiveStyleTune {
+  optional int32 excitement = 1;
+  optional int32 formality = 2;
+  optional int32 directness = 3;
+  optional int32 sarcasm = 4;
+  optional int32 humor = 5;
+  optional string emoji_usage = 6;
+}
+
 // -----------------------------------------------------------------------------
 // Raft log entry envelope
 // -----------------------------------------------------------------------------
@@ -540,6 +596,7 @@ message LogEntry {
     EpisodicRecord episodic_record = 15;
     StorageMount storage_mount = 16;
     ChannelStateRecord channel_state = 17;
+    SoulTuneRecord soul_tune = 18;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

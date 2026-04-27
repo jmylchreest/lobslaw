@@ -29,8 +29,8 @@ func TestNewResolverValidConfig(t *testing.T) {
 		},
 		Chains: []config.ChainConfig{
 			{
-				Label: "everyday",
-				Steps: []config.ChainStepConfig{{Provider: "openrouter", Role: "primary"}},
+				Label:   "everyday",
+				Steps:   []config.ChainStepConfig{{Provider: "openrouter", Role: "primary"}},
 				Trigger: config.ChainTriggerConfig{Always: true},
 			},
 		},
@@ -49,10 +49,10 @@ func TestNewResolverReportsAllProblems(t *testing.T) {
 	t.Parallel()
 	cfg := &config.ComputeConfig{
 		Providers: []config.ProviderConfig{
-			{Label: "", TrustTier: types.TrustPublic},              // empty label
+			{Label: "", TrustTier: types.TrustPublic}, // empty label
 			providerAt("dup", types.TrustPublic),
-			providerAt("dup", types.TrustPublic),                   // duplicate
-			{Label: "bad-tier", TrustTier: "wtf"},                  // bad tier
+			providerAt("dup", types.TrustPublic),  // duplicate
+			{Label: "bad-tier", TrustTier: "wtf"}, // bad tier
 		},
 		Chains: []config.ChainConfig{
 			{Label: "", Steps: []config.ChainStepConfig{{Provider: "dup"}}}, // empty chain label
@@ -75,7 +75,7 @@ func TestNewResolverReportsAllProblems(t *testing.T) {
 		"empty label",
 		"duplicate provider",
 		"invalid trust_tier",
-		"empty label",         // chain empty label (same text; appears twice)
+		"empty label", // chain empty label (same text; appears twice)
 		"no steps",
 		"unknown provider",
 		"default_chain",

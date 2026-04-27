@@ -38,9 +38,9 @@ type TurnBudget struct {
 // for that dimension — operators commonly set only spend and leave
 // tool-calls / egress unbounded.
 type BudgetCaps struct {
-	MaxToolCalls     int
-	MaxSpendUSD      float64
-	MaxEgressBytes   int64
+	MaxToolCalls   int
+	MaxSpendUSD    float64
+	MaxEgressBytes int64
 }
 
 // FromConfig builds BudgetCaps from the deprecated [compute.budgets]
@@ -81,10 +81,10 @@ func FromComputeConfig(cfg config.ComputeConfig) BudgetCaps {
 // means a cap has been passed; the caller surfaces require_confirmation.
 // Within means the operation fits (or no cap is set on that dimension).
 type BudgetDecision struct {
-	Within      bool
-	Exceeded    bool
-	ExceededOn  string // "tool_calls" | "spend" | "egress"; empty when Within
-	Current     BudgetState
+	Within     bool
+	Exceeded   bool
+	ExceededOn string // "tool_calls" | "spend" | "egress"; empty when Within
+	Current    BudgetState
 }
 
 // BudgetState is a snapshot of consumed resources. Returned on

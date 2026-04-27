@@ -39,10 +39,10 @@ func TestNewLLMClientRequiresEndpoint(t *testing.T) {
 func TestNewLLMClientAppendsChatCompletions(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"https://openrouter.ai/api/v1":                    "https://openrouter.ai/api/v1/chat/completions",
-		"https://openrouter.ai/api/v1/":                   "https://openrouter.ai/api/v1/chat/completions",
-		"https://openrouter.ai/api/v1/chat/completions":   "https://openrouter.ai/api/v1/chat/completions",
-		"https://openrouter.ai/api/v1/chat/completions/":  "https://openrouter.ai/api/v1/chat/completions",
+		"https://openrouter.ai/api/v1":                   "https://openrouter.ai/api/v1/chat/completions",
+		"https://openrouter.ai/api/v1/":                  "https://openrouter.ai/api/v1/chat/completions",
+		"https://openrouter.ai/api/v1/chat/completions":  "https://openrouter.ai/api/v1/chat/completions",
+		"https://openrouter.ai/api/v1/chat/completions/": "https://openrouter.ai/api/v1/chat/completions",
 	}
 	for in, want := range cases {
 		c, err := NewLLMClient(LLMClientConfig{Endpoint: in})

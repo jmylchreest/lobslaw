@@ -52,9 +52,9 @@ func TestFSMApplyClaimFreshInsertWithEmptyExpected(t *testing.T) {
 		Id: "task-1",
 		Payload: &lobslawv1.LogEntry_ScheduledTask{
 			ScheduledTask: &lobslawv1.ScheduledTaskRecord{
-				Id:        "task-1",
-				Name:      "nightly",
-				ClaimedBy: "node-a",
+				Id:             "task-1",
+				Name:           "nightly",
+				ClaimedBy:      "node-a",
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},

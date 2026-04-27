@@ -29,7 +29,7 @@ func (h searchHit) Score() float32 { return h.score }
 // search. Same shape as the internal implementation; exported so
 // the compute package can wire memory_search to it without
 // duplicating the cosine math.
-func VectorSearch(store *Store, query []float32, limit int, scopeFilter, retentionFilter string) ([]searchHit, error) {
+func VectorSearch(store *Store, query []float32, limit int, scopeFilter string, retentionFilter lobslawv1.Retention) ([]searchHit, error) {
 	return vectorSearch(store, query, limit, scopeFilter, retentionFilter)
 }
 
@@ -41,7 +41,7 @@ func VectorSearch(store *Store, query []float32, limit int, scopeFilter, retenti
 // Cost is O(N × D) where N is the record count and D is the embedding
 // dimension. Fine for personal scale (< ~100k records). Post-MVP we
 // can swap in HNSW or similar — tracked in DEFERRED.md.
-func vectorSearch(store *Store, query []float32, limit int, scopeFilter, retentionFilter string) ([]searchHit, error) {
+func vectorSearch(store *Store, query []float32, limit int, scopeFilter string, retentionFilter lobslawv1.Retention) ([]searchHit, error) {
 	if len(query) == 0 {
 		return nil, errors.New("search query embedding is empty")
 	}
@@ -62,7 +62,7 @@ func vectorSearch(store *Store, query []float32, limit int, scopeFilter, retenti
 		if scopeFilter != "" && v.Scope != scopeFilter {
 			return nil
 		}
-		if retentionFilter != "" && v.Retention != retentionFilter {
+		if retentionFilter != lobslawv1.Retention_RETENTION_UNSPECIFIED && v.Retention != retentionFilter {
 			return nil
 		}
 		if len(v.Embedding) != len(query) {

@@ -8,7 +8,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 func TestSessionPruneDropsExpiredSessionRecords(t *testing.T) {
@@ -21,17 +20,17 @@ func TestSessionPruneDropsExpiredSessionRecords(t *testing.T) {
 	recent := timestamppb.New(now.Add(-30 * time.Minute))
 
 	for _, rec := range []*lobslawv1.EpisodicRecord{
-		{Id: "ep-stale-session", Event: "ephemeral", Timestamp: old, Retention: string(types.RetentionSession)},
-		{Id: "ep-fresh-session", Event: "still useful", Timestamp: recent, Retention: string(types.RetentionSession)},
-		{Id: "ep-stale-episodic", Event: "keep me", Timestamp: old, Retention: string(types.RetentionEpisodic)},
+		{Id: "ep-stale-session", Event: "ephemeral", Timestamp: old, Retention: lobslawv1.Retention_RETENTION_SESSION},
+		{Id: "ep-fresh-session", Event: "still useful", Timestamp: recent, Retention: lobslawv1.Retention_RETENTION_SESSION},
+		{Id: "ep-stale-episodic", Event: "keep me", Timestamp: old, Retention: lobslawv1.Retention_RETENTION_EPISODIC},
 	} {
 		if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, rec := range []*lobslawv1.VectorRecord{
-		{Id: "vec-stale-session", Embedding: []float32{1}, Text: "draft", Retention: string(types.RetentionSession), CreatedAt: old},
-		{Id: "vec-stale-long", Embedding: []float32{1}, Text: "permanent", Retention: string(types.RetentionLongTerm), CreatedAt: old},
+		{Id: "vec-stale-session", Embedding: []float32{1}, Text: "draft", Retention: lobslawv1.Retention_RETENTION_SESSION, CreatedAt: old},
+		{Id: "vec-stale-long", Embedding: []float32{1}, Text: "permanent", Retention: lobslawv1.Retention_RETENTION_LONG_TERM, CreatedAt: old},
 	} {
 		if _, err := svc.Store(ctx, &lobslawv1.StoreRequest{Record: rec}); err != nil {
 			t.Fatal(err)
@@ -74,7 +73,7 @@ func TestSessionPruneIgnoresMissingTimestamps(t *testing.T) {
 	if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: &lobslawv1.EpisodicRecord{
 		Id:        "ep-no-ts",
 		Event:     "no timestamp",
-		Retention: string(types.RetentionSession),
+		Retention: lobslawv1.Retention_RETENTION_SESSION,
 	}}); err != nil {
 		t.Fatal(err)
 	}

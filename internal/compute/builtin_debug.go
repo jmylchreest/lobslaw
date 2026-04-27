@@ -126,4 +126,3 @@ func wrapDebugString(fn func() string) BuiltinFunc {
 		return out, 0, nil
 	}
 }
-

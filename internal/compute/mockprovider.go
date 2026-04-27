@@ -22,11 +22,11 @@ import (
 // scripted sequence is deterministic even under parallel Chat()
 // invocations.
 type MockProvider struct {
-	mu        sync.Mutex
-	script    []MockResponse
-	cursor    int
-	scriptFn  ScriptFunc
-	callLog   []ChatRequest
+	mu       sync.Mutex
+	script   []MockResponse
+	cursor   int
+	scriptFn ScriptFunc
+	callLog  []ChatRequest
 }
 
 // ScriptFunc is the dynamic counterpart to a fixed script. Receives

@@ -734,12 +734,16 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 	}
 
 	if a.cfg.Hooks != nil {
-		_, _ = a.cfg.Hooks.Dispatch(ctx, types.HookPostLLMCall, map[string]any{
-			"turn_id":      req.TurnID,
-			"scope":        scopeOfClaims(req.Claims),
-			"usage":        chatResp.Usage,
-			"finish":       chatResp.FinishReason,
-			"tool_calls":   len(chatResp.ToolCalls),
+		// Hooks are best-effort observability; their own pipeline
+		// surfaces failures via its log. Bubbling here would let a
+		// broken hook script block the turn — which is the wrong
+		// failure mode for "I want to count tokens."
+		_, _ = a.cfg.Hooks.Dispatch(ctx, types.HookPostLLMCall, map[string]any{ //nolint:errcheck // see comment above
+			"turn_id":    req.TurnID,
+			"scope":      scopeOfClaims(req.Claims),
+			"usage":      chatResp.Usage,
+			"finish":     chatResp.FinishReason,
+			"tool_calls": len(chatResp.ToolCalls),
 		})
 	}
 

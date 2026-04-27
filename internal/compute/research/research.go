@@ -271,12 +271,18 @@ func (c *Coordinator) runWorkers(ctx context.Context, req Request, subqs []strin
 		}
 		findings[i] = resp.Reply
 		// Persist the per-subq finding so the synthesiser (and
-		// future memory_search calls) can recall them.
-		_, _ = c.memory.WriteEpisodic(ctx, resp.Reply, []string{
+		// future memory_search calls) can recall them. Failure here
+		// is logged but not fatal — the in-memory `findings` slice
+		// still feeds the synth step, so the user gets the answer
+		// even if memory write times out.
+		if _, werr := c.memory.WriteEpisodic(ctx, resp.Reply, []string{
 			"research:" + req.TaskID,
 			fmt.Sprintf("sub:%d", i),
 			"finding",
-		})
+		}); werr != nil {
+			c.log.Warn("research: episodic write failed",
+				"task_id", req.TaskID, "sub", i, "err", werr)
+		}
 	}
 	return findings, nil
 }

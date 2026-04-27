@@ -28,12 +28,12 @@ type stubSoulMutator struct {
 }
 
 func (s *stubSoulMutator) Soul() soul.Soul { return s.soul }
-func (s *stubSoulMutator) SetName(name string) (string, error) {
+func (s *stubSoulMutator) SetName(_ context.Context, name string) (string, error) {
 	s.setNameCalls = append(s.setNameCalls, name)
 	s.soul.Config.Name = name
 	return name, nil
 }
-func (s *stubSoulMutator) Tune(dim string, delta int) (int, int, error) {
+func (s *stubSoulMutator) Tune(_ context.Context, dim string, delta int) (int, int, error) {
 	s.tuneCalls = append(s.tuneCalls, struct {
 		dim   string
 		delta int
@@ -43,11 +43,11 @@ func (s *stubSoulMutator) Tune(dim string, delta int) (int, int, error) {
 	}
 	return 5, 5 + delta, nil
 }
-func (s *stubSoulMutator) SetEmojiUsage(value string) error {
+func (s *stubSoulMutator) SetEmojiUsage(_ context.Context, value string) error {
 	s.soul.Config.EmotiveStyle.EmojiUsage = value
 	return nil
 }
-func (s *stubSoulMutator) AddFragment(text string) (string, int, error) {
+func (s *stubSoulMutator) AddFragment(_ context.Context, text string) (string, int, error) {
 	if s.addErr != nil {
 		return "", 0, s.addErr
 	}
@@ -55,12 +55,12 @@ func (s *stubSoulMutator) AddFragment(text string) (string, int, error) {
 	s.soul.Config.Fragments = append(s.soul.Config.Fragments, text)
 	return text, len(s.soul.Config.Fragments), nil
 }
-func (s *stubSoulMutator) RemoveFragment(needle string) (string, error) {
+func (s *stubSoulMutator) RemoveFragment(_ context.Context, needle string) (string, error) {
 	s.removedFragments = append(s.removedFragments, needle)
 	return needle, nil
 }
 func (s *stubSoulMutator) ListFragments() []string { return s.soul.Config.Fragments }
-func (s *stubSoulMutator) HistoryRollback(steps int) (string, error) {
+func (s *stubSoulMutator) HistoryRollback(_ context.Context, steps int) (string, error) {
 	s.rollbackSteps = steps
 	return "20260101T120000.000", nil
 }

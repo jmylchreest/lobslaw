@@ -11,6 +11,7 @@ import (
 	seccomp "github.com/elastic/go-seccomp-bpf"
 	"github.com/elastic/go-seccomp-bpf/arch"
 	"github.com/landlock-lsm/go-landlock/landlock"
+	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"golang.org/x/sys/unix"
 )
 
@@ -72,47 +73,78 @@ func setNoNewPrivs() error {
 	return unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
 }
 
-// installLandlock restricts filesystem access via the Landlock LSM
-// when the policy declares AllowedPaths. The permitted access set is:
+// installLandlock restricts filesystem access via the Landlock LSM.
+// The Mounts field (when populated) is the source of truth for
+// per-path read/write/exec — built directly via landlock.PathAccess
+// so a mount with mode "rx" doesn't accidentally grant write, and a
+// mount with mode "rw" doesn't grant exec.
 //
-//   - All AllowedPaths directories: read + write + create + delete
-//   - All ReadOnlyPaths directories: read only (subset of AllowedPaths)
+// Legacy AllowedPaths/ReadOnlyPaths still work for callers that
+// haven't migrated; both inputs are additive when both populated.
 //
-// Anything outside these paths returns EACCES on syscall entry,
-// kernel-enforced. Uses .BestEffort() so older kernels (5.13+) still
-// benefit from partial enforcement; a kernel without Landlock at all
-// silently no-ops.
+// Uses .BestEffort() so older kernels (5.13+) still benefit from
+// partial enforcement; a kernel without Landlock silently no-ops.
 //
 // Landlock requires PR_SET_NO_NEW_PRIVS=1 — the library sets it for
 // us if we haven't already (though we typically have via Policy.NoNewPrivs).
 //
-// No-op when AllowedPaths is empty; Normalise already populated any
-// sensible defaults.
+// No-op when both Mounts and AllowedPaths are empty.
 func installLandlock(p *Policy) error {
-	if len(p.AllowedPaths) == 0 {
+	if len(p.AllowedPaths) == 0 && len(p.Mounts) == 0 {
 		return nil
 	}
 
-	// Partition AllowedPaths into RW vs RO sets. Entries in
-	// ReadOnlyPaths get the read-only rule; everything else is RW.
-	var roDirs, rwDirs []string
-	for _, path := range p.AllowedPaths {
-		if slices.Contains(p.ReadOnlyPaths, path) {
-			roDirs = append(roDirs, path)
-		} else {
-			rwDirs = append(rwDirs, path)
+	rules := make([]landlock.Rule, 0, len(p.Mounts)+2)
+
+	for _, m := range p.Mounts {
+		access := mountModeAccessFS(m)
+		if access == 0 {
+			continue
+		}
+		rules = append(rules, landlock.PathAccess(access, m.Path).IgnoreIfMissing())
+	}
+
+	if len(p.AllowedPaths) > 0 {
+		var roDirs, rwDirs []string
+		for _, path := range p.AllowedPaths {
+			if slices.Contains(p.ReadOnlyPaths, path) {
+				roDirs = append(roDirs, path)
+			} else {
+				rwDirs = append(rwDirs, path)
+			}
+		}
+		if len(roDirs) > 0 {
+			rules = append(rules, landlock.RODirs(roDirs...).IgnoreIfMissing())
+		}
+		if len(rwDirs) > 0 {
+			rules = append(rules, landlock.RWDirs(rwDirs...).IgnoreIfMissing())
 		}
 	}
 
-	rules := make([]landlock.Rule, 0, 2)
-	if len(roDirs) > 0 {
-		rules = append(rules, landlock.RODirs(roDirs...).IgnoreIfMissing())
-	}
-	if len(rwDirs) > 0 {
-		rules = append(rules, landlock.RWDirs(rwDirs...).IgnoreIfMissing())
-	}
-
 	return landlock.V5.BestEffort().RestrictPaths(rules...)
+}
+
+// mountModeAccessFS turns a PolicyMount's read/write/exec triple
+// into the Landlock AccessFSSet bitmask. Mirrors the higher-level
+// landlock.RODirs / RWDirs helpers but lets us subset more
+// precisely — e.g. read-only without exec, or write-only-no-read.
+func mountModeAccessFS(m PolicyMount) landlock.AccessFSSet {
+	var a landlock.AccessFSSet
+	if m.Read {
+		a |= landlock.AccessFSSet(llsyscall.AccessFSReadFile | llsyscall.AccessFSReadDir)
+	}
+	if m.Exec {
+		a |= landlock.AccessFSSet(llsyscall.AccessFSExecute)
+	}
+	if m.Write {
+		a |= landlock.AccessFSSet(llsyscall.AccessFSWriteFile |
+			llsyscall.AccessFSRemoveDir | llsyscall.AccessFSRemoveFile |
+			llsyscall.AccessFSMakeChar | llsyscall.AccessFSMakeDir |
+			llsyscall.AccessFSMakeReg | llsyscall.AccessFSMakeSock |
+			llsyscall.AccessFSMakeFifo | llsyscall.AccessFSMakeBlock |
+			llsyscall.AccessFSMakeSym | llsyscall.AccessFSTruncate)
+	}
+	return a
 }
 
 // installSeccomp compiles the policy's Seccomp.Deny list into a

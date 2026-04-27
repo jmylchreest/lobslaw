@@ -145,12 +145,27 @@ func (s *Service) CancelCommitment(_ context.Context, req *lobslawv1.CancelCommi
 		return nil, status.Errorf(codes.FailedPrecondition, "commitment %q already completed", req.Id)
 	}
 
-	// Cancel uses expected="" so the CAS only goes through when the
-	// commitment is genuinely not in flight. A live claim (expiry in
-	// the future) makes the FSM's expected-check fail and surfaces
-	// as ErrClaimConflict → Aborted. The expired-claim bypass inside
-	// the FSM lets us cancel a commitment whose claimer crashed
-	// without the operator having to first evict the stale claim.
+	// Decide ExpectedClaimer at the service layer. The FSM's CAS is
+	// exact-match (deterministic across replay — see internal/memory/fsm.go
+	// applyClaim doc), so it does NOT do its own time-based "expired
+	// claim counts as unclaimed" reinterpretation. Plan does that here:
+	//
+	//   - genuinely unclaimed (ClaimedBy == "")           → expected = ""
+	//   - currently claimed and not expired               → Aborted (in-flight)
+	//   - claimed but expiry in the past (claimer crashed)→ expected = current.ClaimedBy
+	//     so the CAS lands and the cancelled state replaces the stale claim
+	expected := ""
+	if current.ClaimedBy != "" {
+		expiry := current.GetClaimExpiresAt()
+		if expiry == nil || expiry.AsTime().After(time.Now()) {
+			return nil, status.Errorf(codes.Aborted,
+				"commitment %q is in-flight; retry after the current handler completes", req.Id)
+		}
+		// Stale claim — pass the actual ClaimedBy as expected so the
+		// FSM CAS lands; the updated record clears ClaimedBy.
+		expected = current.ClaimedBy
+	}
+
 	updated := proto.Clone(&current).(*lobslawv1.AgentCommitment)
 	updated.Status = "cancelled"
 	updated.ClaimedBy = ""
@@ -160,7 +175,7 @@ func (s *Service) CancelCommitment(_ context.Context, req *lobslawv1.CancelCommi
 		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
 		Id:              current.Id,
 		Payload:         &lobslawv1.LogEntry_Commitment{Commitment: updated},
-		ExpectedClaimer: "",
+		ExpectedClaimer: expected,
 	}
 	if err := s.apply(entry); err != nil {
 		if errors.Is(err, memory.ErrClaimConflict) {

@@ -278,29 +278,35 @@ func (f *fakeStorageMount) Healthy() bool                 { return true }
 // must be readable by the interpreter but NOT writable. A skill
 // modifying its own manifest would be confusing at best and
 // tamper-with-audit at worst.
-func TestPolicyIncludesManifestDirReadOnly(t *testing.T) {
+func findMount(mounts []sandbox.PolicyMount, path string) *sandbox.PolicyMount {
+	for i := range mounts {
+		if mounts[i].Path == path {
+			return &mounts[i]
+		}
+	}
+	return nil
+}
+
+func TestPolicyIncludesManifestDirReadExecOnly(t *testing.T) {
 	t.Parallel()
 	skill := &Skill{
 		Manifest:    Manifest{Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h"},
 		ManifestDir: "/mnt/skills/s",
 		HandlerPath: "/mnt/skills/s/h",
 	}
-	p, err := buildPolicy(skill, "/bin/bash", nil)
+	p, err := buildPolicy(skill, "/bin/bash", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsString(p.AllowedPaths, "/mnt/skills/s") {
-		t.Errorf("manifest dir not in AllowedPaths: %+v", p.AllowedPaths)
+	m := findMount(p.Mounts, "/mnt/skills/s")
+	if m == nil {
+		t.Fatalf("manifest dir not in Mounts: %+v", p.Mounts)
 	}
-	if !containsString(p.ReadOnlyPaths, "/mnt/skills/s") {
-		t.Errorf("manifest dir should be read-only: %+v", p.ReadOnlyPaths)
+	if !m.Read || m.Write || !m.Exec {
+		t.Errorf("manifest dir should be read+exec, not write: %+v", *m)
 	}
 }
 
-// TestPolicyIncludesRuntimeDir — the interpreter binary's dir must
-// be readable so python3 can load its stdlib / bash can locate
-// helpers. Full /usr would be overbroad; we settle for the
-// interpreter's immediate directory.
 func TestPolicyIncludesRuntimeDir(t *testing.T) {
 	t.Parallel()
 	skill := &Skill{
@@ -308,16 +314,16 @@ func TestPolicyIncludesRuntimeDir(t *testing.T) {
 		ManifestDir: "/mnt/skills/s",
 		HandlerPath: "/mnt/skills/s/h",
 	}
-	p, _ := buildPolicy(skill, "/usr/bin/bash", nil)
-	if !containsString(p.AllowedPaths, "/usr/bin") {
-		t.Errorf("runtime dir missing: %+v", p.AllowedPaths)
+	p, _ := buildPolicy(skill, "/usr/bin/bash", nil, nil)
+	if findMount(p.Mounts, "/usr/bin") == nil {
+		t.Errorf("runtime dir missing: %+v", p.Mounts)
 	}
 }
 
-// TestPolicyStorageReadOnlyRespected — a skill declaring read-only
-// access ends up with that mount's path in ReadOnlyPaths; write
-// mode stays rw.
-func TestPolicyStorageReadOnlyRespected(t *testing.T) {
+// TestPolicyStorageModeIntersectsMount — a skill declaring write
+// against a writable mount keeps its write bit; a skill declaring
+// read against an rx-mode mount inherits exec from the mount.
+func TestPolicyStorageModeIntersectsMount(t *testing.T) {
 	t.Parallel()
 	mgr := storage.NewManager()
 	_ = mgr.Register(context.Background(), &fakeStorageMount{label: "ro", path: "/srv/ro"})
@@ -334,19 +340,60 @@ func TestPolicyStorageReadOnlyRespected(t *testing.T) {
 		ManifestDir: "/mnt/skills/s",
 		HandlerPath: "/mnt/skills/s/h",
 	}
-	p, err := buildPolicy(skill, "/bin/bash", mgr)
+	p, err := buildPolicy(skill, "/bin/bash", mgr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsString(p.AllowedPaths, "/srv/ro") || !containsString(p.ReadOnlyPaths, "/srv/ro") {
-		t.Errorf("ro mount should be rw'd + read-only: %+v", p)
+	ro := findMount(p.Mounts, "/srv/ro")
+	if ro == nil || !ro.Read || ro.Write {
+		t.Errorf("ro mount should be read-only: %+v", ro)
 	}
-	if !containsString(p.AllowedPaths, "/srv/rw") {
-		t.Errorf("rw mount should be in AllowedPaths: %+v", p.AllowedPaths)
+	rw := findMount(p.Mounts, "/srv/rw")
+	if rw == nil || !rw.Read || !rw.Write {
+		t.Errorf("rw mount should be read+write: %+v", rw)
 	}
-	if containsString(p.ReadOnlyPaths, "/srv/rw") {
-		t.Errorf("rw mount MUST NOT be read-only: %+v", p.ReadOnlyPaths)
+}
+
+// TestPolicyRejectsWriteOnReadOnlyMount — when a MountResolver is
+// wired and the underlying mount mode forbids write, the skill must
+// fail loudly at policy build time.
+func TestPolicyRejectsWriteOnReadOnlyMount(t *testing.T) {
+	t.Parallel()
+	mgr := storage.NewManager()
+	_ = mgr.Register(context.Background(), &fakeStorageMount{label: "config", path: "/etc/lobslaw"})
+
+	skill := &Skill{
+		Manifest: Manifest{
+			Name: "s", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h",
+			Storage: []StorageAccess{{Label: "config", Mode: StorageWrite}},
+		},
+		ManifestDir: "/mnt/skills/s",
+		HandlerPath: "/mnt/skills/s/h",
 	}
+	resolver := &fakeMountResolver{
+		known: map[string]struct {
+			root             string
+			r, w, x          bool
+		}{"config": {root: "/etc/lobslaw", r: true}},
+	}
+	if _, err := buildPolicy(skill, "/bin/bash", mgr, resolver); err == nil {
+		t.Fatal("write on read-only mount should fail policy build")
+	}
+}
+
+type fakeMountResolver struct {
+	known map[string]struct {
+		root    string
+		r, w, x bool
+	}
+}
+
+func (f *fakeMountResolver) ModeForLabel(label string) (string, bool, bool, bool, bool) {
+	m, ok := f.known[label]
+	if !ok {
+		return "", false, false, false, false
+	}
+	return m.root, m.r, m.w, m.x, true
 }
 
 // TestPolicyEnforcesNoNewPrivs — any skill invocation runs with
@@ -360,7 +407,7 @@ func TestPolicyEnforcesNoNewPrivs(t *testing.T) {
 		ManifestDir: "/mnt/skills/s",
 		HandlerPath: "/mnt/skills/s/h",
 	}
-	p, _ := buildPolicy(skill, "/bin/bash", nil)
+	p, _ := buildPolicy(skill, "/bin/bash", nil, nil)
 	if !p.NoNewPrivs {
 		t.Error("skills must run with NoNewPrivs")
 	}
@@ -376,7 +423,7 @@ func TestPolicyUserNamespaceEnabled(t *testing.T) {
 		ManifestDir: "/mnt/skills/s",
 		HandlerPath: "/mnt/skills/s/h",
 	}
-	p, _ := buildPolicy(skill, "/bin/bash", nil)
+	p, _ := buildPolicy(skill, "/bin/bash", nil, nil)
 	if !p.Namespaces.User {
 		t.Error("user namespace must be enabled for skills")
 	}

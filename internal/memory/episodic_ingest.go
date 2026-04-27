@@ -105,7 +105,7 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 		Importance: 5,
 		Timestamp:  timestamppb.New(turn.CompletedAt),
 		Tags:       tags,
-		Retention:  "session",
+		Retention:  lobslawv1.Retention_RETENTION_SESSION,
 	}
 
 	entry := &lobslawv1.LogEntry{
@@ -157,7 +157,14 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 			}
 			vdata, merr := proto.Marshal(ventry)
 			if merr == nil {
-				_, _ = i.raft.Apply(vdata, i.timeout)
+				// Best-effort: the episodic record above is the
+				// source of truth; this vector index entry is a
+				// derived performance optimisation. If the raft
+				// Apply fails the vector record is missing but the
+				// episodic record persists — search still works via
+				// the substring fallback. Surfacing this would
+				// double-log the same root cause.
+				_, _ = i.raft.Apply(vdata, i.timeout) //nolint:errcheck // see comment above
 			}
 		}
 	}

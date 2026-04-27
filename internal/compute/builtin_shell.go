@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -117,6 +119,16 @@ func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, i
 	// tool-specific env via policy metadata once the Ask layer lands.
 	c.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "HOME=/tmp"}
 
+	// Landlock the subprocess to the active storage mounts so a
+	// shell_command call can't escape mount-defined boundaries. On
+	// non-Linux platforms sandbox.Apply is a no-op; we log once at
+	// boot in that case so the operator knows shell runs unsandboxed.
+	if policy := buildShellPolicy(); policy != nil {
+		if err := sandbox.Apply(c, policy); err != nil {
+			return nil, 1, fmt.Errorf("shell_command: sandbox apply: %w", err)
+		}
+	}
+
 	// Capture stdout + stderr separately regardless of exit code
 	// so a successful command that wrote to stderr (lots of CLIs
 	// do) still surfaces it to the model.
@@ -135,12 +147,12 @@ func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, i
 	stderrOut, stderrTrunc := capBytesMax(stderr, shellMaxOutputBytes)
 
 	out, _ := json.Marshal(map[string]any{
-		"command":    cmd,
-		"stdout":     string(stdoutOut),
-		"stderr":     string(stderrOut),
-		"exit_code":  exitCode,
-		"truncated":  stdoutTrunc || stderrTrunc,
-		"timed_out":  errors.Is(runCtx.Err(), context.DeadlineExceeded),
+		"command":   cmd,
+		"stdout":    string(stdoutOut),
+		"stderr":    string(stderrOut),
+		"exit_code": exitCode,
+		"truncated": stdoutTrunc || stderrTrunc,
+		"timed_out": errors.Is(runCtx.Err(), context.DeadlineExceeded),
 	})
 	return out, 0, nil
 }
@@ -150,4 +162,60 @@ func capBytesMax(b []byte, max int) ([]byte, bool) {
 		return b, false
 	}
 	return b[:max], true
+}
+
+// shellSystemPaths is the bare-minimum read-only set the shell needs
+// regardless of operator mounts: the dynamic linker + libc, /usr/bin
+// for shipped utilities, and /tmp for scratch. Without these the
+// landlock'd shell can't even exec /bin/sh because it'd EACCES on
+// /lib64/ld-linux-x86-64.so.2.
+var shellSystemPaths = []sandbox.PolicyMount{
+	{Path: "/lib", Read: true, Exec: true},
+	{Path: "/lib64", Read: true, Exec: true},
+	{Path: "/usr/lib", Read: true, Exec: true},
+	{Path: "/usr/lib64", Read: true, Exec: true},
+	{Path: "/usr/bin", Read: true, Exec: true},
+	{Path: "/bin", Read: true, Exec: true},
+	{Path: "/etc", Read: true},
+	{Path: "/tmp", Read: true, Write: true},
+}
+
+var shellNoMountWarnOnce sync.Once
+
+// buildShellPolicy returns the sandbox policy for shell_command,
+// derived from the active storage mounts plus the shellSystemPaths
+// floor. Returns nil when no mounts are wired (test/dev) so existing
+// integration tests that don't set up storage keep working.
+func buildShellPolicy() *sandbox.Policy {
+	mounts := LandlockMounts()
+	if len(mounts) == 0 {
+		shellNoMountWarnOnce.Do(func() {
+			// One-time signal: the operator hasn't wired any storage
+			// mounts so shell_command falls open. This is the right
+			// behaviour for test setups; flag it so prod misconfig
+			// doesn't pass silently.
+			fmt.Fprintln(stderrForLog(),
+				"shell_command: no storage mounts active — Landlock sandbox skipped (test/dev mode)")
+		})
+		return nil
+	}
+	policy := &sandbox.Policy{
+		NoNewPrivs: true,
+		Mounts:     append(append([]sandbox.PolicyMount(nil), shellSystemPaths...), mounts...),
+	}
+	return policy
+}
+
+// stderrForLog is the logging sink for the one-time shell-not-sandboxed
+// warning. Centralised so tests can swap it; today it's just os.Stderr.
+var stderrForLog = func() interface {
+	Write(p []byte) (int, error)
+} {
+	return defaultStderr{}
+}
+
+type defaultStderr struct{}
+
+func (defaultStderr) Write(p []byte) (int, error) {
+	return fmt.Print(string(p))
 }
