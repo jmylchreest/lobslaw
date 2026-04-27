@@ -86,7 +86,7 @@ enabled = true
 # turns can mutate; strangers stay read-only.
 [[policy.rules]]
 id       = "owner-soul-tools"
-subject  = "owner"
+subject  = "scope:owner"      # MUST be kind:value — bare "owner" is malformed → no-match
 action   = "tool:exec"
 resource = "soul_*"
 effect   = "allow"

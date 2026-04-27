@@ -89,6 +89,10 @@ type Config struct {
 	// the auto-seeded session retention pruner.
 	MemorySession config.SessionConfig
 
+	// Policy is the [policy] config sub-block — operator-declared
+	// [[policy.rules]] entries get seeded at boot.
+	Policy config.PolicyConfig
+
 	// UDP broadcast auto-discovery. Leave Enabled=false for production
 	// clusters that use seed lists.
 	BroadcastEnabled    bool
@@ -1244,6 +1248,37 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	}
 	if len(seeded) > 0 {
 		n.log.Info("policy: seeded default builtin rules", "count", len(seeded))
+	}
+
+	// Operator-declared [[policy.rules]] from config.toml. These get
+	// seeded with the operator-supplied ID — re-seed is a no-op on
+	// repeat boots because we skip when the bucket already has the
+	// rule. Operator-edited rules requires explicit re-apply (delete
+	// the rule first, restart) to avoid silently overwriting.
+	for _, r := range n.cfg.Policy.Rules {
+		if r.ID == "" {
+			n.log.Warn("policy: skipping operator rule without id")
+			continue
+		}
+		if _, err := n.store.Get(memory.BucketPolicyRules, r.ID); err == nil {
+			continue
+		}
+		_, err := n.policySvc.AddRule(ctx, &lobslawv1.AddRuleRequest{
+			Rule: &lobslawv1.PolicyRule{
+				Id:       r.ID,
+				Subject:  r.Subject,
+				Action:   r.Action,
+				Resource: r.Resource,
+				Effect:   r.Effect,
+				Priority: r.Priority,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("seed operator rule %q: %w", r.ID, err)
+		}
+		n.log.Info("policy: seeded operator rule",
+			"id", r.ID, "subject", r.Subject, "action", r.Action,
+			"resource", r.Resource, "effect", r.Effect, "priority", r.Priority)
 	}
 	return nil
 }

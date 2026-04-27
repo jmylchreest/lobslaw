@@ -140,6 +140,23 @@ type StorageMountConfig struct {
 
 type PolicyConfig struct {
 	Enabled bool `koanf:"enabled"`
+	// Rules are operator-declared [[policy.rules]] entries seeded
+	// at boot via raft. Each rule mirrors lobslawv1.PolicyRule
+	// fields. Subjects MUST be "kind:value" (scope:owner,
+	// user:alice, role:admin) or "*" — bare strings like "owner"
+	// are treated as malformed (fail-closed) by the engine.
+	// Higher Priority wins. Default-deny seeds for builtins land
+	// at priority=10; operator allow rules typically use 20+.
+	Rules []PolicyRuleConfig `koanf:"rules,omitempty"`
+}
+
+type PolicyRuleConfig struct {
+	ID       string `koanf:"id"`
+	Subject  string `koanf:"subject"`
+	Action   string `koanf:"action"`
+	Resource string `koanf:"resource"`
+	Effect   string `koanf:"effect"`              // "allow" | "deny"
+	Priority int32  `koanf:"priority,omitempty"`  // higher wins
 }
 
 type ComputeConfig struct {
