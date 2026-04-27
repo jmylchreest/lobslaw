@@ -14,11 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// FetchConfig wires the fetch_url builtin. Zero APIClient → a
-// default one with 15s timeout + SSRF guard. Zero CacheTTL → 10min.
+// FetchConfig wires the fetch_url builtin. Zero HTTPClient → the
+// production egress.For("fetch_url") client wrapped in an SSRF guard.
+// Tests may inject a stubbed client; that client is used unchanged
+// (no SSRF wrapping) so test harnesses can hit httptest endpoints.
 type FetchConfig struct {
 	HTTPClient *http.Client
 	CacheTTL   time.Duration
@@ -64,25 +67,40 @@ func FetchToolDef() *types.ToolDef {
 }
 
 func defaultFetchClient() *http.Client {
-	// The custom Dial prevents SSRF — even if the model is tricked
-	// into providing a URL whose DNS resolves to a private address,
-	// the Dial refuses the connection before any bytes flow.
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	return &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				host, _, err := net.SplitHostPort(addr)
-				if err != nil {
-					return nil, err
-				}
-				if err := ssrfGuard(ctx, host); err != nil {
-					return nil, err
-				}
-				return dialer.DialContext(ctx, network, addr)
-			},
-		},
+	// Three layers of defence:
+	//   1. URL-level SSRF guard (this RoundTripper wrapper) refuses
+	//      private-IP-resolving hostnames before the request leaves
+	//      the process.
+	//   2. egress.For("fetch_url") routes through the in-process
+	//      smokescreen proxy, which enforces hostname ACLs (operator
+	//      can lock fetch_url down via [security] fetch_url_allow_hosts).
+	//   3. smokescreen's own IP-level filter blocks private ranges
+	//      regardless of what DNS returns.
+	// Layers 1 and 3 overlap; 2 is the operator-facing knob. Belt
+	// AND braces because fetch_url is the highest-blast-radius
+	// builtin — the agent can be talked into reaching any URL.
+	base := egress.For("fetch_url").HTTPClient()
+	wrapped := *base
+	wrapped.Transport = &ssrfGuardTransport{base: base.Transport}
+	return &wrapped
+}
+
+// ssrfGuardTransport is the SSRF guard layer in front of the egress
+// client. Resolves the request host, refuses if any resolved IP is
+// in a private range. DNS-rebind-safe because the host is checked
+// here AND at the smokescreen layer; rebind between checks would
+// have to cross both barriers.
+type ssrfGuardTransport struct {
+	base http.RoundTripper
+}
+
+func (s *ssrfGuardTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if host := req.URL.Hostname(); host != "" {
+		if err := ssrfGuard(req.Context(), host); err != nil {
+			return nil, err
+		}
 	}
+	return s.base.RoundTrip(req)
 }
 
 // ssrfGuard resolves the host and refuses if any resolved IP is in
