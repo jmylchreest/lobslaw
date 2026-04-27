@@ -115,6 +115,11 @@ func gateRaftAnd(other func(Config) bool) func(Config) bool {
 //  8. broadcast — optional UDP auto-discovery
 func nodeWireStages() []WireStage {
 	return []WireStage{
+		// Egress filter MUST come before any stage that constructs
+		// an http.Client — otherwise those clients capture the
+		// boot-time noop provider instead of the smokescreen one.
+		{Name: "egress", Wire: (*Node).wireEgress},
+
 		// Raft cluster stack. Each sub-stage runs only when this
 		// node hosts raft (memory or policy function); they share
 		// the gateRaft predicate.

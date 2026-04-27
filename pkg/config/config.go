@@ -28,6 +28,7 @@ type Config struct {
 	Observability ObservabilityConfig `koanf:"observability"`
 	Logging       LoggingConfig       `koanf:"logging"`
 	MCP           MCPConfig           `koanf:"mcp"`
+	Security      SecurityConfig      `koanf:"security"`
 	ConfigOpts    ConfigOpts          `koanf:"config"`
 
 	// resolvedPath is the filesystem path Load resolved via
@@ -630,6 +631,49 @@ type SkillsConfig struct {
 	// no watcher started; skills can still be registered
 	// programmatically but won't auto-discover on drop-in.
 	StorageLabel string `koanf:"storage_label,omitempty"`
+}
+
+// SecurityConfig carries cross-cutting safety controls: the egress
+// filter's ACL inputs, future subprocess sandbox knobs, etc. Each
+// field is independently optional — empty struct is valid and
+// produces sensible-default behaviour (deny-by-default ACL with
+// permissive fetch_url).
+type SecurityConfig struct {
+	// EgressUpstreamProxy is the corporate proxy lobslaw chains
+	// through. Empty = direct egress. Format: "http://corp:8080"
+	// or "https://...". Forwarded to smokescreen's
+	// upstream-proxy hook.
+	EgressUpstreamProxy string `koanf:"egress_upstream_proxy,omitempty"`
+
+	// EgressAllowPrivateRanges disables smokescreen's RFC1918 deny.
+	// NEVER set this in production — it lets a compromised process
+	// reach the local network. Set only by dev/test setups that
+	// need to talk to localhost-bound services (e.g. a self-hosted
+	// LLM on the same machine).
+	EgressAllowPrivateRanges bool `koanf:"egress_allow_private_ranges,omitempty"`
+
+	// EgressAllowRanges is the explicit CIDR allowlist on top of
+	// the default rules. Use to permit a single private subnet
+	// (Tailscale tailnet, Wireguard mesh) without unlocking all
+	// of RFC1918. Format: ["100.64.0.0/10", "10.0.0.0/24"].
+	EgressAllowRanges []string `koanf:"egress_allow_ranges,omitempty"`
+
+	// ClawhubBaseURL is the API endpoint for the clawhub.ai skill
+	// catalog. Empty disables clawhub-driven install — operators
+	// who want self-host or no clawhub access leave this off.
+	ClawhubBaseURL string `koanf:"clawhub_base_url,omitempty"`
+
+	// ClawhubBinaryHosts is the optional allowlist for skill-bundled
+	// binary download URLs (Phase B). Default — when ClawhubBaseURL
+	// is set — is github.com release hosts. Operators with stricter
+	// supply-chain requirements declare their own.
+	ClawhubBinaryHosts []string `koanf:"clawhub_binary_hosts,omitempty"`
+
+	// FetchURLAllowHosts narrows the fetch_url builtin's egress.
+	// Empty = permissive (any public host, smokescreen still blocks
+	// private IPs). Non-empty = explicit allowlist; the agent's
+	// fetch_url calls are limited to these hostnames.
+	FetchURLAllowHosts []string `koanf:"fetch_url_allow_hosts,omitempty"`
 }
 
 type ObservabilityConfig struct {

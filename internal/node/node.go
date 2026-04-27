@@ -16,6 +16,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/audit"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
@@ -150,6 +151,11 @@ type Config struct {
 	// boot alongside any plugin-provided MCP manifests.
 	MCP config.MCPConfig
 
+	// Security carries operator knobs for the egress filter and
+	// other cross-cutting safety controls. See pkg/config.SecurityConfig
+	// for the field-by-field doc.
+	Security config.SecurityConfig
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate
@@ -210,6 +216,12 @@ type Node struct {
 	webhookHandlers  []*gateway.WebhookHandler
 	mountResolver    *compute.MountResolver
 	builtinsRegistry *compute.Builtins
+
+	// egressProvider is the in-process smokescreen-backed forward
+	// proxy. Constructed early in boot via wireEgress; every later
+	// http.Client construction routes through it. Stop is called
+	// from closePartial.
+	egressProvider *egress.SmokescreenProvider
 
 	// Scheduler fires ScheduledTaskRecord and AgentCommitment records.
 	// Runs on any node that has access to the Raft stack (memory or
@@ -537,6 +549,13 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	if n.store != nil {
 		if err := n.store.Close(); err != nil {
 			n.log.Warn("store close", "err", err)
+		}
+	}
+	if n.egressProvider != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := n.egressProvider.Stop(stopCtx); err != nil {
+			n.log.Warn("egress proxy shutdown", "err", err)
 		}
 	}
 	return nil
