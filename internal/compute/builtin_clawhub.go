@@ -43,16 +43,16 @@ func ClawhubToolDefs() []*types.ToolDef {
 		{
 			Name:        "clawhub_install",
 			Path:        BuiltinScheme + "clawhub_install",
-			Description: "Install a skill from the configured clawhub catalog. Pass name (e.g. \"gws-workspace\") and version (semver). Optional mount overrides the default storage label and subpath overrides the per-skill subdirectory. Returns the install path + signer (when signature policy verified the bundle). The skill registry's filesystem watcher picks the new manifest up automatically; no node restart needed. Owner-only; default-deny applies.",
+			Description: "Install a skill from the configured clawhub catalogue. Two modes: (a) by slug — pass slug=\"<owner>/<name>\" (e.g. \"steipete/gog\") to install a clawhub.ai-format bundle; the runtime parses SKILL.md, satisfies declared host bin requirements, and registers the synthetic skill. (b) by name+version — for native (manifest.yaml) bundles served by a lobslaw-format catalogue. Optional mount overrides the storage label and subpath overrides the per-skill directory. Returns the install path + skill name. The skill registry's filesystem watcher picks the new manifest up automatically. Owner-only; default-deny applies.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
-					"name":    {"type": "string", "description": "Skill name in the catalog."},
-					"version": {"type": "string", "description": "Version (semver)."},
+					"slug":    {"type": "string", "description": "Clawhub slug (<owner>/<name>) for clawhub-format bundles. Mutually exclusive with name+version."},
+					"name":    {"type": "string", "description": "Skill name (native-format catalogue). Used with version."},
+					"version": {"type": "string", "description": "Version (semver). Used with name."},
 					"mount":   {"type": "string", "description": "Storage mount label (default: skill-tools)."},
 					"subpath": {"type": "string", "description": "Subdirectory under the mount (default: <name>)."}
 				},
-				"required": ["name", "version"],
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskIrreversible,
@@ -62,14 +62,14 @@ func ClawhubToolDefs() []*types.ToolDef {
 
 func newClawhubInstallHandler(cfg ClawhubConfig) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		slug := strings.TrimSpace(args["slug"])
 		name := strings.TrimSpace(args["name"])
 		version := strings.TrimSpace(args["version"])
-		if name == "" || version == "" {
-			return nil, 2, errors.New("clawhub_install: name and version are required")
+		if slug == "" && (name == "" || version == "") {
+			return nil, 2, errors.New("clawhub_install: pass slug=<owner>/<name> for clawhub-format, or name+version for native-format")
 		}
-		entry, err := cfg.Installer.Client().GetSkill(ctx, name, version)
-		if err != nil {
-			return nil, 1, fmt.Errorf("clawhub_install: %w", err)
+		if slug != "" && (name != "" || version != "") {
+			return nil, 2, errors.New("clawhub_install: slug is mutually exclusive with name+version")
 		}
 		mount := strings.TrimSpace(args["mount"])
 		if mount == "" {
@@ -79,7 +79,19 @@ func newClawhubInstallHandler(cfg ClawhubConfig) BuiltinFunc {
 			MountLabel: mount,
 			Subpath:    strings.TrimSpace(args["subpath"]),
 		}
-		res, err := cfg.Installer.Install(ctx, entry, target)
+		var (
+			res *clawhub.InstallResult
+			err error
+		)
+		if slug != "" {
+			res, err = cfg.Installer.InstallBySlug(ctx, slug, target)
+		} else {
+			entry, gerr := cfg.Installer.Client().GetSkill(ctx, name, version)
+			if gerr != nil {
+				return nil, 1, fmt.Errorf("clawhub_install: %w", gerr)
+			}
+			res, err = cfg.Installer.Install(ctx, entry, target)
+		}
 		if err != nil {
 			return nil, 1, fmt.Errorf("clawhub_install: %w", err)
 		}

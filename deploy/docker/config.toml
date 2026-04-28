@@ -98,12 +98,22 @@ path  = "/lobslaw/usr/local"
 mode  = "rx"
 
 [security]
-# Egress to the clawhub.ai skill catalog. Empty disables clawhub —
-# the clawhub_install builtin and its egress role aren't wired.
-# Setting this declares clawhub.ai as an allowed upstream for the
-# "clawhub" smokescreen role; the policy rule below still has to
-# allow the tool itself.
-clawhub_base_url = "https://clawhub.ai"
+# Egress to the clawhub.ai skill catalog. The base URL is the
+# CATALOGUE API root (where /api/v1/download lives), not the
+# marketing site. Empty disables clawhub — the clawhub_install
+# builtin and its egress role aren't wired. Setting this:
+#  1. Wires the clawhub_install builtin (still policy-gated below)
+#  2. Adds the API host to the "clawhub" smokescreen egress role
+#     so the bundle download can succeed.
+#
+# clawhub.ai's API today lives on a Convex deployment; the public
+# URL changes occasionally. Verify by curling the slug-download
+# endpoint:
+#   curl -sLI "$URL/api/v1/download?slug=steipete/gog" | head -1
+#
+# As of the last check: https://wry-manatee-359.convex.site
+# (clawhub.ai itself returns the marketing HTML, not the API).
+clawhub_base_url = "https://wry-manatee-359.convex.site"
 
 # Optional override of the binary download allowlist. When unset
 # (and clawhub_base_url is set), defaults to github.com release
@@ -171,6 +181,27 @@ action   = "tool:exec"
 resource = "clawhub_install"
 effect   = "allow"
 priority = 20
+
+# After running clawhub_install for a skill, add a per-skill
+# allow rule so the agent can call its tool. Example for gog
+# (uncomment after `clawhub_install slug="steipete/gog"`):
+#
+# [[policy.rules]]
+# id       = "owner-tool-gog"
+# subject  = "scope:owner"
+# action   = "tool:exec"
+# resource = "gog"
+# effect   = "allow"
+# priority = 20
+#
+# For destructive sub-operations, prefer require_confirmation:
+# [[policy.rules]]
+# id       = "owner-tool-gog-confirm-mail"
+# subject  = "scope:owner"
+# action   = "tool:exec"
+# resource = "gog"
+# effect   = "require_confirmation"
+# priority = 50  # higher priority wins; allow at 20 + this at 50 = confirm
 
 # --- Binary install ---
 #

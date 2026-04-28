@@ -112,6 +112,119 @@ type InstallResult struct {
 	SignedBy     string
 }
 
+// InstallBySlug fetches a clawhub.ai-format bundle by slug and runs
+// the same install pipeline. The slug shape is "<owner>/<name>"
+// (e.g. "steipete/gog"); the catalogue serves the bundle bytes
+// directly. SHA verification is skipped (clawhub.ai doesn't publish
+// a per-bundle digest in this API path); the bundle's ed25519
+// signature, when present, is the supply-chain anchor.
+func (i *Installer) InstallBySlug(ctx context.Context, slug string, target InstallTarget) (*InstallResult, error) {
+	parts := strings.SplitN(slug, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("clawhub: slug %q must be <owner>/<name>", slug)
+	}
+	if target.Subpath == "" {
+		target.Subpath = parts[1]
+	}
+	entry := &SkillEntry{
+		Name: parts[1],
+	}
+	body, err := i.client.DownloadBundleBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = body.Close() }()
+	return i.installFromBody(ctx, entry, target, body, "")
+}
+
+// installFromBody is the shared post-fetch pipeline used by Install
+// and InstallBySlug. expectedSHA is verified when non-empty.
+func (i *Installer) installFromBody(ctx context.Context, entry *SkillEntry, target InstallTarget, body io.Reader, expectedSHA string) (*InstallResult, error) {
+	if target.MountLabel == "" {
+		return nil, errors.New("clawhub: install target requires MountLabel")
+	}
+	mountRoot, err := i.storage.Resolve(target.MountLabel)
+	if err != nil {
+		return nil, fmt.Errorf("clawhub: mount %q: %w", target.MountLabel, err)
+	}
+	installDir := filepath.Join(mountRoot, target.Subpath)
+	if !strings.HasPrefix(filepath.Clean(installDir)+string(os.PathSeparator), filepath.Clean(mountRoot)+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("clawhub: install dir %q escapes mount root %q", installDir, mountRoot)
+	}
+
+	bundleBytes, err := io.ReadAll(io.LimitReader(body, MaxBundleSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("clawhub: read bundle body: %w", err)
+	}
+	if int64(len(bundleBytes)) > MaxBundleSize {
+		return nil, fmt.Errorf("clawhub: bundle exceeds %d bytes", MaxBundleSize)
+	}
+	if expectedSHA != "" {
+		hasher := sha256.New()
+		hasher.Write(bundleBytes)
+		if err := verifyDigest(hasher, expectedSHA); err != nil {
+			return nil, err
+		}
+	}
+
+	stage, err := os.MkdirTemp(filepath.Dir(installDir), "."+target.Subpath+".part-*")
+	if err != nil {
+		return nil, fmt.Errorf("clawhub: create staging dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(stage) }
+
+	processed, err := ProcessBundle(bundleBytes, stage)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+
+	switch processed.Format {
+	case "native":
+		binDecls, err := fetchManifestBinaries(stage)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
+		if err := installBinaries(ctx, stage, binDecls); err != nil {
+			cleanup()
+			return nil, err
+		}
+	case "clawhub":
+		if len(processed.RequiresBins) > 0 {
+			if i.satisfier == nil {
+				cleanup()
+				return nil, fmt.Errorf("clawhub: bundle %q declares host bins %v but no Satisfier wired", processed.Name, processed.RequiresBins)
+			}
+			for _, bin := range processed.RequiresBins {
+				if _, err := i.satisfier.Satisfy(ctx, bin, processed.InstallSpecs); err != nil {
+					cleanup()
+					return nil, fmt.Errorf("clawhub: satisfy %q: %w", bin, err)
+				}
+			}
+		}
+	default:
+		cleanup()
+		return nil, fmt.Errorf("clawhub: unrecognised bundle format %q", processed.Format)
+	}
+
+	if err := os.RemoveAll(installDir); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("clawhub: clear prior install: %w", err)
+	}
+	if err := os.Rename(stage, installDir); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("clawhub: promote staging dir: %w", err)
+	}
+
+	return &InstallResult{
+		Name:         processed.Name,
+		Version:      entry.Version,
+		InstallDir:   installDir,
+		ManifestPath: filepath.Join(installDir, "manifest.yaml"),
+	}, nil
+}
+
 // Install downloads, verifies, and extracts entry's bundle into the
 // target mount. SHA-256 is verified while streaming so a corrupted
 // bundle aborts before any disk write happens. Extraction is

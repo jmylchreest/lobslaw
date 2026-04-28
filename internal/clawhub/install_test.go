@@ -16,8 +16,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 )
+
+func newTestSatisfier(t *testing.T, prefix string) *binaries.Satisfier {
+	t.Helper()
+	return binaries.New(binaries.Config{
+		InstallPrefix: prefix,
+	})
+}
 
 func makeBundle(t *testing.T, files map[string]string) []byte {
 	t.Helper()
@@ -99,6 +107,108 @@ func newInstallTestStack(t *testing.T, bundle []byte, sha string) (*Installer, *
 		t.Fatal(err)
 	}
 	return inst, mgr, srv.URL
+}
+
+// makeZipBundleFromFiles builds a clawhub-format ZIP for the slug
+// install test. Mirrors the actual clawhub.ai download payload
+// shape: SKILL.md (with clawdbot front-matter) + _meta.json.
+func makeZipBundleFromFiles(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	return makeZipBundle(t, files)
+}
+
+func TestInstallBySlugClawhubFormat(t *testing.T) {
+	t.Parallel()
+	skillMD := `---
+name: gog
+description: Google Workspace CLI
+metadata: {"clawdbot":{"requires":{"bins":["gog"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/gogcli","bins":["gog"]}]}}
+---
+
+# gog
+
+Use gog for Gmail/Calendar.
+`
+	bundle := makeZipBundleFromFiles(t, map[string][]byte{
+		"SKILL.md":   []byte(skillMD),
+		"_meta.json": []byte(`{"slug":"gog","version":"1.0.0"}`),
+	})
+
+	mountRoot := t.TempDir()
+	mgr := storage.NewManager()
+	if err := mgr.Register(context.Background(), &fakeMount{
+		label: "skill-tools", path: mountRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	prefix := t.TempDir()
+	binDir := filepath.Join(prefix, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "gog"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/download", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("slug"); got != "steipete/gog" {
+			t.Errorf("server saw slug=%q", got)
+		}
+		_, _ = w.Write(bundle)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	satisfier := newTestSatisfier(t, prefix)
+	inst, err := NewInstaller(InstallerConfig{
+		Client:    c,
+		Storage:   mgr,
+		Satisfier: satisfier,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := inst.InstallBySlug(context.Background(), "steipete/gog", InstallTarget{
+		MountLabel: "skill-tools",
+	})
+	if err != nil {
+		t.Fatalf("InstallBySlug: %v", err)
+	}
+	if res.Name != "gog" {
+		t.Errorf("name: %q", res.Name)
+	}
+	wantDir := filepath.Join(mountRoot, "gog")
+	if res.InstallDir != wantDir {
+		t.Errorf("install dir: %q want %q", res.InstallDir, wantDir)
+	}
+	manifestPath := filepath.Join(wantDir, "manifest.yaml")
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Errorf("synthetic manifest.yaml not present: %v", err)
+	}
+	skillMDPath := filepath.Join(wantDir, "SKILL.md")
+	if _, err := os.Stat(skillMDPath); err != nil {
+		t.Errorf("SKILL.md not preserved at install dir: %v", err)
+	}
+}
+
+func TestInstallBySlugRejectsBadShape(t *testing.T) {
+	t.Parallel()
+	c, _ := NewClient("http://localhost:65535")
+	inst, _ := NewInstaller(InstallerConfig{
+		Client:  c,
+		Storage: storage.NewManager(),
+	})
+	_, err := inst.InstallBySlug(context.Background(), "no-slash", InstallTarget{MountLabel: "skill-tools"})
+	if err == nil || !strings.Contains(err.Error(), "<owner>/<name>") {
+		t.Errorf("expected slug-shape error, got: %v", err)
+	}
 }
 
 func TestInstallExtractsBundleIntoMountSubpath(t *testing.T) {

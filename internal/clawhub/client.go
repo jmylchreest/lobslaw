@@ -144,6 +144,54 @@ func (c *Client) DownloadBundle(ctx context.Context, entry *SkillEntry) (io.Read
 	return resp.Body, nil
 }
 
+// DownloadBundleBySlug fetches a clawhub.ai-style bundle directly
+// from the catalogue API. Slug shape is "<owner>/<name>" (e.g.
+// "steipete/gog"); the catalogue serves the bundle ZIP at
+// <baseURL>/api/v1/download?slug=<slug>. Caller (typically
+// Installer.InstallBySlug) is responsible for ProcessBundle on
+// the returned bytes.
+//
+// validateSlug accepts owner/name with the standard skill identifier
+// alphabet (alphanumerics + dash + dot + underscore on each side of
+// the slash). Rejects empty parts and double-slashes.
+func (c *Client) DownloadBundleBySlug(ctx context.Context, slug string) (io.ReadCloser, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	endpoint := c.baseURL + "/api/v1/download?slug=" + url.QueryEscape(slug)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("clawhub: GET %s: %w", endpoint, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("clawhub: GET %s HTTP %d", endpoint, resp.StatusCode)
+	}
+	return resp.Body, nil
+}
+
+func validateSlug(slug string) error {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return errors.New("clawhub: slug required")
+	}
+	parts := strings.Split(slug, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("clawhub: slug %q must be <owner>/<name>", slug)
+	}
+	for _, p := range parts {
+		if err := validateSkillIdentifier(p); err != nil {
+			return fmt.Errorf("clawhub: slug part %w", err)
+		}
+	}
+	return nil
+}
+
 // validateSkillIdentifier guards against path-traversal-shaped
 // inputs in (name, version). Catalogs use these in URL paths;
 // rejecting "/" and ".." here means a malformed catalog entry
