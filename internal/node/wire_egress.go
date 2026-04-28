@@ -1,6 +1,7 @@
 package node
 
 import (
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 )
 
@@ -103,6 +104,22 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		ClawhubBaseURL:     n.cfg.Security.ClawhubBaseURL,
 		ClawhubBinaryHosts: n.cfg.Security.ClawhubBinaryHosts,
 		FetchURLAllowHosts: n.cfg.Security.FetchURLAllowHosts,
+	}
+	if len(n.cfg.Binaries) > 0 {
+		specs := make([]binaries.Binary, 0, len(n.cfg.Binaries))
+		for _, b := range n.cfg.Binaries {
+			install := make([]binaries.InstallSpec, 0, len(b.Install))
+			for _, ins := range b.Install {
+				install = append(install, binaries.InstallSpec{
+					OS:       ins.OS,
+					Manager:  ins.Manager,
+					URL:      ins.URL,
+					Repo:     ins.Repo,
+				})
+			}
+			specs = append(specs, binaries.Binary{Name: b.Name, Install: install})
+		}
+		in.BinariesInstallHosts = binaries.HostsFromBinaries(specs)
 	}
 	if len(n.cfg.Security.OAuth) > 0 {
 		eps := make(map[string]egress.OAuthEndpoints, len(n.cfg.Security.OAuth))

@@ -172,6 +172,25 @@ func (n *Node) wireCompute() error {
 				"providers", len(n.oauthProviders))
 		}
 
+		// Binary install registry: registered only when the operator
+		// declared at least one [[binary]] entry. Default-deny via the
+		// noSeed list — operators allow specific binaries with
+		// [[policy.rules]] resource = "binary_install:<name>".
+		if n.binaries != nil {
+			if err := compute.RegisterBinariesBuiltins(builtins, compute.BinariesConfig{
+				Registry: n.binaries,
+			}); err != nil {
+				return fmt.Errorf("register binaries builtins: %w", err)
+			}
+			for _, td := range compute.BinariesToolDefs() {
+				if err := n.toolRegistry.Register(td); err != nil {
+					return fmt.Errorf("register binaries tool %q: %w", td.Name, err)
+				}
+			}
+			n.log.Debug("compute: binary_install + binary_list registered",
+				"count", len(n.binaries.Names()))
+		}
+
 		// Clawhub install builtin: only registered when the operator
 		// configured a clawhub base URL (i.e. wireClawhub built an
 		// installer). Default-deny — owner-only via the noSeed list.

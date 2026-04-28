@@ -143,6 +143,55 @@ resource = "clawhub_install"
 effect   = "allow"
 priority = 20
 
+# --- Binary install ---
+#
+# binary_list is read-only (catalogue introspection). binary_install
+# runs an OS package manager (or curl-sh-with-checksum). The trust
+# gate is the [[binary]] block — only declared binaries can be
+# installed, so granting binary_install opens whatever's declared
+# (and nothing else). Add at least one [[binary]] before enabling.
+
+# [[policy.rules]]
+# id       = "owner-binary-tools"
+# subject  = "scope:owner"
+# action   = "tool:exec"
+# resource = "binary_*"
+# effect   = "allow"
+# priority = 20
+
+# Example [[binary]] declarations — uncomment and adapt:
+#
+# [[binary]]
+# name        = "gh"
+# description = "GitHub CLI"
+# detect      = "gh --version"
+# [[binary.install]]
+# os = "linux"
+# distro = "debian"
+# manager = "apt"
+# package = "gh"
+# sudo = true
+# [[binary.install]]
+# os = "linux"
+# distro = "arch"
+# manager = "pacman"
+# package = "github-cli"
+# sudo = true
+# [[binary.install]]
+# os = "darwin"
+# manager = "brew"
+# package = "gh"
+#
+# [[binary]]
+# name        = "uvx"
+# description = "Python tool runner (via uv)"
+# detect      = "uvx --version"
+# [[binary.install]]
+# os = "linux"
+# manager = "curl-sh"
+# url = "https://astral.sh/uv/install.sh"
+# checksum = "sha256:REPLACE_WITH_REAL_HASH_FROM_RELEASE_NOTES"
+
 # --- MCP tools: explicit allow per scope ---
 #
 # MCP tools come from external servers; operator opts in here.

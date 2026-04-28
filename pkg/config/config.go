@@ -28,6 +28,7 @@ type Config struct {
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
 	Users     []UserConfig     `koanf:"user"`
+	Binaries  []BinaryConfig   `koanf:"binary"`
 
 	// resolvedPath is the filesystem path Load resolved via
 	// findConfigPath. Empty when no config.toml was found (env-only
@@ -768,3 +769,23 @@ type LogFilterConfig struct {
 	Enabled     bool   `koanf:"enabled"`
 }
 
+
+type BinaryConfig struct {
+	Name        string                `koanf:"name"`
+	Description string                `koanf:"description,omitempty"`
+	Detect      string                `koanf:"detect,omitempty"`
+	Install     []BinaryInstallConfig `koanf:"install"`
+}
+
+type BinaryInstallConfig struct {
+	OS       string   `koanf:"os"`
+	Arch     string   `koanf:"arch,omitempty"`
+	Distro   string   `koanf:"distro,omitempty"`
+	Manager  string   `koanf:"manager"`
+	Package  string   `koanf:"package,omitempty"`
+	Repo     string   `koanf:"repo,omitempty"`
+	URL      string   `koanf:"url,omitempty"`
+	Checksum string   `koanf:"checksum,omitempty"`
+	Sudo     bool     `koanf:"sudo,omitempty"`
+	Args     []string `koanf:"args,omitempty"`
+}

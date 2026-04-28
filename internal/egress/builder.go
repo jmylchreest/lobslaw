@@ -54,6 +54,12 @@ type ACLInputs struct {
 	// blocks private IPs anyway). Non-empty = explicit allowlist.
 	FetchURLAllowHosts []string
 
+	// BinariesInstallHosts is the union of upstream hostnames declared
+	// by the operator's [[binary]] entries (apt repos, brew CDN, pypi,
+	// etc.). Used to seed the "binaries-install" role. Empty when no
+	// binaries are declared — role isn't registered.
+	BinariesInstallHosts []string
+
 	// OAuthProviders maps provider name → its DeviceAuth + Token
 	// endpoints. Egress under "oauth/<name>" is restricted to those
 	// two hosts so a misconfigured client can't reach an arbitrary
@@ -142,6 +148,22 @@ func Build(in ACLInputs) Rules {
 			hosts = append(hosts, "github.com", "objects.githubusercontent.com", "*.githubusercontent.com")
 		}
 		rules.Roles["clawhub"] = hosts
+	}
+
+	if len(in.BinariesInstallHosts) > 0 {
+		seen := make(map[string]struct{}, len(in.BinariesInstallHosts))
+		hosts := make([]string, 0, len(in.BinariesInstallHosts))
+		for _, h := range in.BinariesInstallHosts {
+			if h == "" {
+				continue
+			}
+			if _, dup := seen[h]; dup {
+				continue
+			}
+			seen[h] = struct{}{}
+			hosts = append(hosts, h)
+		}
+		rules.Roles["binaries-install"] = hosts
 	}
 
 	// OAuth IdP endpoints — one role per declared provider, scoped

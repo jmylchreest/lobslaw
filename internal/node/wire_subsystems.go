@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/oauth"
@@ -232,6 +234,48 @@ func (n *Node) wireClawhub() error {
 	}
 	n.clawhubInstaller = inst
 	n.log.Info("clawhub: installer wired", "base", base)
+	return nil
+}
+
+func (n *Node) wireBinaries() error {
+	if len(n.cfg.Binaries) == 0 {
+		return nil
+	}
+	specs := make([]binaries.Binary, 0, len(n.cfg.Binaries))
+	for _, b := range n.cfg.Binaries {
+		install := make([]binaries.InstallSpec, 0, len(b.Install))
+		for _, in := range b.Install {
+			install = append(install, binaries.InstallSpec{
+				OS:       in.OS,
+				Arch:     in.Arch,
+				Distro:   in.Distro,
+				Manager:  in.Manager,
+				Package:  in.Package,
+				Repo:     in.Repo,
+				URL:      in.URL,
+				Checksum: in.Checksum,
+				Sudo:     in.Sudo,
+				Args:     in.Args,
+			})
+		}
+		specs = append(specs, binaries.Binary{
+			Name:        b.Name,
+			Description: b.Description,
+			Detect:      b.Detect,
+			Install:     install,
+		})
+	}
+	cfg := binaries.Config{
+		Binaries:   specs,
+		Logger:     n.log,
+		HTTPClient: egress.For("binaries-install").HTTPClient(),
+	}
+	reg, err := binaries.New(cfg)
+	if err != nil {
+		return fmt.Errorf("binaries: %w", err)
+	}
+	n.binaries = reg
+	n.log.Info("binaries: registry wired", "count", len(specs))
 	return nil
 }
 

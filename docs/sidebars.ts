@@ -56,6 +56,7 @@ const sidebars: SidebarsConfig = {
       items: [
         "features/skills",
         "features/clawhub",
+        "features/binary-install",
         "features/commitments",
         "features/notifications",
         "features/research",
