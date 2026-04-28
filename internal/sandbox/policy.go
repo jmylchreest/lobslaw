@@ -37,9 +37,24 @@ type Policy struct {
 	Mounts []PolicyMount `json:"mounts,omitempty"`
 
 	// NetworkAllowCIDR is the list of egress destinations the tool
-	// may reach. Empty → no outbound network. Enforcement via
-	// nftables is deferred.
+	// may reach. Empty → no outbound network beyond loopback (when
+	// NetworkFilter enforces). The list flows through to
+	// internal/sandbox/netfilter.RuleSet.AllowCIDRs.
 	NetworkAllowCIDR []string `json:"network_allow_cidr,omitempty"`
+
+	// NetworkFilter requests kernel-level egress enforcement via
+	// nftables in the subprocess's network namespace. Linux-only;
+	// requires Namespaces.Network = true. When set, the apply
+	// pipeline installs a drop-by-default output chain plus
+	// allow-rules for loopback (smokescreen UDS), DNS (when
+	// NetworkAllowDNS is true), and every NetworkAllowCIDR entry.
+	NetworkFilter bool `json:"network_filter,omitempty"`
+
+	// NetworkAllowDNS opens UDP+TCP port 53 to any destination when
+	// NetworkFilter is on. Most skills need DNS to resolve hostnames
+	// before the application-layer HTTPS_PROXY connects. Off by
+	// default — operators turn it on per-skill via policy.
+	NetworkAllowDNS bool `json:"network_allow_dns,omitempty"`
 
 	// DangerousCmdsDeny hard deny-list applied before argv
 	// substitution. Exact string match against the joined argv.
@@ -155,6 +170,9 @@ func (p *Policy) Validate() error {
 	}
 	if p.MemoryLimitMB < 0 {
 		return errors.New("MemoryLimitMB must be >= 0")
+	}
+	if p.NetworkFilter && !p.Namespaces.Network {
+		return errors.New("NetworkFilter requires Namespaces.Network")
 	}
 	return nil
 }

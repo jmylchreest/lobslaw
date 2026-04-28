@@ -3,16 +3,20 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"slices"
 	"syscall"
+	"time"
 
 	seccomp "github.com/elastic/go-seccomp-bpf"
 	"github.com/elastic/go-seccomp-bpf/arch"
 	"github.com/landlock-lsm/go-landlock/landlock"
 	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"golang.org/x/sys/unix"
+
+	"github.com/jmylchreest/lobslaw/internal/sandbox/netfilter"
 )
 
 // InstallAndExec is the child-side of the reexec sandbox helper. It
@@ -54,6 +58,15 @@ func InstallAndExec(p *Policy, path string, argv, env []string) error {
 	// Landlock install (Phase 4.5.5b).
 	if err := installLandlock(p); err != nil {
 		return fmt.Errorf("install landlock: %w", err)
+	}
+
+	// Netfilter install (Phase E.5). Runs in the netns the parent
+	// already unshare()d into via Cloneflags|CLONE_NEWNET. Must come
+	// AFTER Landlock (so the policy file restrictions apply to the
+	// nft binary) but BEFORE seccomp (so the netlink/setsockopt
+	// syscalls nft uses aren't blocked).
+	if err := installNetfilter(p); err != nil {
+		return fmt.Errorf("install netfilter: %w", err)
 	}
 
 	// Seccomp install (Phase 4.5.5c).
@@ -203,6 +216,28 @@ func filterKnownSyscalls(deny []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// installNetfilter applies the policy's network-filter ruleset in
+// the current netns. No-op when NetworkFilter is false. Errors here
+// are fatal — a configured filter that fails to install would leave
+// the subprocess with unrestricted egress, defeating the policy.
+//
+// Note: Validate() already ensures NetworkFilter implies
+// Namespaces.Network, so we know we're in the unshared netns when
+// this runs.
+func installNetfilter(p *Policy) error {
+	if !p.NetworkFilter {
+		return nil
+	}
+	rs := netfilter.RuleSet{
+		AllowLoopback: true,
+		AllowDNS:      p.NetworkAllowDNS,
+		AllowCIDRs:    p.NetworkAllowCIDR,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return netfilter.Apply(ctx, rs)
 }
 
 // IsNoNewPrivsSet reads /proc/self/status and reports whether the

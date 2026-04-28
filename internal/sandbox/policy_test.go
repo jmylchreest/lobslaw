@@ -49,6 +49,18 @@ func TestPolicyValidateRejectsNegativeQuotas(t *testing.T) {
 	}
 }
 
+func TestPolicyValidateRejectsNetworkFilterWithoutNetns(t *testing.T) {
+	t.Parallel()
+	p := &Policy{NetworkFilter: true}
+	if err := p.Validate(); err == nil {
+		t.Error("NetworkFilter without Namespaces.Network should be rejected")
+	}
+	p = &Policy{NetworkFilter: true, Namespaces: NamespaceSet{Network: true}}
+	if err := p.Validate(); err != nil {
+		t.Errorf("NetworkFilter with netns should pass: %v", err)
+	}
+}
+
 func TestPolicyNormaliseAppliesDefaultSeccompWhenEnforcementRequested(t *testing.T) {
 	t.Parallel()
 	// Asking for NoNewPrivs is an active enforcement request, so
