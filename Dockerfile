@@ -55,12 +55,20 @@ FROM alpine:${ALPINE_VERSION}
 #   tzdata: scheduler timezone parsing.
 #   libgcc, libstdc++: Python C extensions uv may install (pydantic
 #                      Rust core, etc.) link against them.
+#   bash: curl-sh installer scripts (brew, uv, bun, etc.) start with
+#         #!/bin/bash — busybox ash isn't a drop-in for the bash
+#         features they use (arrays, [[ ]], function declarations,
+#         readarray, etc.). ~1.5MB.
+#   curl: not all install scripts use busybox wget syntax; many
+#         shell-out to curl explicitly.
 # busybox + apk are already in the alpine base — no extra install.
 RUN apk add --no-cache \
         ca-certificates \
         tzdata \
         libgcc \
-        libstdc++ && \
+        libstdc++ \
+        bash \
+        curl && \
     addgroup -S -g 65532 nonroot && \
     adduser -S -u 65532 -G nonroot -h /lobslaw -s /sbin/nologin nonroot && \
     mkdir -p /lobslaw/usr/local/bin && \
