@@ -169,7 +169,8 @@ services:
       - LOBSLAW__CLUSTER__BOOTSTRAP=true
     volumes:
       - tools-bin:/lobslaw/bin:ro
-      - tools-runtime:/lobslaw/usr/bin
+      - tools-runtime:/lobslaw/usr/bin:ro
+      - binaries-workspace:/lobslaw/usr/local
       - certs-1:/etc/lobslaw/certs:ro
       - data-1:/var/lobslaw/data
       - audit-1:/var/lobslaw/audit
@@ -227,7 +228,8 @@ services:
       - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-2:7443
     volumes:
       - tools-bin:/lobslaw/bin:ro
-      - tools-runtime:/lobslaw/usr/bin
+      - tools-runtime:/lobslaw/usr/bin:ro
+      - binaries-workspace:/lobslaw/usr/local
       - certs-2:/etc/lobslaw/certs:ro
       - data-2:/var/lobslaw/data
       - audit-2:/var/lobslaw/audit
@@ -275,7 +277,8 @@ services:
       - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-3:7443
     volumes:
       - tools-bin:/lobslaw/bin:ro
-      - tools-runtime:/lobslaw/usr/bin
+      - tools-runtime:/lobslaw/usr/bin:ro
+      - binaries-workspace:/lobslaw/usr/local
       - certs-3:/etc/lobslaw/certs:ro
       - data-3:/var/lobslaw/data
       - audit-3:/var/lobslaw/audit
