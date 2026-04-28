@@ -92,6 +92,12 @@ func pluginInstall(args []string) {
 	}
 	source := fs.Arg(0)
 
+	if strings.HasPrefix(source, "clawhub:") {
+		if err := pluginInstallClawhub(source, *root); err != nil {
+			exitWith(fmt.Sprintf("plugin install: %v", err))
+		}
+		return
+	}
 	if plugins.IsURLLikeSource(source) {
 		exitWith(fmt.Sprintf("plugin install: %v", plugins.ErrUnsupportedSource))
 	}
