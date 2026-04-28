@@ -60,12 +60,12 @@ func defaultManagers(client *http.Client) map[string]Manager {
 func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 	out := map[string]Manager{
 		"apt":        aptManager{},
-		"brew":       brewManager{},
+		"brew":       brewManager{httpClient: client},
 		"pacman":     pacmanManager{},
 		"dnf":        dnfManager{},
 		"apk":        apkManager{},
 		"pipx":       pipxManager{prefix: prefix},
-		"uvx":        uvxManager{prefix: prefix},
+		"uvx":        uvxManager{prefix: prefix, httpClient: client},
 		"npm":        npmManager{prefix: prefix},
 		"cargo":      cargoManager{prefix: prefix},
 		"go-install": goInstallManager{prefix: prefix},
@@ -74,6 +74,15 @@ func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 		out["curl-sh"] = newCurlShManagerWithPrefix(client, prefix)
 	}
 	return out
+}
+
+// SatisfyOptions controls per-call Satisfier behaviour. Default-zero
+// is the strict path: missing managers are reported as errors. Set
+// BootstrapMissingManagers to true (typically per-clawhub_install
+// call, after operator/user confirmation) to attempt to install a
+// missing-but-Bootstrappable manager before retrying the spec.
+type SatisfyOptions struct {
+	BootstrapMissingManagers bool
 }
 
 // Available reports whether name resolves on PATH (the satisfier's
@@ -104,6 +113,14 @@ type SatisfyResult struct {
 // usable manager. The error includes what was declared vs. what's
 // installed so the operator can diagnose without log-diving.
 func (s *Satisfier) Satisfy(ctx context.Context, name string, installs []InstallSpec) (SatisfyResult, error) {
+	return s.SatisfyOpts(ctx, name, installs, SatisfyOptions{})
+}
+
+// SatisfyOpts is Satisfy with per-call options. When
+// BootstrapMissingManagers is true, a missing-but-Bootstrappable
+// manager (currently brew, uvx) gets bootstrapped via its official
+// curl-sh installer before we retry the spec.
+func (s *Satisfier) SatisfyOpts(ctx context.Context, name string, installs []InstallSpec, opts SatisfyOptions) (SatisfyResult, error) {
 	if name == "" {
 		return SatisfyResult{}, errors.New("binaries: name required")
 	}
@@ -117,8 +134,9 @@ func (s *Satisfier) Satisfy(ctx context.Context, name string, installs []Install
 	}
 
 	var (
-		triedManagers []string
-		skipReasons   []string
+		triedManagers   []string
+		skipReasons     []string
+		bootstrappable  []string
 	)
 	for _, spec := range osMatches {
 		if err := spec.Validate(); err != nil {
@@ -136,8 +154,22 @@ func (s *Satisfier) Satisfy(ctx context.Context, name string, installs []Install
 		}
 		if !mgr.Available(ctx) {
 			triedManagers = append(triedManagers, spec.Manager)
-			skipReasons = append(skipReasons, fmt.Sprintf("%s (not installed on this host)", spec.Manager))
-			continue
+			if bs, isBs := mgr.(Bootstrappable); isBs {
+				bootstrappable = append(bootstrappable, spec.Manager)
+				if opts.BootstrapMissingManagers {
+					s.log.Info("binaries: bootstrap missing manager", "manager", spec.Manager, "url", bs.BootstrapURL())
+					if err := bs.Bootstrap(ctx, s); err != nil {
+						skipReasons = append(skipReasons, fmt.Sprintf("%s (bootstrap failed: %v)", spec.Manager, err))
+						continue
+					}
+				} else {
+					skipReasons = append(skipReasons, fmt.Sprintf("%s (not installed; can be bootstrapped from %s — pass bootstrap_managers=true to opt in)", spec.Manager, bs.BootstrapURL()))
+					continue
+				}
+			} else {
+				skipReasons = append(skipReasons, fmt.Sprintf("%s (not installed on this host)", spec.Manager))
+				continue
+			}
 		}
 
 		if err := mgr.Install(ctx, spec, s.runner, s.log); err != nil {
@@ -156,9 +188,13 @@ func (s *Satisfier) Satisfy(ctx context.Context, name string, installs []Install
 	}
 
 	available := s.availableManagerNames(ctx)
+	hint := ""
+	if len(bootstrappable) > 0 && !opts.BootstrapMissingManagers {
+		hint = fmt.Sprintf(" — to attempt auto-bootstrap, retry with bootstrap_managers=true (would install: %v)", bootstrappable)
+	}
 	return SatisfyResult{}, fmt.Errorf(
-		"binaries: %q declared installable via %v but none are usable on this host (skipped: %v; available managers: %v). Either install one of the declared managers, pre-install %q on PATH, or extend the bundle's clawdbot.install array",
-		name, triedManagers, skipReasons, available, name,
+		"binaries: %q declared installable via %v but none are usable on this host (skipped: %v; available managers: %v)%s",
+		name, triedManagers, skipReasons, available, hint,
 	)
 }
 

@@ -40,11 +40,22 @@ type InstallTarget struct {
 // declared (local disk, NFS, rclone-backed cloud). The signing
 // policy + verifier guard the supply-chain edge — see signing.go.
 type Installer struct {
-	client    *Client
-	storage   *storage.Manager
-	policy    SigningPolicy
-	verifier  BundleVerifier
-	satisfier *binaries.Satisfier
+	client         *Client
+	storage        *storage.Manager
+	policy         SigningPolicy
+	verifier       BundleVerifier
+	satisfier      *binaries.Satisfier
+	satisfyOptions binaries.SatisfyOptions
+}
+
+// WithSatisfyOptions returns a copy of the installer that runs the
+// satisfier with the supplied opts. Callers (the clawhub_install
+// builtin) use this to opt into bootstrap-missing-managers per-call
+// based on the agent's bootstrap_managers argument.
+func (i *Installer) WithSatisfyOptions(opts binaries.SatisfyOptions) *Installer {
+	cp := *i
+	cp.satisfyOptions = opts
+	return &cp
 }
 
 // InstallerConfig wires Installer dependencies. Client + Storage
@@ -196,7 +207,7 @@ func (i *Installer) installFromBody(ctx context.Context, entry *SkillEntry, targ
 				return nil, fmt.Errorf("clawhub: bundle %q declares host bins %v but no Satisfier wired", processed.Name, processed.RequiresBins)
 			}
 			for _, bin := range processed.RequiresBins {
-				if _, err := i.satisfier.Satisfy(ctx, bin, processed.InstallSpecs); err != nil {
+				if _, err := i.satisfier.SatisfyOpts(ctx, bin, processed.InstallSpecs, i.satisfyOptions); err != nil {
 					cleanup()
 					return nil, fmt.Errorf("clawhub: satisfy %q: %w", bin, err)
 				}

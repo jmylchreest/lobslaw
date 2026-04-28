@@ -36,6 +36,31 @@ type Manager interface {
 	Install(ctx context.Context, spec InstallSpec, runner ProcessRunner, log *slog.Logger) error
 }
 
+// Bootstrappable is implemented by managers that can install
+// themselves via a known curl-sh installer. When the Satisfier hits
+// "manager X is unavailable" and X implements Bootstrappable, the
+// operator can opt into auto-bootstrap by passing
+// SatisfyOptions.BootstrapMissingManagers=true. The Bootstrap method
+// runs the manager's official installer; on success, the next
+// Manager.Available(ctx) check should return true and the original
+// install retries.
+//
+// Bootstrappers are intentionally per-manager rather than a generic
+// "auto-install anything" hook — each declares its own pinned URL +
+// checksum so we don't accept arbitrary curl-sh URLs at runtime.
+type Bootstrappable interface {
+	// BootstrapURL returns the upstream installer script URL +
+	// hostname (for egress allowlisting). Returned even when the
+	// manager is already installed — the URL is metadata, not a
+	// trigger to install.
+	BootstrapURL() string
+
+	// Bootstrap downloads the installer, verifies the checksum (when
+	// declared), and runs it. After success the manager's binary
+	// should be on PATH or under the satisfier's install prefix.
+	Bootstrap(ctx context.Context, satisfier *Satisfier) error
+}
+
 // ProcessRunner is the seam tests stub. Production wiring uses the
 // shellRunner below; tests replace with a recording runner.
 type ProcessRunner interface {

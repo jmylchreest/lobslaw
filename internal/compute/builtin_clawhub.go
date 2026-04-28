@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -66,11 +67,12 @@ func ClawhubToolDefs() []*types.ToolDef {
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
-					"slug":    {"type": "string", "description": "Clawhub slug (<owner>/<name>) for clawhub-format bundles. Mutually exclusive with name+version."},
-					"name":    {"type": "string", "description": "Skill name (native-format catalogue). Used with version."},
-					"version": {"type": "string", "description": "Version (semver). Used with name."},
-					"mount":   {"type": "string", "description": "Storage mount label (default: skill-tools)."},
-					"subpath": {"type": "string", "description": "Subdirectory under the mount (default: <name>)."}
+					"slug":              {"type": "string", "description": "Clawhub slug (<owner>/<name>) for clawhub-format bundles. Mutually exclusive with name+version."},
+					"name":              {"type": "string", "description": "Skill name (native-format catalogue). Used with version."},
+					"version":           {"type": "string", "description": "Version (semver). Used with name."},
+					"mount":             {"type": "string", "description": "Storage mount label (default: skill-tools)."},
+					"subpath":           {"type": "string", "description": "Subdirectory under the mount (default: <name>)."},
+					"bootstrap_managers": {"type": "string", "description": "Set to 'true' to auto-install missing-but-bootstrappable managers (brew, uvx) via their official curl-sh installer before retrying. Off by default. Ask the user before opting in — bootstrap downloads + executes upstream-published install scripts."}
 				},
 				"additionalProperties": false
 			}`),
@@ -98,18 +100,23 @@ func newClawhubInstallHandler(cfg ClawhubConfig) BuiltinFunc {
 			MountLabel: mount,
 			Subpath:    strings.TrimSpace(args["subpath"]),
 		}
+		bootstrap := strings.EqualFold(strings.TrimSpace(args["bootstrap_managers"]), "true")
+		installer := cfg.Installer
+		if bootstrap {
+			installer = installer.WithSatisfyOptions(binaries.SatisfyOptions{BootstrapMissingManagers: true})
+		}
 		var (
 			res *clawhub.InstallResult
 			err error
 		)
 		if slug != "" {
-			res, err = cfg.Installer.InstallBySlug(ctx, slug, target)
+			res, err = installer.InstallBySlug(ctx, slug, target)
 		} else {
-			entry, gerr := cfg.Installer.Client().GetSkill(ctx, name, version)
+			entry, gerr := installer.Client().GetSkill(ctx, name, version)
 			if gerr != nil {
 				return nil, 1, fmt.Errorf("clawhub_install: %w", gerr)
 			}
-			res, err = cfg.Installer.Install(ctx, entry, target)
+			res, err = installer.Install(ctx, entry, target)
 		}
 		if err != nil {
 			return nil, 1, fmt.Errorf("clawhub_install: %w", err)

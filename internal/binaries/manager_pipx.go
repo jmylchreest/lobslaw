@@ -3,6 +3,7 @@ package binaries
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 )
@@ -40,7 +41,8 @@ func (m pipxManager) Install(ctx context.Context, spec InstallSpec, runner Proce
 }
 
 type uvxManager struct {
-	prefix string
+	prefix     string
+	httpClient *http.Client
 }
 
 // uvx isn't really an installer (it's a runner) but operators
@@ -65,6 +67,12 @@ func (m uvxManager) Install(ctx context.Context, spec InstallSpec, runner Proces
 		"UV_TOOL_DIR":     m.prefix + "/uv-tools",
 	})
 	return runManagerCmdEnv(ctx, runner, log, "uv", false, args, env)
+}
+
+func (m uvxManager) BootstrapURL() string { return knownBootstraps["uvx"].URL }
+
+func (m uvxManager) Bootstrap(ctx context.Context, satisfier *Satisfier) error {
+	return runBootstrap(ctx, satisfier, "uvx", m.httpClient)
 }
 
 type npmManager struct {
