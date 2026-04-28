@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -689,5 +690,29 @@ func TestNewTelegramHandlerUnknownModeFails(t *testing.T) {
 	}, agent)
 	if err == nil {
 		t.Error("unknown mode should fail construction")
+	}
+}
+
+func TestClassifyAgentErrorShapesMessage(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		err      error
+		contains string
+	}{
+		{"nil → generic", nil, "Something went wrong"},
+		{"429 rate limit", errors.New("llm: rate limited (HTTP 429)"), "rate limit"},
+		{"all-providers-failed cascade", errors.New("LLM call: agent: all providers in chain failed"), "All my LLM providers failed"},
+		{"context cancelled", errors.New("context canceled"), "took too long"},
+		{"policy denied", errors.New("policy denied: rule x matched"), "Policy blocked"},
+		{"unknown → generic fallback", errors.New("something unrelated"), "Something went wrong"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyAgentError(tc.err)
+			if !strings.Contains(got, tc.contains) {
+				t.Errorf("classifyAgentError(%v) = %q; want substring %q", tc.err, got, tc.contains)
+			}
+		})
 	}
 }

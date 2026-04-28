@@ -416,7 +416,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	if err != nil {
 		h.log.Error("telegram: agent error",
 			"turn_id", turnID, "err", err)
-		h.sendText(msg.Chat.ID, "Something went wrong processing your message.")
+		h.sendText(msg.Chat.ID, classifyAgentError(err))
 		return
 	}
 
@@ -613,7 +613,7 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, cont *telegra
 	if err != nil {
 		h.log.Error("telegram: resume failed",
 			"turn_id", cont.req.TurnID, "err", err)
-		h.sendText(cont.chatID, "Something went wrong continuing your request.")
+		h.sendText(cont.chatID, classifyAgentError(err))
 		return
 	}
 	switch {
@@ -1166,4 +1166,29 @@ func nextBackoff(current time.Duration) time.Duration {
 		return pollMaxBackoff
 	}
 	return next
+}
+
+// classifyAgentError converts a RunToolCallLoop error into a
+// short user-facing message. Generic "Something went wrong" is
+// the right fallback only when we genuinely don't know what
+// happened — for known patterns (rate limits, all-providers-failed,
+// context cancellations) the user gets a more useful nudge so
+// they know whether to retry, wait, or chase the operator.
+func classifyAgentError(err error) string {
+	if err == nil {
+		return "Something went wrong processing your message."
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "rate limit") || strings.Contains(msg, "429"):
+		return "I'm hitting an LLM provider rate limit right now. Try again in a minute or two — the limit resets quickly."
+	case strings.Contains(msg, "all providers in chain failed"):
+		return "All my LLM providers failed on that request. The operator's logs will have the specific reason; usually it's a transient rate-limit or a misconfigured backup. Try again shortly."
+	case strings.Contains(msg, "context canceled") || strings.Contains(msg, "deadline exceeded"):
+		return "That turn took too long and got cancelled. Could you ask again, maybe with a tighter scope?"
+	case strings.Contains(msg, "policy denied"):
+		return "Policy blocked that action. The operator's logs have the rule that matched."
+	default:
+		return "Something went wrong processing your message."
+	}
 }
