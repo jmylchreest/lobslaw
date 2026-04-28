@@ -94,8 +94,8 @@ func TestInvokerRequiresBinaryMissing(t *testing.T) {
 	if runner.runCnt != 0 {
 		t.Errorf("runner should not be called when binary missing")
 	}
-	if !contains(err.Error(), "binary_install gh") {
-		t.Errorf("error should suggest binary_install: %v", err)
+	if !contains(err.Error(), "clawhub_install") {
+		t.Errorf("error should suggest clawhub_install path: %v", err)
 	}
 }
 

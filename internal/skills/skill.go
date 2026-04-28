@@ -75,11 +75,12 @@ type Manifest struct {
 	Binaries         []BinaryAccess     `yaml:"binaries,omitempty"`
 	// RequiresBinary names host-level binaries that must resolve in
 	// PATH before the skill is invoked. Distinct from Binaries
-	// (which ships bundle-internal binaries via clawhub install) —
-	// RequiresBinary entries are installed via the operator's
-	// [[binary]] catalogue (the binary_install builtin). The invoker
+	// (which ships bundle-internal binaries via clawhub install).
+	// RequiresBinary entries are typically satisfied by the skill's
+	// own clawdbot.install array (parsed by the clawhub install
+	// pipeline), or by pre-installation on the host. The invoker
 	// runs LookPath against each name pre-spawn; if any are missing
-	// it returns a structured error suggesting binary_install.
+	// it returns a structured error.
 	RequiresBinary   []string           `yaml:"requires_binary,omitempty"`
 	Params           map[string]any     `yaml:"params_schema,omitempty"`
 }

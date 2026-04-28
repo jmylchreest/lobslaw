@@ -9,6 +9,8 @@ import (
 
 func osEnviron() []string { return os.Environ() }
 
+func osStat(name string) (os.FileInfo, error) { return os.Stat(name) }
+
 type pipxManager struct {
 	prefix string
 }

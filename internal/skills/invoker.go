@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 )
@@ -205,25 +206,12 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 	if inv.binaryLookup == nil {
 		prefix := cfg.BinaryInstallPrefix
 		inv.binaryLookup = func(name string) (string, error) {
-			return lookPathWithPrefix(name, prefix)
+			return binaries.LookPath(name, prefix)
 		}
 	}
 	return inv, nil
 }
 
-// lookPathWithPrefix resolves name against $prefix/bin first, then the
-// inherited PATH. Returns the absolute path on success.
-func lookPathWithPrefix(name, prefix string) (string, error) {
-	if prefix != "" {
-		candidate := prefix + "/bin/" + name
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			if info.Mode()&0o111 != 0 {
-				return candidate, nil
-			}
-		}
-	}
-	return exec.LookPath(name)
-}
 
 // Invoke runs a skill. The sandbox policy composition (Landlock
 // rules computed from manifest.storage + runtime exec allowance,
@@ -247,7 +235,7 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 
 	for _, name := range skill.Manifest.RequiresBinary {
 		if _, err := i.binaryLookup(name); err != nil {
-			return nil, fmt.Errorf("skills: skill %q: requires_binary %q not installed — try `binary_install %s` (operator must declare it in [[binary]] first): %w", skill.Name(), name, name, err)
+			return nil, fmt.Errorf("skills: skill %q: required binary %q not on PATH — install it via clawhub_install <skill> (the skill bundle's clawdbot.install array satisfies host bin requirements automatically), or pre-install on the host: %w", skill.Name(), name, err)
 		}
 	}
 

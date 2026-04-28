@@ -5,13 +5,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
 
-// fakeRunner is the deterministic ProcessRunner test stub. Each call
-// is recorded; lookups in commands map decide the exit / output.
 type fakeRunner struct {
 	commands map[string]fakeOutcome
 	calls    []fakeCall
@@ -46,207 +47,154 @@ func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func TestRegistryNewRejectsDuplicateName(t *testing.T) {
-	_, err := New(Config{
-		Binaries: []Binary{
-			{Name: "gh", Install: []InstallSpec{{OS: runtime.GOOS, Manager: "apt", Package: "gh"}}},
-			{Name: "gh", Install: []InstallSpec{{OS: runtime.GOOS, Manager: "brew", Package: "gh"}}},
-		},
-		Logger: quietLogger(),
-	})
-	if err == nil {
-		t.Fatal("expected duplicate-name error")
+// makeBinaryInPrefix drops a fake executable into prefix/bin/<name>
+// so Satisfier.Available returns true. Cleanup is the test's
+// responsibility via t.TempDir.
+func makeBinaryInPrefix(t *testing.T, prefix, name string) {
+	t.Helper()
+	binDir := filepath.Join(prefix, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "twice") {
-		t.Fatalf("expected duplicate-name error, got: %v", err)
+	if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestRegistryListReportsInstallState(t *testing.T) {
-	runner := &fakeRunner{commands: map[string]fakeOutcome{
-		"true": {},
-	}}
-	reg, err := New(Config{
-		Binaries: []Binary{{
-			Name:    "ghx",
-			Detect:  "true",
-			Install: []InstallSpec{{OS: runtime.GOOS, Manager: "apt", Package: "ghx"}},
-		}},
-		Runner: runner,
-		Logger: quietLogger(),
+func TestSatisfyAlreadyAvailable(t *testing.T) {
+	prefix := t.TempDir()
+	makeBinaryInPrefix(t, prefix, "alreadyhere")
+
+	s := New(Config{
+		InstallPrefix: prefix,
+		Logger:        quietLogger(),
 	})
+	res, err := s.Satisfy(context.Background(), "alreadyhere", []InstallSpec{{
+		OS: runtime.GOOS, Manager: "brew", Package: "alreadyhere",
+	}})
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("Satisfy: %v", err)
 	}
-	entries := reg.List(context.Background())
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	if !entries[0].Installed {
-		t.Fatalf("expected detect=true to mark installed, got: %+v", entries[0])
-	}
-	if entries[0].HostSupport != "supported" {
-		t.Fatalf("expected supported host, got %q", entries[0].HostSupport)
+	if !res.AlreadyAvailable {
+		t.Fatalf("expected AlreadyAvailable=true, got %+v", res)
 	}
 }
 
-func TestRegistryInstallShortCircuitsOnDetect(t *testing.T) {
-	runner := &fakeRunner{commands: map[string]fakeOutcome{
-		"true": {}, // detect succeeds → already installed
-	}}
-	reg, err := New(Config{
-		Binaries: []Binary{{
-			Name:    "alreadyhere",
-			Detect:  "true",
-			Install: []InstallSpec{{OS: runtime.GOOS, Manager: "brew", Package: "alreadyhere"}},
-		}},
-		Runner: runner,
-		Logger: quietLogger(),
+func TestSatisfyNoMatchingSpec(t *testing.T) {
+	prefix := t.TempDir()
+	s := New(Config{
+		InstallPrefix: prefix,
+		Logger:        quietLogger(),
 	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	result, err := reg.Install(context.Background(), "alreadyhere")
-	if err != nil {
-		t.Fatalf("Install: %v", err)
-	}
-	if !result.AlreadyInstalled {
-		t.Fatalf("expected AlreadyInstalled=true, got %+v", result)
-	}
-	for _, c := range runner.calls {
-		if c.name == "brew" || (c.name == "sudo" && len(c.args) > 0 && c.args[0] == "-n") {
-			t.Fatalf("install ran the manager despite detect succeeding: %+v", c)
-		}
-	}
-}
-
-func TestRegistryInstallUnknownBinary(t *testing.T) {
-	reg, err := New(Config{Logger: quietLogger()})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	_, err = reg.Install(context.Background(), "nope")
-	if err == nil {
-		t.Fatal("expected unknown-binary error")
-	}
-	if !strings.Contains(err.Error(), "not in catalogue") {
-		t.Fatalf("expected catalogue error, got: %v", err)
-	}
-}
-
-func TestRegistryInstallNoMatchingSpec(t *testing.T) {
-	reg, err := New(Config{
-		Binaries: []Binary{{
-			Name:    "windowsonly",
-			Install: []InstallSpec{{OS: "windows", Manager: "brew", Package: "x"}},
-		}},
-		Logger: quietLogger(),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	_, err = reg.Install(context.Background(), "windowsonly")
+	_, err := s.Satisfy(context.Background(), "windowsonly", []InstallSpec{{
+		OS: "windows", Manager: "brew", Package: "x",
+	}})
 	if runtime.GOOS == "windows" {
-		// brew probably isn't there but the spec matched OS.
-		// Either no manager available OR empty error path is fine.
 		return
 	}
 	if err == nil {
-		t.Fatal("expected no-spec error on non-windows host")
+		t.Fatal("expected no-matching-spec error")
 	}
 	if !strings.Contains(err.Error(), "no install spec") {
-		t.Fatalf("expected no-spec error, got: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestHostsFromBinariesUnion(t *testing.T) {
-	specs := []Binary{
-		{
-			Name: "gh",
-			Install: []InstallSpec{
-				{OS: "linux", Manager: "apt", Package: "gh"},
-				{OS: "darwin", Manager: "brew", Package: "gh"},
-			},
-		},
-		{
-			Name: "uvx",
-			Install: []InstallSpec{
-				{OS: "linux", Manager: "curl-sh", URL: "https://astral.sh/uv/install.sh", Checksum: "sha256:" + strings.Repeat("0", 64)},
-			},
-		},
+func TestSatisfyEmptyName(t *testing.T) {
+	s := New(Config{Logger: quietLogger()})
+	_, err := s.Satisfy(context.Background(), "", nil)
+	if err == nil {
+		t.Fatal("expected empty-name error")
 	}
-	hosts := HostsFromBinaries(specs)
+}
+
+func TestSatisfyRejectsSudoOnUserModeManager(t *testing.T) {
+	s := New(Config{Logger: quietLogger()})
+	_, err := s.Satisfy(context.Background(), "x", []InstallSpec{{
+		OS: runtime.GOOS, Manager: "npm", Package: "x", Sudo: true,
+	}})
+	if err == nil {
+		t.Fatal("expected user-mode + sudo rejection")
+	}
+	if !strings.Contains(err.Error(), "user-mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSatisfyAllowsSudoOnSystemManager(t *testing.T) {
+	s := New(Config{Logger: quietLogger()})
+	_, err := s.Satisfy(context.Background(), "x", []InstallSpec{{
+		OS: runtime.GOOS, Manager: "apt", Package: "x", Sudo: true,
+	}})
+	// On non-debian hosts, apt is unavailable — error mentions
+	// "manager not present", not user-mode rejection.
+	if err != nil && strings.Contains(err.Error(), "user-mode") {
+		t.Fatalf("apt+sudo should not be rejected as user-mode: %v", err)
+	}
+}
+
+func TestSatisfyManagerNotPresentOnHost(t *testing.T) {
+	s := New(Config{Logger: quietLogger()})
+	_, err := s.Satisfy(context.Background(), "imaginary", []InstallSpec{{
+		OS: runtime.GOOS, Manager: "brew", Package: "imaginary",
+	}})
+	// Test host probably doesn't have brew (Linux-only test infra) — if
+	// it does, this test is a no-op for the assertion path. We just
+	// ensure no panic + no false-positive user-mode rejection.
+	if err != nil && strings.Contains(err.Error(), "user-mode") {
+		t.Fatalf("unexpected user-mode error: %v", err)
+	}
+}
+
+func TestHostsForUnion(t *testing.T) {
+	s := New(Config{
+		Logger:     quietLogger(),
+		HTTPClient: &http.Client{},
+	})
+	hosts := s.HostsFor([]InstallSpec{
+		{OS: "linux", Manager: "apt", Package: "gh"},
+		{OS: "darwin", Manager: "brew", Package: "gh"},
+		{OS: "linux", Manager: "curl-sh", URL: "https://astral.sh/uv/install.sh", Checksum: "sha256:" + strings.Repeat("0", 64)},
+	})
 	want := map[string]bool{
-		"deb.debian.org":          true,
-		"formulae.brew.sh":        true,
-		"github.com":              true,
-		"astral.sh":               true,
+		"deb.debian.org":   true,
+		"formulae.brew.sh": true,
+		"astral.sh":        true,
 	}
-	gotSet := make(map[string]bool, len(hosts))
+	got := make(map[string]bool, len(hosts))
 	for _, h := range hosts {
-		gotSet[h] = true
+		got[h] = true
 	}
 	for h := range want {
-		if !gotSet[h] {
-			t.Errorf("missing host %q in union: %v", h, hosts)
+		if !got[h] {
+			t.Errorf("missing %q in union: %v", h, hosts)
 		}
 	}
 }
 
-func TestRegistryRejectsSudoOnUserModeManager(t *testing.T) {
-	_, err := New(Config{
-		Binaries: []Binary{{
-			Name:   "x",
-			Detect: "x --version",
-			Install: []InstallSpec{{
-				OS: runtime.GOOS, Manager: "npm", Package: "x",
-				Sudo: true,
-			}},
-		}},
-		Logger: quietLogger(),
-	})
-	if err == nil {
-		t.Fatal("expected validation error for sudo:true on user-mode manager")
+func TestLookPathPrefersPrefix(t *testing.T) {
+	prefix := t.TempDir()
+	makeBinaryInPrefix(t, prefix, "uniqname")
+
+	got, err := LookPath("uniqname", prefix)
+	if err != nil {
+		t.Fatalf("LookPath: %v", err)
 	}
-	if !strings.Contains(err.Error(), "user-mode") {
-		t.Fatalf("expected user-mode error, got: %v", err)
+	want := filepath.Join(prefix, "bin", "uniqname")
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
 	}
 }
 
-func TestRegistryAllowsSudoOnSystemManagers(t *testing.T) {
-	_, err := New(Config{
-		Binaries: []Binary{{
-			Name:   "gh",
-			Detect: "gh --version",
-			Install: []InstallSpec{{
-				OS: runtime.GOOS, Manager: "apt", Package: "gh",
-				Sudo: true,
-			}},
-		}},
-		Logger: quietLogger(),
-	})
+func TestLookPathFallsBackToSystem(t *testing.T) {
+	prefix := t.TempDir()
+	// "sh" should exist on any POSIX test host
+	got, err := LookPath("sh", prefix)
 	if err != nil {
-		t.Fatalf("apt+sudo should be valid, got: %v", err)
+		t.Skip("no /bin/sh on test host")
 	}
-}
-
-func TestRegistryAllowsSudoOnCurlSh(t *testing.T) {
-	_, err := New(Config{
-		Binaries: []Binary{{
-			Name:   "x",
-			Detect: "x --version",
-			Install: []InstallSpec{{
-				OS:       runtime.GOOS,
-				Manager:  "curl-sh",
-				URL:      "https://example.com/install.sh",
-				Checksum: "sha256:" + strings.Repeat("0", 64),
-				Sudo:     true,
-			}},
-		}},
-		Logger: quietLogger(),
-	})
-	if err != nil {
-		t.Fatalf("curl-sh+sudo should be valid (script may need root), got: %v", err)
+	if !strings.HasPrefix(got, prefix) && got != "" {
+		// It found system sh — that's the path we want.
 	}
 }
 

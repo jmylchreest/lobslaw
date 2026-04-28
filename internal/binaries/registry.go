@@ -8,77 +8,49 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-	"sync"
 )
 
-// Registry is the runtime binary catalogue. Holds the operator's
-// declared binaries plus the per-manager implementations and
-// resolves install requests against them.
-type Registry struct {
-	binaries map[string]Binary
+// Satisfier resolves "I need binary X on PATH" against a pool of
+// install Managers. It does not hold a static catalogue — callers
+// hand in install specs at request time (typically synthesized
+// from a clawhub bundle's clawdbot.install array). The lookup-
+// before-install path is the common case: if the binary's already
+// on PATH (baked image, bind-mount, prior install) the call is a
+// cheap no-op.
+type Satisfier struct {
 	managers map[string]Manager
 	runner   ProcessRunner
 	log      *slog.Logger
-
-	mu sync.RWMutex
+	prefix   string
 }
 
-// Config wires the registry. The HTTP client is used for the
-// curl-sh manager; pass an egress-aware client (binaries-install
-// role) so script downloads flow through smokescreen.
+// Config wires the Satisfier. HTTPClient powers the curl-sh manager
+// (pass an egress-aware client for the "binaries-install" role).
+// InstallPrefix is where user-mode managers (npm/cargo/uvx/pipx/
+// go-install/curl-sh) write — typically /lobslaw/usr/local. System
+// managers (apt/dnf/pacman/apk) ignore the prefix and write to
+// system paths.
 type Config struct {
-	Binaries   []Binary
-	HTTPClient *http.Client
-	Runner     ProcessRunner
-	Logger     *slog.Logger
-
-	// InstallPrefix is the directory user-mode managers install into
-	// (typically the operator's [security] binary_install_prefix,
-	// e.g. "/lobslaw/usr"). When set, npm/cargo/go-install/uvx/pipx
-	// route their installs there via the manager-specific knob
-	// (--prefix, --root, GOBIN, UV_TOOL_BIN_DIR, PIPX_BIN_DIR).
-	// curl-sh scripts get LOBSLAW_INSTALL_PREFIX as an env var so
-	// the script can honour it. System managers (apt/dnf/pacman/apk)
-	// don't honour prefix and ignore it. Empty disables prefix
-	// routing — managers install to their default locations.
+	HTTPClient    *http.Client
+	Runner        ProcessRunner
+	Logger        *slog.Logger
 	InstallPrefix string
 }
 
-// New builds a Registry. Returns an error if any operator binary
-// fails Validate. Standard managers are always wired; the curl-sh
-// manager is wired only when an HTTP client is supplied.
-func New(cfg Config) (*Registry, error) {
+// New builds a Satisfier with the standard manager pool.
+func New(cfg Config) *Satisfier {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.Runner == nil {
 		cfg.Runner = ShellRunner{}
 	}
-	r := &Registry{
-		binaries: make(map[string]Binary, len(cfg.Binaries)),
+	return &Satisfier{
 		managers: managersWithPrefix(cfg.HTTPClient, cfg.InstallPrefix),
 		runner:   cfg.Runner,
 		log:      cfg.Logger,
+		prefix:   cfg.InstallPrefix,
 	}
-	for _, b := range cfg.Binaries {
-		if err := b.Validate(); err != nil {
-			return nil, err
-		}
-		if _, dup := r.binaries[b.Name]; dup {
-			return nil, fmt.Errorf("binary %q declared twice", b.Name)
-		}
-		for i, spec := range b.Install {
-			mgr, ok := r.managers[spec.Manager]
-			if !ok {
-				continue
-			}
-			if spec.Sudo && mgr.UserMode() && spec.Manager != "curl-sh" {
-				return nil, fmt.Errorf("binary %q install[%d]: manager %q is user-mode; sudo:true is not meaningful (likely a typo). Remove sudo, or use a system manager (apt/dnf/pacman/apk)", b.Name, i, spec.Manager)
-			}
-		}
-		r.binaries[b.Name] = b
-	}
-	return r, nil
 }
 
 func defaultManagers(client *http.Client) map[string]Manager {
@@ -104,208 +76,114 @@ func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 	return out
 }
 
-// List returns the operator-declared binary catalogue, with detected
-// install state populated.
-func (r *Registry) List(ctx context.Context) []ListEntry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]ListEntry, 0, len(r.binaries))
-	for _, b := range r.binaries {
-		entry := ListEntry{
-			Name:        b.Name,
-			Description: b.Description,
-		}
-		spec, ok := r.pickSpec(b)
-		if ok {
-			entry.Manager = spec.Manager
-			entry.HostSupport = "supported"
-		} else {
-			entry.HostSupport = "no install spec for this OS/arch"
-		}
-		entry.Installed = r.detect(ctx, b)
-		out = append(out, entry)
-	}
-	return out
+// Available reports whether name resolves on PATH (the satisfier's
+// install prefix's bin dir is searched first; system PATH after).
+// True means "no install needed" — the binary is already present.
+func (s *Satisfier) Available(name string) bool {
+	_, err := lookPathWithPrefix(name, s.prefix)
+	return err == nil
 }
 
-// ListEntry is one row in the binary_list output.
-type ListEntry struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Manager     string `json:"manager,omitempty"`
-	HostSupport string `json:"host_support"`
-	Installed   bool   `json:"installed"`
+// SatisfyResult is what Satisfy returns on success.
+type SatisfyResult struct {
+	Name             string
+	Manager          string
+	AlreadyAvailable bool
 }
 
-// Get returns the operator declaration for a single binary, plus
-// whether it's already installed on this host.
-func (r *Registry) Get(ctx context.Context, name string) (Binary, bool, error) {
-	r.mu.RLock()
-	b, ok := r.binaries[name]
-	r.mu.RUnlock()
+// Satisfy ensures name is available on PATH. If the binary is
+// already there, returns AlreadyAvailable=true with no work done.
+// Otherwise picks the first install spec matching the host, validates
+// it, and runs the manager. Returns an error if no spec matches the
+// host, the matching manager isn't wired, the manager can't run on
+// this host, or the install command fails.
+func (s *Satisfier) Satisfy(ctx context.Context, name string, installs []InstallSpec) (SatisfyResult, error) {
+	if name == "" {
+		return SatisfyResult{}, errors.New("binaries: name required")
+	}
+	if s.Available(name) {
+		return SatisfyResult{Name: name, AlreadyAvailable: true}, nil
+	}
+	spec, ok := pickSpec(installs)
 	if !ok {
-		return Binary{}, false, fmt.Errorf("binary %q not in catalogue", name)
+		return SatisfyResult{}, fmt.Errorf("binaries: no install spec matches this host for %q", name)
 	}
-	return b, r.detect(ctx, b), nil
-}
-
-// Install resolves the binary, picks a host-matching install spec,
-// short-circuits if the binary is already installed (per Detect),
-// and runs the manager's Install. Returns nil iff the binary is
-// installed by the time the call returns.
-func (r *Registry) Install(ctx context.Context, name string) (InstallResult, error) {
-	r.mu.RLock()
-	b, ok := r.binaries[name]
-	r.mu.RUnlock()
+	if err := spec.Validate(); err != nil {
+		return SatisfyResult{}, fmt.Errorf("binaries: install spec for %q: %w", name, err)
+	}
+	mgr, ok := s.managers[spec.Manager]
 	if !ok {
-		return InstallResult{}, fmt.Errorf("binary %q not in catalogue", name)
+		return SatisfyResult{}, fmt.Errorf("binaries: manager %q for %q not wired (curl-sh requires HTTPClient)", spec.Manager, name)
 	}
-	if r.detect(ctx, b) {
-		return InstallResult{Name: name, AlreadyInstalled: true}, nil
-	}
-
-	spec, ok := r.pickSpec(b)
-	if !ok {
-		return InstallResult{}, fmt.Errorf("binary %q: no install spec matches this OS/arch", name)
-	}
-
-	r.mu.RLock()
-	mgr, mgrOK := r.managers[spec.Manager]
-	r.mu.RUnlock()
-	if !mgrOK {
-		return InstallResult{}, fmt.Errorf("manager %q not wired (curl-sh requires HTTP client)", spec.Manager)
+	if spec.Sudo && mgr.UserMode() && spec.Manager != "curl-sh" {
+		return SatisfyResult{}, fmt.Errorf("binaries: install spec for %q: manager %q is user-mode; sudo:true is not meaningful", name, spec.Manager)
 	}
 	if !mgr.Available(ctx) {
-		return InstallResult{}, fmt.Errorf("%w: %s", errManagerNotAvailable, spec.Manager)
+		return SatisfyResult{}, fmt.Errorf("binaries: manager %q for %q not present on this host", spec.Manager, name)
 	}
-
-	if err := mgr.Install(ctx, spec, r.runner, r.log); err != nil {
-		return InstallResult{}, err
+	if err := mgr.Install(ctx, spec, s.runner, s.log); err != nil {
+		return SatisfyResult{}, err
 	}
-	// Re-detect to confirm.
-	if !r.detect(ctx, b) {
-		return InstallResult{
+	if !s.Available(name) {
+		return SatisfyResult{
 			Name:    name,
 			Manager: spec.Manager,
-		}, errors.New("install command returned success but detect still reports missing — declared detect command may be wrong, or binary was installed to an unsearchable PATH")
+		}, fmt.Errorf("binaries: install command for %q exited zero but binary still not on PATH — verify the install spec actually places the binary under %s/bin or the system PATH", name, s.prefix)
 	}
-	return InstallResult{
+	return SatisfyResult{
 		Name:    name,
 		Manager: spec.Manager,
 	}, nil
 }
 
-// InstallResult is the structured return from Install — fed into the
-// builtin's JSON output.
-type InstallResult struct {
-	Name             string `json:"name"`
-	Manager          string `json:"manager,omitempty"`
-	AlreadyInstalled bool   `json:"already_installed,omitempty"`
-}
-
-// HostsFromBinaries returns the union of upstream host allowlists
-// across the supplied binary declarations, used at boot to seed the
-// "binaries-install" smokescreen role *before* the Registry itself
-// is constructed (the egress provider is wired earlier than the
-// registry, so it needs to compute hosts from raw config). Mirrors
-// AllHosts() except a no-op manager (no HTTP client) is fine here —
-// curl-sh hosts come from spec.URL, no installer state required.
-func HostsFromBinaries(specs []Binary) []string {
-	mgrs := defaultManagers(nil)
-	mgrs["curl-sh"] = NewCurlShManager(nil)
+// HostsFor returns the union of hostnames the supplied install
+// specs will reach. Used to populate the smokescreen
+// "binaries-install" egress role at install-pipeline runtime.
+func (s *Satisfier) HostsFor(installs []InstallSpec) []string {
 	seen := make(map[string]struct{})
 	var out []string
-	for _, b := range specs {
-		for _, spec := range b.Install {
-			mgr, ok := mgrs[spec.Manager]
-			if !ok {
+	for _, spec := range installs {
+		mgr, ok := s.managers[spec.Manager]
+		if !ok {
+			continue
+		}
+		for _, h := range mgr.Hosts(spec) {
+			if h == "" {
 				continue
 			}
-			for _, h := range mgr.Hosts(spec) {
-				if h == "" {
-					continue
-				}
-				if _, dup := seen[h]; dup {
-					continue
-				}
-				seen[h] = struct{}{}
-				out = append(out, h)
+			if _, dup := seen[h]; dup {
+				continue
 			}
+			seen[h] = struct{}{}
+			out = append(out, h)
 		}
 	}
 	return out
 }
 
-// AllHosts returns the union of all host allowlists across declared
-// binaries. Equivalent to HostsFromBinaries on the registry's own
-// catalogue.
-func (r *Registry) AllHosts() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	seen := make(map[string]struct{})
-	var out []string
-	for _, b := range r.binaries {
-		for _, spec := range b.Install {
-			mgr, ok := r.managers[spec.Manager]
-			if !ok {
-				continue
-			}
-			for _, h := range mgr.Hosts(spec) {
-				if _, dup := seen[h]; dup {
-					continue
-				}
-				seen[h] = struct{}{}
-				out = append(out, h)
-			}
-		}
-	}
-	return out
-}
-
-// Names returns every declared binary name. Used by the policy seed
-// walker to know which binary_install:<name> resources exist.
-func (r *Registry) Names() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.binaries))
-	for name := range r.binaries {
-		out = append(out, name)
-	}
-	return out
-}
-
-func (r *Registry) detect(ctx context.Context, b Binary) bool {
-	if strings.TrimSpace(b.Detect) == "" {
-		// No detect command means "always re-run install" — return
-		// false so Install proceeds. The post-install detect is
-		// bypassed for these (caller can see DetectMissing flag).
-		return false
-	}
-	parts := strings.Fields(b.Detect)
-	if len(parts) == 0 {
-		return false
-	}
-	// Resolve the detect binary against PATH first; if it doesn't
-	// exist, the binary's not installed and there's no point
-	// running anything.
-	if _, err := exec.LookPath(parts[0]); err != nil {
-		return false
-	}
-	out, err := r.runner.Run(ctx, parts[0], parts[1:], nil)
-	if err != nil {
-		// Non-zero exit = not installed (or installed-but-broken;
-		// we don't distinguish today).
-		return false
-	}
-	_ = out
-	return true
-}
-
-func (r *Registry) pickSpec(b Binary) (InstallSpec, bool) {
-	for _, spec := range b.Install {
+func pickSpec(installs []InstallSpec) (InstallSpec, bool) {
+	for _, spec := range installs {
 		if spec.Match() {
 			return spec, true
 		}
 	}
 	return InstallSpec{}, false
+}
+
+// LookPath resolves a binary name against the supplied prefix's bin
+// dir first, then the system PATH. Exported so callers (skill
+// invoker, doctor) can do consistent lookup without holding a
+// Satisfier.
+func LookPath(name, prefix string) (string, error) {
+	return lookPathWithPrefix(name, prefix)
+}
+
+func lookPathWithPrefix(name, prefix string) (string, error) {
+	if prefix != "" {
+		candidate := strings.TrimRight(prefix, "/") + "/bin/" + name
+		if info, err := osStat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return exec.LookPath(name)
 }

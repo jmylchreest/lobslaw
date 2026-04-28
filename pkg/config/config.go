@@ -28,7 +28,6 @@ type Config struct {
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
 	Users     []UserConfig     `koanf:"user"`
-	Binaries  []BinaryConfig   `koanf:"binary"`
 
 	// resolvedPath is the filesystem path Load resolved via
 	// findConfigPath. Empty when no config.toml was found (env-only
@@ -704,14 +703,14 @@ type SecurityConfig struct {
 	// fetch_url calls are limited to these hostnames.
 	FetchURLAllowHosts []string `koanf:"fetch_url_allow_hosts,omitempty"`
 
-	// BinaryInstallPrefix is the directory user-mode managers
-	// (npm/cargo/go-install/uvx/pipx/curl-sh) install into. Typically
-	// pointed at a host-bind-mounted volume so installed binaries
-	// survive container restarts and are visible across cluster nodes
-	// (e.g. "/lobslaw/usr"). Empty disables prefix routing — managers
-	// install to their default locations (typically the operator's
-	// home directory, which is rarely durable in containers). System
-	// managers (apt/dnf/pacman/apk) ignore this.
+	// BinaryInstallPrefix is the directory user-mode install managers
+	// (npm/cargo/go-install/uvx/pipx/curl-sh) write to when satisfying
+	// a clawhub skill's declared bin requirements. Defaults to
+	// "/lobslaw/usr/local" (FHS-conventional for "operator-installed
+	// locally", distinct from /lobslaw/usr/bin which the uv-init
+	// container owns). System managers (apt/dnf/pacman/apk) ignore
+	// this — they only land in deployments where the operator has
+	// configured them and they write to system paths.
 	BinaryInstallPrefix string `koanf:"binary_install_prefix,omitempty"`
 
 	// OAuth declares the device-flow IdPs operators have registered
@@ -780,22 +779,3 @@ type LogFilterConfig struct {
 }
 
 
-type BinaryConfig struct {
-	Name        string                `koanf:"name"`
-	Description string                `koanf:"description,omitempty"`
-	Detect      string                `koanf:"detect,omitempty"`
-	Install     []BinaryInstallConfig `koanf:"install"`
-}
-
-type BinaryInstallConfig struct {
-	OS       string   `koanf:"os"`
-	Arch     string   `koanf:"arch,omitempty"`
-	Distro   string   `koanf:"distro,omitempty"`
-	Manager  string   `koanf:"manager"`
-	Package  string   `koanf:"package,omitempty"`
-	Repo     string   `koanf:"repo,omitempty"`
-	URL      string   `koanf:"url,omitempty"`
-	Checksum string   `koanf:"checksum,omitempty"`
-	Sudo     bool     `koanf:"sudo,omitempty"`
-	Args     []string `koanf:"args,omitempty"`
-}

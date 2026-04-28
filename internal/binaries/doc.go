@@ -1,34 +1,28 @@
-// Package binaries implements operator-declared OS-binary install for
-// the agent. Skills sometimes need a binary on the host that isn't
-// part of the bundle — gh, gcloud, uvx, ffmpeg, etc. The agent calls
-// binary_install(name); a Registry built from [[binaries]] in
-// config.toml decides whether the binary is allowed and how to
-// install it on the running OS.
+// Package binaries satisfies host-binary requirements declared by
+// installed skills. When clawhub_install lands a skill whose bundle
+// declares clawdbot.requires.bins (e.g. ["gog"]) plus an install
+// array (e.g. brew/apt/pacman/curl-sh methods), this package's
+// Satisfier checks whether each bin is already on PATH and runs the
+// matching install method when it isn't.
 //
-// # Trust model
+// The Satisfier is install-pipeline-internal; the agent does not call
+// it directly. Operators don't write [[binary]] config — the trust
+// gate is the clawhub bundle they're installing (gated separately
+// via the clawhub_install policy resource).
 //
-// The agent never invents install commands. It picks a name from the
-// operator-declared registry; the registry knows how to install that
-// specific binary using a constrained set of managers (apt, brew,
-// pacman, dnf, curl-sh-with-checksum, etc.). The operator declares
-// the binaries they trust and the supply chain they want.
+// # Manager pool
 //
-// Defaults:
-//   - All binary_install calls go through the policy engine
-//     (resource = "binary_install:<name>"). Default-deny; the
-//     operator opens specific binaries per scope.
-//   - The install subprocess uses the "binaries-install" smokescreen
-//     egress role, with hosts derived from the manager (apt repos,
-//     brew CDN, pypi, etc.).
-//   - sudo is opt-in per-binary and requires passwordless sudo to be
-//     pre-configured on the host. Inside Docker the binary registry
-//     assumes root; outside Docker, sudo refusal is an explicit error.
+// User-mode (no sudo): brew, pipx, uvx, npm, cargo, go-install,
+// curl-sh.
+// System-mode (sudo): apt, dnf, pacman, apk.
 //
-// # What this is not
+// curl-sh requires sha256:<64hex> on the install spec; "curl|bash"
+// without a checksum is rejected.
 //
-// This is NOT clawhub's bundle-binary pipeline (internal/clawhub/
-// binaries.go). That handles binaries shipped INSIDE a clawhub
-// bundle (URL + SHA256, downloaded into the skill's bin/). This
-// package handles binaries the operator wants the OS package
-// manager (or equivalent) to install at the system level.
+// # Egress
+//
+// Manager subprocesses use the "binaries-install" smokescreen role.
+// HostsFor() returns the union of hostnames for a set of install
+// specs so the install pipeline can wire/refresh the role's
+// allowlist when a skill installs.
 package binaries

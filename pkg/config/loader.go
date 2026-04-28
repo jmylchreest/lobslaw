@@ -87,6 +87,10 @@ func Load(opts LoadOptions) (*Config, error) {
 		}
 	}
 
+	if cfg.Security.BinaryInstallPrefix == "" {
+		cfg.Security.BinaryInstallPrefix = "/lobslaw/usr/local"
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

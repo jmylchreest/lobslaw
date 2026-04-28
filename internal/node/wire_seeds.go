@@ -69,8 +69,6 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		"credentials_grant":     true,
 		"credentials_revoke":    true,
 		"clawhub_install":       true,
-		"binary_install":        true,
-		"binary_list":           true,
 	}
 
 	// Seed default-allow rules ONLY for builtins (Path prefix

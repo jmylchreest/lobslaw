@@ -1,7 +1,6 @@
 package node
 
 import (
-	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 )
 
@@ -105,22 +104,13 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		ClawhubBinaryHosts: n.cfg.Security.ClawhubBinaryHosts,
 		FetchURLAllowHosts: n.cfg.Security.FetchURLAllowHosts,
 	}
-	if len(n.cfg.Binaries) > 0 {
-		specs := make([]binaries.Binary, 0, len(n.cfg.Binaries))
-		for _, b := range n.cfg.Binaries {
-			install := make([]binaries.InstallSpec, 0, len(b.Install))
-			for _, ins := range b.Install {
-				install = append(install, binaries.InstallSpec{
-					OS:       ins.OS,
-					Manager:  ins.Manager,
-					URL:      ins.URL,
-					Repo:     ins.Repo,
-				})
-			}
-			specs = append(specs, binaries.Binary{Name: b.Name, Install: install})
-		}
-		in.BinariesInstallHosts = binaries.HostsFromBinaries(specs)
-	}
+	// "binaries-install" egress role is empty at boot — populated
+	// dynamically by clawhub_install when it satisfies a skill's
+	// declared bin requirements (the install pipeline calls
+	// EgressProvider.Reload with the new host union). Operators
+	// declaring [[binary]] standalone is no longer supported; all
+	// binary install paths flow through clawhub_install.
+	in.BinariesInstallHosts = nil
 	if len(n.cfg.Security.OAuth) > 0 {
 		eps := make(map[string]egress.OAuthEndpoints, len(n.cfg.Security.OAuth))
 		for name := range n.cfg.Security.OAuth {

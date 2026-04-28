@@ -7,25 +7,24 @@ import (
 	"strings"
 )
 
-// Binary is one operator-declared binary. Mirrors the [[binaries]]
-// TOML block.
+// Binary describes one host binary the install pipeline may need to
+// satisfy. Synthesized from a clawhub bundle's clawdbot.requires +
+// install array; not operator config.
 type Binary struct {
-	// Name is the user-facing identifier (e.g. "gh", "uvx"). Used
-	// as the resource in policy gating: binary_install:<name>.
+	// Name is the binary's PATH-resolvable name (e.g. "gh", "uvx").
 	Name string
 
-	// Description is free-text; surfaces in binary_list output.
+	// Description is free-text; carried through for diagnostics.
 	Description string
 
-	// Detect is the shell command that returns 0 iff the binary is
-	// already installed. Examples: "gh --version", "uvx --version".
-	// Empty Detect means "always re-run install" (not recommended).
+	// Detect is an optional shell command that returns 0 iff the
+	// binary is already installed. The Satisfier prefers PATH lookup
+	// (LookPath) for "is it available?" and uses Detect only when an
+	// install action wants a richer post-install verification.
 	Detect string
 
-	// Install enumerates per-OS install specs. The Registry picks
-	// the first spec whose OS (and Arch, if set) matches the host.
-	// Empty list means "no install path declared" — the agent will
-	// see "no install method for this OS".
+	// Install enumerates per-OS install specs. Satisfier picks the
+	// first spec whose OS (and Arch, if set) matches the host.
 	Install []InstallSpec
 }
 

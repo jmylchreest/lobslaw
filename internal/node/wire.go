@@ -134,7 +134,6 @@ func nodeWireStages() []WireStage {
 		{Name: "storage", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireStorageStage},
 		{Name: "skills", Gate: gateRaft, Wire: (*Node).wireSkills},
 		{Name: "clawhub", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireClawhub},
-		{Name: "binaries", Wire: (*Node).wireBinaries},
 
 		// Always-on or function-gated platform stages.
 		{Name: "audit", Wire: (*Node).wireAuditStage},

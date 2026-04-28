@@ -15,7 +15,6 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jmylchreest/lobslaw/internal/audit"
-	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
@@ -167,11 +166,6 @@ type Config struct {
 	// (id="owner"); team deployments add more.
 	Users []config.UserConfig
 
-	// Binaries is the operator-declared OS-binary catalogue. Empty
-	// disables binary_install entirely (the builtin and the
-	// "binaries-install" egress role aren't wired).
-	Binaries []config.BinaryConfig
-
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate
@@ -211,7 +205,6 @@ type Node struct {
 	oauthTracker     *oauth.Tracker
 	oauthProviders   map[string]oauth.ProviderConfig
 	clawhubInstaller *clawhub.Installer
-	binaries         *binaries.Registry
 	planSvc       *plan.Service
 	storageSvc    *storage.Service
 	storageMgr    *storage.Manager
