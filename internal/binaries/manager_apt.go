@@ -8,7 +8,8 @@ import (
 
 type aptManager struct{}
 
-func (aptManager) Name() string { return "apt" }
+func (aptManager) Name() string     { return "apt" }
+func (aptManager) UserMode() bool   { return false }
 
 func (aptManager) Hosts(spec InstallSpec) []string {
 	hosts := []string{
@@ -19,7 +20,6 @@ func (aptManager) Hosts(spec InstallSpec) []string {
 		"keyserver.ubuntu.com",
 	}
 	if spec.Repo != "" {
-		// best-effort: extract host from "deb https://host/..." form
 		if h := hostFromDebLine(spec.Repo); h != "" {
 			hosts = append(hosts, h)
 		}
@@ -39,12 +39,10 @@ func (m aptManager) Install(ctx context.Context, spec InstallSpec, runner Proces
 
 // hostFromDebLine extracts the host from a "deb [opts] https://host/path suite components" line.
 func hostFromDebLine(line string) string {
-	// Skip "deb " and any [bracketed] options.
 	rest := line
 	if len(rest) >= 4 && rest[:4] == "deb " {
 		rest = rest[4:]
 	}
-	// strip leading whitespace + bracket options
 	for len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t') {
 		rest = rest[1:]
 	}
@@ -64,7 +62,6 @@ func hostFromDebLine(line string) string {
 	for len(rest) > 0 && rest[0] == ' ' {
 		rest = rest[1:]
 	}
-	// Now rest should start with the URL.
 	end := len(rest)
 	for i, c := range rest {
 		if c == ' ' || c == '\t' {

@@ -182,10 +182,11 @@ func (n *Node) wireStorageStage() error {
 func (n *Node) wireSkills() error {
 	n.skillRegistry = skills.NewRegistry(n.log)
 	cfg := skills.InvokerConfig{
-		Registry: n.skillRegistry,
-		Storage:  n.storageMgr,
-		Mounts:   n.mountResolver,
-		ProxyURL: n.subprocessProxyURL,
+		Registry:            n.skillRegistry,
+		Storage:             n.storageMgr,
+		Mounts:              n.mountResolver,
+		ProxyURL:            n.subprocessProxyURL,
+		BinaryInstallPrefix: n.cfg.Security.BinaryInstallPrefix,
 	}
 	if n.credentialSvc != nil {
 		cfg.Credentials = newCredentialIssuerAdapter(n.credentialSvc, func(name string) (oauth.ProviderConfig, bool) {
@@ -266,9 +267,10 @@ func (n *Node) wireBinaries() error {
 		})
 	}
 	cfg := binaries.Config{
-		Binaries:   specs,
-		Logger:     n.log,
-		HTTPClient: egress.For("binaries-install").HTTPClient(),
+		Binaries:      specs,
+		Logger:        n.log,
+		HTTPClient:    egress.For("binaries-install").HTTPClient(),
+		InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
 	}
 	reg, err := binaries.New(cfg)
 	if err != nil {

@@ -20,6 +20,7 @@ const MaxScriptSize = 10 << 20
 
 type curlShManager struct {
 	client *http.Client
+	prefix string
 }
 
 // NewCurlShManager returns a curl-sh manager wired to the given
@@ -33,7 +34,21 @@ func NewCurlShManager(client *http.Client) Manager {
 	return curlShManager{client: client}
 }
 
+func newCurlShManagerWithPrefix(client *http.Client, prefix string) Manager {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return curlShManager{client: client, prefix: prefix}
+}
+
 func (curlShManager) Name() string { return "curl-sh" }
+
+// UserMode for curl-sh is per-call: when prefix is set, scripts that
+// honour LOBSLAW_INSTALL_PREFIX stay user-mode; otherwise the script
+// itself decides. We report true so the validator allows sudo:false
+// (most install scripts are user-mode by default); the operator's
+// explicit Sudo flag overrides for genuinely system-touching scripts.
+func (curlShManager) UserMode() bool { return true }
 
 func (curlShManager) Hosts(spec InstallSpec) []string {
 	if spec.URL == "" {
@@ -91,19 +106,22 @@ func (m curlShManager) Install(ctx context.Context, spec InstallSpec, runner Pro
 	}
 
 	args := append([]string{tmp.Name()}, spec.Args...)
-	log.Info("binaries: curl-sh exec", "tmp", tmp.Name())
+	env := prefixEnv(m.prefix, map[string]string{
+		"LOBSLAW_INSTALL_PREFIX": m.prefix,
+	})
+	log.Info("binaries: curl-sh exec", "tmp", tmp.Name(), "prefix", m.prefix)
 	if spec.Sudo {
 		if err := ensureSudoAllowed(ctx, runner); err != nil {
 			return err
 		}
-		out, err := runner.Run(ctx, "sudo", append([]string{"-n", "/bin/sh"}, args...), nil)
+		out, err := runner.Run(ctx, "sudo", append([]string{"-n", "/bin/sh"}, args...), env)
 		if err != nil {
 			return fmt.Errorf("curl-sh: sudo sh: %w (output: %s)", err, truncate(out, 512))
 		}
 		log.Info("binaries: curl-sh ok", "output", truncate(out, 256))
 		return nil
 	}
-	out, err := runner.Run(ctx, "/bin/sh", args, nil)
+	out, err := runner.Run(ctx, "/bin/sh", args, env)
 	if err != nil {
 		return fmt.Errorf("curl-sh: sh: %w (output: %s)", err, truncate(out, 512))
 	}

@@ -193,6 +193,63 @@ func TestHostsFromBinariesUnion(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsSudoOnUserModeManager(t *testing.T) {
+	_, err := New(Config{
+		Binaries: []Binary{{
+			Name:   "x",
+			Detect: "x --version",
+			Install: []InstallSpec{{
+				OS: runtime.GOOS, Manager: "npm", Package: "x",
+				Sudo: true,
+			}},
+		}},
+		Logger: quietLogger(),
+	})
+	if err == nil {
+		t.Fatal("expected validation error for sudo:true on user-mode manager")
+	}
+	if !strings.Contains(err.Error(), "user-mode") {
+		t.Fatalf("expected user-mode error, got: %v", err)
+	}
+}
+
+func TestRegistryAllowsSudoOnSystemManagers(t *testing.T) {
+	_, err := New(Config{
+		Binaries: []Binary{{
+			Name:   "gh",
+			Detect: "gh --version",
+			Install: []InstallSpec{{
+				OS: runtime.GOOS, Manager: "apt", Package: "gh",
+				Sudo: true,
+			}},
+		}},
+		Logger: quietLogger(),
+	})
+	if err != nil {
+		t.Fatalf("apt+sudo should be valid, got: %v", err)
+	}
+}
+
+func TestRegistryAllowsSudoOnCurlSh(t *testing.T) {
+	_, err := New(Config{
+		Binaries: []Binary{{
+			Name:   "x",
+			Detect: "x --version",
+			Install: []InstallSpec{{
+				OS:       runtime.GOOS,
+				Manager:  "curl-sh",
+				URL:      "https://example.com/install.sh",
+				Checksum: "sha256:" + strings.Repeat("0", 64),
+				Sudo:     true,
+			}},
+		}},
+		Logger: quietLogger(),
+	})
+	if err != nil {
+		t.Fatalf("curl-sh+sudo should be valid (script may need root), got: %v", err)
+	}
+}
+
 func TestEnsureSudoFailsClosed(t *testing.T) {
 	runner := &fakeRunner{commands: map[string]fakeOutcome{
 		"sudo -n true": {output: "sudo: a password is required", err: errors.New("exit 1")},

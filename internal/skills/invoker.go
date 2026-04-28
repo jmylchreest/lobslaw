@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,18 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 )
+
+// joinPATH builds a PATH= value: the supplied prefix dirs followed by
+// whatever the parent process inherited. Skill subprocesses see the
+// prefix entries first so installed binaries resolve before any host
+// duplicates.
+func joinPATH(prefixes []string) string {
+	parts := append([]string(nil), prefixes...)
+	if existing := os.Getenv("PATH"); existing != "" {
+		parts = append(parts, existing)
+	}
+	return strings.Join(parts, string(os.PathListSeparator))
+}
 
 // InvokeRequest is what the agent (or test) hands to the invoker.
 // SkillName resolves via the Registry; Params is JSON-marshalled
@@ -110,6 +123,8 @@ type Invoker struct {
 
 	proxyURL    func(role string, networkIsolation bool) string
 	credentials CredentialIssuer
+	binaryLookup func(name string) (string, error)
+	binaryPath   []string
 
 	defaultTimeout time.Duration
 }
@@ -148,6 +163,19 @@ type InvokerConfig struct {
 	// time; deployments without an OAuth setup simply don't declare
 	// credentials in skill manifests.
 	Credentials CredentialIssuer
+
+	// BinaryInstallPrefix is the operator's binary install prefix
+	// (typically /lobslaw/usr). Prepended to PATH during the
+	// requires_binary pre-spawn check, AND injected into the skill
+	// subprocess's PATH so installed binaries resolve at exec.
+	// Empty means "no prefix" — the runtime LookPath uses the
+	// inherited PATH only.
+	BinaryInstallPrefix string
+
+	// BinaryLookup overrides exec.LookPath for tests. Production
+	// leaves this nil and gets the default LookPath against the
+	// invoker's effective PATH (BinaryInstallPrefix/bin + os PATH).
+	BinaryLookup func(name string) (string, error)
 }
 
 // NewInvoker constructs an invoker.
@@ -161,7 +189,7 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 	if cfg.DefaultTimeout <= 0 {
 		cfg.DefaultTimeout = 30 * time.Second
 	}
-	return &Invoker{
+	inv := &Invoker{
 		reg:            cfg.Registry,
 		storage:        cfg.Storage,
 		mounts:         cfg.Mounts,
@@ -169,7 +197,32 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 		proxyURL:       cfg.ProxyURL,
 		credentials:    cfg.Credentials,
 		defaultTimeout: cfg.DefaultTimeout,
-	}, nil
+	}
+	if cfg.BinaryInstallPrefix != "" {
+		inv.binaryPath = []string{cfg.BinaryInstallPrefix + "/bin"}
+	}
+	inv.binaryLookup = cfg.BinaryLookup
+	if inv.binaryLookup == nil {
+		prefix := cfg.BinaryInstallPrefix
+		inv.binaryLookup = func(name string) (string, error) {
+			return lookPathWithPrefix(name, prefix)
+		}
+	}
+	return inv, nil
+}
+
+// lookPathWithPrefix resolves name against $prefix/bin first, then the
+// inherited PATH. Returns the absolute path on success.
+func lookPathWithPrefix(name, prefix string) (string, error) {
+	if prefix != "" {
+		candidate := prefix + "/bin/" + name
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			if info.Mode()&0o111 != 0 {
+				return candidate, nil
+			}
+		}
+	}
+	return exec.LookPath(name)
 }
 
 // Invoke runs a skill. The sandbox policy composition (Landlock
@@ -192,11 +245,20 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		}
 	}
 
+	for _, name := range skill.Manifest.RequiresBinary {
+		if _, err := i.binaryLookup(name); err != nil {
+			return nil, fmt.Errorf("skills: skill %q: requires_binary %q not installed — try `binary_install %s` (operator must declare it in [[binary]] first): %w", skill.Name(), name, name, err)
+		}
+	}
+
 	argv, err := buildArgv(skill)
 	if err != nil {
 		return nil, err
 	}
 	env := buildEnv(skill, i.storage)
+	if len(i.binaryPath) > 0 {
+		env = append(env, "PATH="+joinPATH(i.binaryPath))
+	}
 	if len(skill.Manifest.Credentials) > 0 {
 		credEnv, err := i.injectCredentials(ctx, skill)
 		if err != nil {

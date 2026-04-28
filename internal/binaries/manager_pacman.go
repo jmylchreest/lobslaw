@@ -8,7 +8,8 @@ import (
 
 type pacmanManager struct{}
 
-func (pacmanManager) Name() string { return "pacman" }
+func (pacmanManager) Name() string   { return "pacman" }
+func (pacmanManager) UserMode() bool { return false }
 
 func (pacmanManager) Hosts(_ InstallSpec) []string {
 	return []string{

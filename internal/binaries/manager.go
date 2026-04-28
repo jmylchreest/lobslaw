@@ -23,6 +23,13 @@ type Manager interface {
 	// host (binary present in PATH; OS matches; etc.).
 	Available(ctx context.Context) bool
 
+	// UserMode reports whether the manager writes only into the
+	// user's home directory and never needs root. False for apt,
+	// pacman, dnf, apk; true for brew, pipx, uvx, npm, cargo,
+	// go-install. curl-sh is reported per-call by the spec's Sudo
+	// flag (the script itself decides what it touches).
+	UserMode() bool
+
 	// Install runs the install. Returns nil on success. The runner
 	// is responsible for writing stdout/stderr to slog and for
 	// honouring ctx cancellation.
@@ -67,6 +74,12 @@ var errManagerNotAvailable = errors.New("manager binary not available on this ho
 func runManagerCmd(ctx context.Context, runner ProcessRunner, log *slog.Logger,
 	managerName string, sudo bool, args []string,
 ) error {
+	return runManagerCmdEnv(ctx, runner, log, managerName, sudo, args, nil)
+}
+
+func runManagerCmdEnv(ctx context.Context, runner ProcessRunner, log *slog.Logger,
+	managerName string, sudo bool, args []string, env []string,
+) error {
 	bin := managerName
 	finalArgs := args
 	if sudo {
@@ -77,7 +90,7 @@ func runManagerCmd(ctx context.Context, runner ProcessRunner, log *slog.Logger,
 		finalArgs = append([]string{"-n", managerName}, args...)
 	}
 	log.Info("binaries: install", "manager", managerName, "args", args, "sudo", sudo)
-	out, err := runner.Run(ctx, bin, finalArgs, nil)
+	out, err := runner.Run(ctx, bin, finalArgs, env)
 	if err != nil {
 		log.Error("binaries: install failed",
 			"manager", managerName, "err", err, "output", out)

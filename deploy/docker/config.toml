@@ -78,6 +78,15 @@ type  = "local"
 path  = "/workspace"
 mode  = "rw"
 
+# The binary install prefix (see [security] binary_install_prefix
+# below). Skill subprocesses get rx — read+execute, but not write.
+# Only the lobslaw process (the installer) writes here.
+[[storage.mounts]]
+label = "binaries"
+type  = "local"
+path  = "/lobslaw/usr"
+mode  = "rx"
+
 [security]
 # Egress to the clawhub.ai skill catalog. Empty disables clawhub —
 # the clawhub_install builtin and its egress role aren't wired.
@@ -90,6 +99,13 @@ clawhub_base_url = "https://clawhub.ai"
 # (and clawhub_base_url is set), defaults to github.com release
 # hosts — the most common skill-binary distribution.
 # clawhub_binary_hosts = ["github.com", "objects.githubusercontent.com", "*.githubusercontent.com"]
+
+# Where binary_install puts user-mode installs. Pointed at the
+# tools-runtime volume so installed binaries survive container
+# restarts and are visible across cluster nodes. System managers
+# (apt/dnf/pacman/apk) ignore this — only user-mode managers (npm,
+# cargo, go-install, uvx, pipx, curl-sh) honour it.
+binary_install_prefix = "/lobslaw/usr"
 
 [policy]
 enabled = true

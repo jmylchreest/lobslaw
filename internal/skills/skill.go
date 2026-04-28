@@ -73,6 +73,14 @@ type Manifest struct {
 	NetworkAllowDNS  bool               `yaml:"network_allow_dns,omitempty"`
 	Credentials      []CredentialAccess `yaml:"credentials,omitempty"`
 	Binaries         []BinaryAccess     `yaml:"binaries,omitempty"`
+	// RequiresBinary names host-level binaries that must resolve in
+	// PATH before the skill is invoked. Distinct from Binaries
+	// (which ships bundle-internal binaries via clawhub install) —
+	// RequiresBinary entries are installed via the operator's
+	// [[binary]] catalogue (the binary_install builtin). The invoker
+	// runs LookPath against each name pre-spawn; if any are missing
+	// it returns a structured error suggesting binary_install.
+	RequiresBinary   []string           `yaml:"requires_binary,omitempty"`
 	Params           map[string]any     `yaml:"params_schema,omitempty"`
 }
 

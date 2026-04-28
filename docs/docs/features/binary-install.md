@@ -140,9 +140,62 @@ resource = "binary_*"
 
 If you want only `binary_list` (so the agent can introspect but not install), drop the `_*` glob and rule the install path explicitly.
 
+## Install prefix and storage layout
+
+The cleanest deployment uses a managed install prefix — a directory the binary registry writes to, that's also visible to skill subprocesses with read+exec access:
+
+```toml
+[security]
+binary_install_prefix = "/lobslaw/usr"
+
+[[storage.mounts]]
+label = "binaries"
+type  = "local"
+path  = "/lobslaw/usr"
+mode  = "rx"           # skill subprocesses get read+exec, no write
+```
+
+The lobslaw process itself has implicit rw on the prefix (it's the installer). Skill subprocesses see it as an `rx` mount — they can execute installed binaries but can't tamper with them.
+
+Why this layout matters:
+
+- **Persistence.** Mount the prefix from a host volume (or a `tools-runtime` Docker volume) — installed binaries survive container restarts, no apt/dnf state to repopulate.
+- **Cluster-shareable.** Same volume bind-mounted into multiple nodes; one install, every node sees it.
+- **Rootless.** No root needed on the host — user-mode managers (npm, cargo, go-install, uvx, pipx, curl-sh) write to the prefix as the regular user.
+- **Sandboxed.** Skill subprocesses' Landlock allowlist gets the prefix as RX-only via the storage mount declaration. They can't modify what they execute.
+
+The reference deploy at `deploy/docker/cluster.yml` already uses `tools-runtime:/lobslaw/usr/bin` as the persistent volume — point `binary_install_prefix` at `/lobslaw/usr` and the registry feeds it.
+
+## Manager prefix support
+
+| Manager | How prefix is honoured |
+|---|---|
+| `npm` | `--prefix=$prefix` |
+| `cargo` | `--root=$prefix` |
+| `go-install` | `GOBIN=$prefix/bin` env |
+| `uvx` (uv tool install) | `UV_TOOL_BIN_DIR=$prefix/bin UV_TOOL_DIR=$prefix/uv-tools` env |
+| `pipx` | `PIPX_HOME=$prefix/pipx PIPX_BIN_DIR=$prefix/bin` env |
+| `curl-sh` | `LOBSLAW_INSTALL_PREFIX=$prefix` env (the script chooses to honour or not) |
+| `apt`/`dnf`/`pacman`/`apk` | **Not honoured.** System managers write to system paths; only valid in ephemeral container deployments where the whole image gets reset. |
+| `brew` | Brew has its own prefix model; left for separate work. |
+
+## Rootless guidance
+
+If your goal is "no host sudo, ever":
+
+- Use only **user-mode managers** (npm, cargo, go-install, uvx, pipx, curl-sh-with-checksum).
+- Set `binary_install_prefix` to a path you can write to as the lobslaw user.
+- Don't add `[[binary]]` entries with `apt`/`dnf`/`pacman`/`apk` — they require system-level access and the validator will reject `sudo: true` on user-mode managers.
+
+If you're inside a container where lobslaw is root:
+
+- Use any manager. apt/dnf/pacman/apk install to system paths inside the container; bind-mount `/lobslaw/usr` from a host volume so the bits survive container restarts.
+
+The validator catches an explicit footgun: `sudo: true` combined with a user-mode manager (npm, cargo, go-install, etc.) errors at boot — that combination is almost always a typo, not an intentional choice.
+
 ## Skill manifest integration
 
-A skill manifest can declare `requires_binary`:
+A skill manifest declares `requires_binary` for any host binaries the skill needs at exec time:
 
 ```yaml
 requires_binary:
@@ -150,11 +203,13 @@ requires_binary:
   - jq
 ```
 
-If any are missing, the invoker refuses to spawn and surfaces "missing binary: gh — run binary_install gh first" to the agent. The agent can then choose to install (if policy allows) or report to the user.
+The invoker:
 
-This is the intended UX: the user asks the agent to do something, the agent calls a skill, the skill says "I need gh", the agent installs gh, the skill works. No human in the loop unless `binary_install` is gated `require_confirmation`.
+1. Pre-spawn, runs `LookPath(name)` against `$prefix/bin:$PATH` for each entry.
+2. If any are missing, refuses to spawn with: `requires_binary "gh" not installed — try `binary_install gh` (operator must declare it in [[binary]] first)`.
+3. If all are present, injects `PATH=$prefix/bin:$PATH` into the subprocess's env so the skill's `gh ...` invocations resolve.
 
-*(Skill-manifest integration is partial today — the `requires_binary` field is parsed and stored on the manifest, but the invoker does not yet refuse to spawn when a binary is missing. Tracking ticket: lobslaw#XXX.)*
+The intended UX: user asks the agent to do something, the agent calls a skill, the skill says "I need gh", the agent installs gh (if policy allows), the skill retries and works. No human in the loop unless `binary_install` is gated `require_confirmation`.
 
 ## What's not here
 

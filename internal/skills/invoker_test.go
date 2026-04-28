@@ -66,6 +66,90 @@ func TestInvokerMissingSkill(t *testing.T) {
 	}
 }
 
+func TestInvokerRequiresBinaryMissing(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest: Manifest{
+			Name:    "needs-gh",
+			Version: "1.0.0",
+			Runtime: RuntimeBash,
+			Handler: "h.sh",
+			RequiresBinary: []string{"gh"},
+		},
+		HandlerPath: "/mnt/skills/needs-gh/h.sh",
+	})
+	runner := &fakeRunner{}
+	inv, _ := NewInvoker(InvokerConfig{
+		Registry: reg,
+		Runner:   runner,
+		BinaryLookup: func(name string) (string, error) {
+			return "", errors.New("not found")
+		},
+	})
+	_, err := inv.Invoke(context.Background(), InvokeRequest{SkillName: "needs-gh"})
+	if err == nil {
+		t.Fatal("expected requires_binary failure")
+	}
+	if runner.runCnt != 0 {
+		t.Errorf("runner should not be called when binary missing")
+	}
+	if !contains(err.Error(), "binary_install gh") {
+		t.Errorf("error should suggest binary_install: %v", err)
+	}
+}
+
+func TestInvokerRequiresBinaryPresent(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest: Manifest{
+			Name:    "needs-gh",
+			Version: "1.0.0",
+			Runtime: RuntimeBash,
+			Handler: "h.sh",
+			RequiresBinary: []string{"gh"},
+		},
+		HandlerPath: "/mnt/skills/needs-gh/h.sh",
+	})
+	runner := &fakeRunner{stdout: `{"ok":true}`}
+	inv, _ := NewInvoker(InvokerConfig{
+		Registry: reg,
+		Runner:   runner,
+		BinaryLookup: func(name string) (string, error) {
+			return "/lobslaw/usr/bin/" + name, nil
+		},
+		BinaryInstallPrefix: "/lobslaw/usr",
+	})
+	if _, err := inv.Invoke(context.Background(), InvokeRequest{SkillName: "needs-gh"}); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if runner.runCnt != 1 {
+		t.Errorf("runner should be invoked when binary present (got %d)", runner.runCnt)
+	}
+	pathEnvFound := false
+	for _, e := range runner.env {
+		if len(e) > 5 && e[:5] == "PATH=" {
+			pathEnvFound = true
+			if !contains(e, "/lobslaw/usr/bin") {
+				t.Errorf("PATH should include /lobslaw/usr/bin: %s", e)
+			}
+		}
+	}
+	if !pathEnvFound {
+		t.Errorf("PATH env should be injected when prefix is set; env=%v", runner.env)
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestInvokerBashRuntimeArgv(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry(nil)

@@ -27,10 +27,21 @@ type Registry struct {
 // curl-sh manager; pass an egress-aware client (binaries-install
 // role) so script downloads flow through smokescreen.
 type Config struct {
-	Binaries  []Binary
+	Binaries   []Binary
 	HTTPClient *http.Client
 	Runner     ProcessRunner
 	Logger     *slog.Logger
+
+	// InstallPrefix is the directory user-mode managers install into
+	// (typically the operator's [security] binary_install_prefix,
+	// e.g. "/lobslaw/usr"). When set, npm/cargo/go-install/uvx/pipx
+	// route their installs there via the manager-specific knob
+	// (--prefix, --root, GOBIN, UV_TOOL_BIN_DIR, PIPX_BIN_DIR).
+	// curl-sh scripts get LOBSLAW_INSTALL_PREFIX as an env var so
+	// the script can honour it. System managers (apt/dnf/pacman/apk)
+	// don't honour prefix and ignore it. Empty disables prefix
+	// routing — managers install to their default locations.
+	InstallPrefix string
 }
 
 // New builds a Registry. Returns an error if any operator binary
@@ -45,7 +56,7 @@ func New(cfg Config) (*Registry, error) {
 	}
 	r := &Registry{
 		binaries: make(map[string]Binary, len(cfg.Binaries)),
-		managers: defaultManagers(cfg.HTTPClient),
+		managers: managersWithPrefix(cfg.HTTPClient, cfg.InstallPrefix),
 		runner:   cfg.Runner,
 		log:      cfg.Logger,
 	}
@@ -56,26 +67,39 @@ func New(cfg Config) (*Registry, error) {
 		if _, dup := r.binaries[b.Name]; dup {
 			return nil, fmt.Errorf("binary %q declared twice", b.Name)
 		}
+		for i, spec := range b.Install {
+			mgr, ok := r.managers[spec.Manager]
+			if !ok {
+				continue
+			}
+			if spec.Sudo && mgr.UserMode() && spec.Manager != "curl-sh" {
+				return nil, fmt.Errorf("binary %q install[%d]: manager %q is user-mode; sudo:true is not meaningful (likely a typo). Remove sudo, or use a system manager (apt/dnf/pacman/apk)", b.Name, i, spec.Manager)
+			}
+		}
 		r.binaries[b.Name] = b
 	}
 	return r, nil
 }
 
 func defaultManagers(client *http.Client) map[string]Manager {
+	return managersWithPrefix(client, "")
+}
+
+func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 	out := map[string]Manager{
 		"apt":        aptManager{},
 		"brew":       brewManager{},
 		"pacman":     pacmanManager{},
 		"dnf":        dnfManager{},
 		"apk":        apkManager{},
-		"pipx":       pipxManager{},
-		"uvx":        uvxManager{},
-		"npm":        npmManager{},
-		"cargo":      cargoManager{},
-		"go-install": goInstallManager{},
+		"pipx":       pipxManager{prefix: prefix},
+		"uvx":        uvxManager{prefix: prefix},
+		"npm":        npmManager{prefix: prefix},
+		"cargo":      cargoManager{prefix: prefix},
+		"go-install": goInstallManager{prefix: prefix},
 	}
 	if client != nil {
-		out["curl-sh"] = NewCurlShManager(client)
+		out["curl-sh"] = newCurlShManagerWithPrefix(client, prefix)
 	}
 	return out
 }

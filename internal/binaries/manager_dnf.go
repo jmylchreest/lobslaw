@@ -8,7 +8,8 @@ import (
 
 type dnfManager struct{}
 
-func (dnfManager) Name() string { return "dnf" }
+func (dnfManager) Name() string   { return "dnf" }
+func (dnfManager) UserMode() bool { return false }
 
 func (dnfManager) Hosts(_ InstallSpec) []string {
 	return []string{

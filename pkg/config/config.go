@@ -704,6 +704,16 @@ type SecurityConfig struct {
 	// fetch_url calls are limited to these hostnames.
 	FetchURLAllowHosts []string `koanf:"fetch_url_allow_hosts,omitempty"`
 
+	// BinaryInstallPrefix is the directory user-mode managers
+	// (npm/cargo/go-install/uvx/pipx/curl-sh) install into. Typically
+	// pointed at a host-bind-mounted volume so installed binaries
+	// survive container restarts and are visible across cluster nodes
+	// (e.g. "/lobslaw/usr"). Empty disables prefix routing — managers
+	// install to their default locations (typically the operator's
+	// home directory, which is rarely durable in containers). System
+	// managers (apt/dnf/pacman/apk) ignore this.
+	BinaryInstallPrefix string `koanf:"binary_install_prefix,omitempty"`
+
 	// OAuth declares the device-flow IdPs operators have registered
 	// applications with. Keyed by provider name ("google", "github",
 	// ...) which becomes the credentials-bucket prefix and the
