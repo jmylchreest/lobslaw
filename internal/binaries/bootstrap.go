@@ -43,11 +43,45 @@ var knownBootstraps = map[string]bootstrapRecipe{
 	},
 }
 
-// hostsForBootstrap returns the hostnames the bootstrap recipes
-// reach. Used by the egress builder to pre-allowlist these hosts in
-// the "binaries-install" smokescreen role when the operator has
-// opted into bootstrap (via [security] clawhub_bootstrap_managers).
-func hostsForBootstrap() []string {
+// DefaultInstallHosts returns the union of (a) bootstrap installer
+// host names and (b) runtime upstream hosts of every Bootstrappable
+// manager. The egress builder uses this as the boot-time allowlist
+// for the "binaries-install" smokescreen role so that:
+//   - The bootstrap fetch (e.g. raw.githubusercontent.com for brew)
+//     succeeds without an additional operator config step.
+//   - The bootstrapped manager's own installs (e.g. brew pulling
+//     formulae from formulae.brew.sh + ghcr.io) succeed without a
+//     follow-up config + reload.
+// Operators with stricter supply-chain requirements override the
+// allowlist via [security] binaries_install_hosts (future work).
+func DefaultInstallHosts() []string {
+	seen := make(map[string]struct{})
+	var out []string
+	addAll := func(hosts []string) {
+		for _, h := range hosts {
+			if h == "" {
+				continue
+			}
+			if _, dup := seen[h]; dup {
+				continue
+			}
+			seen[h] = struct{}{}
+			out = append(out, h)
+		}
+	}
+	addAll(HostsForBootstrap())
+	for _, mgr := range defaultManagers(nil) {
+		if _, ok := mgr.(Bootstrappable); ok {
+			addAll(mgr.Hosts(InstallSpec{}))
+		}
+	}
+	return out
+}
+
+// HostsForBootstrap returns the hostnames the bootstrap recipes
+// reach (just the curl-sh installer URLs). Subset of
+// DefaultInstallHosts.
+func HostsForBootstrap() []string {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, r := range knownBootstraps {

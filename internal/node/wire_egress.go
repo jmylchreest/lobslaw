@@ -1,6 +1,7 @@
 package node
 
 import (
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 )
 
@@ -104,13 +105,14 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		ClawhubBinaryHosts: n.cfg.Security.ClawhubBinaryHosts,
 		FetchURLAllowHosts: n.cfg.Security.FetchURLAllowHosts,
 	}
-	// "binaries-install" egress role is empty at boot — populated
-	// dynamically by clawhub_install when it satisfies a skill's
-	// declared bin requirements (the install pipeline calls
-	// EgressProvider.Reload with the new host union). Operators
-	// declaring [[binary]] standalone is no longer supported; all
-	// binary install paths flow through clawhub_install.
-	in.BinariesInstallHosts = nil
+	// "binaries-install" egress role is pre-populated at boot with
+	// the union of bootstrap-installer hosts (raw.githubusercontent.com,
+	// astral.sh, etc.) and the runtime upstream hosts of every
+	// Bootstrappable manager (formulae.brew.sh, ghcr.io, pypi.org,
+	// ...). This means clawhub_install with bootstrap_managers=true
+	// can reach the curl-sh installers + the post-bootstrap install
+	// flow without operator config gymnastics.
+	in.BinariesInstallHosts = binaries.DefaultInstallHosts()
 	if len(n.cfg.Security.OAuth) > 0 {
 		eps := make(map[string]egress.OAuthEndpoints, len(n.cfg.Security.OAuth))
 		for name := range n.cfg.Security.OAuth {
