@@ -95,6 +95,18 @@ type  = "local"
 path  = "/lobslaw/usr/local"
 mode  = "rx"
 
+# Where clawhub_install lands skill bundles (manifest.yaml +
+# SKILL.md + handler scripts). RW for the lobslaw process; the
+# skills watcher scans this for new manifest.yaml files. Per-node
+# in this deploy — a multi-node cluster wanting "install on any
+# node, visible everywhere" should bind-mount a shared host volume
+# at this path.
+[[storage.mounts]]
+label = "skill-tools"
+type  = "local"
+path  = "/var/lobslaw/skills"
+mode  = "rw"
+
 [security]
 # Egress to the clawhub.ai skill catalogue. clawhub.ai is the
 # Cloudflare-fronted public API root; bundle download lives at
@@ -107,6 +119,21 @@ mode  = "rx"
 #   curl -sLI "https://clawhub.ai/api/v1/download?slug=gog" | head -1
 #   # Expect: HTTP/2 200
 clawhub_base_url = "https://clawhub.ai"
+
+# Hosts allowed for the "clawhub" smokescreen egress role. Defaults
+# (when this is empty) cover GitHub release CDNs, which is the most
+# common skill-binary distribution. We extend with *.convex.site
+# because clawhub.ai is Cloudflare-fronted in front of a Convex
+# backend — if the CDN ever serves a 30x redirect to the backing
+# Convex deployment, the Go HTTP client follows it and needs a
+# second CONNECT through smokescreen; that CONNECT must hit an
+# allowlisted host or it's blocked.
+clawhub_binary_hosts = [
+    "github.com",
+    "objects.githubusercontent.com",
+    "*.githubusercontent.com",
+    "*.convex.site",
+]
 
 # Optional override of the binary download allowlist. When unset
 # (and clawhub_base_url is set), defaults to github.com release

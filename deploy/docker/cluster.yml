@@ -171,6 +171,7 @@ services:
       - certs-1:/etc/lobslaw/certs:ro
       - data-1:/var/lobslaw/data
       - audit-1:/var/lobslaw/audit
+      - skills-1:/var/lobslaw/skills
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
       - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
@@ -229,6 +230,7 @@ services:
       - certs-2:/etc/lobslaw/certs:ro
       - data-2:/var/lobslaw/data
       - audit-2:/var/lobslaw/audit
+      - skills-2:/var/lobslaw/skills
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
       - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
@@ -277,6 +279,7 @@ services:
       - certs-3:/etc/lobslaw/certs:ro
       - data-3:/var/lobslaw/data
       - audit-3:/var/lobslaw/audit
+      - skills-3:/var/lobslaw/skills
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
       - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
@@ -325,3 +328,6 @@ volumes:
   audit-1:
   audit-2:
   audit-3:
+  skills-1:
+  skills-2:
+  skills-3:
