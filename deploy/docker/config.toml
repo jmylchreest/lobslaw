@@ -78,6 +78,19 @@ type  = "local"
 path  = "/workspace"
 mode  = "rw"
 
+[security]
+# Egress to the clawhub.ai skill catalog. Empty disables clawhub —
+# the clawhub_install builtin and its egress role aren't wired.
+# Setting this declares clawhub.ai as an allowed upstream for the
+# "clawhub" smokescreen role; the policy rule below still has to
+# allow the tool itself.
+clawhub_base_url = "https://clawhub.ai"
+
+# Optional override of the binary download allowlist. When unset
+# (and clawhub_base_url is set), defaults to github.com release
+# hosts — the most common skill-binary distribution.
+# clawhub_binary_hosts = ["github.com", "objects.githubusercontent.com", "*.githubusercontent.com"]
+
 [policy]
 enabled = true
 
