@@ -153,8 +153,8 @@ Use gog for Gmail/Calendar.
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/download", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("slug"); got != "steipete/gog" {
-			t.Errorf("server saw slug=%q", got)
+		if got := r.URL.Query().Get("slug"); got != "gog" {
+			t.Errorf("server saw slug=%q (expected bare 'gog' after owner strip)", got)
 		}
 		_, _ = w.Write(bundle)
 	})
@@ -198,16 +198,58 @@ Use gog for Gmail/Calendar.
 	}
 }
 
-func TestInstallBySlugRejectsBadShape(t *testing.T) {
+func TestInstallBySlugRejectsEmpty(t *testing.T) {
 	t.Parallel()
 	c, _ := NewClient("http://localhost:65535")
 	inst, _ := NewInstaller(InstallerConfig{
 		Client:  c,
 		Storage: storage.NewManager(),
 	})
-	_, err := inst.InstallBySlug(context.Background(), "no-slash", InstallTarget{MountLabel: "skill-tools"})
-	if err == nil || !strings.Contains(err.Error(), "<owner>/<name>") {
-		t.Errorf("expected slug-shape error, got: %v", err)
+	_, err := inst.InstallBySlug(context.Background(), "", InstallTarget{MountLabel: "skill-tools"})
+	if err == nil || !strings.Contains(err.Error(), "slug required") {
+		t.Errorf("expected slug-required error, got: %v", err)
+	}
+}
+
+func TestInstallBySlugStripsOwnerPrefix(t *testing.T) {
+	t.Parallel()
+	skillMD := `---
+name: gog
+metadata: {"clawdbot":{"requires":{"bins":[]},"install":[]}}
+---
+
+# gog
+`
+	bundle := makeZipBundleFromFiles(t, map[string][]byte{
+		"SKILL.md": []byte(skillMD),
+	})
+	mountRoot := t.TempDir()
+	mgr := storage.NewManager()
+	if err := mgr.Register(context.Background(), &fakeMount{
+		label: "skill-tools", path: mountRoot,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var seenSlug string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/download", func(w http.ResponseWriter, r *http.Request) {
+		seenSlug = r.URL.Query().Get("slug")
+		_, _ = w.Write(bundle)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c, _ := NewClient(srv.URL)
+	inst, _ := NewInstaller(InstallerConfig{Client: c, Storage: mgr})
+
+	if _, err := inst.InstallBySlug(context.Background(), "steipete/gog", InstallTarget{
+		MountLabel: "skill-tools",
+	}); err != nil {
+		t.Fatalf("InstallBySlug: %v", err)
+	}
+	if seenSlug != "gog" {
+		t.Errorf("server saw slug=%q, expected owner prefix stripped to bare 'gog'", seenSlug)
 	}
 }
 

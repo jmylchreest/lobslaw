@@ -43,7 +43,7 @@ func ClawhubToolDefs() []*types.ToolDef {
 		{
 			Name:        "clawhub_install",
 			Path:        BuiltinScheme + "clawhub_install",
-			Description: "Install a skill from the configured clawhub catalogue. Two modes: (a) by slug — pass slug=\"<owner>/<name>\" (e.g. \"steipete/gog\") to install a clawhub.ai-format bundle; the runtime parses SKILL.md, satisfies declared host bin requirements, and registers the synthetic skill. (b) by name+version — for native (manifest.yaml) bundles served by a lobslaw-format catalogue. Optional mount overrides the storage label and subpath overrides the per-skill directory. Returns the install path + skill name. The skill registry's filesystem watcher picks the new manifest up automatically. Owner-only; default-deny applies.",
+			Description: "Install a skill from the configured clawhub catalogue. Two modes: (a) by slug — pass slug=\"<name>\" or slug=\"<owner>/<name>\" (e.g. \"gog\" or \"steipete/gog\") to install a clawhub.ai-format bundle; owner prefix is informational and stripped before API calls. The runtime parses SKILL.md, satisfies declared host bin requirements, and registers the synthetic skill. (b) by name+version — for native (manifest.yaml) bundles served by a lobslaw-format catalogue. Optional mount overrides the storage label and subpath overrides the per-skill directory. Returns the install path + skill name. The skill registry's filesystem watcher picks the new manifest up automatically. Owner-only; default-deny applies.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {

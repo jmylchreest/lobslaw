@@ -98,22 +98,17 @@ path  = "/lobslaw/usr/local"
 mode  = "rx"
 
 [security]
-# Egress to the clawhub.ai skill catalog. The base URL is the
-# CATALOGUE API root (where /api/v1/download lives), not the
-# marketing site. Empty disables clawhub — the clawhub_install
-# builtin and its egress role aren't wired. Setting this:
+# Egress to the clawhub.ai skill catalogue. clawhub.ai is the
+# Cloudflare-fronted public API root; bundle download lives at
+# <baseURL>/api/v1/download?slug=<name>. Setting this:
 #  1. Wires the clawhub_install builtin (still policy-gated below)
-#  2. Adds the API host to the "clawhub" smokescreen egress role
-#     so the bundle download can succeed.
+#  2. Adds clawhub.ai to the "clawhub" smokescreen egress role
+#     so bundle downloads can succeed.
 #
-# clawhub.ai's API today lives on a Convex deployment; the public
-# URL changes occasionally. Verify by curling the slug-download
-# endpoint:
-#   curl -sLI "$URL/api/v1/download?slug=steipete/gog" | head -1
-#
-# As of the last check: https://wry-manatee-359.convex.site
-# (clawhub.ai itself returns the marketing HTML, not the API).
-clawhub_base_url = "https://wry-manatee-359.convex.site"
+# Verify reachable from the cluster network:
+#   curl -sLI "https://clawhub.ai/api/v1/download?slug=gog" | head -1
+#   # Expect: HTTP/2 200
+clawhub_base_url = "https://clawhub.ai"
 
 # Optional override of the binary download allowlist. When unset
 # (and clawhub_base_url is set), defaults to github.com release

@@ -113,23 +113,22 @@ type InstallResult struct {
 }
 
 // InstallBySlug fetches a clawhub.ai-format bundle by slug and runs
-// the same install pipeline. The slug shape is "<owner>/<name>"
-// (e.g. "steipete/gog"); the catalogue serves the bundle bytes
-// directly. SHA verification is skipped (clawhub.ai doesn't publish
-// a per-bundle digest in this API path); the bundle's ed25519
-// signature, when present, is the supply-chain anchor.
+// the same install pipeline. Slug is the bare skill name (e.g.
+// "gog"); operators pasting the full clawhub.ai page slug
+// ("steipete/gog") get the owner prefix stripped automatically.
+// SHA verification is skipped (clawhub.ai's API doesn't publish a
+// per-bundle digest in this path); the bundle's ed25519 signature,
+// when present, is the supply-chain anchor.
 func (i *Installer) InstallBySlug(ctx context.Context, slug string, target InstallTarget) (*InstallResult, error) {
-	parts := strings.SplitN(slug, "/", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("clawhub: slug %q must be <owner>/<name>", slug)
+	apiSlug, err := normalizeSlug(slug)
+	if err != nil {
+		return nil, err
 	}
 	if target.Subpath == "" {
-		target.Subpath = parts[1]
+		target.Subpath = apiSlug
 	}
-	entry := &SkillEntry{
-		Name: parts[1],
-	}
-	body, err := i.client.DownloadBundleBySlug(ctx, slug)
+	entry := &SkillEntry{Name: apiSlug}
+	body, err := i.client.DownloadBundleBySlug(ctx, apiSlug)
 	if err != nil {
 		return nil, err
 	}

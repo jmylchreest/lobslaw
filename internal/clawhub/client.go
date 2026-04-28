@@ -145,20 +145,20 @@ func (c *Client) DownloadBundle(ctx context.Context, entry *SkillEntry) (io.Read
 }
 
 // DownloadBundleBySlug fetches a clawhub.ai-style bundle directly
-// from the catalogue API. Slug shape is "<owner>/<name>" (e.g.
-// "steipete/gog"); the catalogue serves the bundle ZIP at
-// <baseURL>/api/v1/download?slug=<slug>. Caller (typically
-// Installer.InstallBySlug) is responsible for ProcessBundle on
-// the returned bytes.
+// from the catalogue API at <baseURL>/api/v1/download?slug=<slug>.
+// Slug is the bare skill name (e.g. "gog") — clawhub.ai displays
+// skills under <owner>/<name> URLs but the download API takes only
+// the name. Owner prefixes are stripped here for operators who paste
+// the full page URL slug ("steipete/gog") instead of the API slug.
 //
-// validateSlug accepts owner/name with the standard skill identifier
-// alphabet (alphanumerics + dash + dot + underscore on each side of
-// the slash). Rejects empty parts and double-slashes.
+// Caller (typically Installer.InstallBySlug) is responsible for
+// ProcessBundle on the returned bytes.
 func (c *Client) DownloadBundleBySlug(ctx context.Context, slug string) (io.ReadCloser, error) {
-	if err := validateSlug(slug); err != nil {
+	apiSlug, err := normalizeSlug(slug)
+	if err != nil {
 		return nil, err
 	}
-	endpoint := c.baseURL + "/api/v1/download?slug=" + url.QueryEscape(slug)
+	endpoint := c.baseURL + "/api/v1/download?slug=" + url.QueryEscape(apiSlug)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -175,21 +175,25 @@ func (c *Client) DownloadBundleBySlug(ctx context.Context, slug string) (io.Read
 	return resp.Body, nil
 }
 
-func validateSlug(slug string) error {
+// normalizeSlug accepts either a bare skill name ("gog") or an
+// "owner/name" pair as it appears in clawhub.ai URLs ("steipete/gog")
+// and returns just the API-shaped slug (the name component).
+func normalizeSlug(slug string) (string, error) {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
-		return errors.New("clawhub: slug required")
+		return "", errors.New("clawhub: slug required")
 	}
-	parts := strings.Split(slug, "/")
-	if len(parts) != 2 {
-		return fmt.Errorf("clawhub: slug %q must be <owner>/<name>", slug)
-	}
-	for _, p := range parts {
-		if err := validateSkillIdentifier(p); err != nil {
-			return fmt.Errorf("clawhub: slug part %w", err)
+	if strings.Contains(slug, "/") {
+		parts := strings.SplitN(slug, "/", 2)
+		if len(parts) != 2 || parts[1] == "" {
+			return "", fmt.Errorf("clawhub: slug %q has empty name component", slug)
 		}
+		slug = parts[1]
 	}
-	return nil
+	if err := validateSkillIdentifier(slug); err != nil {
+		return "", fmt.Errorf("clawhub: slug %w", err)
+	}
+	return slug, nil
 }
 
 // validateSkillIdentifier guards against path-traversal-shaped
