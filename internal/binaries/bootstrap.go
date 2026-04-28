@@ -148,9 +148,20 @@ func runBootstrap(ctx context.Context, satisfier *Satisfier, mgrName string, cli
 		env = append(env, "CARGO_HOME="+satisfier.prefix+"/cargo")
 	}
 
-	out, err := satisfier.runner.Run(ctx, "/bin/sh", []string{tmp.Name()}, env)
+	// brew/uv/bun installers all start with #!/bin/bash and use
+	// bash-only features (arrays, [[ ]], readarray, etc.). When we
+	// invoke them as `/bin/sh script.sh` the shebang is ignored and
+	// busybox ash runs the script — which detects the non-bash
+	// interpreter and aborts with "Bash is required to interpret
+	// this script." Use bash directly when present, fall back to
+	// /bin/sh for installers that genuinely need only POSIX.
+	interp := "/bin/bash"
+	if _, err := os.Stat(interp); err != nil {
+		interp = "/bin/sh"
+	}
+	out, err := satisfier.runner.Run(ctx, interp, []string{tmp.Name()}, env)
 	if err != nil {
-		return fmt.Errorf("binaries: bootstrap %q sh: %w (output: %s)", mgrName, err, truncate(out, 512))
+		return fmt.Errorf("binaries: bootstrap %q %s: %w (output: %s)", mgrName, interp, err, truncate(out, 512))
 	}
 	satisfier.log.Info("binaries: bootstrap ok", "manager", mgrName, "url", recipe.URL, "output_head", truncate(out, 256))
 
