@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/oauth"
@@ -223,16 +225,22 @@ func (n *Node) wireClawhub() error {
 	if err != nil {
 		return fmt.Errorf("clawhub client: %w", err)
 	}
+	satisfier := binaries.New(binaries.Config{
+		HTTPClient:    egress.For("binaries-install").HTTPClient(),
+		Logger:        n.log,
+		InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
+	})
 	inst, err := clawhub.NewInstaller(clawhub.InstallerConfig{
-		Client:  c,
-		Storage: n.storageMgr,
-		Policy:  clawhub.SigningOff,
+		Client:    c,
+		Storage:   n.storageMgr,
+		Policy:    clawhub.SigningOff,
+		Satisfier: satisfier,
 	})
 	if err != nil {
 		return fmt.Errorf("clawhub installer: %w", err)
 	}
 	n.clawhubInstaller = inst
-	n.log.Info("clawhub: installer wired", "base", base)
+	n.log.Info("clawhub: installer wired", "base", base, "binary_prefix", n.cfg.Security.BinaryInstallPrefix)
 	return nil
 }
 

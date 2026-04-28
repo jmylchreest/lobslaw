@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/storage"
 )
 
@@ -39,10 +40,11 @@ type InstallTarget struct {
 // declared (local disk, NFS, rclone-backed cloud). The signing
 // policy + verifier guard the supply-chain edge — see signing.go.
 type Installer struct {
-	client   *Client
-	storage  *storage.Manager
-	policy   SigningPolicy
-	verifier BundleVerifier
+	client    *Client
+	storage   *storage.Manager
+	policy    SigningPolicy
+	verifier  BundleVerifier
+	satisfier *binaries.Satisfier
 }
 
 // InstallerConfig wires Installer dependencies. Client + Storage
@@ -50,10 +52,17 @@ type Installer struct {
 // don't block when absent) which matches how operators typically
 // adopt signature checks.
 type InstallerConfig struct {
-	Client   *Client
-	Storage  *storage.Manager
-	Policy   SigningPolicy
-	Verifier BundleVerifier
+	Client    *Client
+	Storage   *storage.Manager
+	Policy    SigningPolicy
+	Verifier  BundleVerifier
+	// Satisfier (optional) resolves clawhub-format bundles' declared
+	// host bin requirements via the internal/binaries Manager pool.
+	// When nil, clawhub-format bundles that declare requires.bins
+	// fail at install time with a clear "operator hasn't wired the
+	// binary satisfier" message. Native (manifest.yaml) bundles
+	// don't use this field.
+	Satisfier *binaries.Satisfier
 }
 
 // NewInstaller validates the config and constructs an Installer.
@@ -77,10 +86,11 @@ func NewInstaller(cfg InstallerConfig) (*Installer, error) {
 		return nil, errors.New("clawhub: SigningRequire but Verifier has no trusted keys")
 	}
 	return &Installer{
-		client:   cfg.Client,
-		storage:  cfg.Storage,
-		policy:   cfg.Policy,
-		verifier: cfg.Verifier,
+		client:    cfg.Client,
+		storage:   cfg.Storage,
+		policy:    cfg.Policy,
+		verifier:  cfg.Verifier,
+		satisfier: cfg.Satisfier,
 	}, nil
 }
 
@@ -144,38 +154,60 @@ func (i *Installer) Install(ctx context.Context, entry *SkillEntry, target Insta
 	}
 	defer func() { _ = body.Close() }()
 
-	hasher := sha256.New()
-	limited := io.LimitReader(io.TeeReader(body, hasher), MaxBundleSize+1)
+	bundleBytes, err := io.ReadAll(io.LimitReader(body, MaxBundleSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("clawhub: read bundle body: %w", err)
+	}
+	if int64(len(bundleBytes)) > MaxBundleSize {
+		return nil, fmt.Errorf("clawhub: bundle exceeds %d bytes", MaxBundleSize)
+	}
+	if entry.BundleSHA256 != "" {
+		hasher := sha256.New()
+		hasher.Write(bundleBytes)
+		if err := verifyDigest(hasher, entry.BundleSHA256); err != nil {
+			return nil, err
+		}
+	}
 
 	stage, err := os.MkdirTemp(filepath.Dir(installDir), "."+target.Subpath+".part-*")
 	if err != nil {
 		return nil, fmt.Errorf("clawhub: create staging dir: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(stage) }
-	if err := extractTarGz(limited, stage); err != nil {
-		cleanup()
-		return nil, err
-	}
 
-	if err := verifyDigest(hasher, entry.BundleSHA256); err != nil {
-		cleanup()
-		return nil, err
-	}
-
-	manifestPath := filepath.Join(stage, "manifest.yaml")
-	if _, err := os.Stat(manifestPath); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("clawhub: bundle missing manifest.yaml")
-	}
-
-	binDecls, err := fetchManifestBinaries(stage)
+	processed, err := ProcessBundle(bundleBytes, stage)
 	if err != nil {
 		cleanup()
 		return nil, err
 	}
-	if err := installBinaries(ctx, stage, binDecls); err != nil {
+
+	switch processed.Format {
+	case "native":
+		binDecls, err := fetchManifestBinaries(stage)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
+		if err := installBinaries(ctx, stage, binDecls); err != nil {
+			cleanup()
+			return nil, err
+		}
+	case "clawhub":
+		if len(processed.RequiresBins) > 0 {
+			if i.satisfier == nil {
+				cleanup()
+				return nil, fmt.Errorf("clawhub: bundle %q declares host bins %v but no Satisfier wired (operator must enable binary install path)", entry.Name, processed.RequiresBins)
+			}
+			for _, bin := range processed.RequiresBins {
+				if _, err := i.satisfier.Satisfy(ctx, bin, processed.InstallSpecs); err != nil {
+					cleanup()
+					return nil, fmt.Errorf("clawhub: satisfy %q: %w", bin, err)
+				}
+			}
+		}
+	default:
 		cleanup()
-		return nil, err
+		return nil, fmt.Errorf("clawhub: unrecognised bundle format %q", processed.Format)
 	}
 
 	if err := os.RemoveAll(installDir); err != nil {
