@@ -93,10 +93,16 @@ type SatisfyResult struct {
 
 // Satisfy ensures name is available on PATH. If the binary is
 // already there, returns AlreadyAvailable=true with no work done.
-// Otherwise picks the first install spec matching the host, validates
-// it, and runs the manager. Returns an error if no spec matches the
-// host, the matching manager isn't wired, the manager can't run on
-// this host, or the install command fails.
+// Otherwise walks the install specs that match the host OS/arch
+// (in declared order — bundle author's preference is honoured) and
+// picks the first one whose Manager is locally available. Specs
+// with manager-not-installed get diagnosed and skipped, not aborted
+// on; an unavailable brew on a Linux box just falls through to the
+// next declared method (apt, etc.).
+//
+// Returns an error only when none of the OS-matching specs have a
+// usable manager. The error includes what was declared vs. what's
+// installed so the operator can diagnose without log-diving.
 func (s *Satisfier) Satisfy(ctx context.Context, name string, installs []InstallSpec) (SatisfyResult, error) {
 	if name == "" {
 		return SatisfyResult{}, errors.New("binaries: name required")
@@ -104,36 +110,76 @@ func (s *Satisfier) Satisfy(ctx context.Context, name string, installs []Install
 	if s.Available(name) {
 		return SatisfyResult{Name: name, AlreadyAvailable: true}, nil
 	}
-	spec, ok := pickSpec(installs)
-	if !ok {
+
+	osMatches := pickAllMatching(installs)
+	if len(osMatches) == 0 {
 		return SatisfyResult{}, fmt.Errorf("binaries: no install spec matches this host for %q", name)
 	}
-	if err := spec.Validate(); err != nil {
-		return SatisfyResult{}, fmt.Errorf("binaries: install spec for %q: %w", name, err)
-	}
-	mgr, ok := s.managers[spec.Manager]
-	if !ok {
-		return SatisfyResult{}, fmt.Errorf("binaries: manager %q for %q not wired (curl-sh requires HTTPClient)", spec.Manager, name)
-	}
-	if spec.Sudo && mgr.UserMode() && spec.Manager != "curl-sh" {
-		return SatisfyResult{}, fmt.Errorf("binaries: install spec for %q: manager %q is user-mode; sudo:true is not meaningful", name, spec.Manager)
-	}
-	if !mgr.Available(ctx) {
-		return SatisfyResult{}, fmt.Errorf("binaries: manager %q for %q not present on this host", spec.Manager, name)
-	}
-	if err := mgr.Install(ctx, spec, s.runner, s.log); err != nil {
-		return SatisfyResult{}, err
-	}
-	if !s.Available(name) {
+
+	var (
+		triedManagers []string
+		skipReasons   []string
+	)
+	for _, spec := range osMatches {
+		if err := spec.Validate(); err != nil {
+			skipReasons = append(skipReasons, fmt.Sprintf("%s (validation: %v)", spec.Manager, err))
+			continue
+		}
+		mgr, ok := s.managers[spec.Manager]
+		if !ok {
+			skipReasons = append(skipReasons, fmt.Sprintf("%s (not wired; curl-sh needs HTTPClient)", spec.Manager))
+			continue
+		}
+		if spec.Sudo && mgr.UserMode() && spec.Manager != "curl-sh" {
+			skipReasons = append(skipReasons, fmt.Sprintf("%s (user-mode + sudo:true is invalid)", spec.Manager))
+			continue
+		}
+		if !mgr.Available(ctx) {
+			triedManagers = append(triedManagers, spec.Manager)
+			skipReasons = append(skipReasons, fmt.Sprintf("%s (not installed on this host)", spec.Manager))
+			continue
+		}
+
+		if err := mgr.Install(ctx, spec, s.runner, s.log); err != nil {
+			return SatisfyResult{}, err
+		}
+		if !s.Available(name) {
+			return SatisfyResult{
+				Name:    name,
+				Manager: spec.Manager,
+			}, fmt.Errorf("binaries: install command for %q exited zero but binary still not on PATH — verify the install spec actually places the binary under %s/bin or the system PATH", name, s.prefix)
+		}
 		return SatisfyResult{
 			Name:    name,
 			Manager: spec.Manager,
-		}, fmt.Errorf("binaries: install command for %q exited zero but binary still not on PATH — verify the install spec actually places the binary under %s/bin or the system PATH", name, s.prefix)
+		}, nil
 	}
-	return SatisfyResult{
-		Name:    name,
-		Manager: spec.Manager,
-	}, nil
+
+	available := s.availableManagerNames(ctx)
+	return SatisfyResult{}, fmt.Errorf(
+		"binaries: %q declared installable via %v but none are usable on this host (skipped: %v; available managers: %v). Either install one of the declared managers, pre-install %q on PATH, or extend the bundle's clawdbot.install array",
+		name, triedManagers, skipReasons, available, name,
+	)
+}
+
+func (s *Satisfier) availableManagerNames(ctx context.Context) []string {
+	var out []string
+	for name, mgr := range s.managers {
+		if mgr.Available(ctx) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func pickAllMatching(installs []InstallSpec) []InstallSpec {
+	var out []InstallSpec
+	for _, spec := range installs {
+		if spec.Match() {
+			out = append(out, spec)
+		}
+	}
+	return out
 }
 
 // HostsFor returns the union of hostnames the supplied install

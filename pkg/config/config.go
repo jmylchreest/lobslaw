@@ -689,6 +689,17 @@ type SecurityConfig struct {
 	// label). Operators with custom layouts override.
 	ClawhubInstallMount string `koanf:"clawhub_install_mount,omitempty"`
 
+	// ClawhubAutoEmitInstallRules controls whether a successful
+	// clawhub_install also writes a policy rule allowing the agent
+	// to call the newly-installed skill (resource = <skill_name>,
+	// subject = scope:owner, effect = allow, priority = 20). Default
+	// false — operator must explicitly opt in. When true, the
+	// emitted rule appears alongside operator-declared rules in the
+	// policy bucket and survives reload. Operators who want skills
+	// to require an explicit per-skill opt-in (e.g. for
+	// require_confirmation on writes) leave this false.
+	ClawhubAutoEmitInstallRules bool `koanf:"clawhub_auto_emit_install_rules,omitempty"`
+
 	// EgressUDSPath, when set, makes smokescreen also listen on a
 	// Unix-domain socket at the given path. Required when any skill
 	// declares network_isolation: true (the netns subprocess can't

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -19,6 +21,23 @@ import (
 type ClawhubConfig struct {
 	Installer    *clawhub.Installer
 	DefaultMount string
+
+	// AutoEmitInstallRules, when true, makes a successful install
+	// also write a policy rule allowing the agent to call the
+	// newly-installed skill's tool. PolicyAdder is the seam — the
+	// builtin calls it post-install with a synthesized PolicyRule.
+	// Both must be set; either alone is a no-op. The operator's
+	// [security] clawhub_auto_emit_install_rules toggle plumbs
+	// through to AutoEmitInstallRules at wire time.
+	AutoEmitInstallRules bool
+	PolicyAdder          PolicyRuleAdder
+	Logger               *slog.Logger
+}
+
+// PolicyRuleAdder is the subset of policy.Service the auto-emit path
+// needs. Interface so tests can stub without standing up a raft FSM.
+type PolicyRuleAdder interface {
+	AddRule(ctx context.Context, req *lobslawv1.AddRuleRequest) (*lobslawv1.AddRuleResponse, error)
 }
 
 // RegisterClawhubBuiltin installs the clawhub_install handler. Empty
@@ -95,12 +114,41 @@ func newClawhubInstallHandler(cfg ClawhubConfig) BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("clawhub_install: %w", err)
 		}
+
+		emittedRule := ""
+		if cfg.AutoEmitInstallRules && cfg.PolicyAdder != nil && res.Name != "" {
+			ruleID := "auto-clawhub-" + res.Name
+			_, addErr := cfg.PolicyAdder.AddRule(ctx, &lobslawv1.AddRuleRequest{
+				Rule: &lobslawv1.PolicyRule{
+					Id:       ruleID,
+					Subject:  "scope:owner",
+					Action:   "tool:exec",
+					Resource: res.Name,
+					Effect:   "allow",
+					Priority: 20,
+				},
+			})
+			if addErr != nil {
+				if cfg.Logger != nil {
+					cfg.Logger.Warn("clawhub_install: auto-emit policy rule failed",
+						"skill", res.Name, "rule_id", ruleID, "err", addErr)
+				}
+			} else {
+				emittedRule = ruleID
+				if cfg.Logger != nil {
+					cfg.Logger.Info("clawhub_install: auto-emitted policy rule",
+						"skill", res.Name, "rule_id", ruleID)
+				}
+			}
+		}
+
 		out, _ := json.Marshal(map[string]any{
-			"name":          res.Name,
-			"version":       res.Version,
-			"install_dir":   res.InstallDir,
-			"manifest_path": res.ManifestPath,
-			"signed_by":     res.SignedBy,
+			"name":              res.Name,
+			"version":           res.Version,
+			"install_dir":       res.InstallDir,
+			"manifest_path":     res.ManifestPath,
+			"signed_by":         res.SignedBy,
+			"auto_emitted_rule": emittedRule,
 		})
 		return out, 0, nil
 	}

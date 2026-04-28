@@ -135,6 +135,13 @@ clawhub_binary_hosts = [
     "*.convex.site",
 ]
 
+# When true, a successful clawhub_install also writes a policy rule
+# allowing the agent to call the newly-installed skill's tool
+# (resource = <skill_name>, scope:owner, allow, priority 20). Off
+# by default; on in this dev deploy so testing flows don't need a
+# manual policy edit + SIGHUP after each install.
+clawhub_auto_emit_install_rules = true
+
 # Optional override of the binary download allowlist. When unset
 # (and clawhub_base_url is set), defaults to github.com release
 # hosts — the most common skill-binary distribution.

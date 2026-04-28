@@ -27,6 +27,13 @@ func TestBinaryValidate(t *testing.T) {
 			wantErr: "name required",
 		},
 		{
+			name: "empty OS is wildcard (matches brew on any host)",
+			bin: Binary{
+				Name: "gh",
+				Install: []InstallSpec{{Manager: "brew", Package: "gh"}},
+			},
+		},
+		{
 			name: "bad name char",
 			bin: Binary{
 				Name: "gh!",

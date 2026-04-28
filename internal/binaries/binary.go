@@ -111,10 +111,12 @@ func (b Binary) Validate() error {
 }
 
 // Validate reports config errors for one InstallSpec.
+//
+// Empty OS is allowed and means "any OS" — consistent with Match()
+// which treats empty OS as a wildcard. Bundles using kind: brew
+// omit OS because brew runs on both linux + darwin; the
+// synthesizer preserves that.
 func (s InstallSpec) Validate() error {
-	if s.OS == "" {
-		return errors.New("os required")
-	}
 	if s.Manager == "" {
 		return errors.New("manager required")
 	}

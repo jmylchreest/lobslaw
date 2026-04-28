@@ -177,8 +177,11 @@ func (n *Node) wireCompute() error {
 		// installer). Default-deny — owner-only via the noSeed list.
 		if n.clawhubInstaller != nil {
 			if err := compute.RegisterClawhubBuiltin(builtins, compute.ClawhubConfig{
-				Installer:    n.clawhubInstaller,
-				DefaultMount: n.cfg.Security.ClawhubInstallMount,
+				Installer:            n.clawhubInstaller,
+				DefaultMount:         n.cfg.Security.ClawhubInstallMount,
+				AutoEmitInstallRules: n.cfg.Security.ClawhubAutoEmitInstallRules,
+				PolicyAdder:          n.policySvc,
+				Logger:               n.log,
 			}); err != nil {
 				return fmt.Errorf("register clawhub builtin: %w", err)
 			}
