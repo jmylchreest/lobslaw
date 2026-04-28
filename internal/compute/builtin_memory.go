@@ -38,6 +38,13 @@ type memoryForgetter interface {
 	Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lobslawv1.ForgetResponse, error)
 }
 
+// memoryDreamer is the subset of *memory.Service needed for
+// dream_nap (on-demand consolidation). Interface so tests can
+// substitute a fake.
+type memoryDreamer interface {
+	Dream(ctx context.Context, req *lobslawv1.DreamRequest) (*lobslawv1.DreamResponse, error)
+}
+
 // MemoryConfig wires the memory_search + memory_write builtins.
 // Both are registered together — reading without writing is a
 // degraded state that confuses the model.
@@ -51,6 +58,7 @@ type MemoryConfig struct {
 	Store     *memory.Store
 	Raft      memoryRaftApplier
 	Forgetter memoryForgetter // enables memory_forget + memory_correct; nil → those builtins skip registration
+	Dreamer   memoryDreamer   // enables dream_nap; nil → builtin skips registration
 	Embedder  EmbeddingProvider
 }
 
@@ -79,6 +87,11 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 			return err
 		}
 		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Raft, cfg.Forgetter)); err != nil {
+			return err
+		}
+	}
+	if cfg.Dreamer != nil {
+		if err := b.Register("dream_nap", newDreamNapHandler(cfg.Dreamer)); err != nil {
 			return err
 		}
 	}
@@ -141,7 +154,7 @@ func MemoryToolDefs() []*types.ToolDef {
 		{
 			Name:        "dream_recap",
 			Path:        BuiltinScheme + "dream_recap",
-			Description: "Show what was consolidated during recent REM/dream cycles. Returns vector records tagged as consolidations with their source_id counts, consolidation timestamps, and summary text. Use when the user asks 'what did you dream about', 'what did you consolidate', or 'what did you learn last night'. Narrate the result in your own voice per Personality & Style — don't dump the raw structure. Optional since filter (e.g. '24h', '7d', default all-time).",
+			Description: "Show what was consolidated during recent REM/dream cycles. Returns vector records tagged as consolidations with their source_id counts, consolidation timestamps, and summary text. Use when the user asks 'what did you dream about', 'what did you consolidate', or 'what did you learn last night'. Always narrate the result in your own voice per Personality & Style — summarise what you learned, omit the raw structure. Optional since filter (e.g. '24h', '7d', default all-time).",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -155,7 +168,7 @@ func MemoryToolDefs() []*types.ToolDef {
 		{
 			Name:        "memory_forget",
 			Path:        BuiltinScheme + "memory_forget",
-			Description: "Delete memories matching the given filter. Cascades: any consolidated memory whose source_ids intersect the matched set is ALSO deleted (privacy-safe: won't leave summaries echoing forgotten content). DESTRUCTIVE — requires confirmation. Pass at least one filter: query (substring match), ids (explicit list), before (RFC3339 cutoff), or tags. Returns count deleted.",
+			Description: "Delete memories matching the given filter. Cascades: any consolidated memory whose source_ids intersect the matched set is also deleted (privacy-safe — summaries that echo forgotten content go too). DESTRUCTIVE — requires confirmation. Pass at least one filter: query (substring match), ids (explicit list), before (RFC3339 cutoff), or tags. Returns count deleted.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -180,6 +193,17 @@ func MemoryToolDefs() []*types.ToolDef {
 					"new_context": {"type": "string", "description": "Updated full detail (optional)."}
 				},
 				"required": ["id", "new_event"],
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
+		{
+			Name:        "dream_nap",
+			Path:        BuiltinScheme + "dream_nap",
+			Description: "Trigger an on-demand Dream/REM consolidation pass right now (the 'nap' before the scheduled nightly dream). Scores recent memories, consolidates clusters into summaries when a Summarizer is wired, and prunes fired one-shot commitments + stale episodic chatter. Leader-only — followers return a hint to retry at the leader. Returns counts of consolidated and pruned records. Use when the user asks 'consolidate now', 'take a nap', 'forget the stuff that already happened' — or before a memory_recent / commitment_list call when they want fresh state.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {},
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskReversible,
@@ -738,6 +762,27 @@ func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter) 
 			"old_id":               oldID,
 			"deleted_count":        forgetResp.RecordsRemoved,
 			"consolidations_swept": forgetResp.ConsolidationsReforged,
+		})
+		if err != nil {
+			return nil, 1, err
+		}
+		return out, 0, nil
+	}
+}
+
+// newDreamNapHandler runs one Dream/REM pass on demand. Wraps
+// memory.Service.Dream so the agent can consolidate + prune without
+// waiting for the next scheduled cycle. Leader-routed by the service;
+// followers surface FailedPrecondition with the leader address.
+func newDreamNapHandler(svc memoryDreamer) BuiltinFunc {
+	return func(ctx context.Context, _ map[string]string) ([]byte, int, error) {
+		resp, err := svc.Dream(ctx, &lobslawv1.DreamRequest{})
+		if err != nil {
+			return nil, 1, fmt.Errorf("dream_nap: %w", err)
+		}
+		out, err := json.Marshal(map[string]any{
+			"consolidated": resp.Consolidated,
+			"pruned":       resp.Pruned,
 		})
 		if err != nil {
 			return nil, 1, err

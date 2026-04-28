@@ -32,7 +32,10 @@ type SoulBuiltinsConfig struct {
 }
 
 // RegisterSoulBuiltins installs soul_get / soul_tune /
-// soul_fragment_{add,remove,list} / soul_history_rollback.
+// soul_fragment_{add,remove} / soul_history_rollback.
+//
+// soul_get already returns the fragments list — there's no separate
+// soul_fragment_list. Listing is a degenerate case of "get".
 //
 // All mutator builtins are POLICY-DEFAULT-DENY at the seed layer
 // (priority=10). Operators open per-scope (typically owner only)
@@ -54,17 +57,11 @@ func RegisterSoulBuiltins(b *Builtins, cfg SoulBuiltinsConfig) error {
 	if err := b.Register("soul_fragment_remove", soulFragmentRemoveHandler(cfg.Mutator)); err != nil {
 		return err
 	}
-	if err := b.Register("soul_fragment_list", soulFragmentListHandler(cfg.Mutator)); err != nil {
-		return err
-	}
-	if err := b.Register("soul_history_rollback", soulHistoryRollbackHandler(cfg.Mutator)); err != nil {
-		return err
-	}
-	return nil
+	return b.Register("soul_history_rollback", soulHistoryRollbackHandler(cfg.Mutator))
 }
 
 // SoulToolDefs is the tool def list registered alongside the
-// builtins. Read tools (soul_get, soul_fragment_list) are tagged
+// builtins. Read tools (soul_get) are tagged
 // RiskRead; mutators are RiskCommunicating because they alter the
 // agent's persistent identity.
 func SoulToolDefs() []*types.ToolDef {
@@ -79,7 +76,7 @@ func SoulToolDefs() []*types.ToolDef {
 		{
 			Name:        "soul_tune",
 			Path:        BuiltinScheme + "soul_tune",
-			Description: "Tune one bounded soul field. Use cases: rename (field=\"name\", value=\"Lobs\"), nudge an emotive dimension (field=\"sarcasm\", delta=1 or delta=-1 — capped to 0-10 and ±3 of baseline), or set emoji_usage (field=\"emoji_usage\", value=\"moderate\"). Pass EITHER value (string set) OR delta (int adjust) — not both. Cannot edit persona_description, body, scope, trust_tier, or any structural field — those are operator-only.",
+			Description: "Tune one bounded soul field. Use cases: rename (field=\"name\", value=\"Lobs\"), nudge an emotive dimension (field=\"sarcasm\", delta=1 or delta=-1 — capped to 0-10 and ±3 of baseline), or set emoji_usage (field=\"emoji_usage\", value=\"moderate\"). Pass exactly one of value (string set) or delta (int adjust). Editable fields are listed in the schema's enum; structural fields like persona_description, body, scope, trust_tier are operator-managed via SOUL.md.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -119,13 +116,6 @@ func SoulToolDefs() []*types.ToolDef {
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskCommunicating,
-		},
-		{
-			Name:             "soul_fragment_list",
-			Path:             BuiltinScheme + "soul_fragment_list",
-			Description:      "List all currently remembered anecdotal fragments. Useful when the user asks 'what do you remember about me?' or before pruning.",
-			ParametersSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`),
-			RiskTier:         types.RiskReversible,
 		},
 		{
 			Name:        "soul_history_rollback",
@@ -238,13 +228,6 @@ func soulFragmentRemoveHandler(m SoulMutator) BuiltinFunc {
 			return nil, 2, err
 		}
 		out, _ := json.Marshal(map[string]any{"removed": removed})
-		return out, 0, nil
-	}
-}
-
-func soulFragmentListHandler(m SoulMutator) BuiltinFunc {
-	return func(_ context.Context, _ map[string]string) ([]byte, int, error) {
-		out, _ := json.Marshal(map[string]any{"fragments": m.ListFragments()})
 		return out, 0, nil
 	}
 }

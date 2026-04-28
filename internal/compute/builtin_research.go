@@ -32,10 +32,9 @@ type ResearchConfig struct {
 }
 
 // RegisterResearchBuiltins installs the research_start builtin.
-// Default policy is DENY (seeded by node.seedDefaultPolicyRules at
-// priority>1) — agents can't kick off research without an explicit
-// operator allow rule. Read-only research_status / research_list
-// would be safe to default-allow but aren't built yet.
+// Default-allow at the policy seed layer, same as the other builtins;
+// operators wanting research gated add an explicit deny rule. Read-
+// only research_status / research_list would slot in here when built.
 func RegisterResearchBuiltins(b *Builtins, cfg ResearchConfig) error {
 	if cfg.Raft == nil {
 		return errors.New("research builtin: Raft required")
@@ -51,7 +50,7 @@ func ResearchToolDefs() []*types.ToolDef {
 		{
 			Name:        "research_start",
 			Path:        BuiltinScheme + "research_start",
-			Description: "Kick off a deep-research run as a background async task. Use when the user asks for thorough investigation that warrants multiple searches + cross-referencing — 'find me everything about X', 'compare these approaches', 'what's the current state of Y'. NOT for quick lookups (use web_search) or single-page reads (use fetch_url). The research runs out-of-band: planner decomposes the question into sub-questions, workers run web_search + fetch_url per sub-question, a synthesiser merges into a report. Result is written to memory (tagged research:<id>) and the user is notified via their originating channel when complete (typically 1-3 minutes). Pass question (the topic) and optional depth (1-10, default 3 — controls sub-question count + total tool budget). Returns the task id for status tracking.\n\nDEFAULT-DENY: this builtin requires an explicit operator allow rule. If you get a policy denial, tell the user 'research is operator-gated; ask them to add an allow rule for research_start' rather than retrying.",
+			Description: "Run a multi-step deep-research task in the background. Use for 'find me everything about X', 'compare these approaches', 'what's the current state of Y' — questions that need multiple searches + cross-referencing. For single quick lookups, prefer web_search; for one specific page, prefer fetch_url. Pipeline: planner decomposes the question into sub-questions, workers run web_search + fetch_url per sub-question, a synthesiser writes the report to memory (tagged research:<id>) and notifies the user on the originating channel when done (typically 1–3 minutes). Pass question (free text) and optional depth (1-10, default 3 — controls sub-question count + total tool budget). Returns the task id.\n\nResearch tasks are stored as commitments. Track their status with commitment_list (filter by handler='research:run' or look at the Reason field starting with 'deep-research run for:'); cancel one with commitment_cancel(id=<task_id>). The completed report lands in memory and is searchable via memory_search; reference it by the memory_id returned in the completion notification.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {

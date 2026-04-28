@@ -62,7 +62,7 @@ func MCPManagementToolDefs() []*types.ToolDef {
 		{
 			Name:        "mcp_list",
 			Path:        BuiltinScheme + "mcp_list",
-			Description: "List MCP (Model Context Protocol) servers running on this node. Returns {name, command, args, tool_count, healthy} per server. Use when the user asks what integrations are available, or before mcp_add to avoid collisions. Present as a markdown table.",
+			Description: "List MCP (Model Context Protocol) servers running on this node. Returns {name, command, args, tool_count, healthy} per server. Use when the user asks what integrations are available; always call this before mcp_add so you can pick a unique name. Present as a markdown table.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},

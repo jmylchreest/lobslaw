@@ -117,6 +117,13 @@ type AgentConfig struct {
 	// shouldn't know what a manifest is.
 	Skills SkillDispatcher
 
+	// TimezoneResolver returns the IANA zone the user prefers for
+	// time rendering. Resolved per turn from the user's prefs
+	// bucket, falling back to the cluster default. Empty result
+	// (or nil resolver) leaves UserTimezone empty and time output
+	// stays UTC. Wired by the node to read BucketUserPrefs.
+	TimezoneResolver func(userID string) string
+
 	// Logger is used for structured log entries. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -241,11 +248,20 @@ type ProcessMessageRequest struct {
 
 	// Channel + ChannelID identify the gateway origin of the turn.
 	// Threaded into the assembled system prompt so the agent can
-	// address proactive replies (notify_telegram) back to the
-	// correct chat when storing prompts in commitments / scheduled
+	// address proactive replies via the channel-agnostic notify
+	// builtin when storing prompts in commitments / scheduled
 	// tasks. Empty for internally-originated turns (scheduler).
 	Channel   string
 	ChannelID string
+
+	// UserTimezone is the user's preferred IANA zone for time
+	// rendering (e.g. "Europe/London"). Resolved from the user's
+	// preferences bucket at turn assembly. Empty falls back to the
+	// cluster default and finally to UTC. Threaded through to
+	// builtins via the synthetic __user_timezone arg so time
+	// outputs render in the user's wall-clock without the agent
+	// having to remember to convert.
+	UserTimezone string
 
 	// SystemPrompt is the pre-assembled system prompt from
 	// promptgen.Generate(). Callers build this once per turn (it's
@@ -350,20 +366,18 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 // Explicit values on req always win so tests that script exact
 // prompts still work.
 func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
+	if req.UserTimezone == "" && a.cfg.TimezoneResolver != nil && req.Claims != nil {
+		req.UserTimezone = a.cfg.TimezoneResolver(req.Claims.UserID)
+	}
 	if req.Tools == nil && a.cfg.Registry != nil {
-		all := a.cfg.Registry.LLMTools()
-		// Heuristic tool filter: keep defaults + category
-		// matches. Trims prompt size by ~40-60% on typical
-		// chat turns without sacrificing capability — the
-		// model still has memory_search and current_time for
-		// any intent class the classifier missed.
-		req.Tools = tailoredToolsFor(req.Message, all)
-		if len(req.Tools) < len(all) {
-			a.cfg.Logger.Debug("agent: tool list tailored",
-				"turn_id", req.TurnID,
-				"full", len(all),
-				"tailored", len(req.Tools))
-		}
+		// Send every registered tool every turn. The keyword-based
+		// tailor caused recurring "I don't have that tool"
+		// hallucinations whenever a category missed; at our current
+		// scale (~50 tools, ~5K tokens of definitions) the token
+		// cost of full advertisement is acceptable. When tool count
+		// crosses ~100 we swap to semantic top-K retrieval against
+		// the existing embedding service.
+		req.Tools = a.cfg.Registry.LLMTools()
 	}
 	if req.SystemPrompt == "" && a.cfg.Soul != nil {
 		soul := a.cfg.Soul()
@@ -862,6 +876,12 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	if req.ChannelID != "" {
 		params["__chat_id"] = req.ChannelID
 	}
+	if req.Claims != nil && req.Claims.UserID != "" {
+		params["__user_id"] = req.Claims.UserID
+	}
+	if req.UserTimezone != "" {
+		params["__user_timezone"] = req.UserTimezone
+	}
 	if err != nil {
 		return ToolInvocation{
 			CallID:   tc.ID,
@@ -880,7 +900,20 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	// Skill dispatch takes precedence when the name matches a
 	// registered skill. Keeps the executor unaware of skills and
 	// lets skill-level errors surface to the model distinctly.
+	//
+	// Policy gate: skills + MCP tools go through the same
+	// tool:exec policy as builtins. Without this, the skill path
+	// silently bypassed every operator allow/deny rule. The
+	// executor's CheckPolicy is the same function builtin
+	// dispatch uses internally, so allow rules behave
+	// identically across all dispatch paths.
 	if a.cfg.Skills != nil && a.cfg.Skills.Has(tc.Name) {
+		if a.cfg.Executor != nil {
+			if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
+				inv.Error = err.Error()
+				return inv, "", nil
+			}
+		}
 		skillParams := make(map[string]any, len(params))
 		for k, v := range params {
 			skillParams[k] = v

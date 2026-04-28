@@ -273,6 +273,74 @@ func TestRegistrySetPolicyEmptyExplicitlyUnsandboxes(t *testing.T) {
 	}
 }
 
+func TestRegisterExternalRejectsBuiltinScheme(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry()
+	bad := &types.ToolDef{
+		Name:     "current_time",
+		Path:     BuiltinScheme + "current_time",
+		RiskTier: types.RiskReversible,
+	}
+	err := r.RegisterExternal(bad)
+	if err == nil {
+		t.Fatal("RegisterExternal must reject builtin: paths from external tools")
+	}
+	if got, ok := r.Get("current_time"); ok {
+		t.Errorf("registry should be untouched after rejected register; got %+v", got)
+	}
+}
+
+func TestRegisterExternalRejectsEmptyPath(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry()
+	bad := &types.ToolDef{Name: "ghost", RiskTier: types.RiskReversible}
+	if err := r.RegisterExternal(bad); err == nil {
+		t.Error("RegisterExternal must reject empty Path")
+	}
+}
+
+func TestRegisterExternalAcceptsMCPPath(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry()
+	good := &types.ToolDef{
+		Name:     "minimax.text_to_image",
+		Path:     "mcp:minimax.text_to_image",
+		RiskTier: types.RiskCommunicating,
+	}
+	if err := r.RegisterExternal(good); err != nil {
+		t.Errorf("RegisterExternal should accept mcp: paths: %v", err)
+	}
+	if _, ok := r.Get("minimax.text_to_image"); !ok {
+		t.Error("MCP tool should be registered after RegisterExternal")
+	}
+}
+
+func TestRegisterExternalAcceptsAbsPath(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry()
+	good := &types.ToolDef{
+		Name:     "gws-workspace",
+		Path:     "/skills/gws-workspace/handler",
+		RiskTier: types.RiskCommunicating,
+	}
+	if err := r.RegisterExternal(good); err != nil {
+		t.Errorf("RegisterExternal should accept absolute-path skill handlers: %v", err)
+	}
+}
+
+func TestRegisterStillAllowsBuiltinScheme(t *testing.T) {
+	t.Parallel()
+	r := NewRegistry()
+	good := &types.ToolDef{
+		Name:     "current_time",
+		Path:     BuiltinScheme + "current_time",
+		RiskTier: types.RiskReversible,
+	}
+	if err := r.Register(good); err != nil {
+		t.Errorf("Register (trusted entry point) must still accept builtin: paths: %v", err)
+	}
+}
+
 func TestRegistryRemoveDropsPolicy(t *testing.T) {
 	t.Parallel()
 	r := NewRegistry()

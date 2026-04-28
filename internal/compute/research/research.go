@@ -15,6 +15,7 @@ package research
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -26,16 +27,37 @@ import (
 
 // Coordinator orchestrates one research run end-to-end. Constructed
 // once per node; Run is called per commitment fire.
+//
+// Pipeline LLM calls go through TWO different paths:
+//
+//  1. Planner + synthesiser use llmProvider.Chat directly. These
+//     are deterministic transformations — decompose a question into
+//     sub-questions, merge findings into a report. They MUST NOT
+//     receive memory recall, context engine output, soul personality,
+//     or runtime info via the agent loop. Pre-fix, the planner went
+//     through RunToolCallLoop and got the prior research's report
+//     injected via memory recall — the model then regurgitated that
+//     report instead of decomposing, breaking every research run
+//     after the first one had succeeded.
+//
+//  2. Workers use the full agent loop because they need tool
+//     dispatch (web_search, fetch_url, memory_search, MCP tools).
+//     Memory recall on a worker turn is fine — workers ARE supposed
+//     to look up prior findings.
 type Coordinator struct {
-	agent  ResearchAgent
-	memory MemoryWriter
-	notify Notifier
-	tools  []compute.Tool // worker tool list — provided at construction
-	log    *slog.Logger
+	agent        ResearchAgent
+	llmProvider  compute.LLMProvider
+	plannerModel string
+	synthModel   string
+	memory       MemoryWriter
+	notify       Notifier
+	tools        []compute.Tool // worker tool list — provided at construction
+	log          *slog.Logger
 }
 
 // ResearchAgent is the slice of compute.Agent the coordinator uses
-// for the planner / worker / synth LLM calls. Matches the live
+// for the worker LLM calls (which need tool dispatch). Planner and
+// synth use llmProvider directly. Matches the live
 // Agent.RunToolCallLoop signature (returns a pointer + error).
 type ResearchAgent interface {
 	RunToolCallLoop(ctx context.Context, req compute.ProcessMessageRequest) (*compute.ProcessMessageResponse, error)
@@ -59,9 +81,20 @@ type Notifier interface {
 
 // Config wires the coordinator's dependencies. All fields required.
 type Config struct {
-	Agent  ResearchAgent
-	Memory MemoryWriter
-	Notify Notifier
+	Agent ResearchAgent
+	// LLMProvider is the direct chat provider the planner + synth
+	// stages use, bypassing the agent loop's memory + soul + context
+	// injections. Required — research without it would fall back to
+	// RunToolCallLoop and re-trigger the memory-pollution bug.
+	LLMProvider compute.LLMProvider
+	// PlannerModel + SynthModel pin the model name on the direct
+	// Chat() call. Empty → provider default. Operators tuning
+	// research-pipeline cost may set these to a cheaper model than
+	// the main chat one.
+	PlannerModel string
+	SynthModel   string
+	Memory       MemoryWriter
+	Notify       Notifier
 	// WorkerTools is the tool slice each worker turn gets. Should
 	// include web_search, fetch_url, memory_search/write, and any
 	// MCP tools the operator wants research workers to use (image
@@ -78,11 +111,14 @@ func NewCoordinator(cfg Config) *Coordinator {
 		log = slog.Default()
 	}
 	return &Coordinator{
-		agent:  cfg.Agent,
-		memory: cfg.Memory,
-		notify: cfg.Notify,
-		tools:  cfg.WorkerTools,
-		log:    log,
+		agent:        cfg.Agent,
+		llmProvider:  cfg.LLMProvider,
+		plannerModel: cfg.PlannerModel,
+		synthModel:   cfg.SynthModel,
+		memory:       cfg.Memory,
+		notify:       cfg.Notify,
+		tools:        cfg.WorkerTools,
+		log:          log,
 	}
 }
 
@@ -209,21 +245,48 @@ func (c *Coordinator) Run(ctx context.Context, req Request) (*Result, error) {
 // questions. Output format: a JSON array of strings. The planner
 // runs WITHOUT tools — it's a pure transformation, not a research
 // turn itself.
+//
+// Retries once on parse failure with a stronger reminder. Some
+// models (notably MiniMax-M2) flake on structured output under
+// long system prompts: roughly 75% of attempts return clean JSON,
+// 25% return conversational preamble like "I've kicked off the
+// task...". The retry uses a tightened prompt that explicitly
+// mentions the prior failure mode.
 func (c *Coordinator) plan(ctx context.Context, req Request) ([]string, error) {
-	prompt := fmt.Sprintf(plannerPrompt, req.Depth)
-	resp, err := c.agent.RunToolCallLoop(ctx, compute.ProcessMessageRequest{
-		Message:      req.Question,
-		Claims:       req.Claims,
-		TurnID:       req.TaskID + "/plan",
-		SystemPrompt: prompt,
-		// No tools — pure decomposition.
-		Tools:  nil,
-		Budget: mustBudget(0),
+	subqs, err := c.planOnce(ctx, req, fmt.Sprintf(plannerPrompt, req.Depth))
+	if err == nil {
+		return subqs, nil
+	}
+	c.log.Warn("research: planner output unparseable, retrying with tightened prompt",
+		"task_id", req.TaskID, "err", err)
+	retryPrompt := fmt.Sprintf(plannerPrompt, req.Depth) + "\n\n" +
+		`Your previous response was prose, not JSON, and the parser ` +
+		`rejected it. Output ONLY a JSON array — start with [, end with ], ` +
+		`nothing before, nothing after. No prose, no markdown.`
+	return c.planOnce(ctx, req, retryPrompt)
+}
+
+func (c *Coordinator) planOnce(ctx context.Context, req Request, prompt string) ([]string, error) {
+	if c.llmProvider == nil {
+		return nil, errors.New("research: LLMProvider not wired; planner cannot run")
+	}
+	resp, err := c.llmProvider.Chat(ctx, compute.ChatRequest{
+		Model: c.plannerModel,
+		Messages: []compute.Message{
+			{Role: "system", Content: prompt},
+			{Role: "user", Content: req.Question},
+		},
+		// Temperature 0 for deterministic decomposition; no tools.
+		Temperature: 0,
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := strings.TrimSpace(resp.Reply)
+	if resp == nil || strings.TrimSpace(resp.Content) == "" {
+		return nil, errors.New("planner: provider returned empty content")
+	}
+	raw := resp.Content
+	out := strings.TrimSpace(raw)
 	// Extract JSON array — model may wrap in prose. Find first '['.
 	if i := strings.Index(out, "["); i >= 0 {
 		out = out[i:]
@@ -233,7 +296,7 @@ func (c *Coordinator) plan(ctx context.Context, req Request) ([]string, error) {
 	}
 	var subqs []string
 	if err := json.Unmarshal([]byte(out), &subqs); err != nil {
-		return nil, fmt.Errorf("planner output not a JSON array: %w (raw: %q)", err, resp.Reply)
+		return nil, fmt.Errorf("planner output not a JSON array: %w (raw: %q)", err, raw)
 	}
 	cap := req.Depth
 	if len(subqs) > cap {
@@ -301,18 +364,29 @@ func (c *Coordinator) synth(ctx context.Context, req Request, subqs, findings []
 		}
 		fmt.Fprintf(&b, "## %d. %s\n\n%s\n\n", i+1, q, f)
 	}
-	resp, err := c.agent.RunToolCallLoop(ctx, compute.ProcessMessageRequest{
-		Message:      b.String(),
-		Claims:       req.Claims,
-		TurnID:       req.TaskID + "/synth",
-		SystemPrompt: synthPrompt,
-		Tools:        nil,
-		Budget:       mustBudget(0),
+	if c.llmProvider == nil {
+		return "", errors.New("research: LLMProvider not wired; synth cannot run")
+	}
+	// Direct provider call — bypass the agent loop. Same reasoning
+	// as plan(): the synth prompt + the user-supplied findings are
+	// the only context the synthesiser should see. Memory recall
+	// would inject prior reports verbatim; soul personality would
+	// affect tone in ways that don't fit a research report.
+	resp, err := c.llmProvider.Chat(ctx, compute.ChatRequest{
+		Model: c.synthModel,
+		Messages: []compute.Message{
+			{Role: "system", Content: synthPrompt},
+			{Role: "user", Content: b.String()},
+		},
+		Temperature: 0.2, // mostly deterministic but allow some prose voice
 	})
 	if err != nil {
 		return "", err
 	}
-	return resp.Reply, nil
+	if resp == nil || strings.TrimSpace(resp.Content) == "" {
+		return "", errors.New("synth: provider returned empty content")
+	}
+	return resp.Content, nil
 }
 
 // mustBudget builds a TurnBudget with a tool-call cap. Zero =
@@ -346,11 +420,20 @@ func buildNotification(question, report, memID string) string {
 
 const plannerPrompt = `You decompose a research question into independent sub-questions.
 
-Output a JSON array of %d short, self-contained questions, each
-addressable by a single web search + fetch round. Cover distinct
-angles of the user's question — facts, context, contrasting views,
-recent developments. No prose, no commentary, no markdown — JUST
-the JSON array.`
+Your output is consumed by a JSON parser. Output MUST be a JSON
+array of %d short, self-contained question strings — and nothing
+else. No preamble. No "I've kicked off...". No "Here's the plan:".
+No markdown fences (no triple-backticks). No trailing commentary.
+
+Just: [
+  "first sub-question?",
+  "second sub-question?",
+  ...
+]
+
+Each sub-question covers a distinct angle — facts, context,
+contrasting views, recent developments — addressable by a single
+web search + fetch round.`
 
 const workerPrompt = `You are a research worker. Answer the user's
 sub-question using the available tools (web_search, fetch_url,

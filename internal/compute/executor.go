@@ -383,6 +383,16 @@ func (e *Executor) resolvePolicy(toolName string) *sandbox.Policy {
 	return e.cfg.Sandbox
 }
 
+// CheckPolicy is the public entry point for policy evaluation
+// outside the Invoke path. The agent uses this to gate skill +
+// MCP dispatch (which doesn't go through the executor) so skills
+// are subject to the same tool:exec policy as builtins. Returns
+// ErrPolicyDenied / ErrRequireConfirm / nil identically to the
+// internal policyAllow.
+func (e *Executor) CheckPolicy(ctx context.Context, claims *types.Claims, action, resource string) error {
+	return e.policyAllow(ctx, claims, action, resource)
+}
+
 // policyAllow returns nil when policy allows the invocation. Returns
 // ErrPolicyDenied for deny and ErrRequireConfirm for require_confirmation
 // — callers in Phase 6 will convert ErrRequireConfirm into a

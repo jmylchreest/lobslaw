@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -114,10 +115,12 @@ func StdlibToolDefs() []*types.ToolDef {
 }
 
 // currentTimeBuiltin returns the current wall-clock time in UTC
-// and the host's local timezone. When args["zones"] is set (JSON-
-// encoded string array from the LLM's tool-call), the response
-// also includes per-zone times. JSON output so the LLM can parse
-// structured fields instead of regex-splitting.
+// and the host's local timezone. The synthetic __user_timezone arg
+// (resolved from the user's preferences bucket at turn assembly)
+// adds a "user_zone" entry rendering the time in the user's wall-
+// clock — so the agent can answer "what time is it" naturally
+// without the LLM having to remember to convert. The optional
+// zones arg lists additional IANA zones for explicit comparisons.
 func currentTimeBuiltin(_ context.Context, args map[string]string) ([]byte, int, error) {
 	now := time.Now()
 	zoneName, offsetSec := now.Zone()
@@ -129,11 +132,18 @@ func currentTimeBuiltin(_ context.Context, args map[string]string) ([]byte, int,
 		"unix":        now.Unix(),
 	}
 
-	// The LLM's function-call arguments arrive as JSON; the
-	// executor flattens scalar fields into args directly, but
-	// arrays arrive as their JSON-encoded string form. Parse
-	// explicitly so a malformed value is a tool-level error rather
-	// than a silent no-op.
+	if userTZ := strings.TrimSpace(args["__user_timezone"]); userTZ != "" {
+		if loc, err := time.LoadLocation(userTZ); err == nil {
+			inZone := now.In(loc)
+			_, off := inZone.Zone()
+			payload["user_zone"] = map[string]any{
+				"timezone":    userTZ,
+				"time":        inZone.Format(time.RFC3339Nano),
+				"offset_secs": off,
+			}
+		}
+	}
+
 	if raw, ok := args["zones"]; ok && raw != "" {
 		var zones []string
 		if err := json.Unmarshal([]byte(raw), &zones); err != nil {

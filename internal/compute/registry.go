@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
@@ -54,6 +55,46 @@ func (r *Registry) Register(t *types.ToolDef) error {
 		return fmt.Errorf("%w: %q", ErrToolExists, t.Name)
 	}
 	r.tools[t.Name] = cloneTool(t)
+	return nil
+}
+
+// RegisterExternal is the entry point for tools whose definition
+// originates outside lobslaw's own code base — skills loaded from
+// manifests, MCP tools synthesised from server discovery, future
+// plugin formats. It rejects any tool whose Path uses BuiltinScheme,
+// preventing a skill / MCP from impersonating a builtin and
+// short-circuiting the in-process Builtins dispatcher (which has
+// privileged access to memory + raft + all the things builtins
+// rightly do).
+//
+// Builtins use Register directly (BuiltinScheme path is fine
+// because lobslaw's own code constructed the path). Untrusted
+// sources MUST go through RegisterExternal.
+//
+// Name collisions still surface via ErrToolExists — a skill named
+// "current_time" can't shadow the builtin if the builtin
+// registered first (which it does, since wireCompute runs before
+// the skill registry watcher).
+func (r *Registry) RegisterExternal(t *types.ToolDef) error {
+	if err := validateExternalTool(t); err != nil {
+		return err
+	}
+	return r.Register(t)
+}
+
+// validateExternalTool enforces invariants on tools registered from
+// outside lobslaw's own code base. Any failure here aborts the
+// registration before it can poison the registry.
+func validateExternalTool(t *types.ToolDef) error {
+	if t == nil {
+		return errors.New("tool: nil ToolDef")
+	}
+	if t.Path == "" {
+		return fmt.Errorf("tool %q: external registration requires a non-empty Path (skill handler path or 'mcp:<server>:<tool>' identifier)", t.Name)
+	}
+	if strings.HasPrefix(t.Path, BuiltinScheme) {
+		return fmt.Errorf("tool %q: external registration cannot use the %q path scheme (reserved for in-process builtins)", t.Name, BuiltinScheme)
+	}
 	return nil
 }
 

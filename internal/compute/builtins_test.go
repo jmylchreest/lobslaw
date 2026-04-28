@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -140,6 +141,50 @@ func TestExecutorBuiltinRejectedWhenRegistryMissing(t *testing.T) {
 	})
 	if !errors.Is(err, ErrToolPathInvalid) {
 		t.Errorf("want ErrToolPathInvalid; got %v", err)
+	}
+}
+
+func TestFormatTimeForUserHonoursSyntheticTZ(t *testing.T) {
+	t.Parallel()
+	utc := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		args     map[string]string
+		contains string
+	}{
+		{"empty args → UTC", nil, "Z"},
+		{"london zone → +01:00 (BST)", map[string]string{"__user_timezone": "Europe/London"}, "+01:00"},
+		{"bad zone → fallback to UTC", map[string]string{"__user_timezone": "Not/Real"}, "Z"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatTimeForUser(utc, tc.args)
+			if !strings.Contains(got, tc.contains) {
+				t.Errorf("formatTimeForUser(%v, %+v) = %q; want substring %q", utc, tc.args, got, tc.contains)
+			}
+		})
+	}
+}
+
+func TestCurrentTimeBuiltinIncludesUserZone(t *testing.T) {
+	t.Parallel()
+	stdout, _, err := currentTimeBuiltin(context.Background(), map[string]string{
+		"__user_timezone": "Europe/London",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(stdout, &payload)
+	uz, ok := payload["user_zone"].(map[string]any)
+	if !ok {
+		t.Fatalf("user_zone missing; payload=%v", payload)
+	}
+	if uz["timezone"] != "Europe/London" {
+		t.Errorf("user_zone.timezone = %v; want Europe/London", uz["timezone"])
+	}
+	if _, ok := uz["time"]; !ok {
+		t.Error("user_zone.time missing")
 	}
 }
 

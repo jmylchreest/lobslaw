@@ -204,3 +204,84 @@ func TestMemoryWriteSurfacesRaftError(t *testing.T) {
 		t.Error("raft error should propagate")
 	}
 }
+
+// fakeDreamer captures Dream calls so dream_nap tests can assert
+// the builtin dispatched without standing up a real DreamRunner.
+type fakeDreamer struct {
+	called bool
+	resp   *lobslawv1.DreamResponse
+	err    error
+}
+
+func (f *fakeDreamer) Dream(_ context.Context, _ *lobslawv1.DreamRequest) (*lobslawv1.DreamResponse, error) {
+	f.called = true
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.resp, nil
+}
+
+func TestDreamNapDispatchesAndShapesResponse(t *testing.T) {
+	t.Parallel()
+	dreamer := &fakeDreamer{resp: &lobslawv1.DreamResponse{Consolidated: 3, Pruned: 7}}
+	b := NewBuiltins()
+	if err := RegisterMemoryBuiltins(b, MemoryConfig{
+		Store:   newMemoryStoreForTest(t),
+		Raft:    &fakeApplier{},
+		Dreamer: dreamer,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fn, ok := b.Get("dream_nap")
+	if !ok {
+		t.Fatal("dream_nap not registered")
+	}
+	out, exit, err := fn(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit != 0 {
+		t.Errorf("exit = %d", exit)
+	}
+	if !dreamer.called {
+		t.Error("Dream was not invoked")
+	}
+	var payload struct {
+		Consolidated int32 `json:"consolidated"`
+		Pruned       int32 `json:"pruned"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Consolidated != 3 || payload.Pruned != 7 {
+		t.Errorf("response = %+v; want consolidated=3 pruned=7", payload)
+	}
+}
+
+func TestDreamNapSurfacesServiceError(t *testing.T) {
+	t.Parallel()
+	dreamer := &fakeDreamer{err: errors.New("not the leader")}
+	b := NewBuiltins()
+	_ = RegisterMemoryBuiltins(b, MemoryConfig{
+		Store:   newMemoryStoreForTest(t),
+		Raft:    &fakeApplier{},
+		Dreamer: dreamer,
+	})
+	fn, _ := b.Get("dream_nap")
+	_, _, err := fn(context.Background(), nil)
+	if err == nil {
+		t.Error("service error should propagate")
+	}
+}
+
+func TestDreamNapSkippedWhenDreamerNil(t *testing.T) {
+	t.Parallel()
+	b := NewBuiltins()
+	_ = RegisterMemoryBuiltins(b, MemoryConfig{
+		Store: newMemoryStoreForTest(t),
+		Raft:  &fakeApplier{},
+	})
+	if _, ok := b.Get("dream_nap"); ok {
+		t.Error("dream_nap should not be registered when Dreamer is nil")
+	}
+}
