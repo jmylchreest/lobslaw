@@ -142,29 +142,54 @@ If you want only `binary_list` (so the agent can introspect but not install), dr
 
 ## Install prefix and storage layout
 
-The cleanest deployment uses a managed install prefix — a directory the binary registry writes to, that's also visible to skill subprocesses with read+exec access:
+The container layout has three tiers, each owned by a different actor:
+
+```
+/usr/bin/                  ← image-baked baseline (busybox)
+                              owner: the lobslaw image
+                              mode: read-only
+
+/lobslaw/usr/bin/          ← bootstrap tools (uv, uvx)
+                              owner: the uv-init container
+                              populated at boot from a sibling image
+                              mode: read-only at runtime
+
+/lobslaw/usr/local/bin/    ← operator-installed binaries (gh, jq, ...)
+                              owner: the lobslaw process via binary_install
+                              mode: rw for lobslaw, rx for skills
+```
+
+Skill subprocess `PATH` becomes `/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/bin` — agent-installed binaries take precedence; uv/uvx fall through; busybox last.
+
+Configure:
 
 ```toml
 [security]
-binary_install_prefix = "/lobslaw/usr"
+binary_install_prefix = "/lobslaw/usr/local"
 
 [[storage.mounts]]
 label = "binaries"
 type  = "local"
-path  = "/lobslaw/usr"
+path  = "/lobslaw/usr/local"
 mode  = "rx"           # skill subprocesses get read+exec, no write
 ```
 
-The lobslaw process itself has implicit rw on the prefix (it's the installer). Skill subprocesses see it as an `rx` mount — they can execute installed binaries but can't tamper with them.
+The lobslaw process has implicit rw on the prefix (it's the installer). Skill subprocesses see it as an `rx` mount — they can execute installed binaries but can't tamper with them.
 
-Why this layout matters:
+Why a separate path from `tools-runtime`:
 
-- **Persistence.** Mount the prefix from a host volume (or a `tools-runtime` Docker volume) — installed binaries survive container restarts, no apt/dnf state to repopulate.
-- **Cluster-shareable.** Same volume bind-mounted into multiple nodes; one install, every node sees it.
-- **Rootless.** No root needed on the host — user-mode managers (npm, cargo, go-install, uvx, pipx, curl-sh) write to the prefix as the regular user.
-- **Sandboxed.** Skill subprocesses' Landlock allowlist gets the prefix as RX-only via the storage mount declaration. They can't modify what they execute.
+- **Ownership clarity.** `tools-runtime` (`/lobslaw/usr/bin`) is populated by the `uv-init` sidecar; lobslaw shouldn't write there. `binaries-workspace` (`/lobslaw/usr/local`) is lobslaw's own territory.
+- **No collisions.** A `uv-init` rerun at restart could clobber whatever `binary_install` had left in `tools-runtime`.
+- **FHS convention.** `/usr/local` is the conventional path for "operator-installed locally"; following it means a future operator who's never read these docs can guess what's there.
 
-The reference deploy at `deploy/docker/cluster.yml` already uses `tools-runtime:/lobslaw/usr/bin` as the persistent volume — point `binary_install_prefix` at `/lobslaw/usr` and the registry feeds it.
+## Persistence vs. ephemeral
+
+Pure deploy choice — the registry doesn't care:
+
+- **Persistent**: mount a named volume (or host bind-mount) at the prefix path. Installs survive container restarts; share the same volume across cluster nodes for one-install-many-views.
+- **Ephemeral**: don't mount anything at the prefix path. Installs live on the container's writable layer; reset on every container restart. Fine for fast managers (`uvx`, `pipx`, most `go install`); painful for slow ones (`cargo install` is minutes per crate).
+
+The reference `deploy/docker/cluster.yml` declares `binaries-workspace` as a named volume mounted at `/lobslaw/usr/local`. Drop the entry from `volumes:` to make it ephemeral.
 
 ## Manager prefix support
 

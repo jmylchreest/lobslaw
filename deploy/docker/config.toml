@@ -78,13 +78,23 @@ type  = "local"
 path  = "/workspace"
 mode  = "rw"
 
-# The binary install prefix (see [security] binary_install_prefix
-# below). Skill subprocesses get rx — read+execute, but not write.
-# Only the lobslaw process (the installer) writes here.
+# The binary install workspace — operator-owned territory where
+# binary_install writes. Distinct from /lobslaw/usr/bin (which
+# uv-init populates with the uv/uvx bootstrap tools and we treat
+# as read-only at runtime). Skill subprocesses get rx — they can
+# read and execute installed binaries but never write. Only the
+# lobslaw process (the installer) writes here, and the agent only
+# writes via the operator-gated binary_install builtin.
+#
+# Persistence is the operator's choice: pair this mount with a
+# named volume in compose for persistence (recommended), or omit
+# the volume to let it live on the container's writable layer
+# (ephemeral — every restart wipes it; binary_install reruns on
+# demand).
 [[storage.mounts]]
 label = "binaries"
 type  = "local"
-path  = "/lobslaw/usr"
+path  = "/lobslaw/usr/local"
 mode  = "rx"
 
 [security]
@@ -100,12 +110,15 @@ clawhub_base_url = "https://clawhub.ai"
 # hosts — the most common skill-binary distribution.
 # clawhub_binary_hosts = ["github.com", "objects.githubusercontent.com", "*.githubusercontent.com"]
 
-# Where binary_install puts user-mode installs. Pointed at the
-# tools-runtime volume so installed binaries survive container
-# restarts and are visible across cluster nodes. System managers
-# (apt/dnf/pacman/apk) ignore this — only user-mode managers (npm,
-# cargo, go-install, uvx, pipx, curl-sh) honour it.
-binary_install_prefix = "/lobslaw/usr"
+# Where binary_install puts user-mode installs. Convention:
+# /lobslaw/usr/local — FHS-aligned for "operator-installed stuff",
+# distinct from /lobslaw/usr/bin (which uv-init owns) and /usr/bin
+# (image-baked baseline). Pair with a named volume in compose for
+# persistence, or skip the volume for ephemeral installs that
+# reset on container restart. System managers (apt/dnf/pacman/apk)
+# ignore this — only user-mode managers (npm, cargo, go-install,
+# uvx, pipx, curl-sh) honour it.
+binary_install_prefix = "/lobslaw/usr/local"
 
 [policy]
 enabled = true

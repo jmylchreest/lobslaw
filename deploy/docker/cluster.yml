@@ -47,7 +47,8 @@ x-lobslaw-defaults: &lobslaw-defaults
   image: lobslaw:dev
   volumes:
     - tools-bin:/lobslaw/bin:ro
-    - tools-runtime:/lobslaw/usr/bin
+    - tools-runtime:/lobslaw/usr/bin:ro
+    - binaries-workspace:/lobslaw/usr/local
     - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
     - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
     - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
@@ -310,6 +311,14 @@ secrets:
 volumes:
   tools-bin:
   tools-runtime:
+  # binaries-workspace is the operator-owned scratch volume where
+  # binary_install lands user-mode installs (npm/cargo/uvx/pipx/...).
+  # Distinct from tools-runtime (uv-init populates that with the
+  # bootstrap tools). Shared across all three nodes so an install
+  # on the leader is visible to followers without re-running.
+  # Drop this entry to make binary installs ephemeral — they'll
+  # live on each container's writable layer and reset on restart.
+  binaries-workspace:
   certs-1:
   certs-2:
   certs-3:
