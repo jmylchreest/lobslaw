@@ -39,17 +39,15 @@ type  = "local"
 path  = "/var/lobslaw/data/snapshots"
 
 # ----- Read-only system surfaces -----------------------------------
-# Baseline shell utilities the tools-init container populated. Mode
-# "rx": the agent can read+exec these binaries (shell_command's
-# Landlock sandbox honours this) but not modify them. Self-discovery
-# via list/glob/read still works because Read is implicit in "rx".
-[[storage.mounts]]
-label = "system-bin"
-type  = "local"
-path  = "/lobslaw/bin"
-mode  = "rx"
-
-# Operator-managed extension dir. Same shape as system-bin: agent
+# Operator-managed extension dir at /lobslaw/usr/bin (uv/uvx live
+# here, populated by the uv-init sidecar). Mode "rx": the agent can
+# read+exec these binaries (shell_command's Landlock sandbox honours
+# this) but not modify them. Self-discovery via list/glob/read still
+# works because Read is implicit in "rx".
+#
+# The alpine runtime image provides /bin and /usr/bin natively; we
+# don't declare a separate system-bin mount because skill subprocesses
+# inherit the container's PATH and busybox is on it.
 # may exec but not write. Operators (or the `tools` sidecar) push
 # binaries here out-of-band.
 [[storage.mounts]]

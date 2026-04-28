@@ -4,8 +4,8 @@
 # copy of the single-node docker-compose.yml + a shared CA.
 #
 # Topology:
-#   tools-init                one-shot, populates the shared tools-bin
-#                             volume the three nodes mount at /lobslaw/bin.
+#   tools-init                one-shot, normalises ownership on the
+#                             shared tools-runtime volume.
 #   cert-init-{1,2,3}         one-shot per node — signs that node's mTLS
 #                             cert against the cluster CA (same CA for
 #                             all three).
@@ -46,7 +46,8 @@ x-lobslaw-defaults: &lobslaw-defaults
     dockerfile: Dockerfile
   image: lobslaw:dev
   volumes:
-    - tools-bin:/lobslaw/bin:ro
+    # tools-bin / busybox sidecar is no longer needed — alpine's
+    # baseline includes /bin/sh, wget, tar, awk, etc. natively.
     - tools-runtime:/lobslaw/usr/bin:ro
     - binaries-workspace:/lobslaw/usr/local
     - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
@@ -74,32 +75,29 @@ x-cert-init-defaults: &cert-init-defaults
 services:
 
   # ---- shared tools-init -------------------------------------------
-  # Populates two shared volumes:
-  #   - tools-bin (ro mounted into lobslaw at /lobslaw/bin): busybox
-  #     baseline, here purely so old workflows still resolve. Distroless
-  #     lobslaw doesn't need this.
-  #   - tools-runtime (rw, also mounted into lobslaw at /lobslaw/usr/bin):
+  # Single shared volume:
+  #   - tools-runtime (rw, mounted into lobslaw at /lobslaw/usr/bin):
   #     drop-in tools the runtime can exec. We seed it with `uv` and
   #     `uvx` (static Rust binaries from the lobslaw-tools image) so
   #     lobslaw at startup can install/upgrade MCP servers via
   #     [[mcp.servers]] install commands. The installed MCP venvs land
   #     under $UV_TOOL_DIR=/workspace/tools (host bind-mount), so
   #     installs are persistent + host-visible.
+  #
+  # The busybox-baseline sidecar that used to populate /lobslaw/bin is
+  # gone — alpine's runtime base already provides sh + 300 standard
+  # tools at /bin and /usr/bin natively.
   tools-init:
-    image: busybox:musl
+    image: alpine:3.20
     user: "0:0"
     command:
       - sh
       - -c
       - |
         set -e
-        rm -rf /out/bin/* /out/bin/.[!.]* 2>/dev/null || true
-        cp -a /bin/. /out/bin/
-        chown -R 65532:65532 /out/bin /out/usr-bin
-        chmod -R a+rX /out/bin
+        chown -R 65532:65532 /out/usr-bin
         chmod 0775 /out/usr-bin
     volumes:
-      - tools-bin:/out/bin
       - tools-runtime:/out/usr-bin
     restart: "no"
 
@@ -158,7 +156,7 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
@@ -168,7 +166,6 @@ services:
       - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-1:7443
       - LOBSLAW__CLUSTER__BOOTSTRAP=true
     volumes:
-      - tools-bin:/lobslaw/bin:ro
       - tools-runtime:/lobslaw/usr/bin:ro
       - binaries-workspace:/lobslaw/usr/local
       - certs-1:/etc/lobslaw/certs:ro
@@ -186,7 +183,7 @@ services:
     # because podman 5.x + podman-compose treat Exited(0) deps as
     # "improper state" and refuse to start the lobslaw container even
     # though the init has already populated the persistent volumes
-    # (certs-N, tools-bin, tools-runtime). The README documents the
+    # (certs-N, tools-runtime, binaries-workspace). The README documents the
     # bring-up sequence (lobslaw-1 first, then 2+3+tools) which gives
     # the same ordering guarantee without needing the broken dep check.
 
@@ -221,13 +218,12 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
       - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-2:7443
     volumes:
-      - tools-bin:/lobslaw/bin:ro
       - tools-runtime:/lobslaw/usr/bin:ro
       - binaries-workspace:/lobslaw/usr/local
       - certs-2:/etc/lobslaw/certs:ro
@@ -270,13 +266,12 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
       - LOBSLAW__CLUSTER__ADVERTISE_ADDR=lobslaw-3:7443
     volumes:
-      - tools-bin:/lobslaw/bin:ro
       - tools-runtime:/lobslaw/usr/bin:ro
       - binaries-workspace:/lobslaw/usr/local
       - certs-3:/etc/lobslaw/certs:ro
@@ -293,7 +288,7 @@ services:
     hostname: tools
     command: ["sleep", "infinity"]
     environment:
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
     volumes:
       - tools-runtime:/lobslaw/usr/bin
       - data-1:/var/lobslaw/data-1:ro
@@ -312,7 +307,6 @@ secrets:
     file: ./secrets/ca-key.pem
 
 volumes:
-  tools-bin:
   tools-runtime:
   # binaries-workspace is the operator-owned scratch volume where
   # binary_install lands user-mode installs (npm/cargo/uvx/pipx/...).

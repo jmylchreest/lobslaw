@@ -1,36 +1,27 @@
 # syntax=docker/dockerfile:1.7
 #
-# Core lobslaw node image — distroless, ~10MB, no shell.
+# Core lobslaw node image — alpine 3.20, ~15MB, full POSIX shell.
 #
-# For nodes that do NOT execute local skill/tool subprocesses
-# (memory, policy, storage, or gateway without local skill runtimes),
-# this image is the right default: minimal attack surface, nonroot,
-# no package manager, no shell.
+# Why alpine over distroless: alpine ships busybox + a real package
+# manager (apk) baked in. That gives us /bin/sh + 300 standard tools,
+# making curl-sh installer scripts (uv, bun, etc.) work directly
+# inside the runtime container without a separate busybox sidecar
+# volume. apk is also exposed as an install manager to the binary
+# registry, so clawhub bundles declaring `kind: apk` install paths
+# can satisfy bin requirements at runtime when lobslaw runs as root
+# in the container.
 #
-# Compute nodes that run Phase 8 python/bash skill runtimes should
-# use Dockerfile.tools instead — distroless has no interpreters.
+# Compute nodes that run Phase 8 python/bash skill runtimes can use
+# Dockerfile.tools for a heavier image with bash/git/python3/uv/bun/
+# curl pre-installed. This file's runtime image is the lighter one
+# for nodes whose skills only need POSIX baseline + apk-installable
+# packages.
 
 ARG GO_VERSION=1.26
-
-# ---- Tiny shell stage ----------------------------------------------
-# uv's libc-detection probe reads PT_INTERP from /bin/sh. The
-# distroless static base has no /bin contents at all, and busybox-
-# static (in the :debug variants) is statically linked so PT_INTERP
-# is empty. Smallest fix: extract `dash` (~140KB dynamic binary)
-# from debian-slim and copy it into the runtime image. dash links
-# against glibc which we get from distroless/base.
-FROM debian:12-slim AS shell
-RUN apt-get update && apt-get install -y --no-install-recommends libgcc-s1 libstdc++6 && \
-    mkdir -p /sysroot/bin /sysroot/lib/x86_64-linux-gnu && \
-    cp /bin/dash /sysroot/bin/sh && \
-    # Python C extensions (pydantic_core, etc.) link against libgcc_s
-    # and libstdc++. distroless/base supplies libc but not these.
-    cp -L /lib/x86_64-linux-gnu/libgcc_s.so.1 \
-          /lib/x86_64-linux-gnu/libstdc++.so.6 \
-          /sysroot/lib/x86_64-linux-gnu/
+ARG ALPINE_VERSION=3.20
 
 # ---- Build stage ---------------------------------------------------
-FROM golang:${GO_VERSION} AS build
+FROM golang:${GO_VERSION}-alpine AS build
 
 WORKDIR /src
 
@@ -45,8 +36,9 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 
 # Pure-Go build: CGO_ENABLED=0 so the binary is statically linked
-# and runs on distroless/static. -trimpath strips local paths for
-# reproducibility; -s -w drops debug info (~30% smaller binary).
+# and runs against musl on alpine without dynamic linking surprises.
+# -trimpath strips local paths for reproducibility; -s -w drops debug
+# info (~30% smaller binary).
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build \
@@ -56,31 +48,25 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         ./cmd/lobslaw
 
 # ---- Runtime stage -------------------------------------------------
-# gcr.io/distroless/base-debian12:debug-nonroot includes:
-#   - glibc + dynamic linker (/lib64/ld-linux-x86-64.so.2)
-#   - busybox at /busybox/ for shell + utilities
-#   - dynamically-linked /bin/sh (CRITICAL: uv reads its ELF
-#     PT_INTERP segment to detect the system's libc variant before
-#     downloading a Python interpreter; static busybox has no
-#     PT_INTERP, so the static-debian12 variant fails uv's probe)
-#   - CA certs at /etc/ssl/certs (outbound HTTPS to LLM providers)
-#   - tzdata, /tmp, /etc/passwd entries for nonroot
-# Trade: ~25MB total (vs 10MB for static-only). We accept this so
-# lobslaw can drive `uv tool install` / `uvx` directly at runtime,
-# which is what the [[mcp.servers]] install field needs.
-FROM gcr.io/distroless/base-debian12:nonroot
+FROM alpine:${ALPINE_VERSION}
+
+# Baseline runtime tools:
+#   ca-certificates: outbound HTTPS to LLM providers, clawhub, OAuth.
+#   tzdata: scheduler timezone parsing.
+#   libgcc, libstdc++: Python C extensions uv may install (pydantic
+#                      Rust core, etc.) link against them.
+# busybox + apk are already in the alpine base — no extra install.
+RUN apk add --no-cache \
+        ca-certificates \
+        tzdata \
+        libgcc \
+        libstdc++ && \
+    addgroup -S -g 65532 nonroot && \
+    adduser -S -u 65532 -G nonroot -h /lobslaw -s /sbin/nologin nonroot && \
+    mkdir -p /lobslaw/usr/local/bin && \
+    chown -R 65532:65532 /lobslaw
 
 COPY --from=build /out/lobslaw /usr/local/bin/lobslaw
-
-# Tiny dynamic /bin/sh + libgcc_s + libstdc++ extracted from
-# debian:slim. `/bin/sh` is needed so uv's libc-detection probe (used
-# by `uv tool install` to pick the right python-build-standalone
-# variant) can read PT_INTERP. The libs are needed by Python C
-# extensions like pydantic_core (Rust). distroless/base already
-# supplies the matching glibc + ld-linux.
-COPY --from=shell /sysroot/bin/sh /bin/sh
-COPY --from=shell /sysroot/lib/x86_64-linux-gnu/libgcc_s.so.1 /lib/x86_64-linux-gnu/
-COPY --from=shell /sysroot/lib/x86_64-linux-gnu/libstdc++.so.6 /lib/x86_64-linux-gnu/
 
 USER nonroot:nonroot
 WORKDIR /lobslaw
