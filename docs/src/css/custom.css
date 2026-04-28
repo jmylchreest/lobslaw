@@ -1,0 +1,81 @@
+/**
+ * lobslaw documentation — terminal-inspired dark theme.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  /* Amber/orange accent — distinct from sibling AIDE (cyan) */
+  --ifm-color-primary: #f59e0b;
+  --ifm-color-primary-dark: #d97706;
+  --ifm-color-primary-darker: #b45309;
+  --ifm-color-primary-darkest: #92400e;
+  --ifm-color-primary-light: #fbbf24;
+  --ifm-color-primary-lighter: #fcd34d;
+  --ifm-color-primary-lightest: #fde68a;
+
+  --ifm-font-family-base: "Inter", system-ui, -apple-system, sans-serif;
+  --ifm-font-family-monospace:
+    "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+  --ifm-code-font-size: 0.875rem;
+  --ifm-heading-font-weight: 600;
+  --ifm-spacing-horizontal: 1.5rem;
+  --ifm-global-radius: 0.5rem;
+
+  --ifm-background-color: #fafafa;
+  --ifm-background-surface-color: #ffffff;
+  --ifm-navbar-background-color: #ffffff;
+  --ifm-footer-background-color: #f4f4f5;
+  --ifm-toc-border-color: #e4e4e7;
+
+  --docusaurus-highlighted-code-line-bg: rgba(245, 158, 11, 0.12);
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #fbbf24;
+  --ifm-color-primary-dark: #f59e0b;
+  --ifm-color-primary-darker: #d97706;
+  --ifm-color-primary-darkest: #b45309;
+  --ifm-color-primary-light: #fcd34d;
+  --ifm-color-primary-lighter: #fde68a;
+  --ifm-color-primary-lightest: #fef3c7;
+
+  --ifm-background-color: #0a0a0a;
+  --ifm-background-surface-color: #18181b;
+  --ifm-navbar-background-color: #18181b;
+  --ifm-footer-background-color: #09090b;
+  --ifm-toc-border-color: #27272a;
+
+  --docusaurus-highlighted-code-line-bg: rgba(251, 191, 36, 0.18);
+}
+
+.markdown table {
+  display: table;
+  width: 100%;
+}
+
+.markdown table th {
+  background: var(--ifm-background-surface-color);
+}
+
+.menu__link--active {
+  font-weight: 600;
+}
+
+code {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+[data-theme="dark"] code {
+  background: rgba(251, 191, 36, 0.08);
+  border-color: rgba(251, 191, 36, 0.18);
+}
+
+pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
