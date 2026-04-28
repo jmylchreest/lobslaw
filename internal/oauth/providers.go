@@ -8,6 +8,11 @@ import (
 // ProviderConfig declares everything the device-code flow needs to
 // authenticate against one IdP. Endpoints follow the OAuth 2.0
 // Device Authorization Grant spec (RFC 8628).
+//
+// Built-in defaults for common IdPs live alongside this type as
+// per-provider files (provider_google.go, provider_microsoft.go, ...).
+// Custom providers are configured by populating ProviderConfig
+// directly from operator TOML.
 type ProviderConfig struct {
 	// Name is the canonical provider identifier ("google", "github",
 	// "microsoft", ...). Used as the credentials bucket prefix.
@@ -44,6 +49,14 @@ type ProviderConfig struct {
 	// credential bucket key. Empty → caller supplies an explicit
 	// subject (less common).
 	SubjectClaim string
+
+	// UserInfoEndpoint is the URL FetchSubject calls to resolve
+	// the authenticated user's identifier post-authorization. The
+	// response is parsed as a flat JSON object; SubjectClaim names
+	// the field to read out of it. Empty → FetchSubject returns
+	// an error and the caller decides whether to fall back to a
+	// synthetic key.
+	UserInfoEndpoint string
 }
 
 // Validate fails on missing required fields. Called at config
@@ -62,37 +75,4 @@ func (p *ProviderConfig) Validate() error {
 		return errors.New("oauth: client_id required")
 	}
 	return nil
-}
-
-// Google returns a default ProviderConfig for Google Workspace
-// device-flow auth. Operators supply ClientID (and ClientSecret
-// for the limited-input-device client type) via config; the
-// endpoints are well-known.
-func Google() ProviderConfig {
-	return ProviderConfig{
-		Name:               "google",
-		DeviceAuthEndpoint: "https://oauth2.googleapis.com/device/code",
-		TokenEndpoint:      "https://oauth2.googleapis.com/token",
-		DefaultScopes: []string{
-			"openid",
-			"email",
-			"profile",
-		},
-		SubjectClaim: "email",
-	}
-}
-
-// GitHub returns a default ProviderConfig for GitHub device-flow
-// auth. ClientID comes from the operator's GitHub OAuth App. No
-// client_secret needed for the device flow.
-func GitHub() ProviderConfig {
-	return ProviderConfig{
-		Name:               "github",
-		DeviceAuthEndpoint: "https://github.com/login/device/code",
-		TokenEndpoint:      "https://github.com/login/oauth/access_token",
-		DefaultScopes: []string{
-			"read:user",
-		},
-		SubjectClaim: "login",
-	}
 }
