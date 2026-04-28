@@ -86,7 +86,7 @@ services:
   #     under $UV_TOOL_DIR=/workspace/tools (host bind-mount), so
   #     installs are persistent + host-visible.
   tools-init:
-    image: busybox:glibc
+    image: busybox:musl
     user: "0:0"
     command:
       - sh
@@ -158,7 +158,7 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
@@ -221,7 +221,7 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
@@ -270,7 +270,7 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
@@ -289,11 +289,11 @@ services:
 
   # ---- shared tools sidecar ----------------------------------------
   tools:
-    image: busybox:glibc
+    image: busybox:musl
     hostname: tools
     command: ["sleep", "infinity"]
     environment:
-      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin
     volumes:
       - tools-runtime:/lobslaw/usr/bin
       - data-1:/var/lobslaw/data-1:ro
