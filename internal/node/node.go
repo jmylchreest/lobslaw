@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jmylchreest/lobslaw/internal/audit"
+	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
@@ -22,6 +24,8 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/notify"
+	"github.com/jmylchreest/lobslaw/internal/oauth"
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
@@ -156,6 +160,12 @@ type Config struct {
 	// for the field-by-field doc.
 	Security config.SecurityConfig
 
+	// Users is the operator-declared user list, seeded into
+	// BucketUserPrefs at first boot. Carries timezone, language,
+	// channel addresses. Solo deployments declare one entry
+	// (id="owner"); team deployments add more.
+	Users []config.UserConfig
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate
@@ -189,6 +199,12 @@ type Node struct {
 
 	policySvc     *policy.Service
 	memorySvc     *memory.Service
+	credentialSvc    *memory.CredentialService
+	userPrefsSvc     *memory.UserPrefsService
+	notifySvc        *notify.Service
+	oauthTracker     *oauth.Tracker
+	oauthProviders   map[string]oauth.ProviderConfig
+	clawhubInstaller *clawhub.Installer
 	planSvc       *plan.Service
 	storageSvc    *storage.Service
 	storageMgr    *storage.Manager
@@ -373,6 +389,10 @@ func (n *Node) Start(ctx context.Context) error {
 	// pprof under build tag `debug` only — see pprof_debug.go.
 	n.startPprof(ctx)
 
+	// Reaper for orphaned OAuth flows + synthetic credentials. Per-
+	// node loop; the credential-side delete is leader-gated inside.
+	n.startReaper(ctx)
+
 	// Dial seeds for peer-registry exchange (Register + GetPeers).
 	// Failures are non-fatal: even if every seed is down, we keep
 	// serving so other nodes can dial us. Membership-join (raft
@@ -455,6 +475,9 @@ func (n *Node) Start(ctx context.Context) error {
 			}
 			if err := n.seedSessionPruneTask(ctx); err != nil {
 				n.log.Warn("memory: seed session prune task failed", "err", err)
+			}
+			if err := n.seedUserPrefsFromConfig(ctx); err != nil {
+				n.log.Warn("user_prefs: seed from config failed", "err", err)
 			}
 		}
 	}
@@ -777,4 +800,87 @@ func (n *Node) resolveAPIKey(ref string) (string, error) {
 		return n.cfg.APIKeyResolver(ref)
 	}
 	return config.ResolveSecret(ref)
+}
+
+// resolveOAuthProviders walks cfg.Security.OAuth, resolves each
+// entry's ClientIDRef + ClientSecretRef via the same secret resolver
+// used for API keys, and returns the runtime ProviderConfig map the
+// credentials builtins consume. Known names ("google", "github")
+// inherit endpoint defaults from internal/oauth — operators only
+// supply ClientID(/Secret).
+func (n *Node) resolveOAuthProviders() (map[string]oauth.ProviderConfig, error) {
+	if len(n.cfg.Security.OAuth) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]oauth.ProviderConfig, len(n.cfg.Security.OAuth))
+	for name, raw := range n.cfg.Security.OAuth {
+		base := defaultOAuthProvider(name)
+		if raw.DeviceAuthEndpoint != "" {
+			base.DeviceAuthEndpoint = raw.DeviceAuthEndpoint
+		}
+		if raw.TokenEndpoint != "" {
+			base.TokenEndpoint = raw.TokenEndpoint
+		}
+		if len(raw.DefaultScopes) > 0 {
+			base.DefaultScopes = append([]string(nil), raw.DefaultScopes...)
+		}
+		if raw.SubjectClaim != "" {
+			base.SubjectClaim = raw.SubjectClaim
+		}
+		clientID, err := n.resolveAPIKey(raw.ClientIDRef)
+		if err != nil {
+			return nil, fmt.Errorf("oauth %q client_id_ref: %w", name, err)
+		}
+		base.ClientID = clientID
+		if raw.ClientSecretRef != "" {
+			secret, err := n.resolveAPIKey(raw.ClientSecretRef)
+			if err != nil {
+				return nil, fmt.Errorf("oauth %q client_secret_ref: %w", name, err)
+			}
+			base.ClientSecret = secret
+		}
+		base.Name = name
+		if err := base.Validate(); err != nil {
+			return nil, fmt.Errorf("oauth %q: %w", name, err)
+		}
+		out[name] = base
+	}
+	return out, nil
+}
+
+// resolveUserTimezone returns the IANA zone for the given user_id,
+// falling back to the cluster default and finally UTC. Used by the
+// agent to inject the synthetic __user_timezone arg into tool calls
+// + render time output naturally for the user.
+func (n *Node) resolveUserTimezone(userID string) string {
+	clusterDefault := strings.TrimSpace(n.cfg.Gateway.DefaultTimezone)
+	if clusterDefault == "" {
+		clusterDefault = "UTC"
+	}
+	if userID == "" || n.userPrefsSvc == nil {
+		return clusterDefault
+	}
+	prefs, err := n.userPrefsSvc.Get(context.Background(), userID)
+	if err != nil || prefs == nil {
+		return clusterDefault
+	}
+	if tz := strings.TrimSpace(prefs.Timezone); tz != "" {
+		return tz
+	}
+	return clusterDefault
+}
+
+func defaultOAuthProvider(name string) oauth.ProviderConfig {
+	switch name {
+	case "google":
+		return oauth.Google()
+	case "github":
+		return oauth.GitHub()
+	case "microsoft":
+		return oauth.Microsoft()
+	case "gitlab":
+		return oauth.GitLab()
+	default:
+		return oauth.ProviderConfig{Name: name}
+	}
 }

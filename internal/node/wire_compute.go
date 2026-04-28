@@ -103,6 +103,7 @@ func (n *Node) wireCompute() error {
 			Store:     n.store,
 			Raft:      n.raft,
 			Forgetter: n.memorySvc,
+			Dreamer:   n.memorySvc,
 			Embedder:  embedder,
 		}); err != nil {
 			return fmt.Errorf("register memory builtins: %w", err)
@@ -149,9 +150,50 @@ func (n *Node) wireCompute() error {
 		}
 		n.log.Debug("compute: commitment_create/list/cancel registered")
 
-		// Deep-research builtin (research_start). Default-deny via
-		// the policy seed below; operators flip subject="*"/effect=allow
-		// when they want the agent to kick off async research runs.
+		// Credentials + OAuth builtins. Tracker + Service are always
+		// wired on raft-hosting nodes (wireCredentials); operator
+		// declares IdPs via [security.oauth.<name>]. Empty Providers
+		// is fine — oauth_start surfaces "not configured" at call
+		// time. Default-deny policy seed gates these to scope:owner.
+		if n.credentialSvc != nil && n.oauthTracker != nil {
+			if err := compute.RegisterCredentialsBuiltins(builtins, compute.CredentialsConfig{
+				Tracker:   n.oauthTracker,
+				Service:   n.credentialSvc,
+				Providers: n.oauthProviders,
+			}); err != nil {
+				return fmt.Errorf("register credentials builtins: %w", err)
+			}
+			for _, td := range compute.CredentialsToolDefs() {
+				if err := n.toolRegistry.Register(td); err != nil {
+					return fmt.Errorf("register credentials tool %q: %w", td.Name, err)
+				}
+			}
+			n.log.Debug("compute: oauth_* + credentials_* registered",
+				"providers", len(n.oauthProviders))
+		}
+
+		// Clawhub install builtin: only registered when the operator
+		// configured a clawhub base URL (i.e. wireClawhub built an
+		// installer). Default-deny — owner-only via the noSeed list.
+		if n.clawhubInstaller != nil {
+			if err := compute.RegisterClawhubBuiltin(builtins, compute.ClawhubConfig{
+				Installer:    n.clawhubInstaller,
+				DefaultMount: n.cfg.Security.ClawhubInstallMount,
+			}); err != nil {
+				return fmt.Errorf("register clawhub builtin: %w", err)
+			}
+			for _, td := range compute.ClawhubToolDefs() {
+				if err := n.toolRegistry.Register(td); err != nil {
+					return fmt.Errorf("register clawhub tool %q: %w", td.Name, err)
+				}
+			}
+			n.log.Debug("compute: clawhub_install registered")
+		}
+
+		// Deep-research builtin (research_start). Default-allow at
+		// the policy seed layer like other builtins; operators add
+		// an explicit deny rule when they want the agent's async
+		// research runs gated.
 		if err := compute.RegisterResearchBuiltins(builtins, compute.ResearchConfig{
 			Raft: n.raft,
 		}); err != nil {
@@ -162,7 +204,7 @@ func (n *Node) wireCompute() error {
 				return fmt.Errorf("register research tool %q: %w", td.Name, err)
 			}
 		}
-		n.log.Debug("compute: research_start registered (default-deny)")
+		n.log.Debug("compute: research_start registered")
 	}
 
 	// Council tools: list_providers + council_review. Only wire
@@ -319,9 +361,9 @@ func (n *Node) wireCompute() error {
 
 	// Soul self-tuning builtins. Default-deny via the seedDefault
 	// rules below — operators open per-scope so only the owner's
-	// chat can mutate the agent's identity. soul_get +
-	// soul_fragment_list are also default-deny by virtue of being
-	// in the soul_* namespace; tighten/loosen per scope as needed.
+	// chat can mutate the agent's identity. soul_get is also
+	// default-deny by virtue of being in the soul_* namespace;
+	// tighten/loosen per scope as needed.
 	if n.soulAdjuster != nil {
 		if err := compute.RegisterSoulBuiltins(builtins, compute.SoulBuiltinsConfig{
 			Mutator: n.soulAdjuster,
@@ -507,8 +549,9 @@ func (n *Node) wireCompute() error {
 				Embedder: n.embedder,
 				Logger:   n.log,
 			}),
-			Skills: skillDispatcherOrNil(n.skillAdapter),
-			Logger: n.log,
+			Skills:           skillDispatcherOrNil(n.skillAdapter),
+			TimezoneResolver: n.resolveUserTimezone,
+			Logger:           n.log,
 		})
 		if err != nil {
 			return fmt.Errorf("agent: %w", err)
@@ -522,6 +565,10 @@ func (n *Node) wireCompute() error {
 	// loop without writing custom handler code.
 	if n.agent != nil && n.scheduler != nil {
 		n.registerAgentTurnHandlers()
+		// research:run handler also lives here (not in wireScheduler)
+		// because it needs the agent to drive the research loop and
+		// the agent isn't constructed until this stage.
+		n.registerResearchHandler()
 	}
 
 	n.log.Info("compute stack wired",
@@ -894,6 +941,7 @@ func (n *Node) runResearchCommitment(ctx context.Context, c *lobslawv1.AgentComm
 	tools := buildResearchToolList(n.toolRegistry)
 	coord := research.NewCoordinator(research.Config{
 		Agent:       n.agent,
+		LLMProvider: n.llmProvider,
 		Memory:      &researchMemoryAdapter{svc: n.memorySvc},
 		Notify:      &researchNotifyAdapter{tg: n.telegramHandler, log: n.log},
 		WorkerTools: tools,

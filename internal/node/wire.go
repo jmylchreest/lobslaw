@@ -126,11 +126,14 @@ func nodeWireStages() []WireStage {
 		{Name: "raft", Gate: gateRaft, Wire: (*Node).wireRaftStage},
 		{Name: "policy-svc", Gate: gateRaft, Wire: (*Node).wirePolicyService},
 		{Name: "memory-svc", Gate: gateRaft, Wire: (*Node).wireMemoryService},
+		{Name: "user-prefs", Gate: gateRaft, Wire: (*Node).wireUserPrefs},
+		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},
 		{Name: "scheduler", Gate: gateRaft, Wire: (*Node).wireScheduler},
 		{Name: "storage", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireStorageStage},
 		{Name: "skills", Gate: gateRaft, Wire: (*Node).wireSkills},
+		{Name: "clawhub", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireClawhub},
 
 		// Always-on or function-gated platform stages.
 		{Name: "audit", Wire: (*Node).wireAuditStage},

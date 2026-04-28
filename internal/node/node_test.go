@@ -82,8 +82,8 @@ func signNodeCert(t *testing.T, tmp, nodeID string) *mtls.NodeCreds {
 func clientCreds(t *testing.T, creds *mtls.NodeCreds) credentials.TransportCredentials {
 	t.Helper()
 	return credentials.NewTLS(&tls.Config{
-		Certificates:       []tls.Certificate{creds.NodeCert},
-		RootCAs:            creds.CAPool,
+		Certificates:       []tls.Certificate{creds.Certificate()},
+		RootCAs:            creds.CAPool(),
 		InsecureSkipVerify: true,
 		MinVersion:         tls.VersionTLS13,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
@@ -94,7 +94,7 @@ func clientCreds(t *testing.T, creds *mtls.NodeCreds) credentials.TransportCrede
 			if err != nil {
 				return err
 			}
-			_, err = peer.Verify(x509.VerifyOptions{Roots: creds.CAPool})
+			_, err = peer.Verify(x509.VerifyOptions{Roots: creds.CAPool()})
 			return err
 		},
 	})
@@ -1225,6 +1225,23 @@ func TestNodeAgentRoutesToSkill(t *testing.T) {
 		cancel()
 		<-done
 		t.Fatalf("WaitForLeader: %v", err)
+	}
+
+	// Skills + MCP tools no longer get default-allow seeds (the
+	// policy posture is "operator must explicitly allow"). Add an
+	// allow rule for the test skill so dispatch can proceed past
+	// the policy gate and we observe the routing-to-skills-invoker
+	// behaviour the test cares about.
+	if _, err := n.Policy().AddRule(ctx, &lobslawv1.AddRuleRequest{
+		Rule: &lobslawv1.PolicyRule{
+			Id: "test-allow-agenda", Subject: "*",
+			Action: "tool:exec", Resource: "agenda",
+			Effect: "allow", Priority: 10,
+		},
+	}); err != nil {
+		cancel()
+		<-done
+		t.Fatalf("AddRule: %v", err)
 	}
 
 	// Drive a message through the agent. Expectation: skill dispatch

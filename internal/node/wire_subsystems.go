@@ -3,9 +3,12 @@ package node
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/oauth"
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
@@ -44,6 +47,35 @@ func (n *Node) wirePolicyService() error {
 func (n *Node) wireMemoryService() error {
 	n.memorySvc = memory.NewService(n.raft, n.store, n.log)
 	lobslawv1.RegisterMemoryServiceServer(n.server, n.memorySvc)
+	return nil
+}
+
+// wireUserPrefs constructs the per-user preferences service. Reads
+// are local; writes go through raft. Solo deployments seed an
+// "owner" record from operator config; team deployments add records
+// at runtime via a future user_bind builtin.
+func (n *Node) wireUserPrefs() error {
+	n.userPrefsSvc = memory.NewUserPrefsService(n.raft, n.store)
+	return nil
+}
+
+// wireCredentials constructs the encrypted credentials service +
+// the in-memory OAuth device-flow tracker. Both ride on the
+// already-wired raft + store. The cluster MemoryKey doubles as the
+// token-encryption key (see DESIGN.md "credentials encryption" —
+// one master secret, not two).
+func (n *Node) wireCredentials() error {
+	cs, err := memory.NewCredentialService(n.raft, n.store, n.cfg.MemoryKey)
+	if err != nil {
+		return fmt.Errorf("credentials service: %w", err)
+	}
+	n.credentialSvc = cs
+	n.oauthTracker = oauth.NewTracker(n.log)
+	providers, err := n.resolveOAuthProviders()
+	if err != nil {
+		return fmt.Errorf("oauth providers: %w", err)
+	}
+	n.oauthProviders = providers
 	return nil
 }
 
@@ -102,7 +134,10 @@ func (n *Node) wireScheduler() error {
 	n.scheduler = sched
 	n.registerDreamHandler()
 	n.registerSessionPruneHandler()
-	n.registerResearchHandler()
+	// registerResearchHandler is deliberately NOT called here. It
+	// requires n.agent + n.memorySvc + n.toolRegistry, which the
+	// compute stage wires later. wireCompute calls it after agent
+	// construction (alongside registerAgentTurnHandlers).
 	return nil
 }
 
@@ -144,12 +179,19 @@ func (n *Node) wireStorageStage() error {
 // can be registered first.
 func (n *Node) wireSkills() error {
 	n.skillRegistry = skills.NewRegistry(n.log)
-	skillInvoker, err := skills.NewInvoker(skills.InvokerConfig{
+	cfg := skills.InvokerConfig{
 		Registry: n.skillRegistry,
 		Storage:  n.storageMgr,
 		Mounts:   n.mountResolver,
 		ProxyURL: n.subprocessProxyURL,
-	})
+	}
+	if n.credentialSvc != nil {
+		cfg.Credentials = newCredentialIssuerAdapter(n.credentialSvc, func(name string) (oauth.ProviderConfig, bool) {
+			p, ok := n.oauthProviders[name]
+			return p, ok
+		})
+	}
+	skillInvoker, err := skills.NewInvoker(cfg)
 	if err != nil {
 		return fmt.Errorf("skills invoker: %w", err)
 	}
@@ -158,6 +200,38 @@ func (n *Node) wireSkills() error {
 		return fmt.Errorf("skills adapter: %w", err)
 	}
 	n.skillAdapter = adapter
+	return nil
+}
+
+// wireClawhub constructs the clawhub catalog client + installer when
+// the operator declared a base URL. No-op when ClawhubBaseURL is
+// empty — operators with no clawhub access just don't configure it.
+//
+// Signing is wired but defaults to "off" — no publisher infrastructure
+// exists yet. When clawhub.ai starts publishing signed bundles, an
+// operator-trust-store config block + CLI will land alongside it.
+func (n *Node) wireClawhub() error {
+	base := strings.TrimSpace(n.cfg.Security.ClawhubBaseURL)
+	if base == "" {
+		return nil
+	}
+	if n.storageMgr == nil {
+		return nil
+	}
+	c, err := clawhub.NewClient(base)
+	if err != nil {
+		return fmt.Errorf("clawhub client: %w", err)
+	}
+	inst, err := clawhub.NewInstaller(clawhub.InstallerConfig{
+		Client:  c,
+		Storage: n.storageMgr,
+		Policy:  clawhub.SigningOff,
+	})
+	if err != nil {
+		return fmt.Errorf("clawhub installer: %w", err)
+	}
+	n.clawhubInstaller = inst
+	n.log.Info("clawhub: installer wired", "base", base)
 	return nil
 }
 

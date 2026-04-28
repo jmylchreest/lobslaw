@@ -27,6 +27,7 @@ func (n *Node) wireEgress() error {
 		AllowPrivateRanges: n.cfg.Security.EgressAllowPrivateRanges,
 		AllowRanges:        n.cfg.Security.EgressAllowRanges,
 		UpstreamProxy:      n.cfg.Security.EgressUpstreamProxy,
+		UDSPath:            n.cfg.Security.EgressUDSPath,
 		Logger:             n.log,
 	})
 	if err != nil {
@@ -60,8 +61,28 @@ func (n *Node) refreshEgressACL() error {
 // so smokescreen sees the right ACL. Returns "" when no provider
 // is wired (e.g. boot-time noop) — callers treat empty as "no
 // proxy" and the subprocess egresses directly (only safe in tests).
-func (n *Node) subprocessProxyURL(role string) string {
+//
+// When networkIsolation is true and a UDS listener was configured,
+// returns the UDS form (`unix:///<path>?role=<role>`) instead of
+// TCP loopback — the netns-isolated subprocess can't reach loopback
+// TCP but inherits the mount namespace. HTTP libraries that don't
+// support unix:// URLs in HTTPS_PROXY (most non-Go ones) need a
+// per-runtime adapter; document this in the skill manifest.
+func (n *Node) subprocessProxyURL(role string, networkIsolation bool) string {
 	if n.egressProvider == nil {
+		return ""
+	}
+	if networkIsolation {
+		if uds := n.egressProvider.UDSPath(); uds != "" {
+			return "unix://" + uds + "?role=" + role
+		}
+		// netns-isolated subprocess with no UDS configured can't
+		// reach the proxy. Returning empty makes HTTPS_PROXY unset;
+		// the subprocess can only reach what's in its (typically
+		// empty) netns. Operators wanting netns isolation MUST
+		// configure security.egress_uds_path.
+		n.log.Warn("subprocess: network_isolation requested but no UDS configured; egress will fail",
+			"role", role)
 		return ""
 	}
 	return n.egressProvider.SubprocessProxyURL(role)
@@ -82,6 +103,26 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		ClawhubBaseURL:     n.cfg.Security.ClawhubBaseURL,
 		ClawhubBinaryHosts: n.cfg.Security.ClawhubBinaryHosts,
 		FetchURLAllowHosts: n.cfg.Security.FetchURLAllowHosts,
+	}
+	if len(n.cfg.Security.OAuth) > 0 {
+		eps := make(map[string]egress.OAuthEndpoints, len(n.cfg.Security.OAuth))
+		for name := range n.cfg.Security.OAuth {
+			defaults := defaultOAuthProvider(name)
+			raw := n.cfg.Security.OAuth[name]
+			da := raw.DeviceAuthEndpoint
+			if da == "" {
+				da = defaults.DeviceAuthEndpoint
+			}
+			tok := raw.TokenEndpoint
+			if tok == "" {
+				tok = defaults.TokenEndpoint
+			}
+			eps[name] = egress.OAuthEndpoints{
+				DeviceAuthEndpoint: da,
+				TokenEndpoint:      tok,
+			}
+		}
+		in.OAuthProviders = eps
 	}
 	// MCP servers + skill networks: rules emerge once subprocesses
 	// spawn. Phase E.4 + E.6 fold them in.

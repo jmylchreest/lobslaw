@@ -8,6 +8,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
@@ -48,16 +49,24 @@ func (n *Node) wireGateway() error {
 	}
 	n.webhookHandlers = webhooks
 
-	// HTTPPort defaults to 8443 when unset. ListenAddr uses 0.0.0.0
-	// unless the operator supplies a specific bind via future config
-	// (Phase 6h keeps it simple; a bind-address setting lands with
-	// notify_telegram builtin: now that telegram handler exists,
-	// register the proactive-push builtin so commitments and
-	// scheduled tasks can deliver out-of-band messages back to
-	// chats. Skipped silently if Telegram isn't configured.
-	if tg != nil && n.builtinsRegistry != nil && n.toolRegistry != nil {
+	// Notification dispatch service: routes the channel-agnostic
+	// `notify` builtin through registered Sinks. Each gateway
+	// channel handler that supports outbound delivery registers
+	// its own Sink. Per-user channel addresses live in
+	// BucketUserPrefs (seeded from [[user]] config at boot).
+	if n.builtinsRegistry != nil && n.toolRegistry != nil && n.userPrefsSvc != nil {
+		notifySvc := notify.NewService(n.userPrefsSvc, n.log)
+		if tg != nil {
+			if err := notifySvc.RegisterSink(&gateway.TelegramSink{Handler: tg}); err != nil {
+				n.log.Warn("notify: telegram sink register failed", "err", err)
+			}
+		}
+		if err := notifySvc.RegisterSink(&gateway.RESTSink{}); err != nil {
+			n.log.Warn("notify: rest sink register failed", "err", err)
+		}
+		n.notifySvc = notifySvc
 		if err := compute.RegisterNotifyBuiltins(n.builtinsRegistry, compute.NotifyConfig{
-			Telegram: tg,
+			Service: notifySvc,
 		}); err != nil {
 			n.log.Warn("notify: builtin register failed", "err", err)
 		} else {
@@ -66,7 +75,7 @@ func (n *Node) wireGateway() error {
 					n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
 				}
 			}
-			n.log.Debug("compute: notify_telegram registered")
+			n.log.Debug("compute: notify registered")
 		}
 	}
 
@@ -227,7 +236,11 @@ func (n *Node) registerMCPToolsWithCompute() {
 	}
 	defs := n.mcpLoader.ToolDefs()
 	for _, td := range defs {
-		if err := n.toolRegistry.Register(td); err != nil {
+		// MCP tool defs come from external MCP servers — go through
+		// RegisterExternal so a hostile/buggy server can't ship a
+		// tool with a builtin: path that would short-circuit our
+		// privileged in-process dispatcher.
+		if err := n.toolRegistry.RegisterExternal(td); err != nil {
 			n.log.Warn("mcp: register tool def failed", "name", td.Name, "err", err)
 		}
 	}
@@ -263,7 +276,9 @@ func (n *Node) startMCPFromConfig(ctx context.Context) error {
 		n.mcpLoader = mcp.NewLoader(mcp.LoaderConfig{
 			Logger:         n.log,
 			SecretResolver: config.ResolveSecret,
-			ProxyURL:       n.subprocessProxyURL,
+			// MCP servers don't carry the network_isolation flag —
+			// the manifest field is skill-only. Always pass false.
+			ProxyURL: func(role string) string { return n.subprocessProxyURL(role, false) },
 		})
 	}
 	servers := make(map[string]mcp.ServerConfig, len(n.cfg.MCP.Servers))
