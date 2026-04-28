@@ -24,6 +24,29 @@ func TestBuildExtractsHostsFromProviderEndpoints(t *testing.T) {
 	}
 }
 
+func TestBuildOAuthRolesScopedToProviderHosts(t *testing.T) {
+	t.Parallel()
+	in := ACLInputs{
+		OAuthProviders: map[string]OAuthEndpoints{
+			"google": {
+				DeviceAuthEndpoint: "https://oauth2.googleapis.com/device/code",
+				TokenEndpoint:      "https://oauth2.googleapis.com/token",
+			},
+			"github": {
+				DeviceAuthEndpoint: "https://github.com/login/device/code",
+				TokenEndpoint:      "https://github.com/login/oauth/access_token",
+			},
+		},
+	}
+	got := Build(in)
+	if hosts := got.Roles["oauth/google"]; !equalSet(hosts, []string{"oauth2.googleapis.com"}) {
+		t.Errorf("oauth/google = %v", hosts)
+	}
+	if hosts := got.Roles["oauth/github"]; !equalSet(hosts, []string{"github.com"}) {
+		t.Errorf("oauth/github = %v", hosts)
+	}
+}
+
 func TestBuildTelegramAlwaysAddsAPIHost(t *testing.T) {
 	t.Parallel()
 	in := ACLInputs{

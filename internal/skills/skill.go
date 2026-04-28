@@ -62,14 +62,60 @@ type StorageAccess struct {
 // Versioning follows semver; the registry prefers the highest
 // version when two mounts expose the same skill name.
 type Manifest struct {
-	Name        string          `yaml:"name"`
-	Version     string          `yaml:"version"`
-	Description string          `yaml:"description,omitempty"`
-	Runtime     Runtime         `yaml:"runtime"`
-	Handler     string          `yaml:"handler"`  // relative to manifest dir
-	Storage     []StorageAccess `yaml:"storage,omitempty"`
-	Network     []string        `yaml:"network,omitempty"`
-	Params      map[string]any  `yaml:"params_schema,omitempty"`
+	Name             string             `yaml:"name"`
+	Version          string             `yaml:"version"`
+	Description      string             `yaml:"description,omitempty"`
+	Runtime          Runtime            `yaml:"runtime"`
+	Handler          string             `yaml:"handler"` // relative to manifest dir
+	Storage          []StorageAccess    `yaml:"storage,omitempty"`
+	Network          []string           `yaml:"network,omitempty"`
+	NetworkIsolation bool               `yaml:"network_isolation,omitempty"`
+	NetworkAllowDNS  bool               `yaml:"network_allow_dns,omitempty"`
+	Credentials      []CredentialAccess `yaml:"credentials,omitempty"`
+	Binaries         []BinaryAccess     `yaml:"binaries,omitempty"`
+	Params           map[string]any     `yaml:"params_schema,omitempty"`
+}
+
+// BinaryAccess declares one binary the skill bundles. The install
+// pipeline fetches each binary (Phase B), verifies SHA-256 against
+// the manifest's declared digest, and writes it under the install
+// dir at the named Target with the executable bit set. Hosting URL
+// must resolve to a host inside the egress "clawhub" role's
+// allowlist (e.g. github.com release endpoints).
+//
+// Binaries declared in the manifest are part of the signed bundle:
+// any change to URL/SHA/Target invalidates the publisher signature.
+//
+// Example manifest fragment:
+//
+//	binaries:
+//	  - name: gws-cli
+//	    url: https://github.com/myorg/gws-cli/releases/download/v1.0.0/gws-cli
+//	    sha256: a1b2c3...
+//	    target: bin/gws-cli
+type BinaryAccess struct {
+	Name   string `yaml:"name"`
+	URL    string `yaml:"url"`
+	SHA256 string `yaml:"sha256"`
+	Target string `yaml:"target"`
+}
+
+// CredentialAccess declares one credential a skill needs at invocation
+// time. The invoker resolves (provider, subject) via the credential
+// service, validates the per-skill ACL, refreshes the token if near
+// expiry, and injects the access token via env. Subject is optional
+// in single-user setups — when omitted the invoker requires exactly
+// one credential bound to the provider; multiple matches abort the
+// invocation with an "ambiguous subject" error.
+//
+// Example manifest fragment:
+//
+//	credentials:
+//	  - { provider: google, subject: alice@example.com }
+//	  - { provider: github }
+type CredentialAccess struct {
+	Provider string `yaml:"provider"`
+	Subject  string `yaml:"subject,omitempty"`
 }
 
 // Skill is the registered form — manifest + resolved disk paths +
@@ -206,6 +252,35 @@ func validateManifest(m *Manifest, dir string) error {
 	rel, err := filepath.Rel(dir, handlerAbs)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("manifest.handler %q must be inside the manifest directory", m.Handler)
+	}
+	for i, b := range m.Binaries {
+		if strings.TrimSpace(b.Name) == "" {
+			return fmt.Errorf("manifest.binaries[%d].name is required", i)
+		}
+		if strings.TrimSpace(b.URL) == "" {
+			return fmt.Errorf("manifest.binaries[%d].url is required", i)
+		}
+		if strings.TrimSpace(b.SHA256) == "" {
+			return fmt.Errorf("manifest.binaries[%d].sha256 is required", i)
+		}
+		if strings.TrimSpace(b.Target) == "" {
+			return fmt.Errorf("manifest.binaries[%d].target is required", i)
+		}
+		cleaned := filepath.Clean(b.Target)
+		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, "/../") {
+			return fmt.Errorf("manifest.binaries[%d].target %q must be relative and not escape the install dir", i, b.Target)
+		}
+	}
+	for i, c := range m.Credentials {
+		if strings.TrimSpace(c.Provider) == "" {
+			return fmt.Errorf("manifest.credentials[%d].provider is required", i)
+		}
+		if strings.ContainsAny(c.Provider, ":/") {
+			return fmt.Errorf("manifest.credentials[%d].provider %q must not contain ':' or '/'", i, c.Provider)
+		}
+		if strings.Contains(c.Subject, ":") {
+			return fmt.Errorf("manifest.credentials[%d].subject %q must not contain ':'", i, c.Subject)
+		}
 	}
 	for i := range m.Storage {
 		if m.Storage[i].Label == "" {

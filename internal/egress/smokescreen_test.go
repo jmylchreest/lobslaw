@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,57 @@ func TestSmokescreenAllowsDeclaredHost(t *testing.T) {
 // TestSmokescreenDeniesUndeclaredHost — a host not in the role's
 // ACL must be blocked at the proxy, surfaced as a non-2xx response
 // or an outright connection error to the caller.
+func TestSmokescreenUDSListenerCreatesSocket(t *testing.T) {
+	t.Parallel()
+	udsPath := filepath.Join(t.TempDir(), "egress.sock")
+	prov, err := NewSmokescreenProvider(SmokescreenConfig{
+		ACL:                Rules{Roles: map[string][]string{"test": {"example.com"}}},
+		AllowPrivateRanges: true,
+		AllowRanges:        []string{"127.0.0.0/8"},
+		UDSPath:            udsPath,
+	})
+	if err != nil {
+		t.Fatalf("NewSmokescreenProvider: %v", err)
+	}
+	t.Cleanup(func() { _ = prov.Stop(context.Background()) })
+
+	if prov.UDSPath() != udsPath {
+		t.Errorf("UDSPath() = %q, want %q", prov.UDSPath(), udsPath)
+	}
+	info, err := os.Stat(udsPath)
+	if err != nil {
+		t.Fatalf("UDS not created: %v", err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		t.Errorf("path %q is not a socket: mode %v", udsPath, info.Mode())
+	}
+	if perm := info.Mode().Perm(); perm != 0o660 {
+		t.Errorf("UDS perm = %o, want 0660", perm)
+	}
+}
+
+func TestSmokescreenStopRemovesUDS(t *testing.T) {
+	t.Parallel()
+	udsPath := filepath.Join(t.TempDir(), "egress.sock")
+	prov, err := NewSmokescreenProvider(SmokescreenConfig{
+		ACL:                Rules{Roles: map[string][]string{}},
+		AllowPrivateRanges: true,
+		UDSPath:            udsPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(udsPath); err != nil {
+		t.Fatalf("UDS not created: %v", err)
+	}
+	if err := prov.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if _, err := os.Stat(udsPath); !os.IsNotExist(err) {
+		t.Errorf("UDS should be removed after Stop, got err=%v", err)
+	}
+}
+
 func TestSmokescreenDeniesUndeclaredHost(t *testing.T) {
 	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

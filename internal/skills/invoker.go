@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
@@ -107,15 +108,17 @@ type Invoker struct {
 	mounts  MountResolver
 	runner  SubprocessRunner
 
-	// proxyURL, when non-nil, returns the HTTPS_PROXY URL for a
-	// per-skill role. The invoker injects HTTPS_PROXY + HTTP_PROXY
-	// + NO_PROXY into the subprocess env so honest skills (curl,
-	// python requests, gws-cli, etc.) route through the egress
-	// proxy automatically. Nil → no proxy env injected (legacy
-	// path; only safe in test/dev where smokescreen isn't running).
-	proxyURL func(role string) string
+	proxyURL    func(role string, networkIsolation bool) string
+	credentials CredentialIssuer
 
 	defaultTimeout time.Duration
+}
+
+// CredentialIssuer is the subset of memory.CredentialService the
+// invoker needs to issue tokens at skill-launch time. Interface so
+// tests can substitute a stub without depending on the raft stack.
+type CredentialIssuer interface {
+	IssueForSkillByManifest(ctx context.Context, skill, provider, subject string) (accessToken string, scopes []string, expiresAt time.Time, err error)
 }
 
 // InvokerConfig bundles the dependencies. Storage is optional —
@@ -131,9 +134,20 @@ type InvokerConfig struct {
 
 	// ProxyURL returns the HTTPS_PROXY URL the subprocess should use
 	// for outbound HTTP. Wired to the egress provider's
-	// SubprocessProxyURL("skill/<name>") in production. Nil disables
-	// proxy injection — only safe when no smokescreen is running.
-	ProxyURL func(role string) string
+	// SubprocessProxyURL in production. networkIsolation=true means
+	// the skill manifest set NetworkIsolation: the subprocess will
+	// run in its own netns and can't reach TCP loopback, so the
+	// implementation must return a UDS form (or "" if unsupported).
+	// Nil disables proxy injection — only safe when no smokescreen
+	// is running.
+	ProxyURL func(role string, networkIsolation bool) string
+
+	// Credentials, when non-nil, lets the invoker resolve manifest
+	// credentials: declarations to access tokens injected via env.
+	// Nil → manifest credentials trigger an error at invocation
+	// time; deployments without an OAuth setup simply don't declare
+	// credentials in skill manifests.
+	Credentials CredentialIssuer
 }
 
 // NewInvoker constructs an invoker.
@@ -153,6 +167,7 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 		mounts:         cfg.Mounts,
 		runner:         cfg.Runner,
 		proxyURL:       cfg.ProxyURL,
+		credentials:    cfg.Credentials,
 		defaultTimeout: cfg.DefaultTimeout,
 	}, nil
 }
@@ -182,9 +197,16 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		return nil, err
 	}
 	env := buildEnv(skill, i.storage)
+	if len(skill.Manifest.Credentials) > 0 {
+		credEnv, err := i.injectCredentials(ctx, skill)
+		if err != nil {
+			return nil, err
+		}
+		env = append(env, credEnv...)
+	}
 	if i.proxyURL != nil {
 		role := "skill/" + skill.Name()
-		proxy := i.proxyURL(role)
+		proxy := i.proxyURL(role, skill.Manifest.NetworkIsolation)
 		// Both lower-case and upper-case forms — different HTTP
 		// libraries honour different casings (curl reads lower,
 		// Go reads either, Python's requests reads upper). NO_PROXY
@@ -268,6 +290,11 @@ func buildPolicy(skill *Skill, runtimePath string, mgr *storage.Manager, mounts 
 			User: true, PID: true, IPC: true, UTS: true,
 		},
 		NoNewPrivs: true,
+	}
+	if skill.Manifest.NetworkIsolation {
+		policy.Namespaces.Network = true
+		policy.NetworkFilter = true
+		policy.NetworkAllowDNS = skill.Manifest.NetworkAllowDNS
 	}
 
 	// Handler directory — interpreter needs read+exec to load the
@@ -386,6 +413,46 @@ func buildEnv(skill *Skill, mgr *storage.Manager) []string {
 		env = append(env, fmt.Sprintf("LOBSLAW_STORAGE_%s=%s", toEnvVar(s.Label), path))
 	}
 	return env
+}
+
+// injectCredentials walks the manifest's credentials: declarations,
+// resolves each to an access token via the credential service,
+// validates the per-skill ACL, and emits env vars for the subprocess.
+//
+// Variable shape:
+//
+//	LOBSLAW_CRED_<PROVIDER>_TOKEN    — bearer access token
+//	LOBSLAW_CRED_<PROVIDER>_SUBJECT  — authenticated user identifier
+//	LOBSLAW_CRED_<PROVIDER>_SCOPES   — space-joined scope subset
+//	LOBSLAW_CRED_<PROVIDER>_EXPIRES  — RFC3339 expiry timestamp
+//
+// Tokens never reach the agent or the LLM — they're materialised
+// here, handed to the subprocess via env, and the parent process
+// drops the local copy when this function returns. The subprocess
+// is the only place plaintext access tokens exist outside of raft.
+func (i *Invoker) injectCredentials(ctx context.Context, skill *Skill) ([]string, error) {
+	if i.credentials == nil {
+		return nil, fmt.Errorf("skills: skill %q declares credentials but no CredentialIssuer is wired", skill.Name())
+	}
+	out := make([]string, 0, len(skill.Manifest.Credentials)*4)
+	for _, c := range skill.Manifest.Credentials {
+		token, scopes, expiresAt, err := i.credentials.IssueForSkillByManifest(ctx, skill.Name(), c.Provider, c.Subject)
+		if err != nil {
+			return nil, fmt.Errorf("skills: skill %q: credential %s/%s: %w", skill.Name(), c.Provider, c.Subject, err)
+		}
+		prefix := "LOBSLAW_CRED_" + toEnvVar(c.Provider)
+		out = append(out,
+			prefix+"_TOKEN="+token,
+			prefix+"_SCOPES="+strings.Join(scopes, " "),
+		)
+		if c.Subject != "" {
+			out = append(out, prefix+"_SUBJECT="+c.Subject)
+		}
+		if !expiresAt.IsZero() {
+			out = append(out, prefix+"_EXPIRES="+expiresAt.UTC().Format(time.RFC3339))
+		}
+	}
+	return out, nil
 }
 
 // toEnvVar uppercases + replaces invalid env-var characters with

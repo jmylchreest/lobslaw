@@ -165,6 +165,115 @@ func TestInvokerBuildsStorageEnv(t *testing.T) {
 	}
 }
 
+type stubCredentialIssuer struct {
+	token   string
+	scopes  []string
+	expires time.Time
+	err     error
+	calls   []struct{ skill, provider, subject string }
+}
+
+func (s *stubCredentialIssuer) IssueForSkillByManifest(_ context.Context, skill, provider, subject string) (string, []string, time.Time, error) {
+	s.calls = append(s.calls, struct{ skill, provider, subject string }{skill, provider, subject})
+	if s.err != nil {
+		return "", nil, time.Time{}, s.err
+	}
+	return s.token, s.scopes, s.expires, nil
+}
+
+func TestInvokerInjectsCredentialEnv(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest: Manifest{
+			Name: "gws", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h",
+			Credentials: []CredentialAccess{
+				{Provider: "google", Subject: "alice@example.com"},
+			},
+		},
+		HandlerPath: "/x/h",
+	})
+	stub := &stubCredentialIssuer{
+		token:   "ya29.fresh",
+		scopes:  []string{"gmail.readonly", "calendar.readonly"},
+		expires: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	runner := &fakeRunner{}
+	inv, _ := NewInvoker(InvokerConfig{
+		Registry:    reg,
+		Runner:      runner,
+		Credentials: stub,
+	})
+
+	_, err := inv.Invoke(context.Background(), InvokeRequest{SkillName: "gws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.calls) != 1 {
+		t.Fatalf("issuer should be called once; got %d", len(stub.calls))
+	}
+	want := struct{ skill, provider, subject string }{"gws", "google", "alice@example.com"}
+	if stub.calls[0] != want {
+		t.Errorf("issuer call = %+v; want %+v", stub.calls[0], want)
+	}
+	envSet := map[string]string{}
+	for _, e := range runner.env {
+		for i := range len(e) {
+			if e[i] == '=' {
+				envSet[e[:i]] = e[i+1:]
+				break
+			}
+		}
+	}
+	if got := envSet["LOBSLAW_CRED_GOOGLE_TOKEN"]; got != "ya29.fresh" {
+		t.Errorf("token env = %q", got)
+	}
+	if got := envSet["LOBSLAW_CRED_GOOGLE_SCOPES"]; got != "gmail.readonly calendar.readonly" {
+		t.Errorf("scopes env = %q", got)
+	}
+	if got := envSet["LOBSLAW_CRED_GOOGLE_SUBJECT"]; got != "alice@example.com" {
+		t.Errorf("subject env = %q", got)
+	}
+	if got := envSet["LOBSLAW_CRED_GOOGLE_EXPIRES"]; got != "2030-01-01T00:00:00Z" {
+		t.Errorf("expires env = %q", got)
+	}
+}
+
+func TestInvokerRejectsCredentialDeclWithoutIssuer(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest: Manifest{
+			Name: "gws", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h",
+			Credentials: []CredentialAccess{{Provider: "google"}},
+		},
+		HandlerPath: "/x/h",
+	})
+	inv, _ := NewInvoker(InvokerConfig{Registry: reg, Runner: &fakeRunner{}})
+	_, err := inv.Invoke(context.Background(), InvokeRequest{SkillName: "gws"})
+	if err == nil {
+		t.Error("credential declaration without an issuer should fail loudly")
+	}
+}
+
+func TestInvokerSurfacesIssuerError(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest: Manifest{
+			Name: "gws", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h",
+			Credentials: []CredentialAccess{{Provider: "google"}},
+		},
+		HandlerPath: "/x/h",
+	})
+	stub := &stubCredentialIssuer{err: errors.New("not authorised")}
+	inv, _ := NewInvoker(InvokerConfig{Registry: reg, Runner: &fakeRunner{}, Credentials: stub})
+	_, err := inv.Invoke(context.Background(), InvokeRequest{SkillName: "gws"})
+	if err == nil {
+		t.Error("expected error to surface from issuer")
+	}
+}
+
 // TestInvokerRejectsStorageAccessWithoutManager — a skill that
 // declares storage access but is invoked without a configured
 // Manager must fail loudly rather than silently dropping the
@@ -259,6 +368,54 @@ func (d *deadlineRunner) Run(ctx context.Context, _ RunSpec) (int, error) {
 		*d.observed = true
 	}
 	return 0, nil
+}
+
+func TestPolicyEnablesNetworkFilterFromManifest(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest: Manifest{
+			Name: "iso", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h",
+			NetworkIsolation: true,
+			NetworkAllowDNS:  true,
+		},
+		HandlerPath: "/x/h",
+	})
+	runner := &fakeRunner{}
+	inv, _ := NewInvoker(InvokerConfig{Registry: reg, Runner: runner})
+	if _, err := inv.Invoke(context.Background(), InvokeRequest{SkillName: "iso"}); err != nil {
+		t.Fatal(err)
+	}
+	if runner.policy == nil {
+		t.Fatal("policy not captured")
+	}
+	if !runner.policy.NetworkFilter {
+		t.Error("NetworkFilter should be set when manifest opts in")
+	}
+	if !runner.policy.Namespaces.Network {
+		t.Error("Namespaces.Network should be set when NetworkFilter requested")
+	}
+	if !runner.policy.NetworkAllowDNS {
+		t.Error("NetworkAllowDNS should propagate from manifest")
+	}
+}
+
+func TestPolicyDefaultsToNoNetworkIsolation(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry(nil)
+	reg.Put(&Skill{
+		Manifest:    Manifest{Name: "x", Version: "1.0.0", Runtime: RuntimeBash, Handler: "h"},
+		HandlerPath: "/x/h",
+	})
+	runner := &fakeRunner{}
+	inv, _ := NewInvoker(InvokerConfig{Registry: reg, Runner: runner})
+	_, _ = inv.Invoke(context.Background(), InvokeRequest{SkillName: "x"})
+	if runner.policy.NetworkFilter {
+		t.Error("NetworkFilter should default off")
+	}
+	if runner.policy.Namespaces.Network {
+		t.Error("netns should default off")
+	}
 }
 
 // fakeStorageMount for tests that need a resolvable label.

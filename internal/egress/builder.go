@@ -53,6 +53,20 @@ type ACLInputs struct {
 	// list. Empty = default-permissive (any public host, smokescreen
 	// blocks private IPs anyway). Non-empty = explicit allowlist.
 	FetchURLAllowHosts []string
+
+	// OAuthProviders maps provider name → its DeviceAuth + Token
+	// endpoints. Egress under "oauth/<name>" is restricted to those
+	// two hosts so a misconfigured client can't reach an arbitrary
+	// IdP. Empty = no oauth roles registered.
+	OAuthProviders map[string]OAuthEndpoints
+}
+
+// OAuthEndpoints carries the two URLs an OAuth device flow needs to
+// reach. Only the host portion is used; smokescreen does host-level
+// matching, not path matching.
+type OAuthEndpoints struct {
+	DeviceAuthEndpoint string
+	TokenEndpoint      string
 }
 
 // Build aggregates the inputs into a Rules struct ready to feed into
@@ -128,6 +142,21 @@ func Build(in ACLInputs) Rules {
 			hosts = append(hosts, "github.com", "objects.githubusercontent.com", "*.githubusercontent.com")
 		}
 		rules.Roles["clawhub"] = hosts
+	}
+
+	// OAuth IdP endpoints — one role per declared provider, scoped
+	// to that provider's two hosts. The credentials builtins call
+	// egress.For("oauth/<name>") so a misconfigured client (or a
+	// compromised one) can't reach a different IdP.
+	for name, ep := range in.OAuthProviders {
+		hosts := uniqueHosts{}
+		if h := hostOf(ep.DeviceAuthEndpoint); h != "" {
+			hosts.add(h)
+		}
+		if h := hostOf(ep.TokenEndpoint); h != "" {
+			hosts.add(h)
+		}
+		rules.Roles["oauth/"+name] = hosts.list
 	}
 
 	// fetch_url is the deliberately permissive role. Operators who

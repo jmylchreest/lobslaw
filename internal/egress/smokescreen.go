@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stripe/smokescreen/pkg/smokescreen"
 	smokeacl "github.com/stripe/smokescreen/pkg/smokescreen/acl/v1"
+	"github.com/stripe/smokescreen/pkg/smokescreen/conntrack"
 )
 
 // roleHeader is the request header smokescreen reads to identify the
@@ -65,6 +67,18 @@ type SmokescreenConfig struct {
 	// CIDR here. Operators in unusual deployments (LLM provider on
 	// the same host as lobslaw) might also use this knob.
 	AllowRanges []string
+
+	// UDSPath, when non-empty, also serves the proxy on a Unix-domain
+	// socket at the given path. Used by subprocesses launched into
+	// their own network namespace (manifest network_isolation: true) —
+	// they can't reach the parent's TCP loopback but inherit the mount
+	// namespace and can dial the UDS. Empty = TCP-only (the default;
+	// fine for skills without netns isolation).
+	//
+	// Path is created with mode 0660. The subprocess sees it via the
+	// inherited mount namespace; Landlock must include the parent
+	// directory in AllowedPaths for the subprocess to dial it.
+	UDSPath string
 }
 
 // Rules is the role-to-allowlist map the ACL builder produces.
@@ -96,6 +110,8 @@ type Rules struct {
 type SmokescreenProvider struct {
 	bindAddr           string
 	listener           net.Listener
+	udsListener        net.Listener // nil when UDSPath wasn't set
+	udsPath            string
 	server             *http.Server
 	proxyURL           *url.URL
 	upstreamProxy      *url.URL
@@ -177,6 +193,33 @@ func NewSmokescreenProvider(cfg SmokescreenConfig) (*SmokescreenProvider, error)
 		}
 	}()
 
+	// Optional UDS listener for netns-isolated subprocesses.
+	if cfg.UDSPath != "" {
+		// Remove any stale socket from a prior crash so Listen
+		// doesn't fail with "address already in use." The socket
+		// is process-private (we're the only user), so unlinking
+		// is safe.
+		_ = os.Remove(cfg.UDSPath)
+		udsListener, udsErr := net.Listen("unix", cfg.UDSPath)
+		if udsErr != nil {
+			_ = listener.Close()
+			return nil, fmt.Errorf("egress: listen on UDS %q: %w", cfg.UDSPath, udsErr)
+		}
+		if chmodErr := os.Chmod(cfg.UDSPath, 0o660); chmodErr != nil {
+			_ = udsListener.Close()
+			_ = listener.Close()
+			return nil, fmt.Errorf("egress: chmod UDS %q: %w", cfg.UDSPath, chmodErr)
+		}
+		p.udsListener = udsListener
+		p.udsPath = cfg.UDSPath
+		go func() {
+			if serveErr := p.server.Serve(udsListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				logger.Error("egress: UDS proxy server exited", "err", serveErr)
+			}
+		}()
+		logger.Info("egress: smokescreen UDS listener started", "path", cfg.UDSPath)
+	}
+
 	logger.Info("egress: smokescreen proxy started",
 		"bind", addr.String(),
 		"roles", len(cfg.ACL.Roles),
@@ -215,13 +258,22 @@ func (p *SmokescreenProvider) SetACL(rules Rules) {
 	p.logger.Info("egress: ACL hot-reloaded", "roles", len(rules.Roles))
 }
 
-// Stop shuts down the proxy listener. Idempotent.
+// Stop shuts down the proxy listener(s). Idempotent.
 func (p *SmokescreenProvider) Stop(ctx context.Context) error {
 	if p.server == nil {
 		return nil
 	}
-	return p.server.Shutdown(ctx)
+	err := p.server.Shutdown(ctx)
+	if p.udsPath != "" {
+		_ = os.Remove(p.udsPath)
+	}
+	return err
 }
+
+// UDSPath returns the Unix-domain-socket path the proxy listens on,
+// or "" when no UDS listener was configured. Used by callers that
+// need to bind-mount or reference the socket from a child process.
+func (p *SmokescreenProvider) UDSPath() string { return p.udsPath }
 
 // ProxyURL returns the URL subprocesses should use as HTTPS_PROXY
 // WITHOUT a role embedded — for callers that handle role identity
@@ -388,6 +440,18 @@ func buildSmokescreenConfig(p *SmokescreenProvider) (*smokescreen.Config, error)
 		p.logger.Warn("egress: UpstreamProxy is configured but not yet wired; direct egress will be used",
 			"upstream", p.upstreamProxy.String())
 	}
+
+	// smokescreen's StartWithConfig (the public binary entrypoint)
+	// initializes ConnTracker before the listener loop. We bypass
+	// that path and call BuildProxy directly, so we have to install
+	// the tracker ourselves — every CONNECT-mode dial dereferences
+	// it via NewInstrumentedConn and panics on a nil receiver.
+	scfg.ConnTracker = conntrack.NewTracker(
+		scfg.IdleTimeout,
+		scfg.MetricsClient.StatsdClient,
+		scfg.Log,
+		scfg.ShuttingDown,
+	)
 
 	return scfg, nil
 }

@@ -51,14 +51,88 @@ func TestRoundTripCAAndNodeCert(t *testing.T) {
 	if creds.NodeID != "node-1" {
 		t.Errorf("NodeID = %q, want node-1", creds.NodeID)
 	}
-	if len(creds.NodeCert.Certificate) != 1 {
-		t.Errorf("cert chain length = %d, want 1", len(creds.NodeCert.Certificate))
+	if len(creds.Certificate().Certificate) != 1 {
+		t.Errorf("cert chain length = %d, want 1", len(creds.Certificate().Certificate))
 	}
 	if creds.ServerCreds() == nil {
 		t.Error("ServerCreds returned nil")
 	}
 	if creds.ClientCreds() == nil {
 		t.Error("ClientCreds returned nil")
+	}
+}
+
+func TestReloadAtomicSwapsCertificate(t *testing.T) {
+	t.Parallel()
+	caCert, caKey, nodeCert, nodeKey := setupCluster(t, "node-1")
+
+	creds, err := LoadNodeCreds(caCert, nodeCert, nodeKey)
+	if err != nil {
+		t.Fatalf("LoadNodeCreds: %v", err)
+	}
+	original := creds.Certificate()
+
+	// Re-sign with a different CN to force a different leaf cert.
+	ca, caPriv, err := LoadCA(caCert, caKey)
+	if err != nil {
+		t.Fatalf("LoadCA: %v", err)
+	}
+	rotatedCertPEM, rotatedKeyPEM, err := SignNodeCert(ca, caPriv, SignOpts{NodeID: "node-1-rotated"})
+	if err != nil {
+		t.Fatalf("SignNodeCert: %v", err)
+	}
+	if err := os.WriteFile(nodeCert, rotatedCertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nodeKey, rotatedKeyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := creds.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	rotated := creds.Certificate()
+	if string(original.Certificate[0]) == string(rotated.Certificate[0]) {
+		t.Error("Reload did not swap the certificate bytes")
+	}
+	if creds.NodeID != "node-1-rotated" {
+		t.Errorf("NodeID = %q, want node-1-rotated", creds.NodeID)
+	}
+}
+
+func TestReloadRejectsCertNotSignedByCA(t *testing.T) {
+	t.Parallel()
+	caCert, _, nodeCert, nodeKey := setupCluster(t, "node-1")
+	creds, err := LoadNodeCreds(caCert, nodeCert, nodeKey)
+	if err != nil {
+		t.Fatalf("LoadNodeCreds: %v", err)
+	}
+	originalNodeID := creds.NodeID
+
+	// Generate a fresh, unrelated CA and sign a cert with it.
+	wrongCAPEM, wrongCAKeyPEM, err := GenerateCA(CAOpts{CommonName: "rogue-ca"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCAFile := filepath.Join(t.TempDir(), "rogue-ca.pem")
+	wrongKeyFile := filepath.Join(t.TempDir(), "rogue-ca-key.pem")
+	if err := WriteCAFiles(wrongCAFile, wrongKeyFile, wrongCAPEM, wrongCAKeyPEM); err != nil {
+		t.Fatal(err)
+	}
+	rogueCA, rogueKey, _ := LoadCA(wrongCAFile, wrongKeyFile)
+	rogueCertPEM, rogueCertKeyPEM, _ := SignNodeCert(rogueCA, rogueKey, SignOpts{NodeID: "rogue"})
+	if err := os.WriteFile(nodeCert, rogueCertPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nodeKey, rogueCertKeyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := creds.Reload(); err == nil {
+		t.Error("Reload must reject a cert signed by a different CA")
+	}
+	if creds.NodeID != originalNodeID {
+		t.Errorf("NodeID changed after failed Reload: got %q, want %q (Reload should be all-or-nothing)", creds.NodeID, originalNodeID)
 	}
 }
 
