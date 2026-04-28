@@ -364,11 +364,6 @@ type = "rest"
 path  = "{{.SoulPath}}"
 scope = "default"
 
-[scheduler]
-enabled       = true
-tick_interval = "1m"
-claim_lease   = "5m"
-
 [audit.local]
 enabled     = true
 path        = "{{.AuditDir}}/audit.jsonl"
@@ -380,13 +375,6 @@ enabled = true
 
 [discovery]
 broadcast = false
-
-[observability]
-tracing_exporter = "stdout"
-
-[config]
-watch       = true
-debounce_ms = 1500
 `
 
 func writeConfigTOML(path string, ans initAnswers, dataDir, auditDir, caCert, nodeCert, nodeKey, providerKeyVar string) error {

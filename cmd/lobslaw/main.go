@@ -270,6 +270,32 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	// SIGHUP triggers an mTLS cert reload from disk — the conventional
+	// "re-read your config files" signal. Atomic-swaps the live cert;
+	// in-flight handshakes are unaffected, new handshakes pick up the
+	// rotated material on the next connection.
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	defer signal.Stop(hupCh)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hupCh:
+				if nodeCfg.Creds == nil {
+					logger.Warn("SIGHUP: no mTLS creds configured; ignoring")
+					continue
+				}
+				if err := nodeCfg.Creds.Reload(); err != nil {
+					logger.Error("SIGHUP: cert reload failed", "error", err)
+					continue
+				}
+				logger.Info("SIGHUP: mTLS certs reloaded", "node_id", nodeCfg.Creds.NodeID)
+			}
+		}
+	}()
+
 	if err := n.Start(ctx); err != nil {
 		logger.Error("node.Start", "error", err)
 		os.Exit(1)
@@ -391,6 +417,8 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		Storage:             cfg.Storage,
 		Skills:              cfg.Skills,
 		MCP:                 cfg.MCP,
+		Security:            cfg.Security,
+		Users:               cfg.Users,
 		SoulPath:            cfg.Soul.Path,
 		Logger:              logger,
 	}, nil

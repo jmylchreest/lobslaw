@@ -139,6 +139,11 @@ services:
       cert-init:
         condition: service_completed_successfully
     restart: unless-stopped
+    # Headroom over lobslaw's internal 10s gRPC GracefulStop ceiling
+    # (internal/node/node.go Shutdown), so storage/audit/raft/store
+    # close steps complete before SIGKILL when an in-flight stream
+    # consumes the full graceful-stop window.
+    stop_grace_period: 30s
 
   # ---- tools (long-running shell sidecar) ---------------------------
   # `docker compose exec tools sh` for ad-hoc inspection. Shares the

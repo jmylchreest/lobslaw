@@ -11,25 +11,23 @@ import (
 // validates its own slice — this layer only parses and resolves
 // secret references.
 type Config struct {
-	Memory        MemoryConfig        `koanf:"memory"`
-	Storage       StorageConfig       `koanf:"storage"`
-	Policy        PolicyConfig        `koanf:"policy"`
-	Compute       ComputeConfig       `koanf:"compute"`
-	Hooks         HooksConfig         `koanf:"hooks"`
-	Gateway       GatewayConfig       `koanf:"gateway"`
-	Discovery     DiscoveryConfig     `koanf:"discovery"`
-	Cluster       ClusterConfig       `koanf:"cluster"`
-	Soul          SoulLoaderConfig    `koanf:"soul"`
-	Scheduler     SchedulerConfig     `koanf:"scheduler"`
-	Auth          AuthConfig          `koanf:"auth"`
-	Sandbox       SandboxConfig       `koanf:"sandbox"`
-	Audit         AuditConfig         `koanf:"audit"`
-	Skills        SkillsConfig        `koanf:"skills"`
-	Observability ObservabilityConfig `koanf:"observability"`
-	Logging       LoggingConfig       `koanf:"logging"`
-	MCP           MCPConfig           `koanf:"mcp"`
-	Security      SecurityConfig      `koanf:"security"`
-	ConfigOpts    ConfigOpts          `koanf:"config"`
+	Memory    MemoryConfig     `koanf:"memory"`
+	Storage   StorageConfig    `koanf:"storage"`
+	Policy    PolicyConfig     `koanf:"policy"`
+	Compute   ComputeConfig    `koanf:"compute"`
+	Hooks     HooksConfig      `koanf:"hooks"`
+	Gateway   GatewayConfig    `koanf:"gateway"`
+	Discovery DiscoveryConfig  `koanf:"discovery"`
+	Cluster   ClusterConfig    `koanf:"cluster"`
+	Soul      SoulLoaderConfig `koanf:"soul"`
+	Auth      AuthConfig       `koanf:"auth"`
+	Sandbox   SandboxConfig    `koanf:"sandbox"`
+	Audit     AuditConfig      `koanf:"audit"`
+	Skills    SkillsConfig     `koanf:"skills"`
+	Logging   LoggingConfig    `koanf:"logging"`
+	MCP       MCPConfig        `koanf:"mcp"`
+	Security  SecurityConfig   `koanf:"security"`
+	Users     []UserConfig     `koanf:"user"`
 
 	// resolvedPath is the filesystem path Load resolved via
 	// findConfigPath. Empty when no config.toml was found (env-only
@@ -55,7 +53,6 @@ func (c *Config) Dir() string {
 
 type MemoryConfig struct {
 	Enabled    bool             `koanf:"enabled"`
-	RaftPort   int              `koanf:"raft_port"`
 	Encryption EncryptionConfig `koanf:"encryption"`
 	Snapshot   SnapshotConfig   `koanf:"snapshot"`
 	Dream      DreamConfig      `koanf:"dream"`
@@ -430,11 +427,43 @@ type GatewayConfig struct {
 	ConfirmationTimeout time.Duration          `koanf:"confirmation_timeout"`
 	UnknownUserScope    string                 `koanf:"unknown_user_scope"`
 
+	// DefaultTimezone is the cluster-wide IANA zone used when a user
+	// hasn't bound a per-user timezone via [[user]] config or the
+	// future timezone-binding builtin. Empty = "UTC". Stored UTC
+	// times are CONVERTED to this zone for display in agent
+	// responses, scheduled-task descriptions, commitment due_at, etc.
+	DefaultTimezone string `koanf:"default_timezone,omitempty"`
+
 	// Responsiveness timers. Zero on any = disabled. Operators can
 	// tune per deployment; sensible defaults land in Load().
 	TypingInterval time.Duration `koanf:"typing_interval"` // refresh typing indicator (Telegram clears at ~5s)
 	InterimTimeout time.Duration `koanf:"interim_timeout"` // send "still working" message after this (chatty SOUL only)
 	HardTimeout    time.Duration `koanf:"hard_timeout"`    // cancel turn + force summary reply after this
+}
+
+// UserConfig is the operator-declared per-user binding. Seeded into
+// BucketUserPrefs at boot if the bucket doesn't already hold a
+// record for the same id (operator config is the source of truth on
+// first boot; runtime edits via builtins win on subsequent boots).
+//
+// Solo deployments declare one entry: id="owner". Team / corporate
+// deployments declare one per human, each with their channel
+// addresses + timezone preference.
+type UserConfig struct {
+	ID          string                  `koanf:"id"`
+	DisplayName string                  `koanf:"display_name,omitempty"`
+	Timezone    string                  `koanf:"timezone,omitempty"`
+	Language    string                  `koanf:"language,omitempty"`
+	Channels    []UserChannelAddrConfig `koanf:"channels,omitempty"`
+}
+
+// UserChannelAddrConfig binds one (channel, address) pair for a user.
+// Type is the gateway channel kind ("telegram", "rest", "slack");
+// Address is the channel-specific identifier (Telegram chat_id as
+// string, REST claims subject, Slack user id).
+type UserChannelAddrConfig struct {
+	Type    string `koanf:"type"`
+	Address string `koanf:"address"`
 }
 
 type GatewayChannelConfig struct {
@@ -522,20 +551,6 @@ type MTLSConfig struct {
 type SoulLoaderConfig struct {
 	Path  string `koanf:"path"`
 	Scope string `koanf:"scope"`
-}
-
-type SchedulerConfig struct {
-	Enabled      bool                  `koanf:"enabled"`
-	TickInterval time.Duration         `koanf:"tick_interval"`
-	ClaimLease   time.Duration         `koanf:"claim_lease"`
-	Tasks        []SchedulerTaskConfig `koanf:"tasks"`
-}
-
-type SchedulerTaskConfig struct {
-	Name     string `koanf:"name"`
-	Schedule string `koanf:"schedule"`
-	Handler  string `koanf:"handler"`
-	Enabled  bool   `koanf:"enabled"`
 }
 
 type AuthConfig struct {
@@ -669,17 +684,69 @@ type SecurityConfig struct {
 	// supply-chain requirements declare their own.
 	ClawhubBinaryHosts []string `koanf:"clawhub_binary_hosts,omitempty"`
 
+	// ClawhubInstallMount names the storage mount where installed
+	// skill bundles land. Empty = "skill-tools" (the canonical
+	// label). Operators with custom layouts override.
+	ClawhubInstallMount string `koanf:"clawhub_install_mount,omitempty"`
+
+	// EgressUDSPath, when set, makes smokescreen also listen on a
+	// Unix-domain socket at the given path. Required when any skill
+	// declares network_isolation: true (the netns subprocess can't
+	// reach loopback TCP). Recommended location: under a directory
+	// reachable from the subprocess's mount namespace + Landlock
+	// allowlist (typically /tmp). Empty = TCP-only.
+	EgressUDSPath string `koanf:"egress_uds_path,omitempty"`
+
 	// FetchURLAllowHosts narrows the fetch_url builtin's egress.
 	// Empty = permissive (any public host, smokescreen still blocks
 	// private IPs). Non-empty = explicit allowlist; the agent's
 	// fetch_url calls are limited to these hostnames.
 	FetchURLAllowHosts []string `koanf:"fetch_url_allow_hosts,omitempty"`
+
+	// OAuth declares the device-flow IdPs operators have registered
+	// applications with. Keyed by provider name ("google", "github",
+	// ...) which becomes the credentials-bucket prefix and the
+	// egress role suffix ("oauth/<name>"). Empty = no oauth_start
+	// flows can run; the builtins return an error pointing at the
+	// missing config.
+	OAuth map[string]OAuthProviderConfig `koanf:"oauth,omitempty"`
 }
 
-type ObservabilityConfig struct {
-	TracingExporter string `koanf:"tracing_exporter"` // "otlp" | "stdout" | "none"
-	OTLPEndpoint    string `koanf:"otlp_endpoint,omitempty"`
+// OAuthProviderConfig is the operator-declared shape of one IdP
+// registration. The package internal/oauth has well-known endpoint
+// defaults for "google" and "github" — operators only need to fill
+// ClientIDRef (and ClientSecretRef where the IdP requires one) for
+// those. Custom providers declare endpoints explicitly.
+type OAuthProviderConfig struct {
+	// DeviceAuthEndpoint accepts the initial device-code request.
+	// Leave empty for known providers ("google", "github") to use
+	// the well-known default.
+	DeviceAuthEndpoint string `koanf:"device_auth_endpoint,omitempty"`
+
+	// TokenEndpoint exchanges device_code for tokens. Leave empty
+	// for known providers.
+	TokenEndpoint string `koanf:"token_endpoint,omitempty"`
+
+	// ClientIDRef resolves to the OAuth app client_id via the
+	// configured secret resolver (env var / file / vault).
+	ClientIDRef string `koanf:"client_id_ref"`
+
+	// ClientSecretRef is required by some IdPs even for device flow
+	// (Google's "TVs and Limited Input Devices"); empty for public-
+	// client providers like GitHub.
+	ClientSecretRef string `koanf:"client_secret_ref,omitempty"`
+
+	// DefaultScopes is the scope set requested when oauth_start is
+	// invoked without explicit scopes. Operators override per-call.
+	DefaultScopes []string `koanf:"default_scopes,omitempty"`
+
+	// SubjectClaim is the response field that identifies the
+	// authenticated user; used to derive the credentials bucket key.
+	// Leave empty for known providers to inherit ("email" for
+	// google, "login" for github).
+	SubjectClaim string `koanf:"subject_claim,omitempty"`
 }
+
 
 // LoggingConfig covers static log settings plus a slice of
 // initial filters applied at startup (slog-logfilter). Runtime
@@ -701,7 +768,3 @@ type LogFilterConfig struct {
 	Enabled     bool   `koanf:"enabled"`
 }
 
-type ConfigOpts struct {
-	Watch      bool `koanf:"watch"`
-	DebounceMs int  `koanf:"debounce_ms"`
-}

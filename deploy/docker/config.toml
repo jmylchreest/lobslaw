@@ -81,10 +81,22 @@ mode  = "rw"
 [policy]
 enabled = true
 
-# Soul self-tuning tools default-deny via the seedDefaultPolicyRules
-# layer (priority=10 deny). This rule opens them for the owner scope
-# only — priority 20 beats the deny seed's 10 so owner-scope agent
-# turns can mutate; strangers stay read-only.
+# --- Policy: builtins are default-allow, skills + MCP are not ---
+#
+# Builtins (current_time, fetch_url, web_search, debug_*, etc.) get
+# a default-allow seed at boot — they're lobslaw-curated and
+# shipped with the binary. Skills and MCP tools have NO default-
+# allow seed: the operator opts in explicitly per scope so a
+# malicious or buggy upstream can't widen the agent's reach
+# silently. The credentials flow is already skill-gated separately
+# (each skill must be explicitly granted access to a credential
+# via credentials_grant before it can use the token).
+#
+# Sensitive owner-only tools (soul_*, oauth_*, credentials_*,
+# clawhub_install) are deliberately left unseeded — the rule below
+# is the ONLY thing that lets the agent call them, and the
+# subject="scope:owner" gate keeps strangers out.
+
 [[policy.rules]]
 id       = "owner-soul-tools"
 subject  = "scope:owner"      # MUST be kind:value — bare "owner" is malformed → no-match
@@ -92,6 +104,61 @@ action   = "tool:exec"
 resource = "soul_*"
 effect   = "allow"
 priority = 20
+
+# Owner-only management of authentication + credentials + skill installs.
+[[policy.rules]]
+id       = "owner-oauth-credentials"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "oauth_*"
+effect   = "allow"
+priority = 20
+
+[[policy.rules]]
+id       = "owner-credentials-acl"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "credentials_*"
+effect   = "allow"
+priority = 20
+
+[[policy.rules]]
+id       = "owner-clawhub-install"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "clawhub_install"
+effect   = "allow"
+priority = 20
+
+# --- MCP tools: explicit allow per scope ---
+#
+# MCP tools come from external servers; operator opts in here.
+# Resource patterns support glob: "minimax.*" matches every minimax
+# tool. Tighten by listing specific names (resource = "minimax.text_to_image")
+# when you want a subset. Owner-only by default — extend to other
+# scopes with extra rules.
+
+# [[policy.rules]]
+# id       = "owner-allow-minimax"
+# subject  = "scope:owner"
+# action   = "tool:exec"
+# resource = "minimax.*"
+# effect   = "allow"
+# priority = 10
+
+# --- Skills: one allow rule per installed skill ---
+#
+# The skill registry watcher picks up manifests from the skill mount;
+# each skill becomes a tool the operator opts into here. Unconfigured
+# skills are policy-denied even though they appear in debug_tools.
+
+# [[policy.rules]]
+# id       = "owner-allow-gws-workspace"
+# subject  = "scope:owner"
+# action   = "tool:exec"
+# resource = "gws-workspace"
+# effect   = "allow"
+# priority = 10
 
 [compute]
 enabled = true

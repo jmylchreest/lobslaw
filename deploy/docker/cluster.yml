@@ -52,6 +52,11 @@ x-lobslaw-defaults: &lobslaw-defaults
     - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:ro
     - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
   restart: unless-stopped
+  # Headroom over lobslaw's internal 10s gRPC GracefulStop ceiling
+  # (internal/node/node.go Shutdown), so storage/audit/raft/store
+  # close steps complete before SIGKILL when an in-flight stream
+  # consumes the full graceful-stop window.
+  stop_grace_period: 30s
 
 x-cert-init-defaults: &cert-init-defaults
   build:

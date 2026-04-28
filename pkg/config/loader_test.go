@@ -13,7 +13,6 @@ import (
 const miniConfig = `
 [memory]
 enabled = true
-raft_port = 2380
 
 [storage]
 enabled = true
@@ -42,10 +41,6 @@ enabled = true
 path = "/var/lobslaw/audit/audit.jsonl"
 max_size_mb = 100
 max_files = 10
-
-[config]
-watch = true
-debounce_ms = 1500
 `
 
 func writeTempConfig(t *testing.T, content string) string {
@@ -80,9 +75,6 @@ func TestLoadFromExplicitPath(t *testing.T) {
 	if !cfg.Memory.Enabled {
 		t.Error("Memory.Enabled should be true")
 	}
-	if cfg.Memory.RaftPort != 2380 {
-		t.Errorf("Memory.RaftPort = %d, want 2380", cfg.Memory.RaftPort)
-	}
 	if cfg.Memory.Snapshot.Cadence != time.Hour {
 		t.Errorf("Snapshot.Cadence = %v, want 1h", cfg.Memory.Snapshot.Cadence)
 	}
@@ -98,26 +90,20 @@ func TestLoadFromExplicitPath(t *testing.T) {
 	if !cfg.Audit.Local.Enabled {
 		t.Error("Audit.Local.Enabled should be true")
 	}
-	if !cfg.ConfigOpts.Watch {
-		t.Error("ConfigOpts.Watch should be true")
-	}
-	if cfg.ConfigOpts.DebounceMs != 1500 {
-		t.Errorf("ConfigOpts.DebounceMs = %d, want 1500", cfg.ConfigOpts.DebounceMs)
-	}
 }
 
 func TestLoadEnvOverride(t *testing.T) {
 	path := writeTempConfig(t, miniConfig)
 
-	t.Setenv("LOBSLAW__MEMORY__RAFT_PORT", "9999")
+	t.Setenv("LOBSLAW__MEMORY__ENCRYPTION__KEY_REF", "env:OVERRIDDEN_KEY")
 
 	cfg, err := Load(LoadOptions{Path: path})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Memory.RaftPort != 9999 {
-		t.Errorf("Memory.RaftPort = %d, want 9999 (env override lost)", cfg.Memory.RaftPort)
+	if cfg.Memory.Encryption.KeyRef != "env:OVERRIDDEN_KEY" {
+		t.Errorf("Memory.Encryption.KeyRef = %q, want env:OVERRIDDEN_KEY", cfg.Memory.Encryption.KeyRef)
 	}
 }
 
@@ -137,7 +123,6 @@ func TestLoadMissingMemoryKeyRef(t *testing.T) {
 	const cfgText = `
 [memory]
 enabled = true
-raft_port = 2380
 
 [storage]
 enabled = true
@@ -172,14 +157,14 @@ func TestLoadNoFileEnvOnly(t *testing.T) {
 	}
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	t.Setenv("LOBSLAW__MEMORY__RAFT_PORT", "4242")
+	t.Setenv("LOBSLAW__MEMORY__ENCRYPTION__KEY_REF", "env:ENV_ONLY_KEY")
 
 	cfg, err := Load(LoadOptions{})
 	if err != nil {
 		t.Fatalf("Load without config file should succeed: %v", err)
 	}
-	if cfg.Memory.RaftPort != 4242 {
-		t.Errorf("Memory.RaftPort = %d, want 4242 (env-only load failed)", cfg.Memory.RaftPort)
+	if cfg.Memory.Encryption.KeyRef != "env:ENV_ONLY_KEY" {
+		t.Errorf("Memory.Encryption.KeyRef = %q, want env:ENV_ONLY_KEY (env-only load failed)", cfg.Memory.Encryption.KeyRef)
 	}
 	// Path()/Dir() should be empty when Load ran env-only — downstream
 	// discovery code uses this as the "fall back to CWD" signal.
