@@ -117,6 +117,41 @@ func TestNewSchedulerRequiresRaft(t *testing.T) {
 // TestSchedulerWireFSMCallback — NewScheduler installs the FSM's
 // scheduler-change callback, so a write via Raft.Apply wakes the
 // scheduler even if we're not inside its Run loop.
+// TestTaskNextRunAnchorsAtCreatedAtNotNow guards a real cron bug
+// we hit in production: tasks created before today's firing time
+// (e.g. created at 04:44 UTC with schedule "0 7 * * *") never
+// fired because taskNextRun anchored at now() — and cron.Next(now)
+// returns TOMORROW's 7am once we re-evaluate at 07:11. Anchoring
+// at CreatedAt yields today's 7am as the first scheduled run, and
+// fireDue picks it up because that time is now in the past.
+func TestTaskNextRunAnchorsAtCreatedAtNotNow(t *testing.T) {
+	t.Parallel()
+	node, _ := singleNodeRaft(t, "ntest")
+	s, err := NewScheduler(Config{NodeID: "ntest", MaxSleep: time.Second}, node, NewHandlerRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Date(2026, 4, 28, 4, 44, 0, 0, time.UTC)
+	now := time.Date(2026, 4, 28, 7, 11, 0, 0, time.UTC)
+	task := &lobslawv1.ScheduledTaskRecord{
+		Id:        "morning-walk",
+		Schedule:  "0 7 * * *",
+		Enabled:   true,
+		CreatedAt: timestamppb.New(createdAt),
+	}
+	got, err := s.taskNextRun(task, now)
+	if err != nil {
+		t.Fatalf("taskNextRun: %v", err)
+	}
+	want := time.Date(2026, 4, 28, 7, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("taskNextRun = %v, want %v (today's 7am, the first firing after CreatedAt)", got, want)
+	}
+	if !got.Before(now) {
+		t.Error("first firing should be in the past relative to now → fireDue picks it up immediately")
+	}
+}
+
 func TestSchedulerWireFSMCallback(t *testing.T) {
 	t.Parallel()
 	node, _ := singleNodeRaft(t, "n1")

@@ -73,10 +73,12 @@ func CommitmentToolDefs() []*types.ToolDef {
 		{
 			Name:        "commitment_list",
 			Path:        BuiltinScheme + "commitment_list",
-			Description: "List pending commitments with their due time and prompt. Markdown-table renderable.",
+			Description: "List commitments with their due time, prompt, and status. By default only PENDING (not-yet-fired) commitments are returned — already-delivered one-shots are hidden so the user isn't shown stale 'go to bed at 22:00' reminders the morning after. Pass include_history=true to see fired/done commitments too (useful when the user asks 'what did you remind me about yesterday'). Response includes hidden_count so you can mention there's history available without dumping it. Markdown-table renderable.",
 			ParametersSchema: []byte(`{
 				"type": "object",
-				"properties": {},
+				"properties": {
+					"include_history": {"type": "boolean", "description": "Include already-fired (done) commitments. Default false — only pending entries are returned."}
+				},
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskReversible,
@@ -108,30 +110,29 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		if prompt == "" {
 			return nil, 2, errors.New("commitment_create: prompt is required")
 		}
-		dueAt, err := parseWhen(when)
+		userTZ := strings.TrimSpace(args["__user_timezone"])
+		dueAt, err := parseWhen(when, userTZ)
 		if err != nil {
 			return nil, 2, fmt.Errorf("commitment_create: %w", err)
 		}
 		if dueAt.Before(time.Now()) {
-			return nil, 2, fmt.Errorf("commitment_create: due time %s is in the past", dueAt.Format(time.RFC3339))
+			return nil, 2, fmt.Errorf("commitment_create: due time %s is in the past", formatTimeForUser(dueAt, args))
 		}
 
 		id := ulid.MustNew(ulid.Now(), commitmentIDEntropy).String()
-		// Auto-capture channel context from synthetic args injected
-		// by agent.runToolCall. The bot doesn't reliably remember
-		// to pass chat_id explicitly, so we lift it from the
-		// originating turn's context. The firing turn's
-		// runCommitmentAsAgentTurn reads params.chat_id back into
-		// the agent request's ChannelID, which renders into the
-		// Runtime section of the firing turn's system prompt.
+		// Auto-capture context from synthetic args injected by
+		// agent.runToolCall. The originating user_id flows into
+		// the commitment params + into the firing turn's prompt
+		// as the notify target — the agent at fire time calls
+		// `notify(text=...)` and the system routes via that user's
+		// channel preferences. Channel + chat_id stay stored for
+		// audit/debug visibility but aren't load-bearing for
+		// delivery anymore.
 		channel := strings.TrimSpace(args["__channel"])
 		chatID := strings.TrimSpace(args["__chat_id"])
-		// Prefix the stored prompt with an explicit how-to-message-
-		// back instruction. Without this, the bot's stored prompt
-		// is often generic ("Send a message saying X") and the
-		// firing turn generates text that goes nowhere.
-		if channel == "telegram" && chatID != "" {
-			prompt = fmt.Sprintf("This commitment was scheduled by user in telegram chat %s. To deliver any reply to them you MUST call notify_telegram(chat_id=\"%s\", text=\"...\") — without this call the user will not see your reply, since this turn has no chat to auto-reply into.\n\nYour task: %s", chatID, chatID, prompt)
+		userID := strings.TrimSpace(args["__user_id"])
+		if userID != "" {
+			prompt = fmt.Sprintf("This commitment was scheduled by user %q. The firing turn has no chat to auto-reply into — to deliver any reply, call notify(text=\"...\") and the system routes to whichever channels that user is subscribed to.\n\nYour task: %s", userID, prompt)
 		}
 		params := map[string]string{"prompt": prompt}
 		if channel != "" {
@@ -139,6 +140,9 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		}
 		if chatID != "" {
 			params["chat_id"] = chatID
+		}
+		if userID != "" {
+			params["user_id"] = userID
 		}
 		c := &lobslawv1.AgentCommitment{
 			Id:         id,
@@ -148,6 +152,7 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 			Status:     "pending",
 			HandlerRef: CommitmentHandlerRef,
 			Params:     params,
+			CreatedFor: userID,
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -165,14 +170,22 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		}
 		out, _ := json.Marshal(map[string]any{
 			"id":     id,
-			"due_at": dueAt.Format(time.RFC3339),
+			"due_at": formatTimeForUser(dueAt, args),
 		})
 		return out, 0, nil
 	}
 }
 
 func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, _ map[string]string) ([]byte, int, error) {
+	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+		includeHistory := false
+		if raw, ok := args["include_history"]; ok && raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				return nil, 2, fmt.Errorf("commitment_list: include_history must be a boolean: %w", err)
+			}
+			includeHistory = b
+		}
 		type view struct {
 			ID     string `json:"id"`
 			DueAt  string `json:"due_at"`
@@ -181,9 +194,19 @@ func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
 			Status string `json:"status"`
 		}
 		var out []view
+		hidden := 0
 		err := store.ForEach(memory.BucketCommitments, func(_ string, raw []byte) error {
 			var c lobslawv1.AgentCommitment
 			if err := proto.Unmarshal(raw, &c); err != nil {
+				return nil
+			}
+			// Default-hide anything that's not actively pending. The
+			// scheduler stamps fired commitments to "done"; older or
+			// custom states (cancelled, errored, etc.) are also
+			// uninteresting to the agent's "what's still on the slate"
+			// view by default — opt in with include_history.
+			if !includeHistory && c.Status != "pending" {
+				hidden++
 				return nil
 			}
 			v := view{
@@ -193,7 +216,7 @@ func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
 				Status: c.Status,
 			}
 			if c.DueAt != nil {
-				v.DueAt = c.DueAt.AsTime().Format(time.RFC3339)
+				v.DueAt = formatTimeForUser(c.DueAt.AsTime(), args)
 			}
 			out = append(out, v)
 			return nil
@@ -201,7 +224,12 @@ func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("commitment_list: %w", err)
 		}
-		payload, _ := json.Marshal(map[string]any{"count": len(out), "commitments": out})
+		payload, _ := json.Marshal(map[string]any{
+			"count":           len(out),
+			"hidden_count":    hidden,
+			"include_history": includeHistory,
+			"commitments":     out,
+		})
 		return payload, 0, nil
 	}
 }
@@ -231,25 +259,49 @@ func newCommitmentCancelHandler(raft memoryRaftApplier) BuiltinFunc {
 	}
 }
 
-// parseWhen accepts either a Go duration ("2m", "1h", "24h") OR an
-// RFC3339 timestamp, and returns the absolute due time.
+// parseWhen accepts:
+//   - A Go duration ("2m", "1h", "24h") — added to time.Now().
+//   - A full RFC3339 timestamp with offset ("2026-04-30T09:00:00+01:00",
+//     "...Z") — taken as the absolute UTC moment regardless of TZ.
+//   - A naked wall-clock timestamp without offset ("2026-04-30T09:00:00")
+//     — interpreted in userTZ (when supplied) or UTC (fallback).
+//
+// userTZ is the IANA zone the user prefers (resolved via the
+// synthetic __user_timezone arg). Empty → UTC, which matches the
+// historical behaviour for callers that haven't plumbed TZ context.
+//
+// All returned times are converted to UTC before being stored —
+// the system operates on UTC; only display is timezone-driven.
 var rfc3339Hint = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T`)
+var rfc3339WithOffset = regexp.MustCompile(`(?:Z|[+-]\d{2}:\d{2})$`)
 
-func parseWhen(when string) (time.Time, error) {
+func parseWhen(when, userTZ string) (time.Time, error) {
 	w := strings.TrimSpace(when)
 	if rfc3339Hint.MatchString(w) {
-		t, err := time.Parse(time.RFC3339, w)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("invalid RFC3339 timestamp %q: %w", w, err)
+		if rfc3339WithOffset.MatchString(w) {
+			t, err := time.Parse(time.RFC3339, w)
+			if err != nil {
+				return time.Time{}, fmt.Errorf("invalid RFC3339 timestamp %q: %w", w, err)
+			}
+			return t.UTC(), nil
 		}
-		return t, nil
+		// Naked wall-clock — interpret in the user's TZ.
+		loc := time.UTC
+		if userTZ != "" {
+			if l, err := time.LoadLocation(userTZ); err == nil {
+				loc = l
+			}
+		}
+		t, err := time.ParseInLocation("2006-01-02T15:04:05", w, loc)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("invalid wall-clock timestamp %q (use RFC3339 with offset, or naked YYYY-MM-DDTHH:MM:SS): %w", w, err)
+		}
+		return t.UTC(), nil
 	}
 	d, err := time.ParseDuration(w)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("when %q is neither a Go duration ('2m', '1h') nor RFC3339 timestamp", w)
+		return time.Time{}, fmt.Errorf("when %q is neither a Go duration ('2m', '1h') nor a timestamp", w)
 	}
-	return time.Now().Add(d), nil
+	return time.Now().UTC().Add(d), nil
 }
 
-// suppress unused import warning when builtins compile in isolation
-var _ = strconv.Itoa

@@ -183,7 +183,7 @@ func newScheduleCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 }
 
 func newScheduleListHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, _ map[string]string) ([]byte, int, error) {
+	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
 		type view struct {
 			ID       string `json:"id"`
 			Name     string `json:"name"`
@@ -207,10 +207,10 @@ func newScheduleListHandler(store *memory.Store) BuiltinFunc {
 				Prompt:   t.Params["prompt"],
 			}
 			if t.NextRun != nil {
-				v.NextRun = t.NextRun.AsTime().Format(time.RFC3339)
+				v.NextRun = formatTimeForUser(t.NextRun.AsTime(), args)
 			}
 			if t.LastRun != nil {
-				v.LastRun = t.LastRun.AsTime().Format(time.RFC3339)
+				v.LastRun = formatTimeForUser(t.LastRun.AsTime(), args)
 			}
 			tasks = append(tasks, v)
 			return nil

@@ -314,7 +314,15 @@ func (s *Scheduler) nextDueTime(now time.Time) (time.Time, error) {
 // taskNextRun returns a scheduled task's next firing time given the
 // cluster's current clock. If NextRun is already set and in the
 // future, honour it; otherwise recompute from the cron schedule's
-// next-after-LastRun (or next-after-now if LastRun is zero).
+// next-after-LastRun, falling back to CreatedAt for never-fired
+// tasks.
+//
+// Anchoring at CreatedAt (not now) is load-bearing: cron.Next(t)
+// returns the next firing STRICTLY AFTER t, so anchoring at now
+// skips today's firing once it's passed and silently shifts every
+// missed task to tomorrow. A task created at 04:44 with schedule
+// "0 7 * * *" must fire at 07:00 the same day — anchoring at the
+// creation time gets us that, even when we re-evaluate at 07:11.
 func (s *Scheduler) taskNextRun(t *lobslawv1.ScheduledTaskRecord, now time.Time) (time.Time, error) {
 	if t.NextRun != nil && !t.NextRun.AsTime().IsZero() {
 		return t.NextRun.AsTime(), nil
@@ -323,9 +331,14 @@ func (s *Scheduler) taskNextRun(t *lobslawv1.ScheduledTaskRecord, now time.Time)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parse schedule %q: %w", t.Schedule, err)
 	}
-	anchor := now
-	if t.LastRun != nil && !t.LastRun.AsTime().IsZero() {
+	var anchor time.Time
+	switch {
+	case t.LastRun != nil && !t.LastRun.AsTime().IsZero():
 		anchor = t.LastRun.AsTime()
+	case t.CreatedAt != nil && !t.CreatedAt.AsTime().IsZero():
+		anchor = t.CreatedAt.AsTime()
+	default:
+		anchor = now
 	}
 	return schedule.Next(anchor), nil
 }

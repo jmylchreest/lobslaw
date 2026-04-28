@@ -128,6 +128,6 @@ func BuildEnvironment(specialty []string) Section {
 		b.WriteString(strings.Join(specialty, ", "))
 		b.WriteString(".\n")
 	}
-	b.WriteString("\nIf you need a command that isn't present, say so — don't fabricate one. shell_command is for LOCAL execution only; for online content use fetch_url or web_search.\n")
+	b.WriteString("\nWhen a needed command is missing, name what's missing and stop. shell_command runs LOCAL programs; for online content use fetch_url or web_search.\n")
 	return Section{Title: "Environment", Priority: PriorityContext, Body: b.String()}
 }

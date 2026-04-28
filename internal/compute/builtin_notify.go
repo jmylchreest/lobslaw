@@ -5,51 +5,58 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
+	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// TelegramNotifier is the channel-side push interface the
-// notify_telegram builtin calls into. The Telegram handler in
-// internal/gateway satisfies it via Send(chatID, text). Defined
-// here to avoid a compute → gateway import cycle.
-type TelegramNotifier interface {
-	Send(chatID int64, text string) error
+// Notifier is the channel-agnostic notification dispatch interface
+// the `notify` builtin calls into. internal/notify.Service satisfies
+// it; tests substitute a fake recorder.
+type Notifier interface {
+	Send(ctx context.Context, n notify.Notification) error
 }
 
-// NotifyConfig wires the notify_telegram builtin. Nil notifier
-// skips registration — single-channel deployments without Telegram
-// won't see this tool.
+// NotifyConfig wires the notify builtin. Nil Service skips
+// registration — deployments without any gateway channel running a
+// Sink won't see this tool. Operators with at least one channel
+// configured (Telegram, REST, future Slack) get it always.
 type NotifyConfig struct {
-	Telegram TelegramNotifier
+	Service Notifier
 }
 
-// RegisterNotifyBuiltins installs notify_telegram when a notifier
-// is supplied. Future channels (Slack, Matrix, etc.) get their own
-// builtin here; the current shape stays Telegram-specific because
-// that's the only channel exposing a push API today.
+// RegisterNotifyBuiltins installs the channel-agnostic `notify`
+// builtin. The agent passes a canonical user_id (resolved by the
+// channel layer at inbound time, or by the commitment record's
+// CreatedFor at fire time); the notify service routes to whichever
+// channels that user has bound in their preferences.
 func RegisterNotifyBuiltins(b *Builtins, cfg NotifyConfig) error {
-	if cfg.Telegram == nil {
-		return errors.New("notify builtins: at least one channel notifier required")
+	if cfg.Service == nil {
+		return errors.New("notify builtins: notify.Service required")
 	}
-	return b.Register("notify_telegram", newNotifyTelegramHandler(cfg.Telegram))
+	return b.Register("notify", newNotifyHandler(cfg.Service))
 }
 
+// NotifyToolDefs returns the LLM-facing tool registration for
+// `notify`. The shape replaces the channel-specific predecessors
+// (notify_telegram et al) — operators who want per-channel routing
+// get it via the user's preferences bucket, not a per-builtin tool.
 func NotifyToolDefs() []*types.ToolDef {
 	return []*types.ToolDef{
 		{
-			Name:        "notify_telegram",
-			Path:        BuiltinScheme + "notify_telegram",
-			Description: "Send a Telegram message proactively to a specific chat. Use when a scheduled task or commitment fires and needs to deliver its result to a user, OR when you want to follow up on a turn out-of-band. chat_id is the Telegram user/chat ID (numeric). text is the message body. NOTE: in normal in-chat replies you don't need this — your reply text is delivered automatically. notify_telegram is for PROACTIVE messaging where the user isn't currently expecting a reply (commitments, scheduled checks, completion notifications).",
+			Name:        "notify",
+			Path:        BuiltinScheme + "notify",
+			Description: "Send a proactive message to a user across every channel they're subscribed to. Use ONLY for proactive messaging — commitment fires, scheduled-task results, async research completions, follow-ups on turns out-of-band. For normal in-chat replies, return your reply text directly (the gateway delivers it automatically; calling notify duplicates the message). Pass user_id (canonical user identifier — usually \"owner\" for solo deployments, or the synthetic __user_id arg the agent injects automatically). text is the message body. Optional ttl_seconds (default 300) caps how long the message is allowed to wait before delivery; expired messages drop silently with an audit log.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
-					"chat_id": {"type": "string", "description": "Telegram chat ID (numeric, passed as a string for tool-call compatibility)."},
-					"text":    {"type": "string", "description": "Message body."}
+					"user_id":     {"type": "string", "description": "Canonical user id; falls back to the synthetic __user_id from the originating turn when omitted."},
+					"text":        {"type": "string", "description": "Message body."},
+					"ttl_seconds": {"type": "integer", "description": "Expiry in seconds. Default 300 (5 min). Past this, the message is dropped."}
 				},
-				"required": ["chat_id", "text"],
+				"required": ["text"],
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskCommunicating,
@@ -57,56 +64,59 @@ func NotifyToolDefs() []*types.ToolDef {
 	}
 }
 
-func newNotifyTelegramHandler(notifier TelegramNotifier) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
-		// Prefer the bot-supplied chat_id, but if it's empty OR
-		// matches a placeholder pattern that Anthropic + other
-		// privacy-trained models substitute for phone-shaped
-		// numbers ([PHONE], [PHONE_NUMBER], <chat_id>, etc.),
-		// fall back to the __chat_id synthetic arg the agent
-		// injects from request context. This makes the bot's
-		// "I'm responsibly redacting PII" behaviour harmless —
-		// the actual chat_id is recovered from the originating
-		// channel rather than being lost through the placeholder.
-		chatIDStr := strings.TrimSpace(args["chat_id"])
-		if chatIDStr == "" || isPlaceholder(chatIDStr) {
-			if syn := strings.TrimSpace(args["__chat_id"]); syn != "" {
-				chatIDStr = syn
-			}
+func newNotifyHandler(svc Notifier) BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		userID := strings.TrimSpace(args["user_id"])
+		if userID == "" {
+			userID = strings.TrimSpace(args["__user_id"])
 		}
-		if chatIDStr == "" {
-			return nil, 2, errors.New("notify_telegram: chat_id is required (and no synthetic context available)")
-		}
-		chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
-		if err != nil {
-			return nil, 2, fmt.Errorf("notify_telegram: chat_id must be numeric (got %q): %w", chatIDStr, err)
+		if userID == "" {
+			return nil, 2, errors.New("notify: user_id is required (and no synthetic context available)")
 		}
 		text := args["text"]
 		if strings.TrimSpace(text) == "" {
-			return nil, 2, errors.New("notify_telegram: text is required")
+			return nil, 2, errors.New("notify: text is required")
 		}
-		if err := notifier.Send(chatID, text); err != nil {
-			return nil, 1, fmt.Errorf("notify_telegram: %w", err)
+
+		n := notify.Notification{
+			UserID:            userID,
+			Body:              text,
+			OriginatorChannel: strings.TrimSpace(args["__channel"]),
+			OriginatorID:      strings.TrimSpace(args["__chat_id"]),
+		}
+		if raw := strings.TrimSpace(args["ttl_seconds"]); raw != "" {
+			secs, err := parseTTL(raw)
+			if err != nil {
+				return nil, 2, fmt.Errorf("notify: ttl_seconds: %w", err)
+			}
+			n.ExpiresAt = time.Now().Add(secs)
+		}
+
+		if err := svc.Send(ctx, n); err != nil {
+			if errors.Is(err, notify.ErrExpired) {
+				return nil, 1, fmt.Errorf("notify: dropped (expired before delivery)")
+			}
+			if errors.Is(err, notify.ErrUserUnbound) {
+				return nil, 1, fmt.Errorf("notify: user %q has no reachable channel addresses; ask the operator to bind one", userID)
+			}
+			return nil, 1, fmt.Errorf("notify: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{
-			"chat_id":   chatID,
+			"user_id":   userID,
 			"delivered": true,
 		})
 		return out, 0, nil
 	}
 }
 
-// isPlaceholder spots the privacy-redaction tokens that
-// Anthropic + similar models substitute for phone-shaped numbers
-// when constructing tool-call arguments. List grown as we
-// observe more variants in the wild.
-func isPlaceholder(s string) bool {
-	s = strings.ToUpper(strings.TrimSpace(s))
-	switch s {
-	case "[PHONE]", "[PHONE_NUMBER]", "<PHONE>", "<PHONE_NUMBER>",
-		"[NUMBER]", "<NUMBER>", "[CHAT_ID]", "<CHAT_ID>",
-		"[USER_ID]", "<USER_ID>", "[REDACTED]", "<REDACTED>":
-		return true
+func parseTTL(raw string) (time.Duration, error) {
+	d, err := time.ParseDuration(raw + "s")
+	if err == nil {
+		return d, nil
 	}
-	return false
+	d, err = time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("must be seconds (\"30\") or duration (\"30s\", \"5m\"): %w", err)
+	}
+	return d, nil
 }
