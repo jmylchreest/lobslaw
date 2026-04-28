@@ -1,27 +1,29 @@
 # syntax=docker/dockerfile:1.7
 #
-# Core lobslaw node image — alpine 3.20, ~15MB, full POSIX shell.
+# Core lobslaw node image — debian:12-slim, ~80MB, glibc.
 #
-# Why alpine over distroless: alpine ships busybox + a real package
-# manager (apk) baked in. That gives us /bin/sh + 300 standard tools,
-# making curl-sh installer scripts (uv, bun, etc.) work directly
-# inside the runtime container without a separate busybox sidecar
-# volume. apk is also exposed as an install manager to the binary
-# registry, so clawhub bundles declaring `kind: apk` install paths
-# can satisfy bin requirements at runtime when lobslaw runs as root
-# in the container.
+# We pivoted from alpine (~34MB) to debian-slim because the install
+# manager ecosystem skill bundles target (brew, uv, bun, ruby gems)
+# is glibc-built and doesn't run cleanly on musl. Trade ~46MB extra
+# for compatibility with the install scripts the skills expect.
 #
-# Compute nodes that run Phase 8 python/bash skill runtimes can use
-# Dockerfile.tools for a heavier image with bash/git/python3/uv/bun/
-# curl pre-installed. This file's runtime image is the lighter one
-# for nodes whose skills only need POSIX baseline + apk-installable
-# packages.
+# Tools available natively in debian-slim:
+#   /bin/sh (dash) + /bin/bash + standard GNU userland (grep, sed,
+#   awk, tar, gzip — full GNU versions, not busybox).
+# Things we add via apt:
+#   ca-certificates: outbound HTTPS to LLM providers, clawhub, OAuth.
+#   tzdata: scheduler timezone parsing.
+#   curl: many install scripts shell out to curl explicitly.
+#   procps + file: brew's install.sh sanity-checks need these.
+#
+# Compute nodes that run Phase 8 python/bash skill runtimes with
+# heavy toolchains (git, python3, ruby) should still use
+# Dockerfile.tools — that ships ~120MB with the broader runtime.
 
 ARG GO_VERSION=1.26
-ARG ALPINE_VERSION=3.20
 
 # ---- Build stage ---------------------------------------------------
-FROM golang:${GO_VERSION}-alpine AS build
+FROM golang:${GO_VERSION} AS build
 
 WORKDIR /src
 
@@ -36,7 +38,7 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 
 # Pure-Go build: CGO_ENABLED=0 so the binary is statically linked
-# and runs against musl on alpine without dynamic linking surprises.
+# and runs against any libc without dynamic linking surprises.
 # -trimpath strips local paths for reproducibility; -s -w drops debug
 # info (~30% smaller binary).
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -48,29 +50,20 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         ./cmd/lobslaw
 
 # ---- Runtime stage -------------------------------------------------
-FROM alpine:${ALPINE_VERSION}
+FROM debian:12-slim
 
-# Baseline runtime tools:
-#   ca-certificates: outbound HTTPS to LLM providers, clawhub, OAuth.
-#   tzdata: scheduler timezone parsing.
-#   libgcc, libstdc++: Python C extensions uv may install (pydantic
-#                      Rust core, etc.) link against them.
-#   bash: curl-sh installer scripts (brew, uv, bun, etc.) start with
-#         #!/bin/bash — busybox ash isn't a drop-in for the bash
-#         features they use (arrays, [[ ]], function declarations,
-#         readarray, etc.). ~1.5MB.
-#   curl: not all install scripts use busybox wget syntax; many
-#         shell-out to curl explicitly.
-# busybox + apk are already in the alpine base — no extra install.
-RUN apk add --no-cache \
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         tzdata \
-        libgcc \
-        libstdc++ \
-        bash \
-        curl && \
-    addgroup -S -g 65532 nonroot && \
-    adduser -S -u 65532 -G nonroot -h /lobslaw -s /sbin/nologin nonroot && \
+        curl \
+        procps \
+        file && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system --gid 65532 nonroot && \
+    useradd --system --uid 65532 --gid 65532 \
+        --home-dir /lobslaw --create-home --shell /usr/sbin/nologin \
+        nonroot && \
     mkdir -p /lobslaw/usr/local/bin && \
     chown -R 65532:65532 /lobslaw
 
