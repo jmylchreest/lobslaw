@@ -297,6 +297,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSoulTune, p.SoulTune, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
+	case *lobslawv1.LogEntry_UserPrefs:
+		return BucketUserPrefs, p.UserPrefs, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:
@@ -314,18 +316,16 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 }
 
 // Restore replaces state.db's contents with the bbolt dump read from
-// rc. The Store is closed and re-opened with the restored contents.
+// rc. The Store rotates its internal *bolt.DB in place — outside
+// references to *Store remain valid (policy engine, scheduler,
+// services all hold the same *Store and continue to work without
+// re-wiring).
 func (f *FSM) Restore(rc io.ReadCloser) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	defer rc.Close()
 
-	restored, err := f.store.RestoreFromSnapshot(rc)
-	if err != nil {
-		return err
-	}
-	f.store = restored
-	return nil
+	return f.store.RestoreFromSnapshot(rc)
 }
 
 // snapshot is the per-Snapshot() state captured for raft's async

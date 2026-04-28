@@ -269,8 +269,8 @@ func clientCredsFor(t *testing.T, certDir string, index int) credentials.Transpo
 	// (RootCAs is set via creds.ClientCreds()), so only cluster-signed
 	// certs are accepted.
 	return credentials.NewTLS(&tls.Config{
-		Certificates:       []tls.Certificate{creds.NodeCert},
-		RootCAs:            creds.CAPool,
+		Certificates:       []tls.Certificate{creds.Certificate()},
+		RootCAs:            creds.CAPool(),
 		InsecureSkipVerify: true, // server identity still validated via VerifyPeerCertificate
 		MinVersion:         tls.VersionTLS13,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
@@ -281,7 +281,7 @@ func clientCredsFor(t *testing.T, certDir string, index int) credentials.Transpo
 			if err != nil {
 				return err
 			}
-			_, err = peer.Verify(x509.VerifyOptions{Roots: creds.CAPool})
+			_, err = peer.Verify(x509.VerifyOptions{Roots: creds.CAPool()})
 			return err
 		},
 	})

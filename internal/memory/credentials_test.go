@@ -167,6 +167,97 @@ func TestCredentialNilKeyConstructionFails(t *testing.T) {
 	}
 }
 
+func TestIssueForSkillRequiresGrant(t *testing.T) {
+	t.Parallel()
+	cs := newTestCredentialService(t)
+	ctx := context.Background()
+	_ = cs.Put(ctx, &PlaintextCredential{
+		Provider: "google", Subject: "u@e", AccessToken: "a", RefreshToken: "r",
+		Scopes: []string{"gmail.readonly"},
+	})
+	_, err := cs.IssueForSkill(ctx, "google", "u@e", "ungranted-skill", nil)
+	if err == nil {
+		t.Error("expected error issuing to a skill not in AllowedSkills")
+	}
+}
+
+func TestIssueForSkillReturnsTokenWhenAuthorised(t *testing.T) {
+	t.Parallel()
+	cs := newTestCredentialService(t)
+	ctx := context.Background()
+	_ = cs.Put(ctx, &PlaintextCredential{
+		Provider: "google", Subject: "u@e",
+		AccessToken: "current-access", RefreshToken: "r",
+		Scopes:    []string{"gmail.readonly"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	_ = cs.Grant(ctx, "google", "u@e", "gws", []string{"gmail.readonly"})
+	got, err := cs.IssueForSkill(ctx, "google", "u@e", "gws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AccessToken != "current-access" {
+		t.Errorf("token = %q, want current-access", got.AccessToken)
+	}
+	if len(got.Scopes) != 1 || got.Scopes[0] != "gmail.readonly" {
+		t.Errorf("scopes = %v", got.Scopes)
+	}
+}
+
+func TestIssueForSkillRefreshesNearExpiry(t *testing.T) {
+	t.Parallel()
+	cs := newTestCredentialService(t)
+	ctx := context.Background()
+	_ = cs.Put(ctx, &PlaintextCredential{
+		Provider: "google", Subject: "u@e",
+		AccessToken: "stale", RefreshToken: "rotateable",
+		Scopes:    []string{"gmail.readonly"},
+		ExpiresAt: time.Now().Add(10 * time.Second), // inside skew window
+	})
+	_ = cs.Grant(ctx, "google", "u@e", "gws", []string{"gmail.readonly"})
+	refreshCalls := 0
+	refresher := func(_ context.Context, rt string) (string, string, int, string, error) {
+		refreshCalls++
+		if rt != "rotateable" {
+			t.Errorf("refresher got refresh token %q", rt)
+		}
+		return "fresh-access", "new-refresh", 3600, "gmail.readonly", nil
+	}
+	got, err := cs.IssueForSkill(ctx, "google", "u@e", "gws", refresher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshCalls != 1 {
+		t.Errorf("expected 1 refresh call, got %d", refreshCalls)
+	}
+	if got.AccessToken != "fresh-access" {
+		t.Errorf("token = %q, want fresh-access", got.AccessToken)
+	}
+	stored, _ := cs.Get(ctx, "google", "u@e")
+	if stored.AccessToken != "fresh-access" || stored.RefreshToken != "new-refresh" {
+		t.Error("refresh outcome should be persisted in raft")
+	}
+}
+
+func TestFindOnlyForProviderErrorsOnAmbiguity(t *testing.T) {
+	t.Parallel()
+	cs := newTestCredentialService(t)
+	ctx := context.Background()
+	_ = cs.Put(ctx, &PlaintextCredential{Provider: "google", Subject: "alice@example.com", AccessToken: "a", RefreshToken: "r"})
+	_ = cs.Put(ctx, &PlaintextCredential{Provider: "google", Subject: "bob@example.com", AccessToken: "a", RefreshToken: "r"})
+	if _, err := cs.FindOnlyForProvider(ctx, "google"); err == nil {
+		t.Error("expected error when multiple credentials match a provider")
+	}
+}
+
+func TestFindOnlyForProviderErrorsOnMissing(t *testing.T) {
+	t.Parallel()
+	cs := newTestCredentialService(t)
+	if _, err := cs.FindOnlyForProvider(context.Background(), "google"); err == nil {
+		t.Error("expected error when no credential matches the provider")
+	}
+}
+
 func TestCredentialScopesAllowedForSkill(t *testing.T) {
 	t.Parallel()
 	cs := newTestCredentialService(t)

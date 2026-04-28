@@ -599,6 +599,35 @@ message AllowedScopes {
   repeated string scopes = 1;
 }
 
+// UserPreferences holds per-user settings that aren't credentials:
+// timezone, subscribed channel addresses, language. Plaintext —
+// channel IDs aren't secret. Solo deployments use one record (id =
+// "owner"); team / corporate deployments scale by adding records.
+//
+// channels is the list of channel-specific addresses the
+// notification service uses to broadcast messages to this user.
+// Inbound messages on any channel use the OriginatorChannel hint
+// instead — broadcast is only for self-generated notifications
+// (commitments, scheduled tasks, async research completions).
+message UserPreferences {
+  string user_id = 1;        // canonical id; bucket key
+  string display_name = 2;   // human-readable, e.g. "Alice"
+  string timezone = 3;       // IANA name; "Europe/London", "America/Los_Angeles". Empty falls back to cluster default.
+  string language = 4;       // BCP-47, e.g. "en", "en-GB". Empty = cluster default.
+  repeated UserChannelAddress channels = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// UserChannelAddress is one channel binding for a user. type is the
+// gateway channel kind ("telegram", "rest", "slack" — matches the
+// Sink registration); address is channel-specific (Telegram chat_id
+// as string, Slack member id, etc.).
+message UserChannelAddress {
+  string type = 1;
+  string address = 2;
+}
+
 // -----------------------------------------------------------------------------
 // Raft log entry envelope
 // -----------------------------------------------------------------------------
@@ -637,6 +666,7 @@ message LogEntry {
     ChannelStateRecord channel_state = 17;
     SoulTuneRecord soul_tune = 18;
     CredentialRecord credential = 19;
+    UserPreferences user_prefs = 21;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

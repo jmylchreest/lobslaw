@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -395,3 +396,133 @@ func TestServiceDreamUnimplementedWithoutRaft(t *testing.T) {
 		t.Errorf("code = %v, want Unimplemented", st.Code())
 	}
 }
+
+// seedCommitment writes an AgentCommitment directly into the
+// commitments bucket so digest tests don't have to plumb through
+// the scheduler.
+func seedCommitment(t *testing.T, s *Store, c *lobslawv1.AgentCommitment) {
+	t.Helper()
+	raw, err := proto.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(BucketCommitments, c.Id, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDreamDigestRollsUpFiredCommitments(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	ctx := context.Background()
+	now := fixedNow()
+
+	// Two done commitments on day-1, one on day-2, all past the
+	// 24h grace.
+	day1 := now.Add(-48 * time.Hour)
+	day2 := now.Add(-72 * time.Hour)
+	seedCommitment(t, svc.store, &lobslawv1.AgentCommitment{
+		Id: "c-day1-a", Status: "done", DueAt: timestamppb.New(day1),
+		Reason: "weather check", Params: map[string]string{"prompt": "fetch weather"},
+	})
+	seedCommitment(t, svc.store, &lobslawv1.AgentCommitment{
+		Id: "c-day1-b", Status: "done", DueAt: timestamppb.New(day1.Add(2 * time.Hour)),
+		Reason: "Iris's leaving drinks", Params: map[string]string{"prompt": "wish her well"},
+	})
+	seedCommitment(t, svc.store, &lobslawv1.AgentCommitment{
+		Id: "c-day2-a", Status: "done", DueAt: timestamppb.New(day2),
+		Reason: "go to bed", Params: map[string]string{"prompt": "remind to sleep"},
+	})
+
+	d := NewDreamRunner(svc.raft, svc.store, nil, DreamConfig{
+		Now: func() time.Time { return now },
+	}, nil)
+	result, err := d.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CommitmentsDigested != 3 {
+		t.Errorf("CommitmentsDigested = %d; want 3", result.CommitmentsDigested)
+	}
+	if result.CommitmentDigests != 2 {
+		t.Errorf("CommitmentDigests = %d; want 2 (one per day)", result.CommitmentDigests)
+	}
+
+	// Originals must be gone.
+	for _, id := range []string{"c-day1-a", "c-day1-b", "c-day2-a"} {
+		if _, err := svc.store.Get(BucketCommitments, id); err == nil {
+			t.Errorf("commitment %q should be deleted", id)
+		}
+	}
+
+	digestsFound := 0
+	combinedBodies := ""
+	err = svc.store.ForEach(BucketEpisodicRecords, func(_ string, raw []byte) error {
+		var rec lobslawv1.EpisodicRecord
+		if err := proto.Unmarshal(raw, &rec); err != nil {
+			return nil
+		}
+		hasDigestTag := false
+		for _, tag := range rec.Tags {
+			if tag == "commitment-digest" {
+				hasDigestTag = true
+			}
+		}
+		if !hasDigestTag {
+			return nil
+		}
+		digestsFound++
+		if rec.Retention != lobslawv1.Retention_RETENTION_LONG_TERM {
+			t.Errorf("digest %s retention = %v; want LONG_TERM", rec.Id, rec.Retention)
+		}
+		combinedBodies += rec.Context
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digestsFound != 2 {
+		t.Errorf("found %d commitment-digest records; want 2", digestsFound)
+	}
+	for _, want := range []string{"weather check", "Iris's leaving drinks", "go to bed"} {
+		if !strings.Contains(combinedBodies, want) {
+			t.Errorf("digest bodies missing %q; combined = %q", want, combinedBodies)
+		}
+	}
+}
+
+func TestDreamDigestRespectsGraceWindow(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	ctx := context.Background()
+	now := fixedNow()
+
+	// Fired 1 hour ago — inside the 24h grace, should be left alone.
+	seedCommitment(t, svc.store, &lobslawv1.AgentCommitment{
+		Id: "c-fresh", Status: "done", DueAt: timestamppb.New(now.Add(-time.Hour)),
+		Reason: "fresh delivery",
+	})
+	// Pending — never digested regardless of age.
+	seedCommitment(t, svc.store, &lobslawv1.AgentCommitment{
+		Id: "c-pending", Status: "pending", DueAt: timestamppb.New(now.Add(-100 * time.Hour)),
+		Reason: "still queued",
+	})
+
+	d := NewDreamRunner(svc.raft, svc.store, nil, DreamConfig{
+		Now: func() time.Time { return now },
+	}, nil)
+	result, err := d.Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CommitmentsDigested != 0 {
+		t.Errorf("CommitmentsDigested = %d; want 0 (grace + pending should both be skipped)", result.CommitmentsDigested)
+	}
+
+	for _, id := range []string{"c-fresh", "c-pending"} {
+		if _, err := svc.store.Get(BucketCommitments, id); err != nil {
+			t.Errorf("commitment %q should still exist; err = %v", id, err)
+		}
+	}
+}
+

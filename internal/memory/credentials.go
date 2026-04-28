@@ -253,6 +253,105 @@ func (s *CredentialService) ScopesAllowedForSkill(p *PlaintextCredential, skill 
 	return p.AllowedScopesPerSkill[skill]
 }
 
+// FindOnlyForProvider returns the single credential bound to the
+// given provider. Errors when zero or multiple are stored — callers
+// in single-user setups can treat "the google credential" as
+// implicit; multi-user setups MUST disambiguate by subject. Reads
+// are local; no raft round-trip.
+func (s *CredentialService) FindOnlyForProvider(ctx context.Context, provider string) (*PlaintextCredential, error) {
+	all, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var matches []*PlaintextCredential
+	for _, c := range all {
+		if c.Provider == provider {
+			matches = append(matches, c)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("credentials: no credential bound for provider %q", provider)
+	case 1:
+		return matches[0], nil
+	default:
+		subjects := make([]string, 0, len(matches))
+		for _, m := range matches {
+			subjects = append(subjects, m.Subject)
+		}
+		return nil, fmt.Errorf("credentials: provider %q has %d bound credentials (%v); subject must be specified", provider, len(matches), subjects)
+	}
+}
+
+// TokenRefresher trades a refresh token for a fresh access token.
+// Decoupled from the oauth package so memory can stay independent of
+// the device-flow specifics — node wiring injects oauth.RefreshToken
+// closed over the resolved ProviderConfig.
+type TokenRefresher func(ctx context.Context, refreshToken string) (access string, refresh string, expiresIn int, scope string, err error)
+
+// SkillIssue is the result of IssueForSkill: a fresh access token
+// scoped to what the skill is allowed to request, plus expiry info
+// the invoker uses to decide what env vars to inject.
+type SkillIssue struct {
+	AccessToken string
+	Scopes      []string
+	ExpiresAt   time.Time
+}
+
+// refreshSkew is the buffer subtracted from ExpiresAt when deciding
+// whether to refresh. Tokens that expire within this window are
+// proactively refreshed so a long-running skill doesn't hit a 401
+// mid-execution.
+const refreshSkew = 60 * time.Second
+
+// IssueForSkill returns a fresh access token for (provider, subject)
+// that is authorised to act on behalf of the named skill. Validates
+// the per-skill ACL, refreshes the token when within the skew window
+// of expiry, persists the new token via raft so other nodes see the
+// rotation, and returns the result.
+//
+// Refresh is optional — when refresher is nil the function returns
+// the stored access token even if expired (caller decides whether
+// that's fatal). Callers in production wire oauth.RefreshToken so
+// rotation happens transparently.
+func (s *CredentialService) IssueForSkill(ctx context.Context, provider, subject, skill string, refresher TokenRefresher) (*SkillIssue, error) {
+	cred, err := s.Get(ctx, provider, subject)
+	if err != nil {
+		return nil, err
+	}
+	scopes := s.ScopesAllowedForSkill(cred, skill)
+	if len(scopes) == 0 {
+		return nil, fmt.Errorf("credentials: skill %q is not authorised for %s/%s (run credentials_grant first)", skill, provider, subject)
+	}
+	now := time.Now()
+	needsRefresh := !cred.ExpiresAt.IsZero() && cred.ExpiresAt.Sub(now) < refreshSkew
+	if needsRefresh && refresher != nil {
+		access, refresh, expiresIn, scope, rerr := refresher(ctx, cred.RefreshToken)
+		if rerr != nil {
+			return nil, fmt.Errorf("credentials: refresh: %w", rerr)
+		}
+		cred.AccessToken = access
+		if refresh != "" {
+			cred.RefreshToken = refresh
+		}
+		if expiresIn > 0 {
+			cred.ExpiresAt = now.Add(time.Duration(expiresIn) * time.Second)
+		}
+		if scope != "" {
+			cred.Scopes = strings.Fields(strings.ReplaceAll(scope, ",", " "))
+		}
+		cred.LastRotated = now
+		if perr := s.Put(ctx, cred); perr != nil {
+			return nil, fmt.Errorf("credentials: persist refreshed: %w", perr)
+		}
+	}
+	return &SkillIssue{
+		AccessToken: cred.AccessToken,
+		Scopes:      append([]string(nil), scopes...),
+		ExpiresAt:   cred.ExpiresAt,
+	}, nil
+}
+
 // encrypt seals AccessToken + RefreshToken with the cluster key.
 // Other fields stay plaintext — they're not secrets, and keeping
 // them readable lets operators inspect the bucket via standard

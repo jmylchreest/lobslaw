@@ -27,6 +27,13 @@ const (
 	// ciphertext. Keyed by "<provider>:<subject>" — one record per
 	// (provider, authenticated-user) tuple.
 	BucketCredentials = "credentials"
+	// BucketUserPrefs holds per-user preferences: timezone,
+	// subscribed channel addresses (telegram chat_id, future Slack
+	// user, etc.), language. Keyed by canonical user_id. Plaintext
+	// — channel IDs aren't secret, timezones aren't secret.
+	// Solo-deployment uses one record (id=owner); team/corporate
+	// deployments scale by adding records.
+	BucketUserPrefs = "user_prefs"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -45,4 +52,5 @@ var allBuckets = []string{
 	BucketChannelState,
 	BucketSoulTune,
 	BucketCredentials,
+	BucketUserPrefs,
 }

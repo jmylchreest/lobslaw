@@ -135,22 +135,70 @@ func TestStoreSnapshotRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restored, err := s.RestoreFromSnapshot(&buf)
-	if err != nil {
+	if err := s.RestoreFromSnapshot(&buf); err != nil {
 		t.Fatalf("RestoreFromSnapshot: %v", err)
 	}
-	t.Cleanup(func() { _ = restored.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	_ = path
 
-	got, err := restored.Get(BucketPolicyRules, "a")
+	// Reads against the SAME *Store pointer must work post-restore —
+	// this is the load-bearing invariant. Pre-fix, RestoreFromSnapshot
+	// returned a NEW *Store and outside callers got "database not
+	// open" on the original pointer. Now the Store rotates its inner
+	// *bolt.DB in place via atomic.Pointer.
+	got, err := s.Get(BucketPolicyRules, "a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "pre-snap" {
 		t.Errorf("after restore: got %q, want pre-snap", got)
 	}
-	_, err = restored.Get(BucketPolicyRules, "b")
+	_, err = s.Get(BucketPolicyRules, "b")
 	if !errors.Is(err, types.ErrNotFound) {
 		t.Errorf("b should be absent post-restore, err=%v", err)
+	}
+}
+
+// TestRestoreFromSnapshotKeepsOutsideStorePointerValid is the
+// regression test for the "database not open" production bug:
+// callers (policy engine, scheduler, services) hold *Store
+// references that were captured at boot. After raft applied a
+// snapshot, those references must still produce reads against the
+// fresh DB rather than against a closed handle.
+func TestRestoreFromSnapshotKeepsOutsideStorePointerValid(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+	key, _ := crypto.GenerateKey()
+	s, err := OpenStore(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	if err := s.Put(BucketPolicyRules, "before", []byte("v0")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture the same *Store pointer in a "remote consumer" — this
+	// is the role policy.Engine, scheduler, services play in prod.
+	consumer := s
+
+	var snap bytes.Buffer
+	if err := s.WriteSnapshot(&snap); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(BucketPolicyRules, "after-snap", []byte("v1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RestoreFromSnapshot(&snap); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := consumer.Get(BucketPolicyRules, "before")
+	if err != nil {
+		t.Fatalf("consumer.Get after restore: %v (the regression: pre-fix this was 'database not open')", err)
+	}
+	if string(got) != "v0" {
+		t.Errorf("got %q, want v0", got)
 	}
 }

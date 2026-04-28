@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -37,6 +38,14 @@ type DreamConfig struct {
 	// HalfLife is the recency-decay half-life. Default 14 days —
 	// records a half-life old score half as much as fresh ones.
 	HalfLife time.Duration
+
+	// CommitmentGrace is the minimum age a fired (status=done)
+	// commitment must reach before the dream pass digests it into
+	// episodic memory and deletes the original. Default 24h — gives
+	// the user a window to ask "what did you remind me about today"
+	// against the live commitment listing before history-mode is
+	// required.
+	CommitmentGrace time.Duration
 
 	// Now is the wall-clock function for tests to override.
 	Now func() time.Time
@@ -87,6 +96,9 @@ func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg Dre
 	if cfg.HalfLife <= 0 {
 		cfg.HalfLife = 14 * 24 * time.Hour
 	}
+	if cfg.CommitmentGrace <= 0 {
+		cfg.CommitmentGrace = 24 * time.Hour
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -109,6 +121,12 @@ type DreamResult struct {
 	// pass. Zero values are expected before Phase 5 lands — the default
 	// AlwaysKeepDistinct Adjudicator never takes destructive action.
 	Merge MergeResult
+	// CommitmentsDigested is the number of fired commitments swept
+	// from BucketCommitments during this pass.
+	CommitmentsDigested int
+	// CommitmentDigests is the number of per-day rollup EpisodicRecords
+	// written into episodic memory by this pass.
+	CommitmentDigests int
 }
 
 // Run performs one Dream/REM pass: score → select → consolidate (if
@@ -157,7 +175,17 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		d.logger.Warn("dream: merge phase failed", "err", err)
 	}
 
-	if err := d.logDreamSession(now, len(candidates), consolidated, pruned); err != nil {
+	// Commitment digest: roll up fired commitments older than the
+	// grace window into per-day episodic summaries, then delete the
+	// originals. Keeps BucketCommitments lean for fast listing while
+	// preserving the historical fact in vector-searchable form.
+	// Failures are non-fatal — log and keep the rest of the pass.
+	digested, digests, err := d.digestCommitments(now)
+	if err != nil {
+		d.logger.Warn("dream: commitment digest failed", "err", err)
+	}
+
+	if err := d.logDreamSession(now, len(candidates), consolidated, pruned, digested, digests); err != nil {
 		// Don't fail the run for a log-entry error; just warn.
 		d.logger.Warn("dream: failed to log session", "err", err)
 	}
@@ -167,10 +195,12 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		ids = append(ids, c.id)
 	}
 	result := &DreamResult{
-		Consolidated: consolidated,
-		Pruned:       pruned,
-		Candidates:   ids,
-		Merge:        mergeResult,
+		Consolidated:        consolidated,
+		Pruned:              pruned,
+		Candidates:          ids,
+		Merge:               mergeResult,
+		CommitmentsDigested: digested,
+		CommitmentDigests:   digests,
 	}
 	d.logger.Info("dream complete",
 		"candidates", len(ids),
@@ -179,6 +209,8 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		"merged", mergeResult.Merged,
 		"conflicts", mergeResult.Conflicts,
 		"supersedes", mergeResult.Supersedes,
+		"commitments_digested", digested,
+		"commitment_digests", digests,
 	)
 	return result, nil
 }
@@ -329,10 +361,10 @@ func (d *DreamRunner) prune(scored []scoredRecord) (int, error) {
 // logDreamSession writes a tiny episodic record summarising what the
 // dream pass did. Useful for post-hoc introspection ("what did the
 // agent remember to forget last night?").
-func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, pruned int) error {
+func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, pruned, digested, digests int) error {
 	session := &lobslawv1.EpisodicRecord{
 		Id:         fmt.Sprintf("dream-session-%d", now.UnixNano()),
-		Event:      fmt.Sprintf("dream run: %d candidates, %d consolidated, %d pruned", candidates, consolidated, pruned),
+		Event:      fmt.Sprintf("dream run: %d candidates, %d consolidated, %d pruned, %d commitments digested into %d rollups", candidates, consolidated, pruned, digested, digests),
 		Importance: 3, // modest; dream sessions aren't the memories themselves
 		Timestamp:  timestamppb.New(now),
 		Tags:       []string{"dream-session"},
@@ -343,6 +375,135 @@ func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, p
 		Id:      session.Id,
 		Payload: &lobslawv1.LogEntry_EpisodicRecord{EpisodicRecord: session},
 	})
+}
+
+// digestCommitments rolls up fired commitments past the grace window
+// into one EpisodicRecord per calendar day (UTC), then deletes the
+// originals from BucketCommitments. Returns (deleted, digests, err).
+//
+// Digest IDs include UnixNano so a retry after a partial failure
+// produces a fresh rollup rather than overwriting the prior one — the
+// originals get deleted on the retry, and search recalls both summaries.
+func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
+	if d.cfg.CommitmentGrace <= 0 {
+		return 0, 0, nil
+	}
+	cutoff := now.Add(-d.cfg.CommitmentGrace)
+
+	// DueAt stands in for fire time — the proto has no fired_at field,
+	// and the scheduler preserves DueAt when stamping Status=done.
+	type entry struct {
+		id     string
+		due    time.Time
+		reason string
+		prompt string
+	}
+	byDay := map[string][]entry{}
+	err := d.store.ForEach(BucketCommitments, func(_ string, raw []byte) error {
+		var c lobslawv1.AgentCommitment
+		if err := proto.Unmarshal(raw, &c); err != nil {
+			return nil
+		}
+		if c.Status != "done" {
+			return nil
+		}
+		if c.DueAt == nil {
+			return nil
+		}
+		due := c.DueAt.AsTime()
+		if !due.Before(cutoff) {
+			return nil
+		}
+		dayKey := due.UTC().Format("2006-01-02")
+		byDay[dayKey] = append(byDay[dayKey], entry{
+			id:     c.Id,
+			due:    due,
+			reason: c.Reason,
+			prompt: c.Params["prompt"],
+		})
+		return nil
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("scan commitments: %w", err)
+	}
+	if len(byDay) == 0 {
+		return 0, 0, nil
+	}
+
+	days := make([]string, 0, len(byDay))
+	for k := range byDay {
+		days = append(days, k)
+	}
+	sort.Strings(days)
+
+	digested := 0
+	digestsWritten := 0
+	for _, day := range days {
+		es := byDay[day]
+		sort.Slice(es, func(i, j int) bool { return es[i].due.Before(es[j].due) })
+
+		var lines strings.Builder
+		fmt.Fprintf(&lines, "On %s (UTC), agent delivered %d scheduled commitment(s):\n", day, len(es))
+		for _, e := range es {
+			label := strings.TrimSpace(e.reason)
+			if label == "" {
+				label = truncatePrompt(e.prompt, 80)
+			}
+			if label == "" {
+				label = "(unlabelled commitment)"
+			}
+			fmt.Fprintf(&lines, "- %s — %s\n", e.due.UTC().Format("15:04"), label)
+		}
+
+		digest := &lobslawv1.EpisodicRecord{
+			Id:         fmt.Sprintf("commitment-digest-%s-%d", day, now.UnixNano()),
+			Event:      fmt.Sprintf("commitment digest %s: %d delivered", day, len(es)),
+			Context:    lines.String(),
+			Importance: 4,
+			Timestamp:  timestamppb.New(now),
+			Tags:       []string{"commitment-history", "commitment-digest"},
+			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
+		}
+		if err := d.applyEntry(&lobslawv1.LogEntry{
+			Op:      lobslawv1.LogOp_LOG_OP_PUT,
+			Id:      digest.Id,
+			Payload: &lobslawv1.LogEntry_EpisodicRecord{EpisodicRecord: digest},
+		}); err != nil {
+			return digested, digestsWritten, fmt.Errorf("write digest %s: %w", day, err)
+		}
+		digestsWritten++
+
+		// Delete originals only after the digest write succeeds, so a
+		// mid-pass crash leaves the originals intact and the next run
+		// rebuilds the rollup.
+		for _, e := range es {
+			if err := d.applyEntry(&lobslawv1.LogEntry{
+				Op:      lobslawv1.LogOp_LOG_OP_DELETE,
+				Id:      e.id,
+				Payload: &lobslawv1.LogEntry_Commitment{Commitment: &lobslawv1.AgentCommitment{Id: e.id}},
+			}); err != nil {
+				return digested, digestsWritten, fmt.Errorf("delete commitment %s: %w", e.id, err)
+			}
+			digested++
+		}
+	}
+	return digested, digestsWritten, nil
+}
+
+// truncatePrompt clips a stored commitment prompt to a human-friendly
+// length for digest summaries. Strips the leading "This commitment
+// was scheduled by user in telegram chat ..." preamble that
+// commitment_create injects, since the digest is always episodic and
+// the chat-targeting metadata is noise in the summary.
+func truncatePrompt(prompt string, max int) string {
+	p := strings.TrimSpace(prompt)
+	if idx := strings.Index(p, "Your task: "); idx >= 0 {
+		p = strings.TrimSpace(p[idx+len("Your task: "):])
+	}
+	if max > 0 && len(p) > max {
+		p = p[:max] + "…"
+	}
+	return p
 }
 
 func (d *DreamRunner) applyEntry(e *lobslawv1.LogEntry) error {
