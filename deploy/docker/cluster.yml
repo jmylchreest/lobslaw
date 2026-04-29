@@ -156,7 +156,7 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
@@ -219,7 +219,7 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
@@ -268,7 +268,7 @@ services:
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
       - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
@@ -291,7 +291,7 @@ services:
     hostname: tools
     command: ["sleep", "infinity"]
     environment:
-      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
+      - PATH=/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
     volumes:
       - tools-runtime:/lobslaw/usr/bin
       - data-1:/var/lobslaw/data-1:ro

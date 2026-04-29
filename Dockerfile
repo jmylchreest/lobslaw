@@ -66,17 +66,13 @@ RUN apt-get update && \
         --home-dir /lobslaw --create-home --shell /usr/sbin/nologin \
         nonroot && \
     mkdir -p /lobslaw/usr/local/bin && \
-    chown -R 65532:65532 /lobslaw && \
-    # Pre-create Linuxbrew's default install prefix and chown to
-    # nonroot. Brew's install.sh ignores HOMEBREW_PREFIX in many
-    # non-interactive paths and falls back to /home/linuxbrew/.linuxbrew
-    # — which it then can't write to as a non-sudo user. Pre-creating
-    # the directory with the right ownership lets brew bootstrap
-    # natively without sudo.
-    # git is also added because brew's bootstrap clones its core tap
-    # via git, not just curl + tar.
-    mkdir -p /home/linuxbrew/.linuxbrew && \
-    chown -R 65532:65532 /home/linuxbrew
+    chown -R 65532:65532 /lobslaw
+# git is in the apt-install above because brew's bootstrap clones
+# the brew repo (and homebrew-core tap) via git rather than curl+tar.
+# Brew installs at /lobslaw/usr/local (Satisfier's prefix); the manual
+# git-clone bootstrap path skips install.sh's hardcoded /home/linuxbrew
+# default. Trade-off: bottle-incompatibility for many formulae —
+# they'll source-build. For Go-only formulae (gog) this is fine.
 
 COPY --from=build /out/lobslaw /usr/local/bin/lobslaw
 

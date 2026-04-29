@@ -60,7 +60,7 @@ func defaultManagers(client *http.Client) map[string]Manager {
 func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 	out := map[string]Manager{
 		"apt":        aptManager{},
-		"brew":       brewManager{httpClient: client},
+		"brew":       brewManager{httpClient: client, prefix: prefix},
 		"pacman":     pacmanManager{},
 		"dnf":        dnfManager{},
 		"apk":        apkManager{},
