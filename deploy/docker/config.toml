@@ -232,18 +232,80 @@ priority = 20
 
 # --- Binary install ---
 #
-# Host binaries (gh, jq, uvx, ...) are installed automatically when
-# clawhub_install lands a skill whose bundle declares them in
-# clawdbot.requires.bins. The bundle's clawdbot.install array tells
-# the runtime how (brew, apt, pacman, curl-sh-with-checksum, etc.).
-# No operator [[binary]] config — the trust gate is the clawhub
-# bundle being installed (already gated by the clawhub_install
-# policy rule above) plus the per-skill tool:exec rule.
+# Two paths:
+#  1. Clawhub bundles declare their host bins in clawdbot.requires
+#     and clawdbot.install. The runtime auto-satisfies them via the
+#     same Manager pool when clawhub_install runs.
+#  2. Operator-declared [[binary]] entries (below) — for binaries
+#     not in clawhub or where you want a different install method
+#     than the bundle declared.
 #
-# Pre-installed binaries (baked into the image, bind-mounted from
-# host, installed via the operator's normal package manager) "just
-# work" — when the skill's bin requirement is already on PATH the
-# install pipeline skips it.
+# Both flow through the same internal/binaries Satisfier; the only
+# difference is the source of the install spec.
+
+# [[policy.rules]]
+# id       = "owner-binary-install"
+# subject  = "scope:owner"
+# action   = "tool:exec"
+# resource = "binary_*"
+# effect   = "allow"
+# priority = 20
+
+[[binary]]
+name        = "gog"
+description = "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs"
+detect      = "gog --version"
+
+# Linux amd64 prebuilt binary from the GitHub release. The
+# gh-release manager downloads the asset, extracts the binary
+# (auto-detects tar.gz/zip/bare-binary), and lands it under
+# /lobslaw/usr/local/bin/<name> with the executable bit set.
+# Optional checksum: pin sha256 of the asset for supply-chain
+# integrity (set checksum = "sha256:<hex>"); leave empty to trust
+# the release as-published.
+[[binary.install]]
+os      = "linux"
+arch    = "amd64"
+manager = "gh-release"
+package = "gog"
+url     = "https://github.com/steipete/gogcli/releases/download/v0.14.0/gogcli_0.14.0_linux_amd64.tar.gz"
+# checksum = "sha256:..."
+
+[[binary.install]]
+os      = "linux"
+arch    = "arm64"
+manager = "gh-release"
+package = "gog"
+url     = "https://github.com/steipete/gogcli/releases/download/v0.14.0/gogcli_0.14.0_linux_arm64.tar.gz"
+
+[[binary.install]]
+os      = "darwin"
+manager = "brew"
+package = "steipete/tap/gogcli"
+
+# After install, the agent reads this prose as part of binary_install's
+# return value and walks the user through setup. Same shape as a
+# clawhub SKILL.md prose body — free-form instructions the LLM
+# follows naturally. Triple-quoted TOML for multi-line.
+post_install = """
+gog is a Google Workspace CLI. Setup (once):
+
+  gog auth credentials /path/to/client_secret.json
+  gog auth add you@gmail.com --services gmail,calendar,drive,contacts,sheets,docs
+  gog auth list
+
+Common commands:
+  Gmail:    gog gmail search 'newer_than:7d' --max 10
+            gog gmail send --to a@b.com --subject "Hi" --body "Hello"
+  Calendar: gog calendar events <calendarId> --from <iso> --to <iso>
+  Drive:    gog drive search "query" --max 10
+  Sheets:   gog sheets get <sheetId> "Tab!A1:D10" --json
+  Docs:     gog docs export <docId> --format txt --out /tmp/doc.txt
+
+Set GOG_ACCOUNT=you@gmail.com to avoid repeating --account on every
+command. For scripting, prefer --json and --no-input. Confirm with
+the user before sending mail or creating events.
+"""
 
 # --- MCP tools: explicit allow per scope ---
 #

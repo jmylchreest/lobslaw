@@ -166,6 +166,13 @@ type Config struct {
 	// (id="owner"); team deployments add more.
 	Users []config.UserConfig
 
+	// Binaries is the operator-declared host-binary catalogue. Each
+	// entry mirrors the clawdbot.requires/install pair shape — the
+	// agent calls binary_install(name) which walks the declared
+	// install array via the same internal/binaries Satisfier
+	// pipeline clawhub_install uses. Empty disables binary_install.
+	Binaries []config.BinaryConfig
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate

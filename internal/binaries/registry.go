@@ -72,6 +72,7 @@ func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 	}
 	if client != nil {
 		out["curl-sh"] = newCurlShManagerWithPrefix(client, prefix)
+		out["gh-release"] = ghReleaseManager{prefix: prefix, httpClient: client}
 	}
 	return out
 }

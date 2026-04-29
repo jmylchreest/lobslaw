@@ -15,8 +15,10 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/research"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -170,6 +172,50 @@ func (n *Node) wireCompute() error {
 			}
 			n.log.Debug("compute: oauth_* + credentials_* registered",
 				"providers", len(n.oauthProviders))
+		}
+
+		// Operator-declared host binary catalogue. Each [[binary]] in
+		// config.toml becomes a BinaryDeclaration the agent can install
+		// via binary_install(name). Same Satisfier + Manager pool as
+		// clawhub_install — the only difference is the source of the
+		// install spec (operator config vs. clawhub bundle).
+		if len(n.cfg.Binaries) > 0 {
+			satisfier := binaries.New(binaries.Config{
+				HTTPClient:    egress.For("binaries-install").HTTPClient(),
+				Logger:        n.log,
+				InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
+			})
+			decls := make(map[string]compute.BinaryDeclaration, len(n.cfg.Binaries))
+			for _, b := range n.cfg.Binaries {
+				install := make([]binaries.InstallSpec, 0, len(b.Install))
+				for _, in := range b.Install {
+					install = append(install, binaries.InstallSpec{
+						OS: in.OS, Arch: in.Arch, Distro: in.Distro,
+						Manager: in.Manager, Package: in.Package,
+						Repo: in.Repo, URL: in.URL, Checksum: in.Checksum,
+						Sudo: in.Sudo, Args: in.Args,
+					})
+				}
+				decls[b.Name] = compute.BinaryDeclaration{
+					Name:        b.Name,
+					Description: b.Description,
+					Detect:      b.Detect,
+					Install:     install,
+					PostInstall: b.PostInstall,
+				}
+			}
+			if err := compute.RegisterBinariesBuiltins(builtins, compute.BinariesConfig{
+				Satisfier:    satisfier,
+				Declarations: decls,
+			}); err != nil {
+				return fmt.Errorf("register binaries builtins: %w", err)
+			}
+			for _, td := range compute.BinariesToolDefs() {
+				if err := n.toolRegistry.Register(td); err != nil {
+					return fmt.Errorf("register binaries tool %q: %w", td.Name, err)
+				}
+			}
+			n.log.Debug("compute: binary_install + binary_list registered", "count", len(decls))
 		}
 
 		// Clawhub install builtin: only registered when the operator

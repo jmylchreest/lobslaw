@@ -28,6 +28,7 @@ type Config struct {
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
 	Users     []UserConfig     `koanf:"user"`
+	Binaries  []BinaryConfig   `koanf:"binary"`
 
 	// resolvedPath is the filesystem path Load resolved via
 	// findConfigPath. Empty when no config.toml was found (env-only
@@ -790,3 +791,34 @@ type LogFilterConfig struct {
 }
 
 
+
+// BinaryConfig is one operator-declared host binary. Mirrors the
+// shape of a clawhub bundle's clawdbot.requires/install pair so the
+// same binaries.Manager pool can satisfy either source. Operators
+// declare binaries that aren't in clawhub (custom internal tooling,
+// vendor CLIs, github-release artefacts) here.
+type BinaryConfig struct {
+	Name        string                `koanf:"name"`
+	Description string                `koanf:"description,omitempty"`
+	Detect      string                `koanf:"detect,omitempty"`
+	Install     []BinaryInstallConfig `koanf:"install"`
+	// PostInstall is free-form prose surfaced to the agent after a
+	// successful install. Use for one-shot setup commands, env-var
+	// hints, OAuth flow walkthroughs — anything the user expects the
+	// agent to read and act on after the binary lands. Same shape as
+	// a clawhub SKILL.md prose body.
+	PostInstall string `koanf:"post_install,omitempty"`
+}
+
+type BinaryInstallConfig struct {
+	OS       string   `koanf:"os,omitempty"`
+	Arch     string   `koanf:"arch,omitempty"`
+	Distro   string   `koanf:"distro,omitempty"`
+	Manager  string   `koanf:"manager"`
+	Package  string   `koanf:"package,omitempty"`
+	Repo     string   `koanf:"repo,omitempty"`
+	URL      string   `koanf:"url,omitempty"`
+	Checksum string   `koanf:"checksum,omitempty"`
+	Sudo     bool     `koanf:"sudo,omitempty"`
+	Args     []string `koanf:"args,omitempty"`
+}

@@ -138,6 +138,8 @@ func ManagerKind(kind string) string {
 		return "go-install"
 	case "curl-sh", "curl|sh", "shell-script":
 		return "curl-sh"
+	case "gh-release", "github-release":
+		return "gh-release"
 	}
 	return ""
 }
