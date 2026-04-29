@@ -216,6 +216,33 @@ func (n *Node) wireCompute() error {
 				}
 			}
 			n.log.Debug("compute: binary_install + binary_list registered", "count", len(decls))
+
+			// Async auto-install: for each declared binary, check
+			// PATH; if missing, run satisfy in a goroutine. Failures
+			// log a warning but don't block boot — operator can
+			// re-run later via binary_install builtin (with
+			// bootstrap_managers=true if a manager itself is
+			// missing). Skip when the operator only declared
+			// binaries that need bootstrap (we don't auto-opt-in
+			// to running upstream installer scripts at boot).
+			for name, decl := range decls {
+				name, decl := name, decl
+				go func() {
+					if satisfier.Available(name) {
+						n.log.Debug("binary: auto-install skip (already on PATH)", "name", name)
+						return
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
+					n.log.Info("binary: auto-install starting", "name", name)
+					res, err := satisfier.Satisfy(ctx, name, decl.Install)
+					if err != nil {
+						n.log.Warn("binary: auto-install failed (operator can re-run via binary_install)", "name", name, "err", err)
+						return
+					}
+					n.log.Info("binary: auto-install done", "name", name, "manager", res.Manager, "already_available", res.AlreadyAvailable)
+				}()
+			}
 		}
 
 		// Clawhub install builtin: only registered when the operator
