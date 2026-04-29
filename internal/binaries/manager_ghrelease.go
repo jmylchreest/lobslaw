@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,12 +43,9 @@ func (ghReleaseManager) Name() string   { return "gh-release" }
 func (ghReleaseManager) UserMode() bool { return true }
 
 func (ghReleaseManager) Hosts(spec InstallSpec) []string {
-	// GitHub releases redirect through several CDN subdomains.
-	// We list the wildcard AND known specific hosts because some
-	// smokescreen glob configurations don't expand `*.x` reliably;
-	// belt-and-braces to avoid debugging in prod.
 	hosts := []string{
 		"github.com",
+		"api.github.com",
 		"codeload.github.com",
 		"*.githubusercontent.com",
 		"objects.githubusercontent.com",
@@ -61,6 +59,101 @@ func (ghReleaseManager) Hosts(spec InstallSpec) []string {
 		}
 	}
 	return hosts
+}
+
+// ResolveLatest queries the GitHub releases API for the most recent
+// tag of the repo whose owner/name appears in urlPattern. Used when
+// the operator declares version = "latest" — the auto-install loop
+// resolves to a concrete tag at boot and substitutes {{version}} +
+// {{stripv}} into the spec URL.
+//
+// Rate-limited: GitHub's unauthenticated API allows 60 requests per
+// hour per IP. Plenty for a typical boot sequence; operators with
+// many gh-release binaries should pin versions instead.
+func (m ghReleaseManager) ResolveLatest(ctx context.Context, urlPattern string) (string, error) {
+	if m.httpClient == nil {
+		return "", errors.New("gh-release: ResolveLatest requires HTTPClient")
+	}
+	owner, repo, err := parseGHRepoFromURL(urlPattern)
+	if err != nil {
+		return "", err
+	}
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", owner, repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gh-release: GET %s: %w", endpoint, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("gh-release: GET %s HTTP %d", endpoint, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", fmt.Errorf("gh-release: parse response: %w", err)
+	}
+	if payload.TagName == "" {
+		return "", errors.New("gh-release: latest release has no tag_name")
+	}
+	return payload.TagName, nil
+}
+
+// SubstituteVersion replaces {{version}} (full tag, e.g. "v0.14.0")
+// and {{stripv}} (tag without leading "v", e.g. "0.14.0") in the
+// spec's URL. No-op when neither token is present.
+func SubstituteVersion(specs []InstallSpec, version string) []InstallSpec {
+	stripped := strings.TrimPrefix(version, "v")
+	out := make([]InstallSpec, len(specs))
+	for i, spec := range specs {
+		spec.URL = strings.ReplaceAll(spec.URL, "{{version}}", version)
+		spec.URL = strings.ReplaceAll(spec.URL, "{{stripv}}", stripped)
+		out[i] = spec
+	}
+	return out
+}
+
+// parseGHRepoFromURL extracts owner + repo from a GitHub URL like
+// "https://github.com/steipete/gogcli/releases/download/...". Falls
+// back to the codeload + raw subdomains used by some bundle paths.
+func parseGHRepoFromURL(urlStr string) (string, string, error) {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return "", "", err
+	}
+	parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("gh-release: cannot extract owner/repo from %q", urlStr)
+	}
+	return parts[0], parts[1], nil
+}
+
+// LatestResolver is the interface the wire layer uses to resolve
+// version="latest" without taking a hard dependency on
+// ghReleaseManager's concrete type.
+type LatestResolver interface {
+	ResolveLatest(ctx context.Context, urlPattern string) (string, error)
+}
+
+// LookupLatestResolver returns the gh-release manager from the
+// satisfier's pool when present. Returns nil when gh-release isn't
+// wired (no HTTPClient).
+func (s *Satisfier) LookupLatestResolver() LatestResolver {
+	if mgr, ok := s.managers["gh-release"]; ok {
+		if r, ok := mgr.(ghReleaseManager); ok {
+			return r
+		}
+	}
+	return nil
 }
 
 // Available returns true whenever the manager is wired (i.e. an

@@ -249,21 +249,50 @@ func (n *Node) wireCompute() error {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 					defer cancel()
 
+					// Resolve version="latest" against GitHub's
+					// releases API, then substitute {{version}} and
+					// {{stripv}} into the install specs' URLs. Skip
+					// resolution if version isn't "latest" or no
+					// gh-release spec is declared.
+					declVersion := decl.Version
+					declInstall := decl.Install
+					if strings.EqualFold(declVersion, "latest") {
+						if resolver := satisfier.LookupLatestResolver(); resolver != nil {
+							for _, spec := range declInstall {
+								if spec.Manager == "gh-release" && spec.URL != "" {
+									latest, err := resolver.ResolveLatest(ctx, spec.URL)
+									if err != nil {
+										n.log.Warn("binary: latest-resolve failed; falling back to PATH check",
+											"name", name, "err", err)
+										declVersion = ""
+										break
+									}
+									declVersion = latest
+									declInstall = binaries.SubstituteVersion(declInstall, latest)
+									n.log.Info("binary: resolved latest",
+										"name", name, "version", latest)
+									break
+								}
+							}
+						}
+					}
+
 					// Version-mismatch upgrade path: if the operator
 					// declared a version + detect command, run detect
 					// and check whether its stdout contains the
-					// declared version. Mismatch → force reinstall.
-					// Available alone (no version) → skip if on PATH.
+					// declared (or resolved) version. Mismatch → force
+					// reinstall. Available alone (no version) → skip
+					// if on PATH.
 					force := false
 					reason := ""
-					if decl.Version != "" && decl.Detect != "" && satisfier.Available(name) {
+					if declVersion != "" && decl.Detect != "" && satisfier.Available(name) {
 						currentOut := runDetect(ctx, decl.Detect)
-						if !strings.Contains(currentOut, decl.Version) {
+						if !strings.Contains(currentOut, declVersion) && !strings.Contains(currentOut, strings.TrimPrefix(declVersion, "v")) {
 							force = true
-							reason = "version mismatch (declared=" + decl.Version + ", detect=" + truncateLine(currentOut, 80) + ")"
+							reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, 80) + ")"
 						} else {
 							n.log.Debug("binary: auto-install skip (version match)",
-								"name", name, "version", decl.Version)
+								"name", name, "version", declVersion)
 							return
 						}
 					} else if satisfier.Available(name) {
@@ -275,7 +304,7 @@ func (n *Node) wireCompute() error {
 					} else {
 						n.log.Info("binary: auto-install starting", "name", name)
 					}
-					res, err := satisfier.SatisfyOpts(ctx, name, decl.Install, binaries.SatisfyOptions{Force: force})
+					res, err := satisfier.SatisfyOpts(ctx, name, declInstall, binaries.SatisfyOptions{Force: force})
 					if err != nil {
 						n.log.Warn("binary: auto-install failed (operator can re-run via binary_install)",
 							"name", name, "err", err)
