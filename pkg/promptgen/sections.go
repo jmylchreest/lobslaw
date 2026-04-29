@@ -191,9 +191,12 @@ func BuildSafety() Section {
 	body := strings.TrimSpace(`
 You operate autonomously on behalf of the user. Hold to these principles:
 
+- **Retry after self-correction. Don't anchor on a stale failure.** If a tool, command, or step failed earlier in *this* turn, and you have since taken action that could change the outcome — installed a binary, set a credential, the user gave you new info, the operator updated a policy — try the original step again before reporting it as broken. A failure from 30 seconds ago is *not* the current state. Specifically: if you just ran binary_install and the next tool needs that binary, run it. If you got a permission denial and then the user authorised it, retry. Never quote a remembered failure as the present truth — verify it's still failing first.
 - **Tools first, talk second.** When the user asks "what do you have", "is X empty", "what did you find" — call the relevant tool and answer from the result. debug_tools, debug_memory, debug_policy, memory_recent, debug_storage, debug_scheduler all return live state. Always check before answering.
 - **Your tool list this turn is canonical.** It's the function-calling schema attached to this request. Reference it as the source of truth for what you can do. When a tool fails, name the tool + the exact result ("web_search returned no relevant hits", "fetch_url got 404"); that's the honest answer.
-- **System state changes between turns.** Operators update policies, install skills, configure providers between your turns. A tool that was denied or missing earlier may be available now. When in doubt, attempt the call again, or call debug_tools / debug_policy to see the live state — never quote a remembered failure as the current truth.
+- **System state changes between turns.** Operators update policies, install skills, configure providers between your turns. A tool that was denied or missing earlier may be available now. When in doubt, attempt the call again, or call debug_tools / debug_policy to see the live state.
+- **You run headless. Route interactive flows through chat.** There is no browser, no clipboard, no GUI on this machine. When a CLI needs OAuth, device-code, magic-link, or any flow that says "open this URL in your browser" — look for a headless flag (commonly --manual, --remote, --device-code, --headless, --no-browser, --offline) so it prints a URL or code you can read. Pass that URL/code back to the user via the chat reply (or the notify builtin for proactive turns); ask them to complete the flow on their own device and paste the result back to you. Never tell the user "open the browser locally" — they're not at this machine. If a CLI doesn't expose a headless mode, say so explicitly rather than launching a flow that will hang.
+- **Inspect before guessing.** When you need a CLI's flags or behaviour and they aren't in the Host Binaries section above, run "<name> --help" (or --help-all / -h depending on the tool) once via shell_exec and reason from the actual output. Don't invent flags from training-data memory; CLIs change.
 - **Quote facts; don't manufacture them.** Numeric data, dates, URLs, page contents — render them only when a tool returned them this turn. When a scrape was partial, say what you got and what was missing.
 - **Read your own history.** Prior tool calls and their results are in your context. Reference them when the user asks "why did you do X" or "what did you find earlier".
 - **Confirm before actions that are hard to reverse.** Deleting files, sending messages, making purchases, modifying shared systems — state what you're about to do and get explicit confirmation, unless the user already approved that exact action this turn.
@@ -344,6 +347,64 @@ func BuildSkills(skills []SkillInfo) Section {
 		}
 	}
 	return Section{Title: "Installed Skills", Priority: PriorityPrimary, Body: b.String()}
+}
+
+// BinaryInfo is the projection of an operator-declared [[binary]]
+// the prompt should advertise to the agent every turn. Help is the
+// captured --help output (already truncated by binaries.CaptureHelp);
+// the prompt further trims if the operator's help is unusually verbose.
+type BinaryInfo struct {
+	Name        string
+	Description string
+	PostInstall string
+	Help        string
+	Installed   bool
+}
+
+// maxBinaryHelpInPrompt caps each binary's help block so a verbose
+// CLI doesn't dominate the prompt. The full help stays on disk and
+// is surfaced in full via binary_install's response when the agent
+// asks for it; this is a quick-reference projection.
+const maxBinaryHelpInPrompt = 1500
+
+// BuildBinaries renders the operator-declared [[binary]] catalogue
+// the agent can use this turn — installed-status, description,
+// post_install prose (which may include agent-targeted hints), and a
+// truncated --help summary so the agent reasons about real flags
+// rather than confabulating from training data. Sorted by name.
+func BuildBinaries(bins []BinaryInfo) Section {
+	if len(bins) == 0 {
+		return Section{}
+	}
+	sorted := append([]BinaryInfo(nil), bins...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
+	var b strings.Builder
+	b.WriteString("Host CLI binaries the operator has declared. Already installed at the listed status — invoke directly via shell tools (e.g. shell_exec) using the flags shown in the help block. The post_install prose is operator-authored guidance for setup and common usage; follow it. When you need a flag not shown here, run `<name> --help` once via shell_exec and reason from real output rather than guessing.\n\n")
+	for _, bin := range sorted {
+		status := "missing — call binary_install to provision"
+		if bin.Installed {
+			status = "installed"
+		}
+		fmt.Fprintf(&b, "## %s (%s)\n\n", bin.Name, status)
+		if bin.Description != "" {
+			fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(bin.Description))
+		}
+		if pi := strings.TrimSpace(bin.PostInstall); pi != "" {
+			b.WriteString("**Operator notes:**\n\n")
+			b.WriteString(pi)
+			b.WriteString("\n\n")
+		}
+		if h := strings.TrimSpace(bin.Help); h != "" {
+			if len(h) > maxBinaryHelpInPrompt {
+				h = h[:maxBinaryHelpInPrompt] + "\n…(truncated — run the binary's help command via shell for the full surface)"
+			}
+			b.WriteString("**Captured `--help`:**\n\n```\n")
+			b.WriteString(h)
+			b.WriteString("\n```\n\n")
+		}
+	}
+	return Section{Title: "Host Binaries", Priority: PriorityPrimary, Body: b.String()}
 }
 
 // BuildCurrentTime renders the current time — timezone only, not

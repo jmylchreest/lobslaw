@@ -124,6 +124,13 @@ type AgentConfig struct {
 	// stays UTC. Wired by the node to read BucketUserPrefs.
 	TimezoneResolver func(userID string) string
 
+	// BinariesProvider returns the operator-declared [[binary]]
+	// catalogue to advertise in the system prompt every turn. The
+	// callback runs per-turn so install/uninstall and help-capture
+	// updates take effect without an agent restart. Nil → no Host
+	// Binaries section is rendered.
+	BinariesProvider func() []promptgen.BinaryInfo
+
 	// Logger is used for structured log entries. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -382,9 +389,14 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 	if req.SystemPrompt == "" && a.cfg.Soul != nil {
 		soul := a.cfg.Soul()
 		if soul != nil {
+			var bins []promptgen.BinaryInfo
+			if a.cfg.BinariesProvider != nil {
+				bins = a.cfg.BinariesProvider()
+			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
-				Soul:  soul,
-				Tools: toPromptgenTools(req.Tools),
+				Soul:     soul,
+				Tools:    toPromptgenTools(req.Tools),
+				Binaries: bins,
 				Runtime: promptgen.RuntimeInfo{
 					Channel:   req.Channel,
 					ChannelID: req.ChannelID,

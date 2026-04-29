@@ -23,11 +23,14 @@ type BinaryDeclaration struct {
 	Version     string
 	Install     []binaries.InstallSpec
 	PostInstall string
+	HelpCommand string
+	Env         []string
 }
 
 type BinariesConfig struct {
-	Satisfier    *binaries.Satisfier
-	Declarations map[string]BinaryDeclaration
+	Satisfier     *binaries.Satisfier
+	Declarations  map[string]BinaryDeclaration
+	InstallPrefix string
 }
 
 func RegisterBinariesBuiltins(b *Builtins, cfg BinariesConfig) error {
@@ -119,11 +122,23 @@ func newBinaryInstallHandler(cfg BinariesConfig) BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("binary_install: %w", err)
 		}
+		if cfg.InstallPrefix != "" && len(decl.Env) > 0 {
+			if _, werr := binaries.EnsureEnvWrapper(cfg.InstallPrefix, decl.Name, decl.Env); werr != nil {
+				return nil, 1, fmt.Errorf("binary_install: env wrapper: %w", werr)
+			}
+		}
+		postInstall := decl.PostInstall
+		if helpOut := binaries.ReadHelp(cfg.InstallPrefix, decl.Name); helpOut != "" {
+			if postInstall != "" {
+				postInstall += "\n\n"
+			}
+			postInstall += "## Help output captured at install time\n\n```\n" + helpOut + "\n```\n"
+		}
 		body, _ := json.Marshal(map[string]any{
 			"name":              result.Name,
 			"manager":           result.Manager,
 			"already_available": result.AlreadyAvailable,
-			"post_install":      decl.PostInstall,
+			"post_install":      postInstall,
 		})
 		return body, 0, nil
 	}

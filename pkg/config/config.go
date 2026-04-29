@@ -810,6 +810,22 @@ type BinaryConfig struct {
 	// release and wants the binary to upgrade. Empty means "any
 	// version is fine, only install when Detect/PATH says missing".
 	Version string `koanf:"version,omitempty"`
+	// HelpCommand runs after a successful install to capture the
+	// binary's flag/usage info. Persisted to disk and surfaced to
+	// the agent via binary_install's response so the agent learns
+	// the available flags without manually running --help. Empty
+	// defaults to "<name> --help"; set explicitly when the binary
+	// uses an unconventional help flag (e.g. "ffmpeg -h").
+	HelpCommand string `koanf:"help_command,omitempty"`
+	// Env is a list of "KEY=VAL" pairs exported every time the
+	// binary is invoked. lobslaw installs a /bin/sh shim at
+	// <prefix>/bin/<name> that exports these then execs the real
+	// binary at <prefix>/libexec/<name>. Use for HOME (so headless
+	// tools find their own state dir), XDG_*, or tool-specific
+	// account/profile selectors. Only applied when the binary
+	// installs under <prefix>/bin (gh-release, curl-sh) — apt/brew
+	// installs to system paths skip wrapping with a debug log.
+	Env []string `koanf:"env,omitempty"`
 	// PostInstall is free-form prose surfaced to the agent after a
 	// successful install. Use for one-shot setup commands, env-var
 	// hints, OAuth flow walkthroughs — anything the user expects the

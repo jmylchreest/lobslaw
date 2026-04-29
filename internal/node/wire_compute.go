@@ -28,6 +28,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -52,6 +53,13 @@ func (n *Node) wireCompute() error {
 
 	n.toolRegistry = compute.NewRegistry()
 	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
+
+	// binariesProvider is captured here at function scope so the
+	// Agent (constructed later in this function) can advertise the
+	// operator's [[binary]] catalogue in the system prompt every
+	// turn. Built inside the binaries-config block where decls +
+	// satisfier exist; nil-checked at the agent call site.
+	var binariesProvider func() []promptgen.BinaryInfo
 
 	// Stdlib builtins: cheap Go-native tools every node ships with
 	// (current_time today, more to follow). Register the handlers
@@ -202,13 +210,16 @@ func (n *Node) wireCompute() error {
 					Description: b.Description,
 					Detect:      b.Detect,
 					Version:     b.Version,
+					HelpCommand: b.HelpCommand,
 					Install:     install,
 					PostInstall: b.PostInstall,
+					Env:         b.Env,
 				}
 			}
 			if err := compute.RegisterBinariesBuiltins(builtins, compute.BinariesConfig{
-				Satisfier:    satisfier,
-				Declarations: decls,
+				Satisfier:     satisfier,
+				Declarations:  decls,
+				InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
 			}); err != nil {
 				return fmt.Errorf("register binaries builtins: %w", err)
 			}
@@ -218,6 +229,21 @@ func (n *Node) wireCompute() error {
 				}
 			}
 			n.log.Debug("compute: binary_install + binary_list + binary_upgrade registered", "count", len(decls))
+
+			installPrefix := n.cfg.Security.BinaryInstallPrefix
+			binariesProvider = func() []promptgen.BinaryInfo {
+				out := make([]promptgen.BinaryInfo, 0, len(decls))
+				for _, d := range decls {
+					out = append(out, promptgen.BinaryInfo{
+						Name:        d.Name,
+						Description: d.Description,
+						PostInstall: d.PostInstall,
+						Help:        binaries.ReadHelp(installPrefix, d.Name),
+						Installed:   satisfier.Available(d.Name),
+					})
+				}
+				return out
+			}
 
 			// Async auto-install: for each declared binary, check
 			// PATH; if missing, run Satisfy in a goroutine.
@@ -280,6 +306,46 @@ func (n *Node) wireCompute() error {
 						declInstall = binaries.SubstituteVersion(declInstall, declVersion)
 					}
 
+					// captureHelp persists --help output for the agent.
+					// fresh=true → always recapture (post-install); fresh=false →
+					// only capture when help.txt is missing (self-heal for
+					// binaries already on PATH from a prior run).
+					captureHelp := func(fresh bool) {
+						if !fresh && binaries.ReadHelp(n.cfg.Security.BinaryInstallPrefix, decl.Name) != "" {
+							return
+						}
+						helpOut := binaries.CaptureHelp(ctx, decl.Name, decl.HelpCommand)
+						if helpOut == "" {
+							return
+						}
+						if err := binaries.WriteHelp(n.cfg.Security.BinaryInstallPrefix, decl.Name, helpOut); err != nil {
+							n.log.Warn("binary: help capture write failed",
+								"name", name, "err", err)
+						} else {
+							n.log.Debug("binary: help captured",
+								"name", name, "bytes", len(helpOut), "fresh", fresh)
+						}
+					}
+
+					// applyEnvWrapper is idempotent — safe on every code
+					// path. Self-heals when the operator added an env
+					// block to a binary that was already installed.
+					applyEnvWrapper := func() {
+						if len(decl.Env) == 0 {
+							return
+						}
+						status, werr := binaries.EnsureEnvWrapper(n.cfg.Security.BinaryInstallPrefix, decl.Name, decl.Env)
+						if werr != nil {
+							n.log.Warn("binary: env wrapper failed",
+								"name", name, "err", werr)
+							return
+						}
+						if status != binaries.WrapperUnchanged {
+							n.log.Info("binary: env wrapper",
+								"name", name, "status", status.String())
+						}
+					}
+
 					// Version-mismatch upgrade path: if the operator
 					// declared a version + detect command, run detect
 					// and check whether its stdout contains the
@@ -296,10 +362,14 @@ func (n *Node) wireCompute() error {
 						} else {
 							n.log.Debug("binary: auto-install skip (version match)",
 								"name", name, "version", declVersion)
+							captureHelp(false)
+							applyEnvWrapper()
 							return
 						}
 					} else if satisfier.Available(name) {
 						n.log.Debug("binary: auto-install skip (already on PATH)", "name", name)
+						captureHelp(false)
+						applyEnvWrapper()
 						return
 					}
 					if force {
@@ -318,6 +388,9 @@ func (n *Node) wireCompute() error {
 						"manager", res.Manager,
 						"already_available", res.AlreadyAvailable,
 						"forced_upgrade", force)
+
+					applyEnvWrapper()
+					captureHelp(true)
 				}()
 			}
 		}
@@ -704,6 +777,7 @@ func (n *Node) wireCompute() error {
 			}),
 			Skills:           skillDispatcherOrNil(n.skillAdapter),
 			TimezoneResolver: n.resolveUserTimezone,
+			BinariesProvider: binariesProvider,
 			Logger:           n.log,
 		})
 		if err != nil {

@@ -20,6 +20,11 @@ type GenerateInput struct {
 	Tools  []ToolInfo
 	Skills []SkillInfo
 
+	// Binaries render the operator-declared [[binary]] catalogue with
+	// description + post_install prose + truncated --help. Empty list
+	// elides the section entirely.
+	Binaries []BinaryInfo
+
 	// Now + Timezone drive BuildCurrentTime. Zero Now → time.Now();
 	// nil Timezone → UTC.
 	Now      time.Time
@@ -77,6 +82,7 @@ func Generate(in GenerateInput) string {
 		BuildFragments(in.Soul),
 		BuildTooling(in.Tools),
 		BuildSkills(in.Skills),
+		BuildBinaries(in.Binaries),
 		BuildCurrentTime(now, in.Timezone),
 		BuildRuntime(in.Runtime),
 		BuildWorkspace(in.Workspace),
