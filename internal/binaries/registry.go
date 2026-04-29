@@ -69,10 +69,14 @@ func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 		"npm":        npmManager{prefix: prefix},
 		"cargo":      cargoManager{prefix: prefix},
 		"go-install": goInstallManager{prefix: prefix},
+		// gh-release + curl-sh are always registered so DefaultInstallHosts
+		// can enumerate them at boot for the binaries-install egress role.
+		// When client is nil, their Available() returns false and Install
+		// surfaces a clear "HTTPClient required" error rather than panicking.
+		"gh-release": ghReleaseManager{prefix: prefix, httpClient: client},
 	}
 	if client != nil {
 		out["curl-sh"] = newCurlShManagerWithPrefix(client, prefix)
-		out["gh-release"] = ghReleaseManager{prefix: prefix, httpClient: client}
 	}
 	return out
 }

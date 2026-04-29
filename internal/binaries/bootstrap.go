@@ -70,10 +70,12 @@ func DefaultInstallHosts() []string {
 		}
 	}
 	addAll(HostsForBootstrap())
+	// Every manager's runtime upstream hosts — not just Bootstrappable
+	// ones — need to be on the binaries-install allowlist. ghRelease,
+	// for example, fetches from github.com + release-assets CDN even
+	// though it doesn't self-bootstrap.
 	for _, mgr := range defaultManagers(nil) {
-		if _, ok := mgr.(Bootstrappable); ok {
-			addAll(mgr.Hosts(InstallSpec{}))
-		}
+		addAll(mgr.Hosts(InstallSpec{}))
 	}
 	return out
 }

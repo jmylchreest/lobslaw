@@ -42,10 +42,18 @@ func (ghReleaseManager) Name() string   { return "gh-release" }
 func (ghReleaseManager) UserMode() bool { return true }
 
 func (ghReleaseManager) Hosts(spec InstallSpec) []string {
+	// GitHub releases redirect through several CDN subdomains.
+	// We list the wildcard AND known specific hosts because some
+	// smokescreen glob configurations don't expand `*.x` reliably;
+	// belt-and-braces to avoid debugging in prod.
 	hosts := []string{
 		"github.com",
+		"codeload.github.com",
+		"*.githubusercontent.com",
 		"objects.githubusercontent.com",
 		"release-assets.githubusercontent.com",
+		"raw.githubusercontent.com",
+		"avatars.githubusercontent.com",
 	}
 	if spec.URL != "" {
 		if u, err := url.Parse(spec.URL); err == nil && u.Hostname() != "" {

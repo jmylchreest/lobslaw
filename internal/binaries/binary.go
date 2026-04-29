@@ -124,6 +124,7 @@ func (s InstallSpec) Validate() error {
 		"apt": true, "brew": true, "pacman": true, "dnf": true,
 		"apk": true, "pipx": true, "uvx": true, "npm": true,
 		"cargo": true, "go-install": true, "curl-sh": true,
+		"gh-release": true,
 	}
 	if !known[s.Manager] {
 		return fmt.Errorf("unknown manager %q", s.Manager)
@@ -135,6 +136,16 @@ func (s InstallSpec) Validate() error {
 		}
 		if !strings.HasPrefix(s.Checksum, "sha256:") || len(s.Checksum) != len("sha256:")+64 {
 			return errors.New("curl-sh requires checksum (sha256:<64hex>)")
+		}
+	case "gh-release":
+		if s.URL == "" {
+			return errors.New("gh-release requires url (release asset URL)")
+		}
+		if s.Package == "" {
+			return errors.New("gh-release requires package (binary name on PATH)")
+		}
+		if s.Checksum != "" && (!strings.HasPrefix(s.Checksum, "sha256:") || len(s.Checksum) != len("sha256:")+64) {
+			return errors.New("gh-release checksum (when set) must be sha256:<64hex>")
 		}
 	default:
 		if s.Package == "" {

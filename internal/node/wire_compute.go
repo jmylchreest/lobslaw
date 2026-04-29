@@ -218,16 +218,32 @@ func (n *Node) wireCompute() error {
 			n.log.Debug("compute: binary_install + binary_list registered", "count", len(decls))
 
 			// Async auto-install: for each declared binary, check
-			// PATH; if missing, run satisfy in a goroutine. Failures
-			// log a warning but don't block boot — operator can
-			// re-run later via binary_install builtin (with
-			// bootstrap_managers=true if a manager itself is
-			// missing). Skip when the operator only declared
-			// binaries that need bootstrap (we don't auto-opt-in
-			// to running upstream installer scripts at boot).
+			// PATH; if missing, run Satisfy in a goroutine.
+			//
+			// Non-blocking guarantees:
+			//   - Each install runs in its own goroutine — wireCompute
+			//     returns immediately, boot continues.
+			//   - Per-call 5-minute context timeout caps any single
+			//     hang (e.g. unreachable upstream).
+			//   - Panic recovery ensures a Satisfier or Manager bug
+			//     can't take down the node.
+			//   - Every code path through the goroutine ends in a log
+			//     line — never silent.
+			//
+			// Bootstrap is intentionally off here: auto-install at
+			// boot does NOT run upstream curl-sh installers (brew,
+			// uv, bun) without explicit operator consent. Bundles
+			// requiring those need the operator to call
+			// binary_install with bootstrap_managers=true.
 			for name, decl := range decls {
 				name, decl := name, decl
 				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							n.log.Error("binary: auto-install panicked",
+								"name", name, "panic", r)
+						}
+					}()
 					if satisfier.Available(name) {
 						n.log.Debug("binary: auto-install skip (already on PATH)", "name", name)
 						return
@@ -237,10 +253,14 @@ func (n *Node) wireCompute() error {
 					n.log.Info("binary: auto-install starting", "name", name)
 					res, err := satisfier.Satisfy(ctx, name, decl.Install)
 					if err != nil {
-						n.log.Warn("binary: auto-install failed (operator can re-run via binary_install)", "name", name, "err", err)
+						n.log.Warn("binary: auto-install failed (operator can re-run via binary_install)",
+							"name", name, "err", err)
 						return
 					}
-					n.log.Info("binary: auto-install done", "name", name, "manager", res.Manager, "already_available", res.AlreadyAvailable)
+					n.log.Info("binary: auto-install done",
+						"name", name,
+						"manager", res.Manager,
+						"already_available", res.AlreadyAvailable)
 				}()
 			}
 		}
