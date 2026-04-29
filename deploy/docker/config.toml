@@ -243,13 +243,13 @@ priority = 20
 # Both flow through the same internal/binaries Satisfier; the only
 # difference is the source of the install spec.
 
-# [[policy.rules]]
-# id       = "owner-binary-install"
-# subject  = "scope:owner"
-# action   = "tool:exec"
-# resource = "binary_*"
-# effect   = "allow"
-# priority = 20
+[[policy.rules]]
+id       = "owner-binary-install"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "binary_*"
+effect   = "allow"
+priority = 20
 
 [[binary]]
 name        = "gog"
@@ -317,6 +317,15 @@ Set GOG_ACCOUNT=you@gmail.com to avoid repeating --account on every
 command. For scripting, prefer --json and --no-input. Confirm with
 the user before sending mail or creating events.
 """
+
+# env injects KEY=VAL pairs into a /bin/sh wrapper at
+# <prefix>/bin/<name>; the real binary is moved to
+# <prefix>/libexec/<name>. Use for HOME (so headless tools find
+# their state dir), XDG_*, or tool-specific account/profile
+# selectors. Only applied when the binary lands under <prefix>/bin
+# (gh-release, curl-sh) — apt/brew installs to system paths skip
+# wrapping with a debug log.
+# env = ["HOME=/lobslaw/var/lib/gog", "GOG_ACCOUNT=you@gmail.com"]
 
 # --- MCP tools: explicit allow per scope ---
 #
