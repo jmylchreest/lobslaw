@@ -142,8 +142,13 @@ func runBootstrap(ctx context.Context, satisfier *Satisfier, mgrName string, cli
 	for k, v := range recipe.Env {
 		env = append(env, k+"="+v)
 	}
-	if satisfier.prefix != "" {
-		env = append(env, "HOMEBREW_PREFIX="+satisfier.prefix)
+	// Per-manager prefix overrides:
+	// - brew: uses its hardcoded /home/linuxbrew/.linuxbrew default
+	//   in non-interactive mode regardless of HOMEBREW_PREFIX. The
+	//   Dockerfile pre-creates that path chown'd to nonroot so the
+	//   install succeeds without sudo.
+	// - bun, cargo, uv: respect their respective prefix env vars.
+	if satisfier.prefix != "" && mgrName != "brew" {
 		env = append(env, "BUN_INSTALL="+satisfier.prefix)
 		env = append(env, "CARGO_HOME="+satisfier.prefix+"/cargo")
 	}
