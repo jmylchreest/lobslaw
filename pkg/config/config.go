@@ -802,6 +802,14 @@ type BinaryConfig struct {
 	Description string                `koanf:"description,omitempty"`
 	Detect      string                `koanf:"detect,omitempty"`
 	Install     []BinaryInstallConfig `koanf:"install"`
+	// Version is the desired version string. When non-empty AND
+	// Detect is set, the auto-install at boot runs the detect
+	// command, captures stdout, and looks for the Version substring.
+	// If absent, treats this as a version mismatch and forces a
+	// reinstall — i.e., the operator just bumped the URL to a newer
+	// release and wants the binary to upgrade. Empty means "any
+	// version is fine, only install when Detect/PATH says missing".
+	Version string `koanf:"version,omitempty"`
 	// PostInstall is free-form prose surfaced to the agent after a
 	// successful install. Use for one-shot setup commands, env-var
 	// hints, OAuth flow walkthroughs — anything the user expects the

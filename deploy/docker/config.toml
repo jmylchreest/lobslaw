@@ -255,6 +255,12 @@ priority = 20
 name        = "gog"
 description = "Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs"
 detect      = "gog --version"
+# Setting `version` lets boot-time auto-install detect upgrades:
+# the detect command runs, the output is searched for this string,
+# and on miss the binary is force-reinstalled. Bump this + the URL
+# below together to upgrade gog. Leave empty to disable version-
+# pinning (auto-install only fires when the binary is missing).
+version     = "0.14.0"
 
 # Linux amd64 prebuilt binary from the GitHub release. The
 # gh-release manager downloads the asset, extracts the binary

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -200,6 +201,7 @@ func (n *Node) wireCompute() error {
 					Name:        b.Name,
 					Description: b.Description,
 					Detect:      b.Detect,
+					Version:     b.Version,
 					Install:     install,
 					PostInstall: b.PostInstall,
 				}
@@ -215,7 +217,7 @@ func (n *Node) wireCompute() error {
 					return fmt.Errorf("register binaries tool %q: %w", td.Name, err)
 				}
 			}
-			n.log.Debug("compute: binary_install + binary_list registered", "count", len(decls))
+			n.log.Debug("compute: binary_install + binary_list + binary_upgrade registered", "count", len(decls))
 
 			// Async auto-install: for each declared binary, check
 			// PATH; if missing, run Satisfy in a goroutine.
@@ -244,14 +246,36 @@ func (n *Node) wireCompute() error {
 								"name", name, "panic", r)
 						}
 					}()
-					if satisfier.Available(name) {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					defer cancel()
+
+					// Version-mismatch upgrade path: if the operator
+					// declared a version + detect command, run detect
+					// and check whether its stdout contains the
+					// declared version. Mismatch → force reinstall.
+					// Available alone (no version) → skip if on PATH.
+					force := false
+					reason := ""
+					if decl.Version != "" && decl.Detect != "" && satisfier.Available(name) {
+						currentOut := runDetect(ctx, decl.Detect)
+						if !strings.Contains(currentOut, decl.Version) {
+							force = true
+							reason = "version mismatch (declared=" + decl.Version + ", detect=" + truncateLine(currentOut, 80) + ")"
+						} else {
+							n.log.Debug("binary: auto-install skip (version match)",
+								"name", name, "version", decl.Version)
+							return
+						}
+					} else if satisfier.Available(name) {
 						n.log.Debug("binary: auto-install skip (already on PATH)", "name", name)
 						return
 					}
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-					defer cancel()
-					n.log.Info("binary: auto-install starting", "name", name)
-					res, err := satisfier.Satisfy(ctx, name, decl.Install)
+					if force {
+						n.log.Info("binary: auto-upgrade starting", "name", name, "reason", reason)
+					} else {
+						n.log.Info("binary: auto-install starting", "name", name)
+					}
+					res, err := satisfier.SatisfyOpts(ctx, name, decl.Install, binaries.SatisfyOptions{Force: force})
 					if err != nil {
 						n.log.Warn("binary: auto-install failed (operator can re-run via binary_install)",
 							"name", name, "err", err)
@@ -260,7 +284,8 @@ func (n *Node) wireCompute() error {
 					n.log.Info("binary: auto-install done",
 						"name", name,
 						"manager", res.Manager,
-						"already_available", res.AlreadyAvailable)
+						"already_available", res.AlreadyAvailable,
+						"forced_upgrade", force)
 				}()
 			}
 		}
@@ -1265,3 +1290,28 @@ func (n *Node) schedulerClaims(creator string) *types.Claims {
 // gateway function is enabled — it's the control plane, not a channel
 // in the list. Adding a new chat backend (Slack, Matrix, Signal) is
 // a new case plus a handler package; the config shape doesn't change.
+
+// runDetect runs a [[binary]].detect command and returns its
+// combined stdout+stderr. Used by the boot auto-install loop to
+// extract the currently-installed version. Errors are silenced —
+// the empty string just means "version-check inconclusive" and
+// the caller proceeds via the regular Available path.
+func runDetect(ctx context.Context, cmdline string) string {
+	parts := strings.Fields(cmdline)
+	if len(parts) == 0 {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	out, _ := cmd.CombinedOutput()
+	return string(out)
+}
+
+func truncateLine(s string, n int) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > n {
+		s = s[:n] + "…"
+	}
+	return s
+}

@@ -20,6 +20,7 @@ type BinaryDeclaration struct {
 	Name        string
 	Description string
 	Detect      string
+	Version     string
 	Install     []binaries.InstallSpec
 	PostInstall string
 }
@@ -60,7 +61,8 @@ func BinariesToolDefs() []*types.ToolDef {
 				"type": "object",
 				"properties": {
 					"name": {"type": "string", "description": "Binary name as declared in [[binary]] (e.g. 'gog')."},
-					"bootstrap_managers": {"type": "string", "description": "Set to 'true' to auto-install missing-but-bootstrappable managers (brew, uvx) via their official curl-sh installer. Off by default."}
+					"bootstrap_managers": {"type": "string", "description": "Set to 'true' to auto-install missing-but-bootstrappable managers (brew, uvx) via their official curl-sh installer. Off by default."},
+					"force": {"type": "string", "description": "Set to 'true' to reinstall even when the binary is already on PATH. Use for upgrades after the operator has bumped the version field or URL in [[binary]] config."}
 				},
 				"required": ["name"],
 				"additionalProperties": false
@@ -108,7 +110,11 @@ func newBinaryInstallHandler(cfg BinariesConfig) BuiltinFunc {
 			return nil, 1, fmt.Errorf("binary_install: %q is not declared in [[binary]] config", name)
 		}
 		bootstrap := strings.EqualFold(strings.TrimSpace(args["bootstrap_managers"]), "true")
-		opts := binaries.SatisfyOptions{BootstrapMissingManagers: bootstrap}
+		force := strings.EqualFold(strings.TrimSpace(args["force"]), "true")
+		opts := binaries.SatisfyOptions{
+			BootstrapMissingManagers: bootstrap,
+			Force:                    force,
+		}
 		result, err := cfg.Satisfier.SatisfyOpts(ctx, decl.Name, decl.Install, opts)
 		if err != nil {
 			return nil, 1, fmt.Errorf("binary_install: %w", err)

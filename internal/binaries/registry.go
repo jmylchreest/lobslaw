@@ -82,12 +82,20 @@ func managersWithPrefix(client *http.Client, prefix string) map[string]Manager {
 }
 
 // SatisfyOptions controls per-call Satisfier behaviour. Default-zero
-// is the strict path: missing managers are reported as errors. Set
-// BootstrapMissingManagers to true (typically per-clawhub_install
-// call, after operator/user confirmation) to attempt to install a
-// missing-but-Bootstrappable manager before retrying the spec.
+// is the strict path: missing managers are reported as errors and
+// already-available binaries are short-circuited.
 type SatisfyOptions struct {
+	// BootstrapMissingManagers, when true, runs a manager's
+	// official curl-sh installer before retrying the spec. Used by
+	// clawhub_install / binary_install when the operator/agent
+	// explicitly opts in.
 	BootstrapMissingManagers bool
+
+	// Force bypasses the Available() short-circuit, reinstalling
+	// even when the binary is already on PATH. Used by
+	// binary_install force=true and by version-mismatch detection
+	// at boot.
+	Force bool
 }
 
 // Available reports whether name resolves on PATH (the satisfier's
@@ -129,7 +137,7 @@ func (s *Satisfier) SatisfyOpts(ctx context.Context, name string, installs []Ins
 	if name == "" {
 		return SatisfyResult{}, errors.New("binaries: name required")
 	}
-	if s.Available(name) {
+	if !opts.Force && s.Available(name) {
 		return SatisfyResult{Name: name, AlreadyAvailable: true}, nil
 	}
 
