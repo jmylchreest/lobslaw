@@ -279,7 +279,7 @@ os      = "linux"
 arch    = "amd64"
 manager = "gh-release"
 package = "gog"
-url     = "https://github.com/steipete/gogcli/releases/download/{{version}}/gogcli_{{stripv}}_linux_amd64.tar.gz"
+url     = "https://github.com/steipete/gogcli/releases/download/v{{version}}/gogcli_{{version}}_linux_amd64.tar.gz"
 # checksum = "sha256:..."
 
 [[binary.install]]
@@ -287,7 +287,7 @@ os      = "linux"
 arch    = "arm64"
 manager = "gh-release"
 package = "gog"
-url     = "https://github.com/steipete/gogcli/releases/download/{{version}}/gogcli_{{stripv}}_linux_arm64.tar.gz"
+url     = "https://github.com/steipete/gogcli/releases/download/v{{version}}/gogcli_{{version}}_linux_arm64.tar.gz"
 
 [[binary.install]]
 os      = "darwin"

@@ -108,15 +108,17 @@ func (m ghReleaseManager) ResolveLatest(ctx context.Context, urlPattern string) 
 	return payload.TagName, nil
 }
 
-// SubstituteVersion replaces {{version}} (full tag, e.g. "v0.14.0")
-// and {{stripv}} (tag without leading "v", e.g. "0.14.0") in the
-// spec's URL. No-op when neither token is present.
+// SubstituteVersion replaces {{version}} in each spec's URL with
+// the bare semver (no leading "v"). Operators write `v{{version}}`
+// in URLs that need the GitHub-tag-style "v" prefix; ungarnished
+// `{{version}}` covers the asset-name case where releases drop the
+// prefix. The API's `tag_name` typically has the "v" — we strip it
+// here so a single placeholder covers both forms.
 func SubstituteVersion(specs []InstallSpec, version string) []InstallSpec {
 	stripped := strings.TrimPrefix(version, "v")
 	out := make([]InstallSpec, len(specs))
 	for i, spec := range specs {
-		spec.URL = strings.ReplaceAll(spec.URL, "{{version}}", version)
-		spec.URL = strings.ReplaceAll(spec.URL, "{{stripv}}", stripped)
+		spec.URL = strings.ReplaceAll(spec.URL, "{{version}}", stripped)
 		out[i] = spec
 	}
 	return out

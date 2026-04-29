@@ -267,14 +267,17 @@ func (n *Node) wireCompute() error {
 										declVersion = ""
 										break
 									}
-									declVersion = latest
+									declVersion = strings.TrimPrefix(latest, "v")
 									declInstall = binaries.SubstituteVersion(declInstall, latest)
 									n.log.Info("binary: resolved latest",
-										"name", name, "version", latest)
+										"name", name, "version", declVersion)
 									break
 								}
 							}
 						}
+					} else if declVersion != "" {
+						declVersion = strings.TrimPrefix(declVersion, "v")
+						declInstall = binaries.SubstituteVersion(declInstall, declVersion)
 					}
 
 					// Version-mismatch upgrade path: if the operator
@@ -287,7 +290,7 @@ func (n *Node) wireCompute() error {
 					reason := ""
 					if declVersion != "" && decl.Detect != "" && satisfier.Available(name) {
 						currentOut := runDetect(ctx, decl.Detect)
-						if !strings.Contains(currentOut, declVersion) && !strings.Contains(currentOut, strings.TrimPrefix(declVersion, "v")) {
+						if !strings.Contains(currentOut, declVersion) {
 							force = true
 							reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, 80) + ")"
 						} else {
