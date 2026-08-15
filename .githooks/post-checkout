@@ -1,0 +1,9 @@
+#!/bin/sh
+# Switching branches (and the initial checkout of a clone) can swap the whole
+# of .aide/shared/ underneath the local store.
+#
+# $1 previous HEAD, $2 new HEAD, $3 flag: 1 for a branch checkout, 0 for a file
+# checkout. Only a branch checkout that actually moved can change the tree.
+[ "$3" = "1" ] || exit 0
+[ "$1" != "$2" ] || exit 0
+exec "$(dirname "$0")/aide-share" import

@@ -1,0 +1,64 @@
+#!/bin/sh
+# aide-share — keep the local aide store and .aide/shared/ in step.
+#
+# .aide/shared/ is committed markdown; the BoltDB store it comes from
+# (.aide/memory/) is gitignored and machine-local. So the two directions have
+# to be driven by hooks:
+#
+#   export   before a commit — publish the local store, stage the result
+#   import   after a merge, rebase or checkout — replay records that arrived
+#            from someone else into the local store
+#
+# What actually ships is governed by the share.{decisions,memories} policy in
+# .aide/config/aide.json (decisions on, memories off by default) — no flags are
+# passed here, so `aide share show` is the single source of truth for scope.
+#
+# Skips silently when there is no aide binary or no local store, so a fresh
+# clone mid-bootstrap can still commit. Set AIDE_HOOKS=0 to disable entirely;
+# `git commit --no-verify` bypasses the export.
+#
+# Usage: .githooks/aide-share export|import
+
+set -e
+
+if [ "$AIDE_HOOKS" = "0" ]; then
+	exit 0
+fi
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+
+# .aide/bin/aide is the project-pinned binary; fall back to whatever is on PATH.
+if [ -x .aide/bin/aide ]; then
+	aide=./.aide/bin/aide
+elif command -v aide >/dev/null 2>&1; then
+	aide=aide
+else
+	exit 0
+fi
+
+case "$1" in
+export)
+	# No store, nothing to publish.
+	[ -d .aide/memory ] || exit 0
+	"$aide" share export
+	# Re-exports of unchanged content are byte-identical, so this stages
+	# nothing when nothing moved.
+	if [ -d .aide/shared ]; then
+		git add .aide/shared
+	fi
+	;;
+import)
+	[ -d .aide/shared ] || exit 0
+	# Never fail the merge/checkout over this: the working tree is already
+	# correct, only the local store missed an update, and the import reruns
+	# cleanly at any time.
+	if ! "$aide" share import; then
+		echo "aide-share: import failed — run '$aide share import' by hand" >&2
+	fi
+	;;
+*)
+	echo "aide-share: unknown mode '$1' (expected export or import)" >&2
+	exit 2
+	;;
+esac

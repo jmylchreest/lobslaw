@@ -1,0 +1,46 @@
+#!/bin/sh
+# Publish the local aide store to .aide/shared/, then refuse the commit if
+# anything staged carries a secret.
+#
+# The scan runs after the export on purpose: the export is what writes new
+# records into the tree, so scanning first would only ever see the previous
+# commit's content. That ordering matters more here than in most repos —
+# .aide/shared/ is committed, this repository is public, and the export is
+# automatic, so nothing else reads that diff before it ships.
+#
+# Scanning --staged rather than the working tree keeps gitignored material
+# (deploy/docker/.env, the aide BoltDB store, certs) out of scope. Those hold
+# real credentials and are correctly untracked; flagging them every commit
+# would train everyone to pass --no-verify, which is how a gate stops working.
+set -e
+
+dir=$(dirname "$0")
+"$dir/aide-share" export
+
+if [ "$LOBSLAW_SKIP_SECRET_SCAN" = "1" ]; then
+	exit 0
+fi
+
+# Prefer PATH, fall back to GOPATH/bin — a hook invoked from a GUI git client
+# often has a much shorter PATH than an interactive shell.
+if command -v betterleaks >/dev/null 2>&1; then
+	betterleaks=betterleaks
+elif [ -x "$(go env GOPATH 2>/dev/null)/bin/betterleaks" ]; then
+	betterleaks="$(go env GOPATH)/bin/betterleaks"
+else
+	cat >&2 <<-'EOF'
+		pre-commit: betterleaks not found — secret scanning is not running.
+
+		    make hooks     # installs it and points git at .githooks/
+
+		This hook fails rather than skipping: a secret scanner that silently
+		no-ops is worse than none, because you stop checking by hand.
+		Set LOBSLAW_SKIP_SECRET_SCAN=1 for a one-off if you must.
+	EOF
+	exit 1
+fi
+
+# --redact so a finding never puts the secret itself into terminal scrollback,
+# shell history, or a CI log. The report gives file and line; that is enough to
+# find it, and the value is already on disk in front of you.
+exec "$betterleaks" git --staged --redact --no-banner .

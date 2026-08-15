@@ -1,4 +1,4 @@
-.PHONY: proto proto-lint proto-breaking proto-tools build test lint lint-tools tidy
+.PHONY: proto proto-lint proto-breaking proto-tools build test lint lint-tools tidy hooks hook-tools
 
 # Go-tool-installed binaries live under $(go env GOPATH)/bin. Prepend to PATH
 # for targets that shell out to them (buf invokes protoc-gen-go via PATH).
@@ -50,3 +50,23 @@ lint-tools:
 
 tidy:
 	@go mod tidy
+
+# Git never installs hooks from a clone (a repo that could run code on clone
+# would be a supply-chain hole), so point git at the committed .githooks/ dir.
+# Run once per checkout; re-running is harmless.
+hooks: hook-tools
+	@git config core.hooksPath .githooks
+	@echo "git hooks installed (core.hooksPath=.githooks)"
+
+# The pre-commit hook fails rather than skipping when the scanner is missing,
+# so installing it is part of installing the hooks, not a separate step people
+# discover from an error message.
+#
+# Deliberately @latest, unlike the protoc-gen-* pins above: a secret scanner is
+# only as good as its newest rules, and pinning one freezes detection at the
+# day someone chose the number. A surprise finding costs a minute; a missed
+# credential in a public repo does not. (A minimum-version floor isn't an
+# option either — `go install` builds report their version as "dev", since the
+# real one is stamped by the upstream release build.)
+hook-tools:
+	@go install github.com/betterleaks/betterleaks@latest

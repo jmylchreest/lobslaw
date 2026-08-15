@@ -23,6 +23,8 @@ The name is a portmanteau of *lobster* and *openclaw*, with a nod to *coleslaw*.
 
 Phase 5 in progress. Foundation (Phases 1–4) complete: cluster core, memory service with Raft, policy engine, tool executor, sandbox (Linux namespaces + Landlock + seccomp via reexec helper), hook dispatcher. See [PLAN.md](PLAN.md) for the full roadmap.
 
+Proposed next work — designed but not built — lives in [ROADMAP.md](ROADMAP.md), ordered by priority. [DEFERRED.md](DEFERRED.md) holds conscious "not now" items with their revisit triggers.
+
 ## Documentation layout
 
 - **[docs/user/](docs/user/)** — installation, configuration, channel setup, skills, troubleshooting. Assumes no knowledge of the internals.

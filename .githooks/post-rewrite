@@ -1,0 +1,6 @@
+#!/bin/sh
+# `git pull --rebase` replays commits instead of merging, so post-merge never
+# fires. $1 is the command that rewrote history: "rebase" or "amend" — an amend
+# cannot introduce someone else's records, so only rebase is worth importing.
+[ "$1" = "rebase" ] || exit 0
+exec "$(dirname "$0")/aide-share" import

@@ -1,0 +1,4 @@
+#!/bin/sh
+# A merge (including `git pull`) can bring in .aide/shared/ records from other
+# checkouts — replay them into the local store.
+exec "$(dirname "$0")/aide-share" import

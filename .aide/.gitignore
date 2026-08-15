@@ -21,3 +21,6 @@ aide-memory.db
 # Shared data IS committed (git-friendly markdown with frontmatter)
 # See: aide share export / aide share import
 !shared/
+
+# Subscription cache - machine-local peer checkouts (aide sync)
+cache/
