@@ -6119,7 +6119,7 @@ var File_lobslaw_v1_lobslaw_proto protoreflect.FileDescriptor
 const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"\x18lobslaw/v1/lobslaw.proto\x12\n" +
-	"lobslaw.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1egoogle/protobuf/duration.proto\"\x97\x01\n" +
+	"lobslaw.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x97\x01\n" +
 	"\bNodeInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\tfunctions\x18\x02 \x03(\tR\tfunctions\x12\x18\n" +

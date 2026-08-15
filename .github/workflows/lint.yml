@@ -67,3 +67,8 @@ jobs:
           lint: true
           breaking: true
           breaking_against: 'https://github.com/${{ github.repository }}.git#branch=main'
+          # Off because the job holds contents:read only, and posting a
+          # comment needs pull-requests:write. The findings are already
+          # in the job log and the check status; a convenience comment
+          # is not worth handing a third-party action write scope.
+          pr_comment: false
