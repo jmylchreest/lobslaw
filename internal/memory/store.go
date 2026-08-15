@@ -28,8 +28,9 @@ import (
 // a Store whose db field pointed at a closed handle — producing
 // "database not open" on every subsequent operation.
 type Store struct {
-	db  atomic.Pointer[bolt.DB]
-	key crypto.Key
+	db     atomic.Pointer[bolt.DB]
+	key    crypto.Key
+	cipher *crypto.Cipher
 }
 
 // OpenStore opens (and creates if missing) the state.db file at path.
@@ -54,7 +55,12 @@ func OpenStore(path string, key crypto.Key) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	s := &Store{key: key}
+	c, err := crypto.NewCipher(key)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("prepare cipher: %w", err)
+	}
+	s := &Store{key: key, cipher: c}
 	s.db.Store(db)
 	return s, nil
 }
@@ -77,7 +83,7 @@ func (s *Store) Close() error {
 
 // Put encrypts value and writes it at bucket/key.
 func (s *Store) Put(bucket, key string, value []byte) error {
-	sealed, err := crypto.Seal(s.key, value)
+	sealed, err := s.cipher.Seal(value)
 	if err != nil {
 		return fmt.Errorf("seal %s/%s: %w", bucket, key, err)
 	}
@@ -109,7 +115,7 @@ func (s *Store) Get(bucket, key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	plaintext, err := crypto.Open(s.key, sealed)
+	plaintext, err := s.cipher.OpenTo(nil, sealed)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt %s/%s: %w", bucket, key, err)
 	}
@@ -137,11 +143,16 @@ func (s *Store) ForEach(bucket string, fn func(key string, value []byte) error) 
 		if b == nil {
 			return fmt.Errorf("bucket %q not found", bucket)
 		}
+		// One buffer for the whole walk. The retention rule above is
+		// what makes this safe: every plaintext is handed out, used,
+		// and overwritten by the next record.
+		var buf []byte
 		return b.ForEach(func(k, v []byte) error {
-			plaintext, err := crypto.Open(s.key, v)
+			plaintext, err := s.cipher.OpenTo(buf, v)
 			if err != nil {
 				return fmt.Errorf("decrypt %s/%s: %w", bucket, string(k), err)
 			}
+			buf = plaintext
 			return fn(string(k), plaintext)
 		})
 	})
@@ -166,11 +177,13 @@ func (s *Store) ForEachPrefix(bucket, prefix string, fn func(key string, value [
 		}
 		p := []byte(prefix)
 		c := b.Cursor()
+		var buf []byte
 		for k, v := c.Seek(p); k != nil && bytes.HasPrefix(k, p); k, v = c.Next() {
-			plaintext, err := crypto.Open(s.key, v)
+			plaintext, err := s.cipher.OpenTo(buf, v)
 			if err != nil {
 				return fmt.Errorf("decrypt %s/%s: %w", bucket, string(k), err)
 			}
+			buf = plaintext
 			if err := fn(string(k), plaintext); err != nil {
 				return err
 			}

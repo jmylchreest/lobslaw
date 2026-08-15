@@ -64,28 +64,48 @@ func GenerateKey() (Key, error) {
 	return k, nil
 }
 
-// Seal encrypts plaintext with key. Output layout: [24-byte nonce | ciphertext].
+// Seal encrypts plaintext with key, using the preferred AEAD for this
+// machine. Convenience wrapper: it builds a Cipher per call, so hot paths
+// should hold their own via NewCipher.
 func Seal(key Key, plaintext []byte) ([]byte, error) {
+	c, err := NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return c.Seal(plaintext)
+}
+
+// Open decrypts sealed bytes, in either the current envelope format or
+// the legacy nacl/secretbox one. Same per-call construction caveat as
+// Seal.
+func Open(key Key, sealed []byte) ([]byte, error) {
+	c, err := NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return c.OpenTo(nil, sealed)
+}
+
+// sealLegacy produces the pre-envelope format: [24-byte nonce | ciphertext].
+// Kept so tests can write legacy values and prove they still open.
+func sealLegacy(key Key, plaintext []byte) ([]byte, error) {
 	var nonce [NonceSize]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
 		return nil, fmt.Errorf("generate nonce: %w", err)
 	}
-	// Pre-allocate output with nonce prefix + secretbox's overhead (16 bytes).
 	out := make([]byte, NonceSize, NonceSize+len(plaintext)+secretbox.Overhead)
 	copy(out, nonce[:])
 	out = secretbox.Seal(out, plaintext, &nonce, (*[KeySize]byte)(&key))
 	return out, nil
 }
 
-// Open decrypts sealed bytes produced by Seal. Returns an error if the
-// ciphertext is malformed or the key doesn't match.
-func Open(key Key, sealed []byte) ([]byte, error) {
+func openLegacy(dst []byte, key Key, sealed []byte) ([]byte, error) {
 	if len(sealed) < NonceSize+secretbox.Overhead {
 		return nil, errors.New("ciphertext too short")
 	}
 	var nonce [NonceSize]byte
 	copy(nonce[:], sealed[:NonceSize])
-	out, ok := secretbox.Open(nil, sealed[NonceSize:], &nonce, (*[KeySize]byte)(&key))
+	out, ok := secretbox.Open(dst[:0], sealed[NonceSize:], &nonce, (*[KeySize]byte)(&key))
 	if !ok {
 		return nil, errors.New("decrypt failed (bad key, nonce, or ciphertext)")
 	}
