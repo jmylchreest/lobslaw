@@ -180,10 +180,10 @@ func TestSessionToolsRecheckBrowserThatIgnoresVisibility(t *testing.T) {
 
 // An unauthenticated turn is scoped, not unscoped: it owns the
 // conversation it is in and nothing attributed to a named user.
-func TestSessionScopeAnonymousTurnIsStillScoped(t *testing.T) {
+func TestTurnIdentityAnonymousTurnIsStillScoped(t *testing.T) {
 	t.Parallel()
 	b := newTestSessionTools(t, twoUserBrowser(), SessionToolConfig{})
-	ctx := WithSessionScope(context.Background(), sessionScopeForTurn(ProcessMessageRequest{
+	ctx := WithTurnIdentity(context.Background(), turnIdentityFor(ProcessMessageRequest{
 		Channel:   "telegram",
 		ChannelID: "-300",
 	}))
@@ -288,10 +288,10 @@ func TestTwoUsersDrivingTurnsCannotReachEachOther(t *testing.T) {
 // A scheduler or research turn has claims but no chat. Ownership is
 // all it gets — and all it needs, since those claims are the person
 // the work is being done for.
-func TestSessionScopeChannellessTurnFallsBackToOwnership(t *testing.T) {
+func TestTurnIdentityChannellessTurnFallsBackToOwnership(t *testing.T) {
 	t.Parallel()
 	b := newTestSessionTools(t, twoUserBrowser(), SessionToolConfig{})
-	ctx := WithSessionScope(context.Background(), SessionScope{UserID: "tg-@bob"})
+	ctx := WithTurnIdentity(context.Background(), TurnIdentity{UserID: "tg-@bob"})
 
 	out := callToolCtx(ctx, t, b, "session_list", nil)
 	if !strings.Contains(out, "Bob's divorce") {

@@ -66,7 +66,7 @@ func ResearchToolDefs() []*types.ToolDef {
 }
 
 func newResearchStartHandler(raft memoryRaftApplier) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		question := strings.TrimSpace(args["question"])
 		if question == "" {
 			return nil, 2, errors.New("research_start: question is required")
@@ -80,8 +80,11 @@ func newResearchStartHandler(raft memoryRaftApplier) BuiltinFunc {
 			depth = n
 		}
 
-		channel := strings.TrimSpace(args["__channel"])
-		chatID := strings.TrimSpace(args["__chat_id"])
+		// Delivery address comes from the turn, not the model: this is
+		// where the finished research gets posted.
+		identity, _ := TurnIdentityFrom(ctx)
+		channel := identity.Channel
+		chatID := identity.ChannelID
 
 		id := ids.New()
 		params := map[string]string{

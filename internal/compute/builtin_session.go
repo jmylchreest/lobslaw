@@ -74,31 +74,6 @@ type SessionBrowseSnippet struct {
 	Text string
 }
 
-// SessionScope is the caller identity a turn carries into the session
-// tools. The transcript store holds every conversation the node has
-// ever had, from every user of every channel; without a scope the
-// tools hand any of them to whoever is talking right now.
-//
-// Identity travels on the context rather than in the tool arguments
-// on purpose. The args map is populated from the model's own JSON
-// (see Agent.runToolCall), and the synthetic __user_id / __chat_id
-// keys injected there are only overwritten when the request actually
-// carries those fields — a turn with no channel leaves the model free
-// to supply its own. Attribution can live with that; an authorisation
-// decision cannot. A context value is unforgeable from inside the
-// model's output, which is the same reason clampArg exists: the model
-// does not get to widen its own reach by asking nicely.
-type SessionScope struct {
-	// UserID is the turn's caller — Claims.UserID, which is
-	// per-channel ("tg-@alice", a REST subject), not a cluster-wide
-	// person. Two channels used by the same human are two scopes.
-	UserID string
-
-	// Current is the conversation this turn is happening in. Empty
-	// for turns with no channel origin (scheduler, research workers).
-	Current SessionKey
-}
-
 // Visible implements the scoping rule for one stored conversation.
 //
 // Two clauses, and the first is the subtle one. A Telegram group chat
@@ -116,38 +91,22 @@ type SessionScope struct {
 // threads from the other. Cross-identity aliasing is a mapping we
 // don't have yet, and inventing one here would mean guessing; a false
 // negative costs recall, a false positive is the bug this fixes.
-func (s SessionScope) Visible(i SessionBrowseInfo) bool {
-	if s.isCurrent(i.Channel, i.ChannelID) {
+func (t TurnIdentity) Visible(i SessionBrowseInfo) bool {
+	if t.isCurrent(i.Channel, i.ChannelID) {
 		return true
 	}
-	return i.UserID == s.UserID
+	return i.UserID == t.UserID
 }
 
 // isCurrent reports whether an address is the turn's own conversation.
 // Both halves must be set: a scheduler turn has no channel, and an
-// empty Current must not match the sessions that predate the UserID
+// empty address must not match the sessions that predate the UserID
 // being recorded.
-func (s SessionScope) isCurrent(channel, channelID string) bool {
-	if s.Current.Channel == "" || s.Current.ChannelID == "" {
+func (t TurnIdentity) isCurrent(channel, channelID string) bool {
+	if t.Channel == "" || t.ChannelID == "" {
 		return false
 	}
-	return channel == s.Current.Channel && channelID == s.Current.ChannelID
-}
-
-type sessionScopeKey struct{}
-
-// WithSessionScope attaches a turn's identity for the session tools to
-// find. The agent loop calls this once per turn; any other driver of
-// the builtins that has a caller identity must do the same.
-func WithSessionScope(ctx context.Context, s SessionScope) context.Context {
-	return context.WithValue(ctx, sessionScopeKey{}, s)
-}
-
-// SessionScopeFrom returns the turn's scope. ok is false when nothing
-// attached one.
-func SessionScopeFrom(ctx context.Context) (SessionScope, bool) {
-	s, ok := ctx.Value(sessionScopeKey{}).(SessionScope)
-	return s, ok
+	return channel == t.Channel && channelID == t.ChannelID
 }
 
 // sessionVisibility is the single place that decides what an unscoped
@@ -168,11 +127,11 @@ func SessionScopeFrom(ctx context.Context) (SessionScope, bool) {
 // is the common case; the guard is the agent-loop test that asserts
 // the scope is attached, not a runtime error here.
 func sessionVisibility(ctx context.Context) SessionVisibleFunc {
-	scope, ok := SessionScopeFrom(ctx)
+	identity, ok := TurnIdentityFrom(ctx)
 	if !ok {
 		return nil
 	}
-	return scope.Visible
+	return identity.Visible
 }
 
 // SessionToolConfig bounds what the session tools may return. Every
@@ -325,18 +284,18 @@ var errSessionNotVisible = errors.New("no conversation with that channel and cha
 // it's readable by definition, and a brand-new session has no index
 // record yet.
 func authorizeSessionRead(ctx context.Context, browser SessionBrowser, key SessionKey) error {
-	scope, ok := SessionScopeFrom(ctx)
+	identity, ok := TurnIdentityFrom(ctx)
 	if !ok {
 		return nil
 	}
-	if scope.isCurrent(key.Channel, key.ChannelID) {
+	if identity.isCurrent(key.Channel, key.ChannelID) {
 		return nil
 	}
 	info, found, err := browser.Info(ctx, key)
 	if err != nil {
 		return err
 	}
-	if !found || !scope.Visible(info) {
+	if !found || !identity.Visible(info) {
 		return errSessionNotVisible
 	}
 	return nil

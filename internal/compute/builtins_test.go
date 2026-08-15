@@ -144,23 +144,25 @@ func TestExecutorBuiltinRejectedWhenRegistryMissing(t *testing.T) {
 	}
 }
 
-func TestFormatTimeForUserHonoursSyntheticTZ(t *testing.T) {
+func TestFormatTimeForUserHonoursTurnTimezone(t *testing.T) {
 	t.Parallel()
 	utc := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
 		name     string
-		args     map[string]string
+		ctx      context.Context
 		contains string
 	}{
-		{"empty args → UTC", nil, "Z"},
-		{"london zone → +01:00 (BST)", map[string]string{"__user_timezone": "Europe/London"}, "+01:00"},
-		{"bad zone → fallback to UTC", map[string]string{"__user_timezone": "Not/Real"}, "Z"},
+		{"no identity → UTC", context.Background(), "Z"},
+		{"london zone → +01:00 (BST)",
+			WithTurnIdentity(context.Background(), TurnIdentity{Timezone: "Europe/London"}), "+01:00"},
+		{"bad zone → fallback to UTC",
+			WithTurnIdentity(context.Background(), TurnIdentity{Timezone: "Not/Real"}), "Z"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := formatTimeForUser(utc, tc.args)
+			got := formatTimeForUser(tc.ctx, utc)
 			if !strings.Contains(got, tc.contains) {
-				t.Errorf("formatTimeForUser(%v, %+v) = %q; want substring %q", utc, tc.args, got, tc.contains)
+				t.Errorf("formatTimeForUser(%v) = %q; want substring %q", utc, got, tc.contains)
 			}
 		})
 	}
@@ -168,9 +170,8 @@ func TestFormatTimeForUserHonoursSyntheticTZ(t *testing.T) {
 
 func TestCurrentTimeBuiltinIncludesUserZone(t *testing.T) {
 	t.Parallel()
-	stdout, _, err := currentTimeBuiltin(context.Background(), map[string]string{
-		"__user_timezone": "Europe/London",
-	})
+	ctx := WithTurnIdentity(context.Background(), TurnIdentity{Timezone: "Europe/London"})
+	stdout, _, err := currentTimeBuiltin(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

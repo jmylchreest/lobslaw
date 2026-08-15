@@ -515,7 +515,7 @@ func TestRunToolCallLoopLLMErrorPropagates(t *testing.T) {
 // attribute work from them. They're only overwritten when the request
 // carries the corresponding field, so on a turn with no channel origin
 // a model that emits its own would otherwise be believed.
-func TestRunToolCallLoopDiscardsModelSuppliedSyntheticArgs(t *testing.T) {
+func TestRunToolCallLoopKeepsIdentityOutOfToolArgs(t *testing.T) {
 	t.Parallel()
 	env := newAgentEnv(t,
 		MockResponse{ToolCalls: []ToolCall{{
@@ -526,9 +526,11 @@ func TestRunToolCallLoopDiscardsModelSuppliedSyntheticArgs(t *testing.T) {
 		MockResponse{Content: "done"},
 	)
 	var seen map[string]string
+	var seenIdentity TurnIdentity
 	b := NewBuiltins()
-	if err := b.Register("whoami", func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	if err := b.Register("whoami", func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		seen = args
+		seenIdentity, _ = TurnIdentityFrom(ctx)
 		return nil, 0, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -540,7 +542,8 @@ func TestRunToolCallLoopDiscardsModelSuppliedSyntheticArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No Channel, no ChannelID: the injection below would skip both.
+	// No Channel, no ChannelID — the case that used to leave the
+	// model's own values in place, because injection was conditional.
 	if _, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
 		Message: "hi",
 		Claims:  &types.Claims{UserID: "alice"},
@@ -550,13 +553,18 @@ func TestRunToolCallLoopDiscardsModelSuppliedSyntheticArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := seen["__chat_id"]; got != "" {
-		t.Errorf("model-supplied __chat_id survived as %q", got)
-	}
-	if got := seen["__user_id"]; got != "alice" {
-		t.Errorf("__user_id = %q, want the turn's claims", got)
+	// Nothing under the reserved prefix reaches a builtin at all now:
+	// identity travels on the context, and the args map carries only
+	// what the model actually asked for.
+	for k := range seen {
+		if strings.HasPrefix(k, syntheticArgPrefix) {
+			t.Errorf("model-supplied %q reached the builtin", k)
+		}
 	}
 	if got := seen["real"]; got != "kept" {
 		t.Errorf("ordinary args were collateral damage: %q", got)
+	}
+	if seenIdentity.UserID != "alice" {
+		t.Errorf("turn identity UserID = %q, want alice", seenIdentity.UserID)
 	}
 }

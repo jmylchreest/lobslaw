@@ -122,9 +122,10 @@ func callTool(t *testing.T, b *Builtins, name string, args map[string]string) st
 
 // scopedCtx is a turn's context: user U talking in channel:chatID.
 func scopedCtx(user, channel, chatID string) context.Context {
-	return WithSessionScope(context.Background(), SessionScope{
-		UserID:  user,
-		Current: SessionKey{Channel: channel, ChannelID: chatID},
+	return WithTurnIdentity(context.Background(), TurnIdentity{
+		UserID:    user,
+		Channel:   channel,
+		ChannelID: chatID,
 	})
 }
 

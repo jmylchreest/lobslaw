@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -115,13 +114,13 @@ func StdlibToolDefs() []*types.ToolDef {
 }
 
 // currentTimeBuiltin returns the current wall-clock time in UTC
-// and the host's local timezone. The synthetic __user_timezone arg
+// and the host's local timezone. The turn identity's timezone
 // (resolved from the user's preferences bucket at turn assembly)
 // adds a "user_zone" entry rendering the time in the user's wall-
 // clock — so the agent can answer "what time is it" naturally
 // without the LLM having to remember to convert. The optional
 // zones arg lists additional IANA zones for explicit comparisons.
-func currentTimeBuiltin(_ context.Context, args map[string]string) ([]byte, int, error) {
+func currentTimeBuiltin(ctx context.Context, args map[string]string) ([]byte, int, error) {
 	now := time.Now()
 	zoneName, offsetSec := now.Zone()
 	payload := map[string]any{
@@ -132,7 +131,8 @@ func currentTimeBuiltin(_ context.Context, args map[string]string) ([]byte, int,
 		"unix":        now.Unix(),
 	}
 
-	if userTZ := strings.TrimSpace(args["__user_timezone"]); userTZ != "" {
+	if identity, ok := TurnIdentityFrom(ctx); ok && identity.Timezone != "" {
+		userTZ := identity.Timezone
 		if loc, err := time.LoadLocation(userTZ); err == nil {
 			inZone := now.In(loc)
 			_, off := inZone.Zone()

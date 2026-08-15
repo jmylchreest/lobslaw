@@ -63,15 +63,15 @@ func (b *Builtins) Get(name string) (BuiltinFunc, bool) {
 	return fn, ok
 }
 
-// formatTimeForUser renders t in the synthetic __user_timezone (set
+// formatTimeForUser renders t in the turn identity's timezone (set
 // by the agent from the user's preferences bucket), falling back to
 // UTC when no zone is supplied or the zone is unparseable. Output is
 // RFC3339 with explicit offset — unambiguous for both LLM parsing
 // and human reading. Builtins that emit JSON containing time fields
 // for the agent to render to the user should use this helper rather
 // than calling t.Format(time.RFC3339) directly.
-func formatTimeForUser(t time.Time, args map[string]string) string {
-	if userTZ := strings.TrimSpace(args["__user_timezone"]); userTZ != "" {
+func formatTimeForUser(ctx context.Context, t time.Time) string {
+	if userTZ := identityTimezone(ctx); userTZ != "" {
 		if loc, err := time.LoadLocation(userTZ); err == nil {
 			return t.In(loc).Format(time.RFC3339)
 		}

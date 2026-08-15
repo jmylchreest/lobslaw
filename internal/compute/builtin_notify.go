@@ -48,11 +48,11 @@ func NotifyToolDefs() []*types.ToolDef {
 		{
 			Name:        "notify",
 			Path:        BuiltinScheme + "notify",
-			Description: "Send a proactive message to a user across every channel they're subscribed to. Use ONLY for proactive messaging — commitment fires, scheduled-task results, async research completions, follow-ups on turns out-of-band. For normal in-chat replies, return your reply text directly (the gateway delivers it automatically; calling notify duplicates the message). Pass user_id (canonical user identifier — usually \"owner\" for solo deployments, or the synthetic __user_id arg the agent injects automatically). text is the message body. Optional ttl_seconds (default 300) caps how long the message is allowed to wait before delivery; expired messages drop silently with an audit log.",
+			Description: "Send a proactive message to a user across every channel they're subscribed to. Use ONLY for proactive messaging — commitment fires, scheduled-task results, async research completions, follow-ups on turns out-of-band. For normal in-chat replies, return your reply text directly (the gateway delivers it automatically; calling notify duplicates the message). Pass user_id (canonical user identifier — usually \"owner\" for solo deployments) to reach someone other than the person whose turn this is; omit it to reach the caller. text is the message body. Optional ttl_seconds (default 300) caps how long the message is allowed to wait before delivery; expired messages drop silently with an audit log.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
-					"user_id":     {"type": "string", "description": "Canonical user id; falls back to the synthetic __user_id from the originating turn when omitted."},
+					"user_id":     {"type": "string", "description": "Canonical user id. Omit to notify the caller of this turn."},
 					"text":        {"type": "string", "description": "Message body."},
 					"ttl_seconds": {"type": "integer", "description": "Expiry in seconds. Default 300 (5 min). Past this, the message is dropped."}
 				},
@@ -66,12 +66,18 @@ func NotifyToolDefs() []*types.ToolDef {
 
 func newNotifyHandler(svc Notifier) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		identity, _ := TurnIdentityFrom(ctx)
+		// An explicit user_id is a routing argument the model may
+		// legitimately set — "tell alice her build finished". Falling
+		// back to the turn's caller is the common case. The fallback
+		// comes from the context, never from the args: this decides
+		// whose devices ring, and the model does not get to pick.
 		userID := strings.TrimSpace(args["user_id"])
 		if userID == "" {
-			userID = strings.TrimSpace(args["__user_id"])
+			userID = identity.UserID
 		}
 		if userID == "" {
-			return nil, 2, errors.New("notify: user_id is required (and no synthetic context available)")
+			return nil, 2, errors.New("notify: user_id is required (this turn has no caller identity to fall back on)")
 		}
 		text := args["text"]
 		if strings.TrimSpace(text) == "" {
@@ -81,8 +87,8 @@ func newNotifyHandler(svc Notifier) BuiltinFunc {
 		n := notify.Notification{
 			UserID:            userID,
 			Body:              text,
-			OriginatorChannel: strings.TrimSpace(args["__channel"]),
-			OriginatorID:      strings.TrimSpace(args["__chat_id"]),
+			OriginatorChannel: identity.Channel,
+			OriginatorID:      identity.ChannelID,
 		}
 		if raw := strings.TrimSpace(args["ttl_seconds"]); raw != "" {
 			secs, err := parseTTL(raw)
