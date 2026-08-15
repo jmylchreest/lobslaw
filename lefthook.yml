@@ -1,0 +1,64 @@
+# Git hooks for lobslaw developers. Install with:
+#
+#     make hooks     # installs lefthook + betterleaks, then `lefthook install`
+#
+# Git deliberately never installs hooks from a clone — a repository that could
+# run code on clone would be a supply-chain hole — so this step cannot be
+# automated by the repo itself.
+#
+# Bypass with `git commit --no-verify`. CI is the backstop for everything here:
+# lint.yml runs the same gofmt gate and the same secret scanner, the latter over
+# full history, so skipping a hook delays a check rather than avoiding it.
+
+pre-commit:
+  parallel: false
+  jobs:
+    # Publish the local aide store to .aide/shared/ and stage the result.
+    #
+    # That directory is committed markdown exported from a gitignored,
+    # machine-local BoltDB store, so git cannot move it on its own. Running it
+    # here rather than by hand is what stops a decision recorded mid-session
+    # from being left behind by the commit that motivated it.
+    - name: aide-export
+      run: ./scripts/aide-share export
+
+    # Refuse the commit if anything staged carries a credential.
+    #
+    # Runs after the export, not before: the export is what writes new records
+    # into the tree, so checking first would only ever inspect the previous
+    # commit's content. .aide/shared/ is published the moment it is pushed,
+    # this repository is public, and the export is automatic — so this is the
+    # only thing that reads that diff before it ships.
+    - name: secret-scan
+      run: ./scripts/check-secrets
+
+    # lint.yml gates on `gofmt -l .` across the whole tree, so one unformatted
+    # file turns CI red for everyone rather than just its author.
+    - name: gofmt
+      glob: "*.go"
+      run: |
+        unformatted=$(gofmt -l {staged_files})
+        if [ -n "$unformatted" ]; then
+          echo "gofmt needed:" >&2
+          echo "$unformatted" | sed 's/^/  /' >&2
+          exit 1
+        fi
+
+# The import direction: records that arrived from someone else's checkout have
+# to be replayed into the local store. Three hooks because git fires different
+# ones — post-merge does not run for `git pull --rebase`, and neither runs on a
+# branch switch or the initial checkout of a clone.
+post-merge:
+  jobs:
+    - name: aide-import
+      run: ./scripts/aide-share import
+
+post-rewrite:
+  jobs:
+    - name: aide-import
+      run: ./scripts/aide-share import
+
+post-checkout:
+  jobs:
+    - name: aide-import
+      run: ./scripts/aide-share import

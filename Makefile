@@ -55,12 +55,19 @@ tidy:
 # would be a supply-chain hole), so point git at the committed .githooks/ dir.
 # Run once per checkout; re-running is harmless.
 hooks: hook-tools
-	@git config core.hooksPath .githooks
-	@echo "git hooks installed (core.hooksPath=.githooks)"
+	@git config --unset-all core.hooksPath 2>/dev/null || true
+	@lefthook install
+	@echo "git hooks installed (lefthook)"
 
-# The pre-commit hook fails rather than skipping when the scanner is missing,
-# so installing it is part of installing the hooks, not a separate step people
-# discover from an error message.
+# lefthook dispatches the hooks; betterleaks is what the secret-scan job runs.
+# The scan fails rather than skipping when its binary is missing, so installing
+# it is part of installing the hooks, not a separate step people discover from
+# an error message.
+#
+# core.hooksPath is unset first: it used to point at a committed .githooks/
+# directory, and while it is set git ignores the .git/hooks/ scripts lefthook
+# writes — so a checkout that ran the old `make hooks` would silently get no
+# hooks at all.
 #
 # Deliberately @latest, unlike the protoc-gen-* pins above: a secret scanner is
 # only as good as its newest rules, and pinning one freezes detection at the
@@ -69,4 +76,5 @@ hooks: hook-tools
 # option either — `go install` builds report their version as "dev", since the
 # real one is stamped by the upstream release build.)
 hook-tools:
+	@go install github.com/evilmartians/lefthook@latest
 	@go install github.com/betterleaks/betterleaks@latest

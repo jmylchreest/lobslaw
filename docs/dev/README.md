@@ -36,32 +36,42 @@ is byte-identical and deletions propagate as tombstones. It is committed. The
 BoltDB store it comes from (`.aide/memory/`) is gitignored and machine-local,
 which means CI cannot regenerate it and git has to move it for us.
 
-Hooks in [`.githooks/`](../../.githooks/) do that, both directions:
+[lefthook](https://github.com/evilmartians/lefthook) dispatches the hooks that
+do it, configured in [`lefthook.yml`](../../lefthook.yml):
 
 | Hook | Does |
 |---|---|
-| `pre-commit` | `aide share export`, then stages `.aide/shared` |
+| `pre-commit` | `aide share export` + stage, secret scan, gofmt on staged files |
 | `post-merge` | `aide share import` — records that arrived with a merge or `git pull` |
 | `post-rewrite` | same, for `git pull --rebase` (which never fires `post-merge`) |
 | `post-checkout` | same, after a branch switch or the initial checkout of a clone |
 
-Install them once per checkout:
+Both directions call [`scripts/aide-share`](../../scripts/aide-share), which
+skips silently when there is no aide binary or no local store, so a fresh clone
+mid-bootstrap can still commit.
+
+Install once per checkout:
 
 ```bash
-make hooks     # installs betterleaks, then git config core.hooksPath .githooks
+make hooks     # installs lefthook + betterleaks, then `lefthook install`
 ```
 
-Git deliberately never installs hooks from a clone, so this step cannot be
-automated by the repo. Scope is policy-driven, not hardcoded in the hooks —
-`./.aide/bin/aide share show` prints what would be published. The hooks no-op
-when there is no aide binary or no local store; `AIDE_HOOKS=0` disables them and
-`git commit --no-verify` skips the export.
+Git deliberately never installs hooks from a clone — a repository that could run
+code on clone would be a supply-chain hole — so this step cannot be automated by
+the repo. Scope is policy-driven, not hardcoded: `./.aide/bin/aide share show`
+prints what would be published. `AIDE_HOOKS=0` disables the aide jobs, and
+`git commit --no-verify` skips the lot.
+
+`make hooks` also clears `core.hooksPath`. An earlier iteration pointed it at a
+committed `.githooks/` directory, and while it is set git ignores the
+`.git/hooks/` scripts lefthook writes — so a checkout that ran the old target
+would otherwise end up with no hooks at all.
 
 ### Secret scanning — the hook expects betterleaks installed
 
 `pre-commit` also runs [betterleaks](https://github.com/betterleaks/betterleaks)
-over the **staged** diff and fails the commit on a hit. `make hooks` installs it;
-`make hook-tools` installs it alone. Unlike the protoc-gen-* tools it is
+over the **staged** diff and fails the commit on a hit. `make hooks` installs it alongside lefthook;
+`make hook-tools` installs the tools alone. Unlike the protoc-gen-* tools it is
 installed at `@latest` rather than pinned — a scanner is only as good as its
 newest rules, and pinning one freezes detection at whenever someone last chose
 a number. Without it the hook **fails rather than skipping** — a secret scanner
