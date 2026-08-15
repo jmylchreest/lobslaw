@@ -40,7 +40,14 @@ certs/*.key
 /data/
 /var/
 
-# Agent worktrees. Claude Code checks these out inside the repo, so they are a
-# full second copy of the tree — ~12MB each and already tracked on their own
-# branch. Committing one would nest the repository inside itself.
-.claude/worktrees/
+# Claude Code's directory is entirely local to whoever is using it. Its one
+# tracked file set AIDE_SHARE_AUTO_IMPORT, which .aide/config/aide.json now
+# covers natively — aide reads `config.share.autoImport || the env var`, so the
+# config alone suffices and the repo carries no tool-specific setup. ../aide
+# tracks nothing here either.
+#
+# Ignoring the whole directory also stops agent worktrees being committed:
+# Claude Code checks those out under .claude/worktrees/, so each is a full
+# second copy of the tree, ~12MB, one `git add -A` from nesting the repository
+# inside itself.
+.claude/
