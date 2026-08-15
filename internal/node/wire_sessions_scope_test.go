@@ -69,7 +69,7 @@ func TestSessionBrowserRecentFiltersBeforeLimiting(t *testing.T) {
 	}
 	browser := seededBrowser(t, recs...)
 
-	scope := compute.SessionScope{UserID: "alice"}
+	scope := compute.TurnIdentity{UserID: "alice"}
 	got, err := browser.Recent(context.Background(), 2, scope.Visible)
 	if err != nil {
 		t.Fatal(err)

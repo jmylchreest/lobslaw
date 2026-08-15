@@ -118,7 +118,7 @@ func ScheduleToolDefs() []*types.ToolDef {
 }
 
 func newScheduleCreateHandler(raft memoryRaftApplier) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		name := strings.TrimSpace(args["name"])
 		if name == "" {
 			return nil, 2, errors.New("schedule_create: name is required")
@@ -181,7 +181,7 @@ func newScheduleCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 }
 
 func newScheduleListHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		type view struct {
 			ID       string `json:"id"`
 			Name     string `json:"name"`
@@ -205,10 +205,10 @@ func newScheduleListHandler(store *memory.Store) BuiltinFunc {
 				Prompt:   t.Params["prompt"],
 			}
 			if t.NextRun != nil {
-				v.NextRun = formatTimeForUser(t.NextRun.AsTime(), args)
+				v.NextRun = formatTimeForUser(ctx, t.NextRun.AsTime())
 			}
 			if t.LastRun != nil {
-				v.LastRun = formatTimeForUser(t.LastRun.AsTime(), args)
+				v.LastRun = formatTimeForUser(ctx, t.LastRun.AsTime())
 			}
 			tasks = append(tasks, v)
 			return nil
@@ -223,7 +223,7 @@ func newScheduleListHandler(store *memory.Store) BuiltinFunc {
 }
 
 func newScheduleGetHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		id := strings.TrimSpace(args["id"])
 		if id == "" {
 			return nil, 2, errors.New("schedule_get: id is required")
@@ -258,7 +258,7 @@ func newScheduleGetHandler(store *memory.Store) BuiltinFunc {
 }
 
 func newScheduleDeleteHandler(raft memoryRaftApplier) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		id := strings.TrimSpace(args["id"])
 		if id == "" {
 			return nil, 2, errors.New("schedule_delete: id is required")

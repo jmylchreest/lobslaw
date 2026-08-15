@@ -162,10 +162,13 @@ func newOAuthStartHandler(cfg CredentialsConfig) BuiltinFunc {
 				return nil, 2, fmt.Errorf("oauth_start: scopes must be a JSON array: %w", err)
 			}
 		}
-		initiatedBy := args["__user_id"]
-		if scope := args["__scope"]; scope != "" {
-			initiatedBy = scope + ":" + initiatedBy
-		}
+		// Audit attribution for a credential flow. Both halves used to
+		// come from the args map, and "__scope" was never injected at
+		// all — so the scope prefix on this field could only ever have
+		// been supplied by the model. An audit trail the subject can
+		// write is not an audit trail.
+		identity, _ := TurnIdentityFrom(ctx)
+		initiatedBy := identity.AttributedTo()
 		flow, err := cfg.Tracker.Start(ctx, p, scopes, initiatedBy, makePersistCallback(cfg))
 		if err != nil {
 			return nil, 1, fmt.Errorf("oauth_start: %w", err)
@@ -340,4 +343,3 @@ func splitScope(tokScope string, fallback []string) []string {
 	}
 	return parts
 }
-

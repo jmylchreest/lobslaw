@@ -283,7 +283,7 @@ long enough to be worth finding again.
 The store holds every conversation the node has ever had, from every user of
 every channel. The agent's `session_search` / `session_list` / `session_read`
 tools read across all of it, so they are scoped per turn. The rule, implemented
-by `compute.SessionScope.Visible`:
+by `compute.TurnIdentity.Visible`:
 
 1. **The conversation the turn is in is always readable** — same `channel` *and*
    `channel_id` as the current turn, whoever the record says opened it.
@@ -296,6 +296,33 @@ alone would refuse the second member the conversation they are visibly having.
 Clause 2 is what stops a shared bot handing user B snippets of user A's threads
 — `UserIDScopes` in the Telegram config exists precisely because a node often
 has more than one user.
+
+#### Where identity comes from
+
+`TurnIdentity` travels on the request context, attached once per turn in
+`Agent.runLoop`, and is the only source of caller identity for any builtin —
+not just the session tools. It carries the user, their permission scope, the
+conversation address, and the timezone.
+
+It is deliberately *not* in the tool-argument map. That map is built from the
+model's own JSON, so a value read out of it is a value the model can choose.
+This was not hypothetical: identity used to be injected there as synthetic
+`__user_id` / `__chat_id` keys, and the injection was conditional on the request
+carrying each field — so on a turn with no channel origin (a scheduled task, a
+webhook, a research worker) the model's own value survived. `notify` chose whose
+devices to ring from it, `commitment_create` chose whose chat a reminder fired
+into, and `oauth_start` stamped who initiated a credential flow into the audit
+log. `__scope` was never injected by anything, so the scope prefix on that audit
+field could only ever have come from the model.
+
+Scrubbing the map before injecting would have closed those instances without
+closing the class: trusted and untrusted values would still share one namespace,
+separated by a naming convention a new contributor has no way to discover. A
+context value cannot be reached from inside the model's output at all.
+
+`TestBuiltinsDoNotReadIdentityFromArgs` parses this package and fails on any
+handler that reads a retired identity key out of a map, so the invariant is
+enforced rather than remembered.
 
 Three properties worth keeping:
 

@@ -857,8 +857,8 @@ func (n *Node) resolveOAuthProviders() (map[string]oauth.ProviderConfig, error) 
 
 // resolveUserTimezone returns the IANA zone for the given user_id,
 // falling back to the cluster default and finally UTC. Used by the
-// agent to inject the synthetic __user_timezone arg into tool calls
-// + render time output naturally for the user.
+// agent to carry the user's timezone on the turn identity + render
+// time output naturally for the user.
 func (n *Node) resolveUserTimezone(userID string) string {
 	clusterDefault := strings.TrimSpace(n.cfg.Gateway.DefaultTimezone)
 	if clusterDefault == "" {

@@ -98,7 +98,7 @@ func CommitmentToolDefs() []*types.ToolDef {
 }
 
 func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		when := strings.TrimSpace(args["when"])
 		if when == "" {
 			return nil, 2, errors.New("commitment_create: when is required (duration or RFC3339)")
@@ -107,13 +107,13 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		if prompt == "" {
 			return nil, 2, errors.New("commitment_create: prompt is required")
 		}
-		userTZ := strings.TrimSpace(args["__user_timezone"])
+		userTZ := identityTimezone(ctx)
 		dueAt, err := parseWhen(when, userTZ)
 		if err != nil {
 			return nil, 2, fmt.Errorf("commitment_create: %w", err)
 		}
 		if dueAt.Before(time.Now()) {
-			return nil, 2, fmt.Errorf("commitment_create: due time %s is in the past", formatTimeForUser(dueAt, args))
+			return nil, 2, fmt.Errorf("commitment_create: due time %s is in the past", formatTimeForUser(ctx, dueAt))
 		}
 
 		id := ids.New()
@@ -125,9 +125,13 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		// channel preferences. Channel + chat_id stay stored for
 		// audit/debug visibility but aren't load-bearing for
 		// delivery anymore.
-		channel := strings.TrimSpace(args["__channel"])
-		chatID := strings.TrimSpace(args["__chat_id"])
-		userID := strings.TrimSpace(args["__user_id"])
+		// From the context, not the args: a commitment records who it
+		// is for and which chat it fires into, and a model that picks
+		// those schedules work in someone else's name.
+		identity, _ := TurnIdentityFrom(ctx)
+		channel := identity.Channel
+		chatID := identity.ChannelID
+		userID := identity.UserID
 		if userID != "" {
 			prompt = fmt.Sprintf("This commitment was scheduled by user %q. The firing turn has no chat to auto-reply into — to deliver any reply, call notify(text=\"...\") and the system routes to whichever channels that user is subscribed to.\n\nYour task: %s", userID, prompt)
 		}
@@ -167,14 +171,14 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		}
 		out, _ := json.Marshal(map[string]any{
 			"id":     id,
-			"due_at": formatTimeForUser(dueAt, args),
+			"due_at": formatTimeForUser(ctx, dueAt),
 		})
 		return out, 0, nil
 	}
 }
 
 func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		includeHistory := false
 		if raw, ok := args["include_history"]; ok && raw != "" {
 			b, err := strconv.ParseBool(raw)
@@ -213,7 +217,7 @@ func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
 				Status: c.Status,
 			}
 			if c.DueAt != nil {
-				v.DueAt = formatTimeForUser(c.DueAt.AsTime(), args)
+				v.DueAt = formatTimeForUser(ctx, c.DueAt.AsTime())
 			}
 			out = append(out, v)
 			return nil
@@ -232,7 +236,7 @@ func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
 }
 
 func newCommitmentCancelHandler(raft memoryRaftApplier) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		id := strings.TrimSpace(args["id"])
 		if id == "" {
 			return nil, 2, errors.New("commitment_cancel: id is required")
@@ -264,7 +268,7 @@ func newCommitmentCancelHandler(raft memoryRaftApplier) BuiltinFunc {
 //     — interpreted in userTZ (when supplied) or UTC (fallback).
 //
 // userTZ is the IANA zone the user prefers (resolved via the
-// synthetic __user_timezone arg). Empty → UTC, which matches the
+// turn identity). Empty → UTC, which matches the
 // historical behaviour for callers that haven't plumbed TZ context.
 //
 // All returned times are converted to UTC before being stored —
@@ -300,4 +304,15 @@ func parseWhen(when, userTZ string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("when %q is neither a Go duration ('2m', '1h') nor a timestamp", w)
 	}
 	return time.Now().UTC().Add(d), nil
+}
+
+// identityTimezone is the turn's timezone, or empty when the turn has
+// no identity attached (operator tooling, tests). Callers treat empty
+// as UTC.
+func identityTimezone(ctx context.Context) string {
+	identity, ok := TurnIdentityFrom(ctx)
+	if !ok {
+		return ""
+	}
+	return identity.Timezone
 }

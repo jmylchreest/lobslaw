@@ -273,7 +273,7 @@ type ProcessMessageRequest struct {
 	// rendering (e.g. "Europe/London"). Resolved from the user's
 	// preferences bucket at turn assembly. Empty falls back to the
 	// cluster default and finally to UTC. Threaded through to
-	// builtins via the synthetic __user_timezone arg so time
+	// builtins via the turn identity so time
 	// outputs render in the user's wall-clock without the agent
 	// having to remember to convert.
 	UserTimezone string
@@ -537,7 +537,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	// like the turn it resumes, and unconditionally rather than only
 	// when Claims are present — a turn with no caller is an anonymous
 	// caller, not an unscoped one.
-	ctx = WithSessionScope(ctx, sessionScopeForTurn(req))
+	ctx = WithTurnIdentity(ctx, turnIdentityFor(req))
 
 	for loop := range a.cfg.MaxToolLoops {
 		a.cfg.Logger.Debug("agent: LLM round-trip",
@@ -915,20 +915,22 @@ func isRetryableProviderError(err error, ctx context.Context) bool {
 	return false
 }
 
-// sessionScopeForTurn derives the transcript-visibility scope from
-// the turn. Channel + ChannelID are the conversation the user is
-// already in; scheduler and research turns leave them empty and fall
-// back to pure ownership, which is right — they carry the claims of
-// the person the work is being done for (see Node.schedulerClaims),
-// not of a chat.
-func sessionScopeForTurn(req ProcessMessageRequest) SessionScope {
-	s := SessionScope{
-		Current: SessionKey{Channel: req.Channel, ChannelID: req.ChannelID},
+// turnIdentityFor derives the caller identity from the request.
+// Channel + ChannelID are the conversation the user is already in;
+// scheduler and research turns leave them empty and fall back to pure
+// ownership, which is right — they carry the claims of the person the
+// work is being done for (see Node.schedulerClaims), not of a chat.
+func turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
+	t := TurnIdentity{
+		Channel:   req.Channel,
+		ChannelID: req.ChannelID,
+		Timezone:  req.UserTimezone,
 	}
 	if req.Claims != nil {
-		s.UserID = req.Claims.UserID
+		t.UserID = req.Claims.UserID
+		t.Scope = req.Claims.Scope
 	}
-	return s
+	return t
 }
 
 // syntheticArgPrefix marks tool arguments the agent injects rather
@@ -966,28 +968,17 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	if params == nil {
 		params = make(map[string]string)
 	}
-	// Drop anything the model put under the synthetic prefix before
-	// injecting the real values. The injections below are conditional
-	// on the request carrying each field, so without this a turn with
-	// no channel origin (scheduler, webhook) leaves the model free to
-	// supply its own __chat_id / __user_id — and notify, commitment
-	// and oauth_start all attribute work from those keys.
+	// Identity is NOT passed here. It travels on the context as a
+	// TurnIdentity, because this map is built from the model's own JSON
+	// and anything placed in it is a value the model can also supply.
+	// The synthetic "__" keys that used to carry it are stripped rather
+	// than trusted — nothing reads them any more, and a leftover one
+	// arriving from the model should never reach a builtin that a later
+	// change teaches to look.
 	for k := range params {
 		if strings.HasPrefix(k, syntheticArgPrefix) {
 			delete(params, k)
 		}
-	}
-	if req.Channel != "" {
-		params["__channel"] = req.Channel
-	}
-	if req.ChannelID != "" {
-		params["__chat_id"] = req.ChannelID
-	}
-	if req.Claims != nil && req.Claims.UserID != "" {
-		params["__user_id"] = req.Claims.UserID
-	}
-	if req.UserTimezone != "" {
-		params["__user_timezone"] = req.UserTimezone
 	}
 	if err != nil {
 		return ToolInvocation{
