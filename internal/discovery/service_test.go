@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc/codes"
@@ -19,10 +20,24 @@ type fakeRaft struct {
 	leader   raft.ServerAddress
 	added    []raft.Server
 	addErr   error
+
+	applied  [][]byte
+	applyErr error
+	// applyResult is returned as the FSM's value; an error here is
+	// the FSM rejecting the entry, distinct from applyErr which is
+	// Raft failing to replicate it.
+	applyResult any
 }
 
 func (f *fakeRaft) IsLeader() bool                    { return f.isLeader }
 func (f *fakeRaft) LeaderAddress() raft.ServerAddress { return f.leader }
+func (f *fakeRaft) Apply(data []byte, _ time.Duration) (any, error) {
+	if f.applyErr != nil {
+		return nil, f.applyErr
+	}
+	f.applied = append(f.applied, data)
+	return f.applyResult, nil
+}
 func (f *fakeRaft) AddVoter(id raft.ServerID, addr raft.ServerAddress) error {
 	if f.addErr != nil {
 		return f.addErr

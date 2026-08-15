@@ -138,15 +138,12 @@ func (s *CredentialService) List(_ context.Context) ([]*PlaintextCredential, err
 // Leader-only — followers return an error. Used by the OAuth flow
 // (initial token write + refresh rotation) and by Grant/Revoke
 // (ACL mutation only — tokens unchanged).
-func (s *CredentialService) Put(_ context.Context, p *PlaintextCredential) error {
+func (s *CredentialService) Put(ctx context.Context, p *PlaintextCredential) error {
 	if p == nil {
 		return errors.New("credentials: nil credential")
 	}
 	if s.raft == nil {
 		return errors.New("credentials: raft not wired")
-	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("credentials: not the raft leader; current leader is %s", s.raft.LeaderAddress())
 	}
 	key, err := CredentialKey(p.Provider, p.Subject)
 	if err != nil {
@@ -165,7 +162,7 @@ func (s *CredentialService) Put(_ context.Context, p *PlaintextCredential) error
 	if err != nil {
 		return fmt.Errorf("credentials: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, credentialApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, credentialApplyTimeout); err != nil {
 		return fmt.Errorf("credentials: raft apply: %w", err)
 	}
 	return nil
@@ -173,12 +170,9 @@ func (s *CredentialService) Put(_ context.Context, p *PlaintextCredential) error
 
 // Delete removes a credential by (provider, subject). Leader-only.
 // Used by the "credentials revoke" CLI/builtin.
-func (s *CredentialService) Delete(_ context.Context, provider, subject string) error {
+func (s *CredentialService) Delete(ctx context.Context, provider, subject string) error {
 	if s.raft == nil {
 		return errors.New("credentials: raft not wired")
-	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("credentials: not the raft leader; current leader is %s", s.raft.LeaderAddress())
 	}
 	key, err := CredentialKey(provider, subject)
 	if err != nil {
@@ -195,7 +189,7 @@ func (s *CredentialService) Delete(_ context.Context, provider, subject string) 
 	if err != nil {
 		return fmt.Errorf("credentials: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, credentialApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, credentialApplyTimeout); err != nil {
 		return fmt.Errorf("credentials: raft apply: %w", err)
 	}
 	return nil

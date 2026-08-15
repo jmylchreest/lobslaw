@@ -24,6 +24,7 @@ import (
 
 type clusterNode struct {
 	id        string
+	index     int
 	addr      string
 	server    *grpc.Server
 	listener  net.Listener
@@ -59,22 +60,7 @@ func TestRaftClusterOverGRPC(t *testing.T) {
 		t.Skip("skipping multi-node integration in short mode")
 	}
 
-	certDir := t.TempDir()
-	caCertPath := filepath.Join(certDir, "ca.pem")
-	caKeyPath := filepath.Join(certDir, "ca-key.pem")
-
-	// Cluster-wide CA.
-	caCertPEM, caKeyPEM, err := mtls.GenerateCA(mtls.CAOpts{CommonName: "cluster-test-ca"})
-	if err != nil {
-		t.Fatalf("GenerateCA: %v", err)
-	}
-	if err := mtls.WriteCAFiles(caCertPath, caKeyPath, caCertPEM, caKeyPEM); err != nil {
-		t.Fatal(err)
-	}
-	caCert, caKey, err := mtls.LoadCA(caCertPath, caKeyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	certDir, caCert, caKey, caCertPath := newClusterCA(t)
 
 	// Build three nodes. Each reserves its port up front so peers can
 	// dial the static address we record in raft configuration.
@@ -239,6 +225,7 @@ func newClusterNode(t *testing.T, index int, certDir, caCertPath string, caCert 
 
 	return &clusterNode{
 		id:       id,
+		index:    index,
 		addr:     addr,
 		server:   server,
 		listener: ln,
@@ -300,5 +287,57 @@ func waitForRecord(t *testing.T, fsm *memory.FSM, id string, timeout time.Durati
 			t.Fatalf("record %q didn't appear in fsm within %s", id, timeout)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// newClusterCA generates the cluster-wide CA every multi-node test
+// needs and returns the temp dir holding it. Shared with
+// leaderfwd_cluster_test.go — one CA definition, so the two harnesses
+// cannot drift into disagreeing about trust.
+func newClusterCA(t *testing.T) (certDir string, caCert *x509.Certificate, caKey ed25519.PrivateKey, caCertPath string) {
+	t.Helper()
+	certDir = t.TempDir()
+	caCertPath = filepath.Join(certDir, "ca.pem")
+	caKeyPath := filepath.Join(certDir, "ca-key.pem")
+
+	caCertPEM, caKeyPEM, err := mtls.GenerateCA(mtls.CAOpts{CommonName: "cluster-test-ca"})
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+	if err := mtls.WriteCAFiles(caCertPath, caKeyPath, caCertPEM, caKeyPEM); err != nil {
+		t.Fatal(err)
+	}
+	caCert, caKey, err = mtls.LoadCA(caCertPath, caKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certDir, caCert, caKey, caCertPath
+}
+
+// bootstrapAndJoin makes nodes[0] a single-voter cluster, waits for it
+// to win the election, then adds the rest as voters.
+func bootstrapAndJoin(t *testing.T, nodes []*clusterNode) {
+	t.Helper()
+	leader := nodes[0]
+	f := leader.raft.Raft.BootstrapCluster(raft.Configuration{
+		Servers: []raft.Server{{
+			ID:       raft.ServerID(leader.id),
+			Address:  raft.ServerAddress(leader.addr),
+			Suffrage: raft.Voter,
+		}},
+	})
+	if err := f.Error(); err != nil && err != raft.ErrCantBootstrap {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if err := leader.raft.WaitForLeader(5 * time.Second); err != nil {
+		t.Fatalf("leader election: %v", err)
+	}
+	for i := 1; i < len(nodes); i++ {
+		if err := leader.raft.AddVoter(
+			raft.ServerID(nodes[i].id),
+			raft.ServerAddress(nodes[i].addr),
+		); err != nil {
+			t.Fatalf("AddVoter %s: %v", nodes[i].id, err)
+		}
 	}
 }

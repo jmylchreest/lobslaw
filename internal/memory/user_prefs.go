@@ -89,9 +89,6 @@ func (s *UserPrefsService) Put(ctx context.Context, p *lobslawv1.UserPreferences
 	if s.raft == nil {
 		return errors.New("user_prefs: raft not wired")
 	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("user_prefs: not the raft leader; current leader is %s", s.raft.LeaderAddress())
-	}
 	if err := validateUserID(p.UserId); err != nil {
 		return err
 	}
@@ -115,19 +112,16 @@ func (s *UserPrefsService) Put(ctx context.Context, p *lobslawv1.UserPreferences
 	if err != nil {
 		return fmt.Errorf("user_prefs: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, userPrefsApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, userPrefsApplyTimeout); err != nil {
 		return fmt.Errorf("user_prefs: raft apply: %w", err)
 	}
 	return nil
 }
 
 // Delete removes a prefs record. Leader-only.
-func (s *UserPrefsService) Delete(_ context.Context, userID string) error {
+func (s *UserPrefsService) Delete(ctx context.Context, userID string) error {
 	if s.raft == nil {
 		return errors.New("user_prefs: raft not wired")
-	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("user_prefs: not the raft leader; current leader is %s", s.raft.LeaderAddress())
 	}
 	if err := validateUserID(userID); err != nil {
 		return err
@@ -143,7 +137,7 @@ func (s *UserPrefsService) Delete(_ context.Context, userID string) error {
 	if err != nil {
 		return fmt.Errorf("user_prefs: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, userPrefsApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, userPrefsApplyTimeout); err != nil {
 		return fmt.Errorf("user_prefs: raft apply: %w", err)
 	}
 	return nil

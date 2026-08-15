@@ -284,7 +284,7 @@ func (s *SessionService) LoadRange(_ context.Context, ref SessionRef, afterSeq, 
 // throughSeq must not go backwards — a stale compaction landing after
 // a newer one would resurrect messages the newer summary already
 // folded in, and the transcript would replay them a second time.
-func (s *SessionService) PutSummary(_ context.Context, ref SessionRef, summary string, throughSeq uint64) error {
+func (s *SessionService) PutSummary(ctx context.Context, ref SessionRef, summary string, throughSeq uint64) error {
 	if s.store == nil {
 		return errors.New("session: store not wired")
 	}
@@ -294,9 +294,6 @@ func (s *SessionService) PutSummary(_ context.Context, ref SessionRef, summary s
 	}
 	if s.raft == nil {
 		return fmt.Errorf("%w: raft not wired", ErrNotLeader)
-	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("%w; current leader is %s", ErrNotLeader, s.raft.LeaderAddress())
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -327,7 +324,7 @@ func (s *SessionService) PutSummary(_ context.Context, ref SessionRef, summary s
 	if err != nil {
 		return fmt.Errorf("session: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, sessionApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, sessionApplyTimeout); err != nil {
 		return fmt.Errorf("session: raft apply: %w", err)
 	}
 	return nil
@@ -343,7 +340,7 @@ func (s *SessionService) PutSummary(_ context.Context, ref SessionRef, summary s
 // System messages are dropped: promptgen rebuilds the system prompt
 // every turn from live state, so a persisted copy would be stale the
 // moment SOUL or the tool list changed.
-func (s *SessionService) Append(_ context.Context, ref SessionRef, turnID string, msgs []TranscriptMessage) (*lobslawv1.SessionRecord, error) {
+func (s *SessionService) Append(ctx context.Context, ref SessionRef, turnID string, msgs []TranscriptMessage) (*lobslawv1.SessionRecord, error) {
 	if s.store == nil {
 		return nil, errors.New("session: store not wired")
 	}
@@ -353,9 +350,6 @@ func (s *SessionService) Append(_ context.Context, ref SessionRef, turnID string
 	}
 	if s.raft == nil {
 		return nil, fmt.Errorf("%w: raft not wired", ErrNotLeader)
-	}
-	if !s.raft.IsLeader() {
-		return nil, fmt.Errorf("%w; current leader is %s", ErrNotLeader, s.raft.LeaderAddress())
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -413,7 +407,7 @@ func (s *SessionService) Append(_ context.Context, ref SessionRef, turnID string
 	if err != nil {
 		return nil, fmt.Errorf("session: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, sessionApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, sessionApplyTimeout); err != nil {
 		return nil, fmt.Errorf("session: raft apply: %w", err)
 	}
 	return rec, nil
@@ -425,16 +419,13 @@ func (s *SessionService) Append(_ context.Context, ref SessionRef, turnID string
 // Deliberately a hard delete, not a retention downgrade: a user
 // saying "forget this conversation" means the bytes go away, and
 // leaving them recoverable in a lower tier would betray that.
-func (s *SessionService) Forget(_ context.Context, ref SessionRef) error {
+func (s *SessionService) Forget(ctx context.Context, ref SessionRef) error {
 	id, err := sessionID(ref.Channel, ref.ChannelID)
 	if err != nil {
 		return err
 	}
 	if s.raft == nil {
 		return fmt.Errorf("%w: raft not wired", ErrNotLeader)
-	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("%w; current leader is %s", ErrNotLeader, s.raft.LeaderAddress())
 	}
 	entry := &lobslawv1.LogEntry{
 		Op:      lobslawv1.LogOp_LOG_OP_DELETE,
@@ -445,7 +436,7 @@ func (s *SessionService) Forget(_ context.Context, ref SessionRef) error {
 	if err != nil {
 		return fmt.Errorf("session: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, sessionApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, sessionApplyTimeout); err != nil {
 		return fmt.Errorf("session: raft apply: %w", err)
 	}
 	return nil
@@ -733,7 +724,7 @@ func alignRuneStart(s string, i int) int {
 // PutTitle sets a conversation's human-readable label. Titles are
 // advisory — nothing keys off them — so an empty or duplicate title
 // is not an error.
-func (s *SessionService) PutTitle(_ context.Context, ref SessionRef, title string) error {
+func (s *SessionService) PutTitle(ctx context.Context, ref SessionRef, title string) error {
 	if s.store == nil {
 		return errors.New("session: store not wired")
 	}
@@ -743,9 +734,6 @@ func (s *SessionService) PutTitle(_ context.Context, ref SessionRef, title strin
 	}
 	if s.raft == nil {
 		return fmt.Errorf("%w: raft not wired", ErrNotLeader)
-	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("%w; current leader is %s", ErrNotLeader, s.raft.LeaderAddress())
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -769,7 +757,7 @@ func (s *SessionService) PutTitle(_ context.Context, ref SessionRef, title strin
 	if err != nil {
 		return fmt.Errorf("session: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, sessionApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, sessionApplyTimeout); err != nil {
 		return fmt.Errorf("session: raft apply: %w", err)
 	}
 	return nil

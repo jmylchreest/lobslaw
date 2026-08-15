@@ -50,12 +50,19 @@ Each service has an `applyLocked` that writes to its bucket and is called only b
 
 ## Leader-only mutations
 
-Only the Raft leader's services accept mutation calls. Followers either:
+Only the Raft leader may write, but a user's message arrives at whichever gateway node they reached, and that is uncorrelated with leadership. So a write issued on a follower is **forwarded to the leader** rather than refused.
 
-- Forward to the leader (gateway → cluster gRPC).
-- Or return a "not leader" error and let the caller retry against the leader.
+Writes go through `RaftNode.ApplyOrForward`. On the leader that is a plain local apply; on a follower it sends the marshalled `LogEntry` to the leader's `NodeService.Propose` over the cluster's existing mTLS connection. The Raft transport shares that same gRPC server, so the address Raft reports for the leader is dialable as-is.
 
-Most code goes through `NodeService.Apply(ctx, entry)` which transparently forwards. Reads are always local.
+Reads are always local and never forwarded — followers serve them from their own replicated bolt state.
+
+Three properties worth knowing:
+
+- **One hop, never a cycle.** `Propose` is leader-only: a node that is not the leader refuses rather than passing the entry on.
+- **Failures are distinguishable.** `ErrNoLeader` means an election is in progress (wait and retry); `ErrForwardUnavailable` means a leader exists but is unreachable (a wiring or network problem). The gateway degrades to its in-memory session buffer on either.
+- **`Propose` grants no new authority.** Any cluster member can already replicate arbitrary log entries through the Raft transport on the same server under the same mTLS identity — the trust boundary is cluster membership, not this method. It must never be exposed outside the cluster mesh.
+
+Some paths stay leader-only by design and do *not* forward: `Dream`, session pruning and the scheduler are singletons that should skip on a follower rather than relocate their work. `Forget` is also leader-only, because it scans for a matched set and then deletes it — forwarding each delete individually would run the scan against the follower's view while the deletes landed on the leader.
 
 ## Snapshot + restore
 

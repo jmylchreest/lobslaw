@@ -86,11 +86,12 @@ sections further down propose:
 | R19 | **Done for the handler.** `signing.go` + `ParseWithPolicy` enforce detached ed25519 signatures over `manifest.yaml`; the manifest pins `handler_sha256`, which is what makes the signature cover executable content, and the invoker re-hashes before exec. Signed manifests that pin nothing are rejected. Still open: only the handler is pinned, so a skill reading adjacent data files is unprotected, and there is no grace flag for migrating an existing signed corpus (nothing is deployed, so none exists) |
 | R6 | **Partial** — `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in |
 | R7 | **Partial** — see the status note on the section itself |
-| R0, R2, R3 | Not started. Non-leader writes return `"not the raft leader; retry at %s"` rather than forwarding (`memory/service.go:234,266,370`); `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record; turns are dispatched straight into `go func()` at `gateway/conversation.go:178` |
+| R0 | **Done.** `RaftNode.ApplyOrForward` + `NodeService.Propose`. Sessions, prefs, credentials, soul tune, channel state and memory writes forward from a follower to the leader; Dream, session pruning and the scheduler stay leader-gated singletons, and `Forget` stays leader-only on purpose. See the section for the two deviations from the design below |
+| R2, R3 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record; turns are dispatched straight into `go func()` at `gateway/conversation.go:178` |
 | R5 | Partial — `internal/soul/trust.go` and skill signing exist; the single trust contract and ingest scanning do not |
 
-R5 is P0 on security grounds and independent of everything else. Of the
-remaining P0s, R0 is the smallest and unblocks R1/R2/R3.
+R5 is P0 on security grounds and independent of everything else. With R0 landed,
+R2 and R3 are unblocked and are the remaining P0s.
 
 ---
 
@@ -159,10 +160,29 @@ can happen opportunistically.
 
 ### Acceptance
 
-- [ ] A three-node cluster where the gateway node is a follower persists sessions, prompts and
-      leases with no operator action.
-- [ ] Killing the leader mid-turn surfaces a retryable error, not a lost message.
-- [ ] `ErrNoLeader` and `ErrNotLeader` are separately testable and separately logged.
+- [x] A three-node cluster where the gateway node is a follower persists sessions, prompts and
+      leases with no operator action. *Sessions, user prefs, credentials, soul tune, channel state
+      and memory Store/EpisodicAdd forward. Prompts and leases are R2/R3 and do not exist yet;
+      they inherit the path.*
+- [x] Killing the leader mid-turn surfaces a retryable error, not a lost message.
+- [x] `ErrNoLeader` and `ErrNotLeader` are separately testable and separately logged.
+
+**Shipped 2026-08-15**, with two deviations from the proposal above:
+
+- **Not at the gRPC boundary.** The writes this exists for — sessions above all — have no gRPC
+  surface at all; they are in-process Go calls from the agent to `memory.SessionService`. A wrapper
+  at the gRPC boundary would not have seen them. Forwarding instead sits at the Raft handle, as
+  `RaftNode.ApplyOrForward`, which every write path already funnels through: each one marshals a
+  `LogEntry` and calls `Apply`.
+- **One new RPC, `NodeService.Propose`,** carrying an already-marshalled `LogEntry`. It grants a
+  peer no authority it lacked: the Raft transport shares the same gRPC server and the same cluster
+  mTLS identity, and already accepts arbitrary log replication from any member, so the trust
+  boundary is cluster membership rather than this method. It is leader-only and never forwards,
+  which makes a cycle structurally impossible rather than merely bounded.
+
+`Forget` is deliberately left leader-only: it scans for a matched set and then deletes it, and
+forwarding each delete individually would run the scan against the follower's view while the
+deletes landed on the leader.
 
 ---
 

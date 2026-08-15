@@ -84,16 +84,13 @@ func (s *ChannelStateService) Get(_ context.Context, channel, key string) ([]byt
 // Put writes value via raft so it replicates. Leader-only — followers
 // get an error so the caller (typically a singleton-gated channel
 // loop) can decide whether to retry, defer, or surface.
-func (s *ChannelStateService) Put(_ context.Context, channel, key string, value []byte) error {
+func (s *ChannelStateService) Put(ctx context.Context, channel, key string, value []byte) error {
 	bktKey, err := channelStateKey(channel, key)
 	if err != nil {
 		return err
 	}
 	if s.raft == nil {
 		return errors.New("channel state: raft not wired")
-	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("channel state: not the raft leader; current leader is %s", s.raft.LeaderAddress())
 	}
 	rec := &lobslawv1.ChannelStateRecord{
 		Channel:   channel,
@@ -110,7 +107,7 @@ func (s *ChannelStateService) Put(_ context.Context, channel, key string, value 
 	if err != nil {
 		return fmt.Errorf("channel state: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, channelStateApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, channelStateApplyTimeout); err != nil {
 		return fmt.Errorf("channel state: raft apply: %w", err)
 	}
 	return nil

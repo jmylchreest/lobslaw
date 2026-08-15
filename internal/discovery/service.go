@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc/codes"
@@ -20,6 +21,7 @@ type RaftMembership interface {
 	IsLeader() bool
 	LeaderAddress() raft.ServerAddress
 	AddVoter(id raft.ServerID, addr raft.ServerAddress) error
+	Apply(data []byte, timeout time.Duration) (any, error)
 }
 
 // ReloadFunc is the hook Phase 11 hot-reload plugs into. Returns the
@@ -162,4 +164,50 @@ func (s *Service) AddMember(ctx context.Context, req *lobslawv1.AddMemberRequest
 		"address", req.Address,
 	)
 	return &lobslawv1.AddMemberResponse{Accepted: true}, nil
+}
+
+// proposeTimeout bounds the leader's own Raft apply for a forwarded
+// entry. The forwarding node applies its own deadline to the RPC; this
+// stops a wedged apply holding the connection open past it.
+const proposeTimeout = 10 * time.Second
+
+// Propose applies one already-marshalled LogEntry on behalf of a
+// follower that received the write.
+//
+// Leader-only and non-forwarding by construction: a node that is not
+// the leader answers FailedPrecondition with the address it believes
+// holds leadership, and never passes the entry on. That makes a
+// forward exactly one hop and a forwarding cycle impossible, which
+// matters more than saving a round trip during an election.
+//
+// This exposes no authority a peer lacked. The Raft transport shares
+// this gRPC server and the same cluster mTLS identity, and already
+// accepts arbitrary log replication from any member — the trust
+// boundary is cluster membership, which mTLS enforces, not this
+// method. What it does add is a path that bypasses the *service*
+// layer's validation, so it must never be reachable from the gateway:
+// entries arrive pre-marshalled and are applied as given.
+func (s *Service) Propose(ctx context.Context, req *lobslawv1.ProposeRequest) (*lobslawv1.ProposeResponse, error) {
+	if s.raft == nil {
+		return nil, status.Error(codes.Unimplemented, "this node doesn't host the Raft group")
+	}
+	if req == nil || len(req.Entry) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "entry is required")
+	}
+	if !s.raft.IsLeader() {
+		// The forwarder read a leader address that has since moved.
+		// Retryable: the caller re-reads leadership on the way back.
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"not the raft leader; leader is %s", s.raft.LeaderAddress())
+	}
+
+	resp, err := s.raft.Apply(req.Entry, proposeTimeout)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "raft apply: %v", err)
+	}
+	if fsmErr, ok := resp.(error); ok && fsmErr != nil {
+		return nil, status.Errorf(codes.Internal, "fsm apply: %v", fsmErr)
+	}
+	logging.From(ctx).Debug("applied forwarded entry", "bytes", len(req.Entry))
+	return &lobslawv1.ProposeResponse{}, nil
 }

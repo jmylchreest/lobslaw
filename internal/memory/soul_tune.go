@@ -76,9 +76,6 @@ func (s *SoulTuneService) Put(ctx context.Context, state *lobslawv1.SoulTuneStat
 	if s.raft == nil {
 		return errors.New("soul tune: raft not wired")
 	}
-	if !s.raft.IsLeader() {
-		return fmt.Errorf("soul tune: not the raft leader; current leader is %s", s.raft.LeaderAddress())
-	}
 	prev, err := s.Get(ctx)
 	if err != nil {
 		return fmt.Errorf("soul tune: read current: %w", err)
@@ -104,7 +101,7 @@ func (s *SoulTuneService) Put(ctx context.Context, state *lobslawv1.SoulTuneStat
 	if err != nil {
 		return fmt.Errorf("soul tune: marshal: %w", err)
 	}
-	if _, err := s.raft.Apply(data, soulTuneApplyTimeout); err != nil {
+	if _, err := s.raft.ApplyOrForward(ctx, data, soulTuneApplyTimeout); err != nil {
 		return fmt.Errorf("soul tune: raft apply: %w", err)
 	}
 	return nil

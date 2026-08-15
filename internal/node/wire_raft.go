@@ -52,6 +52,12 @@ func (n *Node) wireRaft(advertise string) error {
 	n.transport = transport
 	n.raft = rNode
 
+	// Writes that arrive on a follower are forwarded to the leader
+	// rather than refused. The Raft transport shares this gRPC server,
+	// so the raft.ServerAddress we forward to is dialable as-is with
+	// the same cluster mTLS credentials — no separate address book.
+	rNode.SetLeaderDialer(memory.LeaderDialer(n.dialer()))
+
 	// Leader-pinned singleton coordinator. Constructed here because
 	// it needs the raft handle to seed initial state and to receive
 	// transitions. Workloads that want exactly-one-owner semantics

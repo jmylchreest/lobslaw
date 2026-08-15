@@ -58,7 +58,34 @@ service NodeService {
   rpc GetPeers(GetPeersRequest) returns (GetPeersResponse);
   rpc Reload(ReloadRequest) returns (ReloadResponse);
   rpc AddMember(AddMemberRequest) returns (AddMemberResponse);
+
+  // Propose applies one already-marshalled LogEntry on the Raft
+  // leader, on behalf of a follower that received the write.
+  //
+  // Only the leader may write, but a user's message lands on
+  // whichever gateway node they happened to reach, which is
+  // uncorrelated with leadership. Without this a follower cannot
+  // persist a conversation turn at all.
+  //
+  // Leader-only and non-forwarding by construction: a node that is
+  // not the leader returns FAILED_PRECONDITION rather than passing
+  // the entry on, so a forward is always exactly one hop and a
+  // cycle is impossible.
+  //
+  // This grants a peer no authority it did not already have. The
+  // Raft transport shares this gRPC server and the same cluster
+  // mTLS identity, and it already accepts arbitrary log
+  // replication — the trust boundary is cluster membership, not
+  // this method.
+  rpc Propose(ProposeRequest) returns (ProposeResponse);
 }
+
+message ProposeRequest {
+  // Marshalled LogEntry. Opaque here so the entry schema can evolve
+  // without touching the forwarding path.
+  bytes entry = 1;
+}
+message ProposeResponse {}
 
 message RegisterRequest {
   NodeInfo node = 1;

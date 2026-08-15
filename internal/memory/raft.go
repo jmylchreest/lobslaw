@@ -57,7 +57,16 @@ type RaftNode struct {
 	log       *slog.Logger
 	stopWatch chan struct{}
 	watchOnce sync.Once
-	watchWG   sync.WaitGroup
+	// stopOnce makes Shutdown idempotent. watchOnce guards starting
+	// the state-watcher; this guards stopping it.
+	stopOnce sync.Once
+	watchWG  sync.WaitGroup
+
+	// fwd holds the leader-forwarding connection cache. Always
+	// non-nil; its dialer stays nil until internal/node wires one,
+	// and a nil dialer is what makes ApplyOrForward fail loudly on a
+	// follower rather than appear to succeed. See leaderfwd.go.
+	fwd *leaderConns
 
 	// nodeID, localAddr are kept so BootstrapSelf can install a
 	// single-voter config without re-threading the values.
@@ -167,6 +176,7 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 		nodeID:    raft.ServerID(cfg.NodeID),
 		localAddr: cfg.LocalAddr,
 		hadState:  hadState,
+		fwd:       &leaderConns{},
 	}
 	node.startStateWatch()
 	return node, nil
@@ -491,9 +501,15 @@ func (n *RaftNode) WaitForLeader(timeout time.Duration) error {
 }
 
 // Shutdown closes the Raft node and its log/snapshot backing.
+//
+// Idempotent. Callers legitimately shut a node down more than once —
+// an explicit stop followed by a deferred cleanup is the obvious
+// shape, and a second call used to panic on the closed channel rather
+// than doing nothing.
 func (n *RaftNode) Shutdown() error {
-	close(n.stopWatch)
+	n.stopOnce.Do(func() { close(n.stopWatch) })
 	n.watchWG.Wait()
+	n.fwd.closeAll()
 	if err := n.Raft.Shutdown().Error(); err != nil {
 		return fmt.Errorf("raft shutdown: %w", err)
 	}

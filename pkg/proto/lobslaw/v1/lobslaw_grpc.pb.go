@@ -25,6 +25,7 @@ const (
 	NodeService_GetPeers_FullMethodName   = "/lobslaw.v1.NodeService/GetPeers"
 	NodeService_Reload_FullMethodName     = "/lobslaw.v1.NodeService/Reload"
 	NodeService_AddMember_FullMethodName  = "/lobslaw.v1.NodeService/AddMember"
+	NodeService_Propose_FullMethodName    = "/lobslaw.v1.NodeService/Propose"
 )
 
 // NodeServiceClient is the client API for NodeService service.
@@ -37,6 +38,25 @@ type NodeServiceClient interface {
 	GetPeers(ctx context.Context, in *GetPeersRequest, opts ...grpc.CallOption) (*GetPeersResponse, error)
 	Reload(ctx context.Context, in *ReloadRequest, opts ...grpc.CallOption) (*ReloadResponse, error)
 	AddMember(ctx context.Context, in *AddMemberRequest, opts ...grpc.CallOption) (*AddMemberResponse, error)
+	// Propose applies one already-marshalled LogEntry on the Raft
+	// leader, on behalf of a follower that received the write.
+	//
+	// Only the leader may write, but a user's message lands on
+	// whichever gateway node they happened to reach, which is
+	// uncorrelated with leadership. Without this a follower cannot
+	// persist a conversation turn at all.
+	//
+	// Leader-only and non-forwarding by construction: a node that is
+	// not the leader returns FAILED_PRECONDITION rather than passing
+	// the entry on, so a forward is always exactly one hop and a
+	// cycle is impossible.
+	//
+	// This grants a peer no authority it did not already have. The
+	// Raft transport shares this gRPC server and the same cluster
+	// mTLS identity, and it already accepts arbitrary log
+	// replication — the trust boundary is cluster membership, not
+	// this method.
+	Propose(ctx context.Context, in *ProposeRequest, opts ...grpc.CallOption) (*ProposeResponse, error)
 }
 
 type nodeServiceClient struct {
@@ -107,6 +127,16 @@ func (c *nodeServiceClient) AddMember(ctx context.Context, in *AddMemberRequest,
 	return out, nil
 }
 
+func (c *nodeServiceClient) Propose(ctx context.Context, in *ProposeRequest, opts ...grpc.CallOption) (*ProposeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProposeResponse)
+	err := c.cc.Invoke(ctx, NodeService_Propose_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServiceServer is the server API for NodeService service.
 // All implementations should embed UnimplementedNodeServiceServer
 // for forward compatibility.
@@ -117,6 +147,25 @@ type NodeServiceServer interface {
 	GetPeers(context.Context, *GetPeersRequest) (*GetPeersResponse, error)
 	Reload(context.Context, *ReloadRequest) (*ReloadResponse, error)
 	AddMember(context.Context, *AddMemberRequest) (*AddMemberResponse, error)
+	// Propose applies one already-marshalled LogEntry on the Raft
+	// leader, on behalf of a follower that received the write.
+	//
+	// Only the leader may write, but a user's message lands on
+	// whichever gateway node they happened to reach, which is
+	// uncorrelated with leadership. Without this a follower cannot
+	// persist a conversation turn at all.
+	//
+	// Leader-only and non-forwarding by construction: a node that is
+	// not the leader returns FAILED_PRECONDITION rather than passing
+	// the entry on, so a forward is always exactly one hop and a
+	// cycle is impossible.
+	//
+	// This grants a peer no authority it did not already have. The
+	// Raft transport shares this gRPC server and the same cluster
+	// mTLS identity, and it already accepts arbitrary log
+	// replication — the trust boundary is cluster membership, not
+	// this method.
+	Propose(context.Context, *ProposeRequest) (*ProposeResponse, error)
 }
 
 // UnimplementedNodeServiceServer should be embedded to have
@@ -143,6 +192,9 @@ func (UnimplementedNodeServiceServer) Reload(context.Context, *ReloadRequest) (*
 }
 func (UnimplementedNodeServiceServer) AddMember(context.Context, *AddMemberRequest) (*AddMemberResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddMember not implemented")
+}
+func (UnimplementedNodeServiceServer) Propose(context.Context, *ProposeRequest) (*ProposeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Propose not implemented")
 }
 func (UnimplementedNodeServiceServer) testEmbeddedByValue() {}
 
@@ -272,6 +324,24 @@ func _NodeService_AddMember_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeService_Propose_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProposeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServiceServer).Propose(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeService_Propose_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServiceServer).Propose(ctx, req.(*ProposeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeService_ServiceDesc is the grpc.ServiceDesc for NodeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -302,6 +372,10 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddMember",
 			Handler:    _NodeService_AddMember_Handler,
+		},
+		{
+			MethodName: "Propose",
+			Handler:    _NodeService_Propose_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

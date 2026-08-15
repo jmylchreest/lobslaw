@@ -392,7 +392,15 @@ func translateSessionErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, memory.ErrNotLeader) {
+	// ErrNotLeader survives for the paths that are still leader-only.
+	// The forwarding ones fail differently now: ErrNoLeader during an
+	// election, ErrForwardUnavailable when the leader is unreachable.
+	// All three mean "this write cannot land right now" and the
+	// gateway's answer is the same — degrade to the in-memory buffer
+	// and log quietly rather than fail the user's turn.
+	if errors.Is(err, memory.ErrNotLeader) ||
+		errors.Is(err, memory.ErrNoLeader) ||
+		errors.Is(err, memory.ErrForwardUnavailable) {
 		return fmt.Errorf("%w: %s", gateway.ErrSessionUnavailable, err)
 	}
 	return err

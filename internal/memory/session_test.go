@@ -373,7 +373,10 @@ func TestSessionListReturnsIndexRecords(t *testing.T) {
 	}
 }
 
-func TestSessionAppendOnFollowerReturnsErrNotLeader(t *testing.T) {
+// A node with no raft at all cannot write and cannot forward either.
+// Distinct from a follower, which now forwards to the leader — see
+// TestFollowerWriteReachesLeader.
+func TestSessionAppendWithoutRaftReturnsErrNotLeader(t *testing.T) {
 	t.Parallel()
 	svc := newTestServiceStack(t)
 	// No raft wired = can't be the leader; the gateway relies on

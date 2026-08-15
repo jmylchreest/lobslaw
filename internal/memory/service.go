@@ -91,7 +91,7 @@ func (s *Service) Store(ctx context.Context, req *lobslawv1.StoreRequest) (*lobs
 	if rec.CreatedAt == nil {
 		rec.CreatedAt = timestamppb.Now()
 	}
-	if err := s.applyEntry(&lobslawv1.LogEntry{
+	if err := s.applyEntry(ctx, &lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_PUT,
 		Id: rec.Id,
 		Payload: &lobslawv1.LogEntry_VectorRecord{
@@ -208,7 +208,7 @@ func (s *Service) EpisodicAdd(ctx context.Context, req *lobslawv1.EpisodicAddReq
 		// silently exclude the record.
 		rec.Importance = 5
 	}
-	if err := s.applyEntry(&lobslawv1.LogEntry{
+	if err := s.applyEntry(ctx, &lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_PUT,
 		Id: rec.Id,
 		Payload: &lobslawv1.LogEntry_EpisodicRecord{
@@ -253,6 +253,16 @@ func (s *Service) Dream(ctx context.Context, _ *lobslawv1.DreamRequest) (*lobsla
 //
 // Each deletion goes through Raft as a LogEntry{DELETE}. Requires
 // leadership; followers return FailedPrecondition.
+//
+// Deliberately NOT forwarded, unlike the other write paths. Forget
+// scans for a matched set and then deletes it, and the two must agree:
+// forwarding each delete individually would run the scan against this
+// follower's view while the deletes landed on the leader, so a record
+// written in between would be missed by a sweep that reported success.
+// It is also an operator action rather than a per-turn write, so
+// "retry against the leader" is a reasonable thing to ask of its
+// caller — and `lobslaw memory forget` works directly against the
+// store while the node is down.
 func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lobslawv1.ForgetResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
@@ -311,12 +321,12 @@ func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lo
 	// determined from the SourceIDs we already saw — but both buckets
 	// use the same-id-space so we try both for robustness.
 	for id := range matched {
-		if err := s.deleteFromBothBuckets(id); err != nil {
+		if err := s.deleteFromBothBuckets(ctx, id); err != nil {
 			return nil, status.Errorf(codes.Internal, "delete %q: %v", id, err)
 		}
 	}
 	for id := range swept {
-		if err := s.deleteFromBothBuckets(id); err != nil {
+		if err := s.deleteFromBothBuckets(ctx, id); err != nil {
 			return nil, status.Errorf(codes.Internal, "delete cascade %q: %v", id, err)
 		}
 	}
@@ -339,7 +349,7 @@ func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lo
 // VectorRecord and EpisodicRecord buckets. The FSM's applyDelete is
 // idempotent for absent keys, so the entry for whichever bucket
 // doesn't hold the id is a cheap no-op.
-func (s *Service) deleteFromBothBuckets(id string) error {
+func (s *Service) deleteFromBothBuckets(ctx context.Context, id string) error {
 	for _, payload := range []*lobslawv1.LogEntry{
 		{
 			Op:      lobslawv1.LogOp_LOG_OP_DELETE,
@@ -352,7 +362,7 @@ func (s *Service) deleteFromBothBuckets(id string) error {
 			Payload: &lobslawv1.LogEntry_EpisodicRecord{EpisodicRecord: &lobslawv1.EpisodicRecord{Id: id}},
 		},
 	} {
-		if err := s.applyEntry(payload); err != nil {
+		if err := s.applyEntry(ctx, payload); err != nil {
 			return err
 		}
 	}
@@ -361,19 +371,15 @@ func (s *Service) deleteFromBothBuckets(id string) error {
 
 // applyEntry proto-marshals e and submits it to Raft. Followers get a
 // FailedPrecondition with the leader's address; callers retry there.
-func (s *Service) applyEntry(e *lobslawv1.LogEntry) error {
+func (s *Service) applyEntry(ctx context.Context, e *lobslawv1.LogEntry) error {
 	if s.raft == nil {
 		return status.Error(codes.Unimplemented, "raft stack not wired on this node")
-	}
-	if !s.raft.IsLeader() {
-		return status.Errorf(codes.FailedPrecondition,
-			"not the raft leader; retry at %s", s.raft.LeaderAddress())
 	}
 	data, err := proto.Marshal(e)
 	if err != nil {
 		return status.Errorf(codes.Internal, "marshal log entry: %v", err)
 	}
-	resp, err := s.raft.Apply(data, applyTimeout)
+	resp, err := s.raft.ApplyOrForward(ctx, data, applyTimeout)
 	if err != nil {
 		return status.Errorf(codes.Internal, "raft apply: %v", err)
 	}
