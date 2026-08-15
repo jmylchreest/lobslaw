@@ -33,9 +33,13 @@ build:
 test:
 	@go test -race -cover ./...
 
+# `config verify` runs first because the GitHub action does the same, and it
+# rejects config keys that `golangci-lint run` silently tolerates — without it
+# an invalid key passes locally and fails CI.
 lint: lint-tools
 	@go vet ./...
 	@gofmt -l . | (! grep .) || (echo "gofmt needed on files above" && exit 1)
+	@golangci-lint config verify
 	@golangci-lint run ./...
 
 # Pinned so `make lint` reports exactly what CI reports. Unlike the

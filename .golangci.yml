@@ -2,11 +2,6 @@ version: "2"
 
 run:
   timeout: 5m
-  # Agent worktrees are checked out inside the repository, so a local run
-  # otherwise sees a full second copy of the tree and reports every finding
-  # twice — against paths that are gitignored and absent in CI.
-  exclude-dirs:
-    - \.claude
 
 # goconst is deliberately absent. Its premise — a repeated string
 # literal implies a missing constant — does not hold for what this
@@ -35,6 +30,12 @@ linters:
     - revive
     - forbidigo
   exclusions:
+    paths:
+      # Claude Code checks agent worktrees out inside the repository, so a
+      # local run otherwise walks a full second copy of the tree and reports
+      # every finding twice — against paths that are gitignored and absent
+      # from a CI checkout.
+      - \.claude
     rules:
       # internal/egress/ is the chokepoint package — it legitimately
       # constructs http.Client and uses http.* functions. The lint
