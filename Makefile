@@ -1,4 +1,4 @@
-.PHONY: proto proto-lint proto-breaking proto-tools build test lint tidy
+.PHONY: proto proto-lint proto-breaking proto-tools build test lint lint-tools tidy
 
 # Go-tool-installed binaries live under $(go env GOPATH)/bin. Prepend to PATH
 # for targets that shell out to them (buf invokes protoc-gen-go via PATH).
@@ -7,6 +7,9 @@ export PATH := $(GOBIN):$(PATH)
 
 # Pin protoc-gen-* tool versions here; update alongside google.golang.org/protobuf
 # and google.golang.org/grpc in go.mod.
+# Keep in step with the version pinned in .github/workflows/lint.yml,
+# so a local `make lint` reports what CI will.
+GOLANGCI_LINT_VERSION      := v2.12.2
 PROTOC_GEN_GO_VERSION      := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 
@@ -30,9 +33,16 @@ build:
 test:
 	@go test -race -cover ./...
 
-lint:
+lint: lint-tools
 	@go vet ./...
 	@gofmt -l . | (! grep .) || (echo "gofmt needed on files above" && exit 1)
+	@golangci-lint run ./...
+
+# Pinned so `make lint` reports exactly what CI reports. Unlike the
+# secret scanner, which floats at @latest: a stale style linter is
+# harmless, a stale secret scanner is a missed credential.
+lint-tools:
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 tidy:
 	@go mod tidy

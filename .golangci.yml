@@ -3,6 +3,18 @@ version: "2"
 run:
   timeout: 5m
 
+# goconst is deliberately absent. Its premise — a repeated string
+# literal implies a missing constant — does not hold for what this
+# codebase repeats: JSON field names ("count", "text", "path") and
+# external command vocabulary ("apt", "brew", "npm", "curl-sh"). A
+# const for a JSON key is worse than the literal at the call site, and
+# a typo in "apt" fails loudly on first run rather than silently. The
+# two genuine cases it did find — the soul emotive-dimension names and
+# "soul_tune" — are now constants and stay that way without it.
+#
+# It also counts differently across releases: v2.10 reported none of
+# this, v2.12 reported 138. Keeping it would mean re-tuning thresholds
+# against every upgrade for findings that were never bugs.
 linters:
   default: none
   enable:
@@ -13,7 +25,6 @@ linters:
     - unused
     - misspell
     - unconvert
-    - goconst
     - gocyclo
     - gocritic
     - revive
@@ -87,11 +98,6 @@ linters:
       # and carry a nolint naming the reason; they are real debt and
       # should come down rather than have this number raised again.
       min-complexity: 30
-    goconst:
-      # Default is 3, which fires on any incidental triple. At 4 the
-      # remaining production findings are all values that genuinely
-      # want a single definition.
-      min-occurrences: 4
     misspell:
       ignore-rules:
         # "hardlinked" is the filesystem term, not a misspelling of
