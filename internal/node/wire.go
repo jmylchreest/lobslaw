@@ -57,7 +57,7 @@ func (n *Node) runWireStages(stages []WireStage) error {
 // No stage uses it yet; every unconditional stage still leaves Gate
 // nil, which is exactly the ambiguity this was added to remove.
 // Kept so the distinction can be adopted rather than re-invented.
-func gateAlways(_ Config) bool { return true } //nolint:unused // sentinel not yet adopted by the wire stages
+func gateAlways(_ Config) bool { return true }
 
 // gateRaft selects stages that need the raft stack — anything that
 // touches the FSM or replicates state.
@@ -135,6 +135,7 @@ func nodeWireStages() []WireStage {
 		{Name: "memory-svc", Gate: gateRaft, Wire: (*Node).wireMemoryService},
 		{Name: "session-svc", Gate: gateRaft, Wire: (*Node).wireSessionService},
 		{Name: "identity-svc", Gate: gateRaft, Wire: (*Node).wireIdentityService},
+		{Name: "trace-svc", Gate: gateAlways, Wire: (*Node).wireTraceService},
 		{Name: "user-prefs", Gate: gateRaft, Wire: (*Node).wireUserPrefs},
 		// Before compute: the compute stage registers the tools that
 		// write to it, and a store constructed later would leave them

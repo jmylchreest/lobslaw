@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/jmylchreest/lobslaw/internal/trace"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
 // Turn tracing.
@@ -23,15 +24,31 @@ import (
 // traces over a node that had moved on.
 const traceDirName = "traces"
 
+// traceReadDir resolves where this node's traces live, or "" when
+// there is nowhere.
+//
+// Shared by the recorder and the read service, so the thing that
+// writes traces and the thing that serves them cannot disagree about
+// which directory that is.
+func (n *Node) traceReadDir() string {
+	if dir := n.cfg.Trace.Dir; dir != "" {
+		return dir
+	}
+	if n.cfg.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(n.cfg.DataDir, traceDirName)
+}
+
 // startTracing builds the recorder. Returns nil having built nothing
 // when tracing is off.
 func (n *Node) startTracing() error {
 	if !n.cfg.Trace.Enabled {
 		return nil
 	}
-	dir := n.cfg.Trace.Dir
+	dir := n.traceReadDir()
 	if dir == "" {
-		if n.cfg.DataDir == "" {
+		{
 			// Not an error. A node with no data dir has nowhere
 			// per-node to put anything, and refusing to boot over
 			// telemetry would be the wrong trade. Said out loud,
@@ -40,7 +57,6 @@ func (n *Node) startTracing() error {
 			n.log.Warn("trace: enabled but there is no data dir and no trace.dir; nothing will be recorded")
 			return nil
 		}
-		dir = filepath.Join(n.cfg.DataDir, traceDirName)
 	}
 
 	// Constructed eagerly so a directory that cannot be written fails
@@ -79,6 +95,20 @@ func (n *Node) startTracing() error {
 	n.traces = trace.NewRecorder(n.log, sinks...)
 	n.log.Info("trace: recording turns", "dir", dir,
 		"max_bytes", n.cfg.Trace.MaxBytes, "sinks", len(sinks), "content_recorded", false)
+	return nil
+}
+
+// wireTraceService registers TraceService, so an operator can ask this
+// specific node what it recorded rather than reading whatever
+// directory happens to be on their laptop.
+//
+// Registered even when tracing is OFF. The service reports enabled=false
+// and an empty listing, which is a different answer from "no such
+// service" and from "this node served no turns" — and only one of the
+// three is fixed by editing config.
+func (n *Node) wireTraceService() error {
+	lobslawv1.RegisterTraceServiceServer(n.server,
+		trace.NewService(n.cfg.NodeID, n.traceReadDir(), n.cfg.Trace.Enabled))
 	return nil
 }
 

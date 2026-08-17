@@ -36,6 +36,9 @@ lobslaw memory             # read + edit the memory store
   memory share <id>...     # make owned records readable cluster-wide (offline)
   memory unshare <id>...   # return shared records to their owner only (offline)
   memory consolidations    # what Dream merged, superseded or left alone (offline)
+lobslaw trace              # what a turn did, and what it cost
+  trace list               # turns recorded on a node, newest first
+  trace <turn-id>          # the spans of one turn
 lobslaw identity           # repoint a principal after binding a channel
   identity rebind          # move everything owned by <from> to <to>
 lobslaw session            # read conversation transcripts
@@ -270,6 +273,39 @@ hand — does not depend on which client made the call. There is deliberately no
 unscoped delete RPC. A rule that exists but was not minted by an approval is
 reported as *refused*; an id that does not exist at all is reported as *not
 found*. Those are different mistakes with different fixes.
+
+## `lobslaw trace`
+
+```bash
+lobslaw trace list --context prod --limit 50
+lobslaw trace --context prod <turn-id>
+lobslaw trace --offline --config config.toml <turn-id>
+```
+
+Traces are **per-node files**, deliberately — R24 kept them out of raft so a
+trace never costs a replicated write. That stands. What changed is that you can
+now ask a *specific* node, instead of reading whatever directory happens to be
+on the machine you are typing on.
+
+**Every answer names the node it came from**, and `--offline` names the
+directory. A turn served on another node was traced there, not here, so an
+unattributed trace invites exactly the wrong conclusion — and a stale copy on a
+laptop reported as the cluster's is the failure this exists to remove.
+
+A node with tracing **off** is reported as such, distinctly from a node that has
+served no turns. Both have nothing to show, and only one of them is fixed by
+editing config.
+
+The total is the point of the command. A list of spans answers "what happened";
+the total answers "why did that cost what it did". A context-carry span
+*attributes* cost the LLM spans have already counted, so it is reported as a
+share of the total rather than added to it — summing both would roughly double
+the turn.
+
+**No span carries message text, tool arguments or tool output.** Names, sizes,
+counts, timings and outcomes only. Putting traces on the wire did not relax
+that: the conversion is written field by field, so a future field carrying
+content would have to be added there on purpose.
 
 ## `lobslaw identity`
 

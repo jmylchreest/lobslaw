@@ -3712,7 +3712,25 @@ read as though it were the cluster's, and answering confidently with nothing in 
       `RebindApplier` interface exists so that path is reachable from a test at all: a rebind
       that reports success after a failed apply is the worst outcome available here, and a real
       raft node does not offer that failure on demand.
-- [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a
+- [x] `trace` names the node it read, and does not silently read a local directory when pointed at a
       remote cluster.
+      **Per-node storage stayed; what changed is being able to ask a specific node.**
+
+      R24 kept traces out of raft so a trace never costs a replicated write, and that objection
+      was right. `TraceService` does not undo it — it lets an operator ask ONE node what it
+      recorded, instead of the CLI reading whatever directory is on the machine they typed on.
+
+      Every response carries the node id, and `--offline` names the directory. A stale copy on a
+      laptop reported as the cluster's is exactly the failure this item exists to remove.
+
+      A node with tracing OFF is reported distinctly from a node that has served no turns. Both
+      have nothing to show and only one is fixed by editing config, so the service returns
+      `enabled` alongside the empty listing rather than an error — a deliberate setting should
+      not look broken.
+
+      The no-content guarantee survived the move. `SpanToProto` is written field by field rather
+      than reflected or marshalled wholesale, so a future field on `Span` that carried content
+      would have to be added there ON PURPOSE. That is a decision somebody makes rather than one
+      that happens to them.
 - [ ] Every command either reaches the cluster or refuses; none reads a local `state.db` that is not
       the one the operator meant.

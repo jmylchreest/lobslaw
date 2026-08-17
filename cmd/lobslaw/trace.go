@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,11 +25,17 @@ import (
 
 const traceUsage = `lobslaw trace — what a turn did, and what it cost
 
-  trace list [--limit N]     turns recorded on this node, newest first
+  trace list [--limit N]     turns recorded on a node, newest first
   trace <turn-id>            the spans of one turn
 
-Traces are per-node files under <data-dir>/traces. A turn served on
-another node was traced there, not here.
+Talks to a RUNNING node over mTLS by default — use --context, or --addr
+with the credential flags. Pass --offline to read a trace directory on
+this machine instead.
+
+Traces are PER-NODE files. A turn served on another node was traced
+there, not here, so every answer names the node it came from — and
+--offline names the directory, because a copy on a laptop is not the
+cluster's.
 
 Enable with:
 
@@ -35,6 +43,32 @@ Enable with:
   enabled = true
 
 No span carries message text, tool arguments or tool output.`
+
+// traceForms pairs each subcommand's live and offline implementation.
+//
+// A table rather than a switch so the ROUTING is a value a test can
+// assert. The bug worth catching is `trace list --context prod`
+// quietly reading a directory on the laptop and printing it as
+// production's.
+var traceForms = map[string]struct{ live, offline func([]string) error }{
+	"list": {live: traceListLive, offline: traceList},
+	// The turn-id form has no subcommand name; "show" is the internal
+	// label for it and never typed.
+	"show": {live: traceShowLive, offline: traceShow},
+}
+
+// traceRoute returns the implementation, or nil if there is none.
+// Live is the default; --offline is the opt-out.
+func traceRoute(sub string, offline bool) func([]string) error {
+	form, ok := traceForms[sub]
+	if !ok {
+		return nil
+	}
+	if offline {
+		return form.offline
+	}
+	return form.live
+}
 
 func dispatchTrace(args []string) bool {
 	idx := findSubcmd(args, "trace")
@@ -47,13 +81,20 @@ func dispatchTrace(args []string) bool {
 		os.Exit(2)
 	}
 
-	var err error
-	if sub[0] == "list" {
-		err = traceList(sub[1:])
-	} else {
-		err = traceShow(sub)
+	rest, offline := takeOffline(sub)
+	if len(rest) == 0 {
+		fmt.Fprintln(os.Stderr, traceUsage)
+		os.Exit(2)
 	}
-	if err != nil {
+
+	// "list" is the only named subcommand; anything else is a turn id,
+	// which the show form takes as its first positional.
+	name, showArgs := "show", rest
+	if rest[0] == "list" {
+		name, showArgs = "list", rest[1:]
+	}
+
+	if err := traceRoute(name, offline)(showArgs); err != nil {
 		fmt.Fprintf(os.Stderr, "trace: %v\n", err)
 		os.Exit(1)
 	}
@@ -116,6 +157,7 @@ func traceList(args []string) error {
 		fmt.Printf("no turns recorded in %s\n", resolved)
 		return nil
 	}
+	fmt.Printf("local: %s\n", resolved)
 	for _, id := range ids {
 		fmt.Println(id)
 	}
@@ -123,6 +165,12 @@ func traceList(args []string) error {
 }
 
 func traceShow(args []string) error {
+	// Guarded rather than trusted. The dispatcher only calls this
+	// with a turn id present, but a panic is a worse way to learn
+	// that changed than an error is.
+	if len(args) == 0 {
+		return errors.New("a turn id is required: lobslaw trace <turn-id>")
+	}
 	fs := flag.NewFlagSet("trace", flag.ExitOnError)
 	cfgPath, dir := traceDir(fs)
 	// The turn id is positional and comes first, so parse the rest.
@@ -145,7 +193,7 @@ func traceShow(args []string) error {
 	sort.SliceStable(spans, func(i, j int) bool {
 		return spans[i].StartedAt.Before(spans[j].StartedAt)
 	})
-	renderTurn(turnID, spans)
+	renderTurn(os.Stdout, "local: "+resolved, turnID, spans)
 	return nil
 }
 
@@ -154,7 +202,11 @@ func traceShow(args []string) error {
 // The total is the point of the command. A list of spans answers "what
 // happened"; the total answers "why did that cost what it did", which
 // is the question somebody opened this for.
-func renderTurn(turnID string, spans []trace.Span) {
+//
+// Source names WHERE the spans came from — a node id, or a directory.
+// Traces are per-node, so a turn's cost without an attribution is a
+// number about an unspecified machine.
+func renderTurn(out io.Writer, source, turnID string, spans []trace.Span) {
 	var totalCost, attributed float64
 	var totalDur time.Duration
 	var prompt, completion, cached int
@@ -175,7 +227,8 @@ func renderTurn(turnID string, spans []trace.Span) {
 		cached += s.Usage.CachedTokens
 	}
 
-	fmt.Printf("turn %s — %d spans, %s, $%.4f\n", turnID, len(spans),
+	_, _ = fmt.Fprintf(out, "%s\n", source)
+	_, _ = fmt.Fprintf(out, "turn %s — %d spans, %s, $%.4f\n", turnID, len(spans),
 		totalDur.Round(time.Millisecond), totalCost)
 	if attributed > 0 {
 		// Stated as a share of the total, not added to it. This is the
@@ -185,11 +238,11 @@ func renderTurn(turnID string, spans []trace.Span) {
 		if totalCost > 0 {
 			share = attributed / totalCost * 100
 		}
-		fmt.Printf("  of which $%.4f (%.0f%%) is re-sent tool output\n", attributed, share)
+		_, _ = fmt.Fprintf(out, "  of which $%.4f (%.0f%%) is re-sent tool output\n", attributed, share)
 	}
-	fmt.Println()
+	_, _ = fmt.Fprintln(out)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "KIND\tPROVIDER\tNAME\tTRY\tOUTCOME\tDURATION\tTOKENS\tCOST\tDETAIL")
 	for _, s := range spans {
 		tokens := ""
@@ -227,8 +280,8 @@ func renderTurn(turnID string, spans []trace.Span) {
 	_ = w.Flush()
 
 	if cached > 0 {
-		fmt.Printf("\ntokens: %d prompt (%d cached), %d completion\n", prompt, cached, completion)
+		_, _ = fmt.Fprintf(out, "\ntokens: %d prompt (%d cached), %d completion\n", prompt, cached, completion)
 	} else if prompt+completion > 0 {
-		fmt.Printf("\ntokens: %d prompt, %d completion\n", prompt, completion)
+		_, _ = fmt.Fprintf(out, "\ntokens: %d prompt, %d completion\n", prompt, completion)
 	}
 }

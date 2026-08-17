@@ -2503,6 +2503,184 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	TraceService_ListTurns_FullMethodName = "/lobslaw.v1.TraceService/ListTurns"
+	TraceService_ReadTurn_FullMethodName  = "/lobslaw.v1.TraceService/ReadTurn"
+)
+
+// TraceServiceClient is the client API for TraceService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// SessionRecord is the per-session index. Message bodies live in
+// BucketSessionMessages; this record tracks the cursor bounds so a
+// reader knows the retained range without scanning.
+// TraceService reads this node's turn traces.
+//
+// Traces are per-node FILES, deliberately: R24 kept them out of raft
+// so a trace never costs a replicated write. That decision stands, and
+// this service does not undo it — it lets an operator ask a SPECIFIC
+// node for what it recorded, rather than reading whatever directory
+// happens to be on their laptop.
+//
+// Every response carries node_id. A turn served elsewhere was traced
+// elsewhere, and a trace listing that does not say whose it is invites
+// exactly the wrong conclusion.
+//
+// NO SPAN CARRIES CONTENT. Names, sizes, counts, timings and outcomes
+// only — no message text, no tool arguments, no tool output. That is a
+// property of the Span type this mirrors, and putting it on the wire
+// must not become the place it is quietly relaxed.
+type TraceServiceClient interface {
+	ListTurns(ctx context.Context, in *ListTurnsRequest, opts ...grpc.CallOption) (*ListTurnsResponse, error)
+	ReadTurn(ctx context.Context, in *ReadTurnRequest, opts ...grpc.CallOption) (*ReadTurnResponse, error)
+}
+
+type traceServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewTraceServiceClient(cc grpc.ClientConnInterface) TraceServiceClient {
+	return &traceServiceClient{cc}
+}
+
+func (c *traceServiceClient) ListTurns(ctx context.Context, in *ListTurnsRequest, opts ...grpc.CallOption) (*ListTurnsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTurnsResponse)
+	err := c.cc.Invoke(ctx, TraceService_ListTurns_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *traceServiceClient) ReadTurn(ctx context.Context, in *ReadTurnRequest, opts ...grpc.CallOption) (*ReadTurnResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadTurnResponse)
+	err := c.cc.Invoke(ctx, TraceService_ReadTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// TraceServiceServer is the server API for TraceService service.
+// All implementations should embed UnimplementedTraceServiceServer
+// for forward compatibility.
+//
+// SessionRecord is the per-session index. Message bodies live in
+// BucketSessionMessages; this record tracks the cursor bounds so a
+// reader knows the retained range without scanning.
+// TraceService reads this node's turn traces.
+//
+// Traces are per-node FILES, deliberately: R24 kept them out of raft
+// so a trace never costs a replicated write. That decision stands, and
+// this service does not undo it — it lets an operator ask a SPECIFIC
+// node for what it recorded, rather than reading whatever directory
+// happens to be on their laptop.
+//
+// Every response carries node_id. A turn served elsewhere was traced
+// elsewhere, and a trace listing that does not say whose it is invites
+// exactly the wrong conclusion.
+//
+// NO SPAN CARRIES CONTENT. Names, sizes, counts, timings and outcomes
+// only — no message text, no tool arguments, no tool output. That is a
+// property of the Span type this mirrors, and putting it on the wire
+// must not become the place it is quietly relaxed.
+type TraceServiceServer interface {
+	ListTurns(context.Context, *ListTurnsRequest) (*ListTurnsResponse, error)
+	ReadTurn(context.Context, *ReadTurnRequest) (*ReadTurnResponse, error)
+}
+
+// UnimplementedTraceServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedTraceServiceServer struct{}
+
+func (UnimplementedTraceServiceServer) ListTurns(context.Context, *ListTurnsRequest) (*ListTurnsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTurns not implemented")
+}
+func (UnimplementedTraceServiceServer) ReadTurn(context.Context, *ReadTurnRequest) (*ReadTurnResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReadTurn not implemented")
+}
+func (UnimplementedTraceServiceServer) testEmbeddedByValue() {}
+
+// UnsafeTraceServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to TraceServiceServer will
+// result in compilation errors.
+type UnsafeTraceServiceServer interface {
+	mustEmbedUnimplementedTraceServiceServer()
+}
+
+func RegisterTraceServiceServer(s grpc.ServiceRegistrar, srv TraceServiceServer) {
+	// If the following call pancis, it indicates UnimplementedTraceServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&TraceService_ServiceDesc, srv)
+}
+
+func _TraceService_ListTurns_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTurnsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TraceServiceServer).ListTurns(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TraceService_ListTurns_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TraceServiceServer).ListTurns(ctx, req.(*ListTurnsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TraceService_ReadTurn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadTurnRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TraceServiceServer).ReadTurn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TraceService_ReadTurn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TraceServiceServer).ReadTurn(ctx, req.(*ReadTurnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// TraceService_ServiceDesc is the grpc.ServiceDesc for TraceService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var TraceService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.TraceService",
+	HandlerType: (*TraceServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListTurns",
+			Handler:    _TraceService_ListTurns_Handler,
+		},
+		{
+			MethodName: "ReadTurn",
+			Handler:    _TraceService_ReadTurn_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
 	IdentityService_Rebind_FullMethodName = "/lobslaw.v1.IdentityService/Rebind"
 )
 
@@ -2510,9 +2688,6 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SessionRecord is the per-session index. Message bodies live in
-// BucketSessionMessages; this record tracks the cursor bounds so a
-// reader knows the retained range without scanning.
 // IdentityService repoints a principal after a channel rebinding.
 //
 // One operation, deliberately. This is a migration, not an identity
@@ -2545,9 +2720,6 @@ func (c *identityServiceClient) Rebind(ctx context.Context, in *RebindRequest, o
 // All implementations should embed UnimplementedIdentityServiceServer
 // for forward compatibility.
 //
-// SessionRecord is the per-session index. Message bodies live in
-// BucketSessionMessages; this record tracks the cursor bounds so a
-// reader knows the retained range without scanning.
 // IdentityService repoints a principal after a channel rebinding.
 //
 // One operation, deliberately. This is a migration, not an identity

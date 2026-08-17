@@ -1278,6 +1278,91 @@ message UserChannelAddress {
 // SessionRecord is the per-session index. Message bodies live in
 // BucketSessionMessages; this record tracks the cursor bounds so a
 // reader knows the retained range without scanning.
+// TraceService reads this node's turn traces.
+//
+// Traces are per-node FILES, deliberately: R24 kept them out of raft
+// so a trace never costs a replicated write. That decision stands, and
+// this service does not undo it — it lets an operator ask a SPECIFIC
+// node for what it recorded, rather than reading whatever directory
+// happens to be on their laptop.
+//
+// Every response carries node_id. A turn served elsewhere was traced
+// elsewhere, and a trace listing that does not say whose it is invites
+// exactly the wrong conclusion.
+//
+// NO SPAN CARRIES CONTENT. Names, sizes, counts, timings and outcomes
+// only — no message text, no tool arguments, no tool output. That is a
+// property of the Span type this mirrors, and putting it on the wire
+// must not become the place it is quietly relaxed.
+service TraceService {
+  rpc ListTurns(ListTurnsRequest) returns (ListTurnsResponse);
+  rpc ReadTurn(ReadTurnRequest) returns (ReadTurnResponse);
+}
+
+message ListTurnsRequest {
+  int32 limit = 1;
+}
+message ListTurnsResponse {
+  // node_id is which node answered. Traces are per-node, so a listing
+  // without it is unattributable.
+  string node_id = 1;
+  // Newest first.
+  repeated string turn_ids = 2;
+  // enabled distinguishes a node with tracing OFF from one that has
+  // served no turns. Both return nothing and they are different
+  // answers — only one of them is fixed by editing config.
+  bool enabled = 3;
+}
+
+message ReadTurnRequest {
+  string turn_id = 1;
+}
+message ReadTurnResponse {
+  string node_id = 1;
+  repeated TraceSpan spans = 2;
+  bool enabled = 3;
+}
+
+// TraceSpan is one measured piece of a turn.
+//
+// Mirrors internal/trace.Span field for field. Nothing here is content:
+// name is a model or tool NAME, result_bytes is a SIZE, and error is a
+// status plus a classification rather than a response body.
+message TraceSpan {
+  string turn_id = 1;
+  string span_id = 2;
+  string parent_id = 3;
+  string kind = 4;
+  // The model or tool name. A name, never an argument.
+  string name = 5;
+  string provider = 6;
+  google.protobuf.Timestamp started_at = 7;
+  int64 duration_ns = 8;
+  string outcome = 9;
+  int32 prompt_tokens = 10;
+  int32 completion_tokens = 11;
+  // The prompt subset served from cache, separate because it is priced
+  // differently and folding it in would overstate every cached turn.
+  int32 cached_tokens = 12;
+  double cost_usd = 13;
+  // A SIZE, not a body.
+  int32 result_bytes = 14;
+  // unit and quantity carry billing not denominated in tokens — video
+  // seconds, images, credits. A zero token count on a call that cost
+  // real money reads as a free call.
+  string unit = 15;
+  double quantity = 16;
+  // billed_to distinguishes drawing on a prepaid plan from spending
+  // against a balance. Without it a plan-billed call is
+  // indistinguishable from a free one.
+  string billed_to = 17;
+  // A status and a classification, never a response body.
+  string error = 18;
+  // Position in a failover chain, 0-based. What makes "my primary is
+  // never used" answerable.
+  int32 attempt = 19;
+}
+
 // IdentityService repoints a principal after a channel rebinding.
 //
 // One operation, deliberately. This is a migration, not an identity
