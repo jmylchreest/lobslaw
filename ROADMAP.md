@@ -3679,8 +3679,8 @@ read as though it were the cluster's, and answering confidently with nothing in 
       requester scoping happens where it has to: BETWEEN matching and cascading. A record the
       caller may not read must leave the matched set before the cascade runs, or it pulls its
       consolidations down with it and deletes through a record they were never allowed to see.
-- [ ] `session` and `identity` have services and live forms.
-      **`session` is done. `identity rebind` is next and needs more than a wrapper.**
+- [x] `session` and `identity` have services and live forms.
+      **Both, and `identity` was the one that was not a wrapper.**
 
       `SessionService` is read-only on purpose: forgetting a conversation is a replicated
       mutation with its own path, and browsing what was said does not need one that can also
@@ -3696,9 +3696,22 @@ read as though it were the cluster's, and answering confidently with nothing in 
       sessions" because it has no store is indistinguishable from a quiet cluster, which is the
       failure this whole item exists to remove.
 
-      `identity rebind` is not a thin wrapper: the rewriters live in `cmd/lobslaw` and write
-      straight to the store, bypassing raft. A live form has to move them into `internal/memory`
-      and replicate each rewrite.
+      `identity rebind` was not a thin wrapper. Its rewriters lived in `cmd/lobslaw` and wrote
+      straight to bbolt, so it needed a stopped node — and pointed at a follower's file while
+      the cluster ran, it would have written ownership no other replica has. That is worse than
+      requiring the outage, which is why the live path replicates.
+
+      The rewriters produce LOG ENTRIES now rather than raw bytes. That is what makes the
+      replicated path possible at all — the FSM dispatches on payload type — and it keeps one
+      mapping from record type to bucket, the one `bucketAndPayload` already owned.
+
+      Not atomic across records: raft has no multi-entry transaction here, so a rebind
+      interrupted midway leaves some moved and some not. Recoverable by re-running, because each
+      rewrite is idempotent, and the failure reports HOW MANY LANDED — "rebind failed" without a
+      number leaves somebody unable to tell a no-op from a half-done move. The narrow
+      `RebindApplier` interface exists so that path is reachable from a test at all: a rebind
+      that reports success after a failed apply is the worst outcome available here, and a real
+      raft node does not offer that failure on demand.
 - [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a
       remote cluster.
 - [ ] Every command either reaches the cluster or refuses; none reads a local `state.db` that is not

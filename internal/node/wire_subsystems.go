@@ -71,6 +71,21 @@ func (n *Node) wireSessionService() error {
 	return nil
 }
 
+// wireIdentityService registers the gRPC IdentityService — repointing
+// a principal without stopping the cluster.
+//
+// Skipped when there is no store, for the same reason SessionService
+// is: a service that answers every call with "not wired" cannot be
+// told from one that found nothing to move.
+func (n *Node) wireIdentityService() error {
+	if n.raft == nil || n.store == nil {
+		n.log.Debug("identity service: no local store; not registering")
+		return nil
+	}
+	lobslawv1.RegisterIdentityServiceServer(n.server, memory.NewIdentityRPC(n.raft, n.store))
+	return nil
+}
+
 // wireUserPrefs constructs the per-user preferences service. Reads
 // are local; writes go through raft. Solo deployments seed an
 // "owner" record from operator config; team deployments add records

@@ -36,6 +36,8 @@ lobslaw memory             # read + edit the memory store
   memory share <id>...     # make owned records readable cluster-wide (offline)
   memory unshare <id>...   # return shared records to their owner only (offline)
   memory consolidations    # what Dream merged, superseded or left alone (offline)
+lobslaw identity           # repoint a principal after binding a channel
+  identity rebind          # move everything owned by <from> to <to>
 lobslaw session            # read conversation transcripts
   session list             # one line per conversation
   session show <id>        # full transcript
@@ -268,6 +270,39 @@ hand — does not depend on which client made the call. There is deliberately no
 unscoped delete RPC. A rule that exists but was not minted by an approval is
 reported as *refused*; an id that does not exist at all is reported as *not
 found*. Those are different mistakes with different fixes.
+
+## `lobslaw identity`
+
+A person's channel id can change — a new Telegram account, a renamed handle —
+and everything they own is keyed by the old one.
+
+```bash
+lobslaw identity rebind --context prod tg-@old tg-@new           # dry run
+lobslaw identity rebind --context prod tg-@old tg-@new --apply
+```
+
+Ids are **bare**, as they appear in `claims.UserID` — `tg-@alice`, not
+`user:tg-@alice`. The principal prefix is added where records use it; both
+spellings have been written into owner fields over this project's life, and a
+migration understanding only one would leave the other behind.
+
+Live by default, and that matters more here than elsewhere: the rewrites go
+**through raft**, so every replica sees them. The offline form writes straight
+to one `state.db`, and pointing it at a follower's file while the cluster runs
+would write ownership no other replica has.
+
+**Dry run unless `--apply`.** It rewrites ownership across seven buckets and
+there is no undo. The dry run prints what would move, per bucket, plus any
+**conflicts** — records it will not touch and why. User preferences are the
+usual one: they are keyed *by* the id, so a rebind would have to merge two
+records, and silently picking a winner between two timezones is worse than
+saying so.
+
+Re-running is safe. Each rewrite is idempotent — a record already owned by
+`<to>` no longer matches `<from>` — which is also the recovery if a rebind
+fails partway. It is not atomic across records, so a failure reports **how many
+landed** before it stopped; "rebind failed" without a number leaves you unable
+to tell a no-op from a half-done move.
 
 ## `lobslaw memory` and `lobslaw session`
 

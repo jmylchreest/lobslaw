@@ -1,4 +1,4 @@
-package main
+package memory
 
 import (
 	"path/filepath"
@@ -6,7 +6,6 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -16,13 +15,13 @@ import (
 // alone". A migration that over-reaches is worse than one that does
 // nothing: nothing is recoverable by re-running, over-reach is not.
 
-func rebindStore(t *testing.T) *memory.Store {
+func rebindTestStore(t *testing.T) *Store {
 	t.Helper()
 	key, err := crypto.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := memory.OpenStore(filepath.Join(t.TempDir(), "state.db"), key)
+	store, err := OpenStore(filepath.Join(t.TempDir(), "state.db"), key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +29,7 @@ func rebindStore(t *testing.T) *memory.Store {
 	return store
 }
 
-func put(t *testing.T, s *memory.Store, bucket, key string, m proto.Message) {
+func putRaw(t *testing.T, s *Store, bucket, key string, m proto.Message) {
 	t.Helper()
 	raw, err := proto.Marshal(m)
 	if err != nil {
@@ -43,48 +42,48 @@ func put(t *testing.T, s *memory.Store, bucket, key string, m proto.Message) {
 
 // seedForRebind lays down one record per rewritten bucket owned by
 // Alice's old id, plus a matching one owned by somebody else.
-func seedForRebind(t *testing.T, s *memory.Store) {
+func seedForRebind(t *testing.T, s *Store) {
 	t.Helper()
 	const mine, theirs = "user:tg-@alice", "user:bob"
 
-	put(t, s, memory.BucketVectorRecords, "v1", &lobslawv1.VectorRecord{Id: "v1", Owner: mine})
-	put(t, s, memory.BucketVectorRecords, "v2", &lobslawv1.VectorRecord{Id: "v2", Owner: theirs})
-	put(t, s, memory.BucketEpisodicRecords, "e1", &lobslawv1.EpisodicRecord{Id: "e1", Owner: mine})
-	put(t, s, memory.BucketEpisodicRecords, "e2", &lobslawv1.EpisodicRecord{Id: "e2", Owner: theirs})
-	put(t, s, memory.BucketCommitments, "c1", &lobslawv1.AgentCommitment{Id: "c1", Owner: mine})
-	put(t, s, memory.BucketScheduledTasks, "t1", &lobslawv1.ScheduledTaskRecord{Id: "t1", Owner: mine})
-	put(t, s, memory.BucketPrompts, "p1", &lobslawv1.PromptRecord{Id: "p1", Owner: mine})
+	putRaw(t, s, BucketVectorRecords, "v1", &lobslawv1.VectorRecord{Id: "v1", Owner: mine})
+	putRaw(t, s, BucketVectorRecords, "v2", &lobslawv1.VectorRecord{Id: "v2", Owner: theirs})
+	putRaw(t, s, BucketEpisodicRecords, "e1", &lobslawv1.EpisodicRecord{Id: "e1", Owner: mine})
+	putRaw(t, s, BucketEpisodicRecords, "e2", &lobslawv1.EpisodicRecord{Id: "e2", Owner: theirs})
+	putRaw(t, s, BucketCommitments, "c1", &lobslawv1.AgentCommitment{Id: "c1", Owner: mine})
+	putRaw(t, s, BucketScheduledTasks, "t1", &lobslawv1.ScheduledTaskRecord{Id: "t1", Owner: mine})
+	putRaw(t, s, BucketPrompts, "p1", &lobslawv1.PromptRecord{Id: "p1", Owner: mine})
 
 	// Sessions key on the bare id, not the principal form.
-	put(t, s, memory.BucketSessions, "s1", &lobslawv1.SessionRecord{Id: "s1", UserId: "tg-@alice"})
-	put(t, s, memory.BucketSessions, "s2", &lobslawv1.SessionRecord{Id: "s2", UserId: "bob"})
+	putRaw(t, s, BucketSessions, "s1", &lobslawv1.SessionRecord{Id: "s1", UserId: "tg-@alice"})
+	putRaw(t, s, BucketSessions, "s2", &lobslawv1.SessionRecord{Id: "s2", UserId: "bob"})
 
-	put(t, s, memory.BucketPolicyRules, "approval:p1", &lobslawv1.PolicyRule{
+	putRaw(t, s, BucketPolicyRules, "approval:p1", &lobslawv1.PolicyRule{
 		Id: "approval:p1", Subject: mine, Action: "tool:exec",
 		Resource: "write_file", Effect: "allow", CreatedBy: "approval:p1",
 	})
-	put(t, s, memory.BucketPolicyRules, "operator-rule", &lobslawv1.PolicyRule{
+	putRaw(t, s, BucketPolicyRules, "operator-rule", &lobslawv1.PolicyRule{
 		Id: "operator-rule", Subject: "*", Action: "*", Resource: "*", Effect: "allow",
 	})
 	// A role subject names a group, not a person.
-	put(t, s, memory.BucketPolicyRules, "role-rule", &lobslawv1.PolicyRule{
+	putRaw(t, s, BucketPolicyRules, "role-rule", &lobslawv1.PolicyRule{
 		Id: "role-rule", Subject: "role:operator", Action: "*", Resource: "*", Effect: "allow",
 	})
 }
 
 func TestRebindMovesEverythingTheUserOwns(t *testing.T) {
 	t.Parallel()
-	s := rebindStore(t)
+	s := rebindTestStore(t)
 	seedForRebind(t, s)
 
-	plan, err := planRebind(s, "tg-@alice", "alice")
+	plan, err := PlanRebind(s, "tg-@alice", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.total() != 7 {
-		t.Fatalf("plan covers %d records, want 7: %+v", plan.total(), plan.Changes)
+	if plan.Total() != 7 {
+		t.Fatalf("plan covers %d records, want 7: %+v", plan.Total(), plan.Changes)
 	}
-	if err := applyRebind(s, "tg-@alice", "alice"); err != nil {
+	if err := ApplyRebindOffline(s, "tg-@alice", "alice"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,32 +91,32 @@ func TestRebindMovesEverythingTheUserOwns(t *testing.T) {
 		bucket, key string
 		decode      func([]byte) string
 	}{
-		{memory.BucketVectorRecords, "v1", func(b []byte) string {
+		{BucketVectorRecords, "v1", func(b []byte) string {
 			var r lobslawv1.VectorRecord
 			_ = proto.Unmarshal(b, &r)
 			return r.Owner
 		}},
-		{memory.BucketEpisodicRecords, "e1", func(b []byte) string {
+		{BucketEpisodicRecords, "e1", func(b []byte) string {
 			var r lobslawv1.EpisodicRecord
 			_ = proto.Unmarshal(b, &r)
 			return r.Owner
 		}},
-		{memory.BucketCommitments, "c1", func(b []byte) string {
+		{BucketCommitments, "c1", func(b []byte) string {
 			var r lobslawv1.AgentCommitment
 			_ = proto.Unmarshal(b, &r)
 			return r.Owner
 		}},
-		{memory.BucketScheduledTasks, "t1", func(b []byte) string {
+		{BucketScheduledTasks, "t1", func(b []byte) string {
 			var r lobslawv1.ScheduledTaskRecord
 			_ = proto.Unmarshal(b, &r)
 			return r.Owner
 		}},
-		{memory.BucketPrompts, "p1", func(b []byte) string {
+		{BucketPrompts, "p1", func(b []byte) string {
 			var r lobslawv1.PromptRecord
 			_ = proto.Unmarshal(b, &r)
 			return r.Owner
 		}},
-		{memory.BucketPolicyRules, "approval:p1", func(b []byte) string {
+		{BucketPolicyRules, "approval:p1", func(b []byte) string {
 			var r lobslawv1.PolicyRule
 			_ = proto.Unmarshal(b, &r)
 			return r.Subject
@@ -132,7 +131,7 @@ func TestRebindMovesEverythingTheUserOwns(t *testing.T) {
 		}
 	}
 
-	raw, err := s.Get(memory.BucketSessions, "s1")
+	raw, err := s.Get(BucketSessions, "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,22 +145,22 @@ func TestRebindMovesEverythingTheUserOwns(t *testing.T) {
 // The one that matters. Over-reach is not recoverable by re-running.
 func TestRebindLeavesEverybodyElseAlone(t *testing.T) {
 	t.Parallel()
-	s := rebindStore(t)
+	s := rebindTestStore(t)
 	seedForRebind(t, s)
 
-	if err := applyRebind(s, "tg-@alice", "alice"); err != nil {
+	if err := ApplyRebindOffline(s, "tg-@alice", "alice"); err != nil {
 		t.Fatal(err)
 	}
 
 	var v lobslawv1.VectorRecord
-	raw, _ := s.Get(memory.BucketVectorRecords, "v2")
+	raw, _ := s.Get(BucketVectorRecords, "v2")
 	_ = proto.Unmarshal(raw, &v)
 	if v.Owner != "user:bob" {
 		t.Errorf("bob's record owner = %q; the rebind took somebody else's data", v.Owner)
 	}
 
 	var sess lobslawv1.SessionRecord
-	raw, _ = s.Get(memory.BucketSessions, "s2")
+	raw, _ = s.Get(BucketSessions, "s2")
 	_ = proto.Unmarshal(raw, &sess)
 	if sess.UserId != "bob" {
 		t.Errorf("bob's session user_id = %q", sess.UserId)
@@ -169,7 +168,7 @@ func TestRebindLeavesEverybodyElseAlone(t *testing.T) {
 
 	for _, id := range []string{"operator-rule", "role-rule"} {
 		var rule lobslawv1.PolicyRule
-		raw, err := s.Get(memory.BucketPolicyRules, id)
+		raw, err := s.Get(BucketPolicyRules, id)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,14 +183,14 @@ func TestRebindLeavesEverybodyElseAlone(t *testing.T) {
 // mutated would be a migration nobody asked to run.
 func TestPlanRebindWritesNothing(t *testing.T) {
 	t.Parallel()
-	s := rebindStore(t)
+	s := rebindTestStore(t)
 	seedForRebind(t, s)
 
-	if _, err := planRebind(s, "tg-@alice", "alice"); err != nil {
+	if _, err := PlanRebind(s, "tg-@alice", "alice"); err != nil {
 		t.Fatal(err)
 	}
 
-	raw, err := s.Get(memory.BucketVectorRecords, "v1")
+	raw, err := s.Get(BucketVectorRecords, "v1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,13 +205,13 @@ func TestPlanRebindWritesNothing(t *testing.T) {
 // life. Understanding only one would leave the other behind.
 func TestRebindHandlesBareAndPrefixedOwners(t *testing.T) {
 	t.Parallel()
-	s := rebindStore(t)
-	put(t, s, memory.BucketVectorRecords, "prefixed",
+	s := rebindTestStore(t)
+	putRaw(t, s, BucketVectorRecords, "prefixed",
 		&lobslawv1.VectorRecord{Id: "prefixed", Owner: "user:tg-@alice"})
-	put(t, s, memory.BucketVectorRecords, "bare",
+	putRaw(t, s, BucketVectorRecords, "bare",
 		&lobslawv1.VectorRecord{Id: "bare", Owner: "tg-@alice"})
 
-	if err := applyRebind(s, "tg-@alice", "alice"); err != nil {
+	if err := ApplyRebindOffline(s, "tg-@alice", "alice"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -220,7 +219,7 @@ func TestRebindHandlesBareAndPrefixedOwners(t *testing.T) {
 		"prefixed": "user:alice",
 		"bare":     "alice",
 	} {
-		raw, err := s.Get(memory.BucketVectorRecords, key)
+		raw, err := s.Get(BucketVectorRecords, key)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,11 +236,11 @@ func TestRebindHandlesBareAndPrefixedOwners(t *testing.T) {
 // between two timezones is worse than saying so.
 func TestRebindReportsAPrefsConflictRatherThanMerging(t *testing.T) {
 	t.Parallel()
-	s := rebindStore(t)
-	put(t, s, memory.BucketUserPrefs, "tg-@alice",
+	s := rebindTestStore(t)
+	putRaw(t, s, BucketUserPrefs, "tg-@alice",
 		&lobslawv1.UserPreferences{UserId: "tg-@alice", Timezone: "Europe/London"})
 
-	plan, err := planRebind(s, "tg-@alice", "alice")
+	plan, err := PlanRebind(s, "tg-@alice", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,10 +248,10 @@ func TestRebindReportsAPrefsConflictRatherThanMerging(t *testing.T) {
 		t.Fatalf("conflicts = %v, want one about user_prefs", plan.Conflicts)
 	}
 
-	if err := applyRebind(s, "tg-@alice", "alice"); err != nil {
+	if err := ApplyRebindOffline(s, "tg-@alice", "alice"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Get(memory.BucketUserPrefs, "tg-@alice"); err != nil {
+	if _, err := s.Get(BucketUserPrefs, "tg-@alice"); err != nil {
 		t.Error("the prefs record was moved or deleted despite being reported as a conflict")
 	}
 }
@@ -261,14 +260,14 @@ func TestRebindReportsAPrefsConflictRatherThanMerging(t *testing.T) {
 // before they bind somebody should not be told off.
 func TestRebindOnAnUnknownIDIsANoOp(t *testing.T) {
 	t.Parallel()
-	s := rebindStore(t)
+	s := rebindTestStore(t)
 	seedForRebind(t, s)
 
-	plan, err := planRebind(s, "tg-@nobody", "nobody")
+	plan, err := PlanRebind(s, "tg-@nobody", "nobody")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.total() != 0 {
-		t.Errorf("plan covers %d records for an id that owns nothing: %+v", plan.total(), plan.Changes)
+	if plan.Total() != 0 {
+		t.Errorf("plan covers %d records for an id that owns nothing: %+v", plan.Total(), plan.Changes)
 	}
 }

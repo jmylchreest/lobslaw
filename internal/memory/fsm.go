@@ -537,6 +537,15 @@ func claimableBucket(bucket string) bool {
 	}
 }
 
+// BucketAndPayload is the exported form, for callers outside the FSM
+// that need the same record-type-to-bucket mapping — the rebind path
+// writes records it decoded from one bucket back into it, and a second
+// copy of this switch would be a second authority for where each
+// record type lives.
+func BucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) {
+	return bucketAndPayload(entry)
+}
+
 // bucketAndPayload maps a LogEntry's payload oneof to its bucket name
 // and the concrete proto.Message. Adding a new record type requires
 // wiring it both here and in buckets.go.
