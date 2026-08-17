@@ -68,7 +68,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R27** | [The config sweep](#r27--the-config-sweep-done-2026-08-17) | ✅ | 🟠 P1 | M | — |
 | **R25** | [Retire the node functions that select nothing](#r25--retire-the-node-functions-that-do-not-select-anything) | ⬜ | 🟡 P2 | S | — |
 | **R26** | [A second vendor per generation modality](#r26--a-second-vendor-per-generation-modality) | ⬜ | 🟠 P1 | M | R22 |
-| **R28** | [The operator's laptop](#r28--the-operators-laptop) | ⬜ | 🟠 P1 | L | — |
+| **R28** | [The operator's laptop](#r28--the-operators-laptop) | ✅ | 🟠 P1 | L | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -3732,5 +3732,27 @@ read as though it were the cluster's, and answering confidently with nothing in 
       than reflected or marshalled wholesale, so a future field on `Span` that carried content
       would have to be added there ON PURPOSE. That is a decision somebody makes rather than one
       that happens to them.
-- [ ] Every command either reaches the cluster or refuses; none reads a local `state.db` that is not
+- [x] Every command either reaches the cluster or refuses; none reads a local `state.db` that is not
       the one the operator meant.
+      **Enforced by an inventory test, because a rule nothing checks is a rule that decays.**
+
+      `cmd/lobslaw/reach_test.go` walks every dispatcher's declared surface and fails when a
+      subcommand has not been placed on one side of the rule. It checks that anything with both
+      forms goes live by default and that the two are genuinely different functions; that every
+      subcommand appears in its group's usage; that a group with any offline path advertises
+      `--offline`; that an offline-only subcommand is MARKED as such in the usage; that nothing
+      is declared in two sets; and that no declared route is nil. A dispatcher missing from the
+      inventory is invisible to all of it, so adding one is the deliberate act.
+
+      `learned list` turned out to be live-capable all along — `ListArtefacts` existed with no
+      caller here, and the usage text calling list "offline-only" was a claim rather than a
+      constraint. On a laptop it printed "the agent has taught itself nothing" about a cluster it
+      never contacted.
+
+      What stays offline-only, and why: `learned history` and `rollback` read the version bucket,
+      which no RPC exposes; `learned discard` is a bulk archive whose dry run is the only preview
+      before archiving everything, and composing it from per-artefact calls would lose that;
+      `memory share`, `unshare` and `consolidations` likewise have no RPC. All six now ANNOUNCE
+      the gap on stderr and carry an `[offline]` marker in the usage. Announcing beats refusing a
+      command that works to make a point about a flag — and it beats running silently, which is
+      the failure this item names.

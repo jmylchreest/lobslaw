@@ -297,3 +297,56 @@ func approverName(as string) (string, error) {
 	}
 	return "user:" + u.Username, nil
 }
+
+// liveList is `learned list` against a running node.
+//
+// ListArtefacts already existed and had no caller here, so the usage
+// text calling list "offline-only" was a claim rather than a
+// constraint — and on a laptop it meant printing "the agent has taught
+// itself nothing" about a cluster it never contacted.
+func liveList(args []string) error {
+	fs := flag.NewFlagSet("learned list", flag.ExitOnError)
+	var node liveNode
+	node.bind(fs)
+	archived := fs.Bool("archived", false, "read the archive instead of the live set")
+	owner := fs.String("owner", "", "restrict to one principal")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	conn, err := node.dial()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	client := lobslawv1.NewSelfLearningServiceClient(conn)
+
+	ctx, cancel := node.ctx()
+	defer cancel()
+	resp, err := client.ListArtefacts(ctx, &lobslawv1.ListArtefactsRequest{Archived: *archived})
+	if err != nil {
+		return err
+	}
+
+	// Owner filtering is client-side because the RPC has no such
+	// filter. Done here rather than adding one: the artefact set is
+	// small by construction — it is what one agent taught itself — and
+	// a filter on the wire that only this command uses is protocol
+	// nobody else needs.
+	records := filterByOwner(resp.GetArtefacts(), *owner)
+	return renderLearnedList(os.Stdout, records, node.addr, *archived, *asJSON)
+}
+
+func filterByOwner(records []*lobslawv1.SelfTaughtRecord, owner string) []*lobslawv1.SelfTaughtRecord {
+	if owner == "" {
+		return records
+	}
+	out := make([]*lobslawv1.SelfTaughtRecord, 0, len(records))
+	for _, r := range records {
+		if r.GetOwner() == owner {
+			out = append(out, r)
+		}
+	}
+	return out
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -24,26 +25,86 @@ because bbolt takes an exclusive lock on the file, and it exists for
 reading a cluster that will not start.
 
 Approving a proposal is routine, so it should not require an outage.
-list, history, rollback and discard are offline-only; approve is
-live-only.
 
 subcommands:
   list                 what the agent has written for itself
   archive <id>...      move artefacts out of the live set, recoverably
-  discard              archive everything (except pinned artefacts)
+  discard              archive everything (except pinned artefacts) [offline]
   restore <id>...      bring archived artefacts back, as proposals
   pending              refinements staged against a live artefact
   accept <id>...       apply a staged refinement
   reject <id>...       discard a staged refinement, leaving the live one
-  history <id>         prior versions kept for rollback
-  rollback <id> <ver>  restore a prior version as the current one
+  history <id>         prior versions kept for rollback [offline]
+  rollback <id> <ver>  restore a prior version as the current one [offline]
   approve <id>...      let a proposal out of PROPOSED (live only)
+
+Subcommands marked [offline] have no live form yet. They still run, and
+they say so — a command that quietly read a local state.db would be
+reporting on a store the cluster never wrote.
 
 Nothing here deletes. Archived artefacts stay readable with
 --archived — an agent that can silently erase evidence of what it
 taught itself is the wrong default.
 
 archive, discard and restore are DRY RUN unless --apply is given.`
+
+// learnedForms pairs each subcommand's live and offline
+// implementation. A table rather than a switch so the ROUTING is a
+// value a test can assert.
+var learnedForms = map[string]struct{ live, offline func([]string) error }{
+	"list":    {live: liveList, offline: learnedList},
+	"pending": {live: livePending, offline: learnedPending},
+	"accept":  {live: func(a []string) error { return liveDecide(a, true) }, offline: learnedAccept},
+	"reject":  {live: func(a []string) error { return liveDecide(a, false) }, offline: learnedReject},
+	"archive": {live: liveShelve, offline: learnedArchive},
+	"restore": {live: liveRestore, offline: learnedRestore},
+}
+
+// learnedOfflineOnly are the subcommands with no live form yet.
+//
+// history and rollback read the version bucket, which no RPC exposes.
+// discard is a bulk archive with a dry run, and composing it out of
+// per-artefact calls would lose the one preview an operator gets
+// before archiving everything.
+var learnedOfflineOnly = map[string]func([]string) error{
+	"history":  learnedHistory,
+	"rollback": learnedRollback,
+	"discard":  learnedDiscard,
+}
+
+// learnedLiveOnly are the subcommands with no offline form.
+var learnedLiveOnly = map[string]func([]string) error{
+	"approve": liveApprove,
+}
+
+// learnedRoute resolves a subcommand.
+//
+// liveMissing is set when the caller did not ask for --offline and the
+// subcommand has no live form: it runs, and the caller announces the
+// gap. Refusing a command that works to make a point about a flag
+// would be worse; running it silently is the failure R28 names.
+func learnedRoute(sub string, offline bool) (fn func([]string) error, liveMissing bool, err error) {
+	if form, ok := learnedForms[sub]; ok {
+		if offline {
+			return form.offline, false, nil
+		}
+		return form.live, false, nil
+	}
+	if fn, ok := learnedOfflineOnly[sub]; ok {
+		return fn, !offline, nil
+	}
+	if fn, ok := learnedLiveOnly[sub]; ok {
+		if offline {
+			// Named rather than silently ignoring --offline: somebody who
+			// passed it believes the node is stopped, and approving
+			// against a store they think is quiescent is exactly the
+			// misunderstanding worth stopping.
+			return nil, false, errLiveOnly(sub)
+		}
+		return fn, false, nil
+	}
+	return nil, false, nil
+}
 
 func dispatchLearned(args []string) bool {
 	idx := findSubcmd(args, "learned")
@@ -62,57 +123,21 @@ func dispatchLearned(args []string) bool {
 	// the one that needs a flag.
 	rest, offline := takeOffline(sub[1:])
 
-	var err error
-	switch sub[0] {
-	case "list":
-		err = learnedList(rest)
-	case "history":
-		err = learnedHistory(rest)
-	case "rollback":
-		err = learnedRollback(rest)
-	case "discard":
-		err = learnedDiscard(rest)
-	case "approve":
-		if offline {
-			err = errLiveOnly("approve")
-			break
-		}
-		err = liveApprove(rest)
-	case "pending":
-		if offline {
-			err = learnedPending(rest)
-			break
-		}
-		err = livePending(rest)
-	case "accept":
-		if offline {
-			err = learnedAccept(rest)
-			break
-		}
-		err = liveDecide(rest, true)
-	case "reject":
-		if offline {
-			err = learnedReject(rest)
-			break
-		}
-		err = liveDecide(rest, false)
-	case "archive":
-		if offline {
-			err = learnedArchive(rest)
-			break
-		}
-		err = liveShelve(rest)
-	case "restore":
-		if offline {
-			err = learnedRestore(rest)
-			break
-		}
-		err = liveRestore(rest)
-	default:
+	run, liveMissing, err := learnedRoute(sub[0], offline)
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "learned %s: %v\n", sub[0], err)
+		os.Exit(1)
+	case run == nil:
 		fmt.Fprintf(os.Stderr, "unknown learned subcommand %q\n\n%s\n", sub[0], learnedUsage)
 		os.Exit(2)
 	}
-	if err != nil {
+	if liveMissing {
+		fmt.Fprintf(os.Stderr,
+			"lobslaw learned %s: no live form yet — running against a local state.db, "+
+				"which is NOT the cluster's unless this machine is the node\n", sub[0])
+	}
+	if err := run(rest); err != nil {
 		fmt.Fprintf(os.Stderr, "learned %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
@@ -147,37 +172,59 @@ func learnedList(args []string) error {
 		for _, r := range records {
 			out = append(out, learnedJSON(r, st))
 		}
-		return emitJSON(map[string]any{"state_db": path, "artefacts": out})
+		return emitJSON(map[string]any{"source": path, "artefacts": out})
+	}
+	return renderLearnedList(os.Stdout, records, path, *archived, false)
+}
+
+// renderLearnedList prints the artefact set and SAYS WHERE IT CAME
+// FROM.
+//
+// "The agent has taught itself nothing" is indistinguishable from the
+// wrong store unless the source is on the page — and on a laptop that
+// sentence used to be about a state.db the cluster never wrote.
+//
+// Usage counts are omitted on the live path: they live in a separate
+// bucket the RPC does not return, and a zero next to every artefact
+// would read as "never used" rather than "not asked for".
+func renderLearnedList(w io.Writer, records []*lobslawv1.SelfTaughtRecord,
+	source string, archived, asJSON bool) error {
+	if asJSON {
+		out := make([]map[string]any, 0, len(records))
+		for _, r := range records {
+			out = append(out, learnedJSON(r, nil))
+		}
+		return emitJSON(map[string]any{"source": source, "artefacts": out})
 	}
 
-	fmt.Printf("%s\n", path)
+	_, _ = fmt.Fprintf(w, "%s\n", source)
 	if len(records) == 0 {
-		if *archived {
-			fmt.Println("the archive is empty.")
+		if archived {
+			_, _ = fmt.Fprintln(w, "the archive is empty.")
 		} else {
-			fmt.Println("the agent has taught itself nothing.")
+			_, _ = fmt.Fprintln(w, "the agent has taught itself nothing.")
 		}
 		return nil
 	}
 	for _, r := range records {
-		use := st.Usage(r.Id)
 		pin := ""
-		if r.Pinned {
+		if r.GetPinned() {
 			pin = " [pinned]"
 		}
-		fmt.Printf("  %-36s %-10s %-9s used %d%s\n",
-			r.Id, kindLabel(r.Kind), stateLabel(r.State), use.Invocations, pin)
-		if r.ArchivedReason != "" {
-			fmt.Printf("      archived: %s\n", r.ArchivedReason)
+		_, _ = fmt.Fprintf(w, "  %-36s %-10s %-9s%s\n",
+			r.GetId(), kindLabel(r.GetKind()), stateLabel(r.GetState()), pin)
+		if r.GetArchivedReason() != "" {
+			_, _ = fmt.Fprintf(w, "      archived: %s\n", r.GetArchivedReason())
 		}
-		if r.Pending != nil {
-			fmt.Printf("      PENDING refinement to v%d: %s\n", r.Version+1, r.Pending.Rationale)
+		if r.GetPending() != nil {
+			_, _ = fmt.Fprintf(w, "      PENDING refinement to v%d: %s\n",
+				r.GetVersion()+1, r.GetPending().GetRationale())
 		}
-		if r.TurnId != "" {
-			fmt.Printf("      taught by turn %s\n", r.TurnId)
+		if r.GetTurnId() != "" {
+			_, _ = fmt.Fprintf(w, "      taught by turn %s\n", r.GetTurnId())
 		}
 	}
-	fmt.Printf("\n%d artefact(s).\n", len(records))
+	_, _ = fmt.Fprintf(w, "\n%d artefact(s).\n", len(records))
 	return nil
 }
 
@@ -466,6 +513,12 @@ func firstLine(s string) string {
 	return s
 }
 
+// learnedJSON renders one artefact.
+//
+// st is nil on the live path: usage counts live in a separate bucket
+// the RPC does not return, and "uses": 0 next to every artefact would
+// read as "never used" rather than "not asked for". The key is omitted
+// instead, which is the difference between an unknown and a zero.
 func learnedJSON(r *lobslawv1.SelfTaughtRecord, st *memory.OfflineSelfTaught) map[string]any {
 	m := map[string]any{
 		"id":      r.Id,
@@ -477,7 +530,9 @@ func learnedJSON(r *lobslawv1.SelfTaughtRecord, st *memory.OfflineSelfTaught) ma
 		"pinned":  r.Pinned,
 		"version": r.Version,
 		"turn_id": r.TurnId,
-		"uses":    st.Usage(r.Id).Invocations,
+	}
+	if st != nil {
+		m["uses"] = st.Usage(r.Id).Invocations
 	}
 	if r.ArchivedReason != "" {
 		m["archived_reason"] = r.ArchivedReason
