@@ -26,6 +26,9 @@ lobslaw plugin             # plugin lifecycle
 lobslaw audit              # the tamper-evident record
   audit query              # read entries
   audit verify             # walk the hash chain
+lobslaw policy             # see and undo "always" approvals
+  policy approvals         # list the rules an approval minted
+  policy revoke-approvals  # delete them, all or by id
 lobslaw memory             # read + edit the memory store (node must be STOPPED)
   memory show <id>         # one record in full
   memory list              # list vector + episodic records
@@ -235,6 +238,35 @@ checked: exiting 0 having verified nothing is the failure this command exists
 to catch. A sink the node does not run is reported as unavailable, not as a
 broken chain — conflating the two sends somebody looking for tampering that
 did not happen.
+
+## `lobslaw policy`
+
+An "always" approval is a permanent widening of what the agent may do — tapped
+once, then easy to forget. These are the other half of that feature: without a
+way to see and undo the grants, "revocable" is a claim in a doc rather than
+something a person can act on.
+
+```bash
+lobslaw policy approvals --context prod
+lobslaw policy revoke-approvals --context prod approval:abc123 --apply
+lobslaw policy revoke-approvals --context prod --all --apply
+```
+
+Live by default; `--offline` opens `state.db` directly and needs the node
+**stopped**, because bbolt takes an exclusive lock. Both forms print where they
+read from — an empty list of grants is indistinguishable from the wrong store
+unless the source is on the page.
+
+`revoke-approvals` is a **dry run unless `--apply`** is given, and naming
+nothing is not "everything": pass `--all` explicitly, or the command refuses.
+
+**The scope is enforced by the node, not by the CLI.** `RevokeApprovalRules` is
+scoped to approval-minted rules on the server, so the guarantee an operator
+relies on — that revoking their approvals cannot touch a rule they wrote by
+hand — does not depend on which client made the call. There is deliberately no
+unscoped delete RPC. A rule that exists but was not minted by an approval is
+reported as *refused*; an id that does not exist at all is reported as *not
+found*. Those are different mistakes with different fixes.
 
 ## `lobslaw memory` and `lobslaw session`
 

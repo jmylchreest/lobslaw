@@ -1292,6 +1292,7 @@ const (
 	PolicyService_Evaluate_FullMethodName            = "/lobslaw.v1.PolicyService/Evaluate"
 	PolicyService_SyncRules_FullMethodName           = "/lobslaw.v1.PolicyService/SyncRules"
 	PolicyService_AddRule_FullMethodName             = "/lobslaw.v1.PolicyService/AddRule"
+	PolicyService_RevokeApprovalRules_FullMethodName = "/lobslaw.v1.PolicyService/RevokeApprovalRules"
 	PolicyService_RequestConfirmation_FullMethodName = "/lobslaw.v1.PolicyService/RequestConfirmation"
 )
 
@@ -1302,6 +1303,18 @@ type PolicyServiceClient interface {
 	Evaluate(ctx context.Context, in *EvaluateRequest, opts ...grpc.CallOption) (*EvaluateResponse, error)
 	SyncRules(ctx context.Context, in *SyncRulesRequest, opts ...grpc.CallOption) (*SyncRulesResponse, error)
 	AddRule(ctx context.Context, in *AddRuleRequest, opts ...grpc.CallOption) (*AddRuleResponse, error)
+	// RevokeApprovalRules deletes rules minted by an "always" approval.
+	//
+	// Scoped to that class in its NAME rather than by a prefix the
+	// caller supplies. The guarantee an operator relies on — that
+	// revoking their approvals cannot touch a rule they wrote by hand —
+	// is enforced on the server, because a check in the client is one an
+	// attacker replaces.
+	//
+	// There is deliberately no unscoped delete. Nothing needs one, and
+	// an RPC that can remove any policy rule is the one you would most
+	// like not to have shipped.
+	RevokeApprovalRules(ctx context.Context, in *RevokeApprovalRulesRequest, opts ...grpc.CallOption) (*RevokeApprovalRulesResponse, error)
 	RequestConfirmation(ctx context.Context, in *RequestConfirmationRequest, opts ...grpc.CallOption) (*RequestConfirmationResponse, error)
 }
 
@@ -1343,6 +1356,16 @@ func (c *policyServiceClient) AddRule(ctx context.Context, in *AddRuleRequest, o
 	return out, nil
 }
 
+func (c *policyServiceClient) RevokeApprovalRules(ctx context.Context, in *RevokeApprovalRulesRequest, opts ...grpc.CallOption) (*RevokeApprovalRulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeApprovalRulesResponse)
+	err := c.cc.Invoke(ctx, PolicyService_RevokeApprovalRules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *policyServiceClient) RequestConfirmation(ctx context.Context, in *RequestConfirmationRequest, opts ...grpc.CallOption) (*RequestConfirmationResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RequestConfirmationResponse)
@@ -1360,6 +1383,18 @@ type PolicyServiceServer interface {
 	Evaluate(context.Context, *EvaluateRequest) (*EvaluateResponse, error)
 	SyncRules(context.Context, *SyncRulesRequest) (*SyncRulesResponse, error)
 	AddRule(context.Context, *AddRuleRequest) (*AddRuleResponse, error)
+	// RevokeApprovalRules deletes rules minted by an "always" approval.
+	//
+	// Scoped to that class in its NAME rather than by a prefix the
+	// caller supplies. The guarantee an operator relies on — that
+	// revoking their approvals cannot touch a rule they wrote by hand —
+	// is enforced on the server, because a check in the client is one an
+	// attacker replaces.
+	//
+	// There is deliberately no unscoped delete. Nothing needs one, and
+	// an RPC that can remove any policy rule is the one you would most
+	// like not to have shipped.
+	RevokeApprovalRules(context.Context, *RevokeApprovalRulesRequest) (*RevokeApprovalRulesResponse, error)
 	RequestConfirmation(context.Context, *RequestConfirmationRequest) (*RequestConfirmationResponse, error)
 }
 
@@ -1378,6 +1413,9 @@ func (UnimplementedPolicyServiceServer) SyncRules(context.Context, *SyncRulesReq
 }
 func (UnimplementedPolicyServiceServer) AddRule(context.Context, *AddRuleRequest) (*AddRuleResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddRule not implemented")
+}
+func (UnimplementedPolicyServiceServer) RevokeApprovalRules(context.Context, *RevokeApprovalRulesRequest) (*RevokeApprovalRulesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeApprovalRules not implemented")
 }
 func (UnimplementedPolicyServiceServer) RequestConfirmation(context.Context, *RequestConfirmationRequest) (*RequestConfirmationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequestConfirmation not implemented")
@@ -1456,6 +1494,24 @@ func _PolicyService_AddRule_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PolicyService_RevokeApprovalRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeApprovalRulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PolicyServiceServer).RevokeApprovalRules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PolicyService_RevokeApprovalRules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PolicyServiceServer).RevokeApprovalRules(ctx, req.(*RevokeApprovalRulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PolicyService_RequestConfirmation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RequestConfirmationRequest)
 	if err := dec(in); err != nil {
@@ -1492,6 +1548,10 @@ var PolicyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddRule",
 			Handler:    _PolicyService_AddRule_Handler,
+		},
+		{
+			MethodName: "RevokeApprovalRules",
+			Handler:    _PolicyService_RevokeApprovalRules_Handler,
 		},
 		{
 			MethodName: "RequestConfirmation",

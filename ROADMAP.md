@@ -3567,10 +3567,10 @@ Sequenced so each step is useful alone.
 - **Live forms for what already has a service** — `memory`, `policy`, `audit`. This was written as
   "rewiring, not new protocol", and that is true of **audit only**. `AuditService` already has
   `Query` and `VerifyChain` with a sink selector, so the CLI is pure client work. `PolicyService`
-  has `Evaluate`/`SyncRules`/`AddRule`/`RequestConfirmation` and no way to LIST or DELETE a rule,
-  which is exactly what `policy approvals` and `revoke-approvals` do. `MemoryService` has `Forget`
-  but nothing behind `memory list`, `show`, `share` or `unshare`. Both need new RPCs; the estimate
-  was wrong and the sequencing should reflect it.
+  had no way to DELETE a rule, which is what `revoke-approvals` does — though `SyncRules` already
+  covered the listing, so only revocation needed protocol. `MemoryService` has `Forget` but nothing
+  behind `memory list`, `show`, `share` or `unshare`. The estimate was too optimistic and the
+  sequencing should reflect it.
 - **Services for what does not** — `session`, `identity`.
 - **`trace` names a node.** Per-node storage was a deliberate answer to R24's objection and should
   not be undone to make a CLI easier; the CLI should say which node it is reading, and default to
@@ -3643,6 +3643,24 @@ read as though it were the cluster's, and answering confidently with nothing in 
       Sinks are walked one call each rather than in a single combined check: the service
       flattens a combined verification into one verdict, and "the chain is broken" without
       naming the sink is half an answer.
+
+      **`policy` is done, and half of it needed no protocol after all.** `SyncRules` already
+      returns every rule with its provenance, so `policy approvals` is a filter on the same
+      constant the offline form uses — one authority for "minted by an approval", in
+      `internal/policy`. Only revocation needed an RPC.
+
+      `RevokeApprovalRules` is scoped **in its name** rather than by a prefix the caller
+      supplies, and the refusal lives on the SERVER. The guarantee an operator relies on —
+      that revoking their approvals cannot touch a rule they wrote by hand — is worth nothing
+      if the check sits in the client, because a client is what an attacker replaces. There is
+      deliberately no unscoped delete: nothing needs one, and an RPC that can remove any policy
+      rule is the one you would most like not to have shipped.
+
+      Naming nothing is not everything: an empty id list with `all=false` is an error at both
+      ends, so a mistyped command cannot become a blanket revocation. A rule that exists but was
+      not minted by an approval is *refused*; an id that does not exist is *not found*. Kept
+      apart because they are different mistakes, and "not revoked" without saying which leaves
+      the operator to guess.
 - [ ] `session` and `identity` have services and live forms.
 - [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a
       remote cluster.

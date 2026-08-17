@@ -532,6 +532,18 @@ service PolicyService {
   rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
   rpc SyncRules(SyncRulesRequest) returns (SyncRulesResponse);
   rpc AddRule(AddRuleRequest) returns (AddRuleResponse);
+  // RevokeApprovalRules deletes rules minted by an "always" approval.
+  //
+  // Scoped to that class in its NAME rather than by a prefix the
+  // caller supplies. The guarantee an operator relies on — that
+  // revoking their approvals cannot touch a rule they wrote by hand —
+  // is enforced on the server, because a check in the client is one an
+  // attacker replaces.
+  //
+  // There is deliberately no unscoped delete. Nothing needs one, and
+  // an RPC that can remove any policy rule is the one you would most
+  // like not to have shipped.
+  rpc RevokeApprovalRules(RevokeApprovalRulesRequest) returns (RevokeApprovalRulesResponse);
   rpc RequestConfirmation(RequestConfirmationRequest) returns (RequestConfirmationResponse);
 }
 
@@ -593,6 +605,26 @@ message AddRuleRequest {
 }
 message AddRuleResponse {
   string id = 1;
+}
+
+message RevokeApprovalRulesRequest {
+  // Ids to revoke. Empty with all=false is an error, so that nobody
+  // revokes the whole set by omitting an argument.
+  repeated string ids = 1;
+  // Revoke every approval-minted rule. Must be set explicitly.
+  bool all = 2;
+  // Report what would happen without writing anything.
+  bool dry_run = 3;
+}
+message RevokeApprovalRulesResponse {
+  repeated string revoked = 1;
+  // refused carries ids that exist but were NOT minted by an approval
+  // — reported rather than skipped, because silently ignoring them
+  // lets somebody believe they revoked something they did not.
+  repeated string refused = 2;
+  // not_found is kept separate: a typo and a protected rule are
+  // different mistakes with different fixes.
+  repeated string not_found = 3;
 }
 
 message RequestConfirmationRequest {
