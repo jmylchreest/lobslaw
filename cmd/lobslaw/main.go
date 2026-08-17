@@ -251,6 +251,9 @@ func main() {
 	if dispatchInit(os.Args[1:]) {
 		return
 	}
+	if dispatchContext(os.Args[1:]) {
+		return
+	}
 	if dispatchDoctor(os.Args[1:]) {
 		return
 	}

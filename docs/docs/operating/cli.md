@@ -12,10 +12,13 @@ The `lobslaw` binary is multi-mode — the same binary handles run, init, doctor
 lobslaw                    # run the node (with --config)
 lobslaw init               # interactive config scaffold
 lobslaw doctor             # config + connectivity checks
+lobslaw context            # the clusters this machine can reach
+  context list             # show the configured contexts
 lobslaw nodeid             # derive a deterministic node ID for this host
 lobslaw cluster            # cluster + cert lifecycle
   cluster ca-init          # create cluster CA
   cluster sign-node        # sign a node cert against the CA
+  cluster sign-operator    # sign an OPERATOR cert — administers, cannot join
   cluster reset            # nuke the local raft state (DESTRUCTIVE)
 lobslaw plugin             # plugin lifecycle
   plugin install <bundle>  # install a clawhub bundle
@@ -39,9 +42,16 @@ lobslaw dispatch           # hidden — used by hooks / scheduler dispatch
 
 ```
 --config <path>            # config.toml path (required for run, doctor)
+--context <name>           # named cluster from contexts.toml (see below)
 --log-level <debug|info|warn|error>
 --log-format <text|json>
 ```
+
+`--context` and `--config` answer different questions. `--config` is the
+node's file: where its data lives, which certs it presents, what it binds.
+`--context` is the operator's: which remote cluster to talk to and what
+credential to present. A laptop administering a cluster needs the second and
+should not have the first.
 
 ## `lobslaw` (no subcommand)
 
@@ -87,6 +97,87 @@ lobslaw cluster sign-node \
 ```
 
 Signs a node keypair against the CA. CN = node ID, SAN = `<id>` + `<id>.cluster.local`.
+
+## `lobslaw cluster sign-operator`
+
+```bash
+lobslaw cluster sign-operator alice \
+  --ca-cert certs/ca.pem \
+  --ca-key  certs/ca-key.pem \
+  --out     ./alice
+```
+
+Signs a credential for a PERSON rather than a host. CN is the operator's name,
+so audit entries say who rather than which machine.
+
+It is deliberately not a node certificate:
+
+- **Client authentication only.** A node cert carries `ServerAuth` too, because
+  a node both dials its peers and serves them — which is what made handing one
+  to a laptop equivalent to handing over a cluster membership. Nothing can
+  serve with an operator cert.
+- **`OU=operator`, refused on the raft transport.** ClientAuth alone would
+  still permit opening a raft stream, since a peer dials as a client too. The
+  server rejects that OU on the peer-only paths, on the streaming interceptor
+  as well as the unary one.
+- **Shorter-lived by default** — 90 days. A person's credential travels.
+
+Revoking one does not require rotating any node's identity. The command writes
+`operator.pem`, `operator-key.pem` and a copy of `ca.pem` into `--out`, and
+prints the `contexts.toml` block for them.
+
+## `lobslaw context`
+
+Named clusters, so administering a remote cluster does not mean four flags on
+every invocation.
+
+```bash
+lobslaw context list          # what this machine can reach, and whether the files are there
+```
+
+The file lives at `$XDG_CONFIG_HOME/lobslaw/contexts.toml` (falling back to
+`~/.config/lobslaw/contexts.toml`); `LOBSLAW_CONTEXTS` overrides the path.
+
+```toml
+default = "prod"
+
+[contexts.prod]
+addr    = "node1.example.com:9090"
+ca_cert = "~/.config/lobslaw/prod/ca.pem"
+cert    = "~/.config/lobslaw/prod/operator.pem"
+key     = "~/.config/lobslaw/prod/operator-key.pem"
+
+[contexts.staging]
+addr    = "staging.example.com:9090"
+ca_cert = "~/.config/lobslaw/staging/ca.pem"
+cert    = "~/.config/lobslaw/staging/operator.pem"
+key     = "~/.config/lobslaw/staging/operator-key.pem"
+```
+
+```bash
+lobslaw --context staging memory list
+LOBSLAW_CONTEXT=prod lobslaw memory list    # for a shell that lives in one cluster
+```
+
+`default` is optional. Leaving it out is reasonable when you have both a
+staging and a production cluster: a bare command then refuses rather than
+picking one.
+
+**Precedence**, highest first:
+
+1. Explicit `--addr` / `--ca-cert` / `--node-cert` / `--node-key`. Overriding
+   one keeps the rest of the context — you do not have to supply all four to
+   change the address.
+2. The named context (`--context`, `LOBSLAW_CONTEXT`, or `default`).
+3. `--config`, reading `[cluster] advertise_addr` and `[cluster.mtls]`.
+
+A context outranks `config.toml` because a `config.toml` found on a laptop is
+likelier to be left over from running a node locally than the cluster you meant
+to reach.
+
+An unknown context name is an error listing what exists, not a fall back to the
+default. The failure worth preventing is a command aimed at staging that lands
+on production.
 
 ## `lobslaw plugin install <bundle>`
 

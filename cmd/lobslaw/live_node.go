@@ -30,18 +30,21 @@ import (
 
 // liveNode holds the flags a subcommand needs to reach a running node.
 type liveNode struct {
-	configPath string
-	addr       string
-	caCert     string
-	nodeCert   string
-	nodeKey    string
-	timeout    time.Duration
+	configPath  string
+	contextName string
+	addr        string
+	caCert      string
+	nodeCert    string
+	nodeKey     string
+	timeout     time.Duration
 }
 
 // bind registers the shared flags on fs. Call before fs.Parse.
 func (l *liveNode) bind(fs *flag.FlagSet) {
 	fs.StringVar(&l.configPath, "config", envOr("LOBSLAW_CONFIG", ""),
 		"path to config.toml; supplies [cluster] advertise_addr and [cluster.mtls] paths")
+	fs.StringVar(&l.contextName, "context", envOr("LOBSLAW_CONTEXT", ""),
+		"named cluster from contexts.toml; supplies addr and credentials")
 	fs.StringVar(&l.addr, "addr", envOr("LOBSLAW_NODE_ADDR", ""),
 		"host:port of a running node; overrides --config")
 	fs.StringVar(&l.caCert, "ca-cert", "", "CA cert; overrides --config")
@@ -80,17 +83,46 @@ func (l *liveNode) ctx() (context.Context, context.CancelFunc) {
 
 // resolve works out where to connect and with what.
 //
-// Explicit flags win over the config file, and a missing piece is
-// named individually rather than as "configuration error" — somebody
-// running this on a machine that is not a cluster member will be
-// missing exactly one of these, and which one is the whole answer.
+// Three sources, in this order: explicit flags, the named context, the
+// node's config.toml. A missing piece is named individually rather
+// than as "configuration error" — somebody running this on a machine
+// that is not a cluster member will be missing exactly one of these,
+// and which one is the whole answer.
+//
+// The context sits ABOVE config.toml deliberately. An operator who has
+// gone to the trouble of naming a cluster means that cluster; a
+// config.toml found on the same laptop is likelier to be a leftover
+// from running a node locally than the thing they meant to reach.
 func (l *liveNode) resolve() (addr, ca, cert, key string, err error) {
 	addr, ca, cert, key = l.addr, l.caCert, l.nodeCert, l.nodeKey
 
 	if addr == "" || ca == "" || cert == "" || key == "" {
+		// Consulted even when no --context was passed, because the file
+		// may name a default. An unknown name is a hard error rather
+		// than a fallback: see resolveContext.
+		named, cerr := resolveContext(l.contextName)
+		if cerr != nil {
+			return "", "", "", "", cerr
+		}
+		if addr == "" {
+			addr = named.Addr
+		}
+		if ca == "" {
+			ca = named.CACert
+		}
+		if cert == "" {
+			cert = named.Cert
+		}
+		if key == "" {
+			key = named.Key
+		}
+	}
+
+	if addr == "" || ca == "" || cert == "" || key == "" {
 		if l.configPath == "" {
 			return "", "", "", "", errors.New(
-				"no --addr / --ca-cert / --node-cert / --node-key, and no --config to read them from")
+				"no --context, no --addr / --ca-cert / --node-cert / --node-key, " +
+					"and no --config to read them from")
 		}
 		cfg, cerr := config.Load(config.LoadOptions{Path: l.configPath})
 		if cerr != nil {

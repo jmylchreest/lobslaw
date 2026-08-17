@@ -376,4 +376,25 @@ func clusterSignOperator(args []string) {
 	fmt.Println("  - client authentication only, so nothing can serve with it")
 	fmt.Println("  - refused on the raft transport, enforced at the server")
 	fmt.Println("Revoking it does not require rotating any node's identity.")
+
+	// The credential is useless until the operator can point a command
+	// at it, and the alternative to this is four flags on every
+	// invocation — which becomes a shell alias, which is this file with
+	// none of the checking.
+	fmt.Printf("\nTo use it without passing four flags, add this to %s:\n\n%s\n",
+		contextsPath(), operatorContextSnippet(certPath, keyPath, filepath.Join(*out, "ca.pem")))
+	fmt.Println("Then: lobslaw --context CLUSTER_NAME memory list")
+}
+
+// operatorContextSnippet renders a contexts.toml block for a
+// freshly-signed credential. The cluster name and address are left as
+// placeholders because neither is known here: this command signs a
+// certificate, and the same certificate is valid at every node.
+func operatorContextSnippet(cert, key, ca string) string {
+	return fmt.Sprintf(`  [contexts.CLUSTER_NAME]
+  addr    = "NODE_HOST:PORT"
+  ca_cert = %q
+  cert    = %q
+  key     = %q
+`, ca, cert, key)
 }

@@ -3603,7 +3603,24 @@ read as though it were the cluster's, and answering confidently with nothing in 
       Shorter-lived than a node's by default: a person's credential lives on a laptop that
       travels. Revoking it no longer requires rotating any node's identity, and an audit entry
       names who rather than which host.
-- [ ] A named context replaces the four connection flags.
+- [x] A named context replaces the four connection flags.
+      **The precedence is the design, and it puts the context above `config.toml`.**
+
+      `contexts.toml` in the operator's own config directory names clusters — address, CA,
+      operator cert and key — reached with `--context prod` or `LOBSLAW_CONTEXT`, with an
+      optional `default` for the common case of one cluster. Explicit flags still win, and
+      overriding one of them keeps the rest of the context rather than demanding all four again.
+
+      A `config.toml` found on a laptop is likelier to be a leftover from running a node locally
+      than the cluster the operator meant to reach, so a named context outranks it. And an
+      unknown context name is a hard error listing what exists, not a fallback to the default:
+      the failure worth preventing is a command aimed at staging that lands on production.
+
+      `--context` is a global value flag, so `lobslaw --context prod memory list` finds its
+      subcommand rather than reading `prod` as one. `cluster sign-operator` prints the
+      `contexts.toml` block for the credential it just signed, and a test loads that printed
+      block back — a snippet that does not parse sends the operator to a "no such file" error
+      about a credential sitting right there.
 - [ ] `memory`, `policy` and `audit` work against a remote node.
 - [ ] `session` and `identity` have services and live forms.
 - [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a

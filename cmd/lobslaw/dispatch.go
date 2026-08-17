@@ -13,6 +13,7 @@ import (
 func hoistGlobalFlagsToEnv(args []string) {
 	mapping := map[string]string{
 		"--config":    "LOBSLAW_CONFIG",
+		"--context":   "LOBSLAW_CONTEXT",
 		"--env":       "LOBSLAW_ENV",
 		"--log-level": "LOBSLAW_LOG_LEVEL",
 	}
@@ -49,6 +50,7 @@ func hoistGlobalFlagsToEnv(args []string) {
 // Keep in sync with parseFlags() in main.go.
 var globalValueFlags = map[string]bool{
 	"--config":     true,
+	"--context":    true,
 	"--env":        true,
 	"--log-level":  true,
 	"--log-format": true,
