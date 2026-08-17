@@ -23,7 +23,9 @@ lobslaw cluster            # cluster + cert lifecycle
 lobslaw plugin             # plugin lifecycle
   plugin install <bundle>  # install a clawhub bundle
   plugin list              # list installed skills
-lobslaw audit              # query audit logs
+lobslaw audit              # the tamper-evident record
+  audit query              # read entries
+  audit verify             # walk the hash chain
 lobslaw memory             # read + edit the memory store (node must be STOPPED)
   memory show <id>         # one record in full
   memory list              # list vector + episodic records
@@ -196,11 +198,43 @@ Honours `[security] clawhub_signing_policy`.
 
 ## `lobslaw audit`
 
+The tamper-evident record of what the agent was permitted to do.
+
 ```bash
-lobslaw audit --since "1 hour ago" --filter "decision=deny"
+lobslaw audit query --context prod --since 24h --action tool:exec
+lobslaw audit verify --context prod
 ```
 
-Pretty-prints the daily JSONL audit log. Filters: `--decision`, `--subject`, `--action`, `--resource`, `--since`.
+Both subcommands talk to a **running node** by default. Reading the log only
+from the local filesystem made it the record of what *this machine* was
+permitted to do — which on a laptop is nothing at all, and an empty audit log
+reads as a quiet cluster rather than as the wrong file.
+
+`--offline` is the opt-out, and it is the forensic path: a node that will not
+start still has its `audit.jsonl`, and that is exactly when somebody wants to
+read it.
+
+```bash
+lobslaw audit verify --offline --path /var/lib/lobslaw/audit/audit.jsonl
+lobslaw audit query  --offline --config config.toml --actor user:alice
+```
+
+**Filters** (both forms): `--actor`, `--action`, `--target`, `--since`,
+`--until`, `--limit`. `--since` and `--until` take an RFC3339 instant *or* a
+bare duration meaning "ago" — `--since 24h`. A window that ends before it
+starts is refused rather than returning nothing, because an empty result from
+a backwards window looks exactly like an empty result from a quiet cluster.
+
+**`--sink`** picks `raft` or `local` on a running node. Omitted, `verify`
+checks every sink **separately** and names any that breaks — the service
+flattens a combined check into one verdict, and "the chain is broken" without
+saying which sink is half an answer.
+
+`verify` exits non-zero on a break. It also refuses when *no* sink could be
+checked: exiting 0 having verified nothing is the failure this command exists
+to catch. A sink the node does not run is reported as unavailable, not as a
+broken chain — conflating the two sends somebody looking for tampering that
+did not happen.
 
 ## `lobslaw memory` and `lobslaw session`
 

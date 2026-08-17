@@ -3564,8 +3564,13 @@ Sequenced so each step is useful alone.
 - **Connection profiles.** `~/.config/lobslaw/contexts.toml` with named clusters — address, CA,
   operator cert — and `lobslaw --context prod`. `LOBSLAW_CONTEXT` for shells that live in one. The
   node's `config.toml` stays what it is: the node's.
-- **Live forms for what already has a service** — `memory`, `policy`, `audit`. Rewiring, not new
-  protocol.
+- **Live forms for what already has a service** — `memory`, `policy`, `audit`. This was written as
+  "rewiring, not new protocol", and that is true of **audit only**. `AuditService` already has
+  `Query` and `VerifyChain` with a sink selector, so the CLI is pure client work. `PolicyService`
+  has `Evaluate`/`SyncRules`/`AddRule`/`RequestConfirmation` and no way to LIST or DELETE a rule,
+  which is exactly what `policy approvals` and `revoke-approvals` do. `MemoryService` has `Forget`
+  but nothing behind `memory list`, `show`, `share` or `unshare`. Both need new RPCs; the estimate
+  was wrong and the sequencing should reflect it.
 - **Services for what does not** — `session`, `identity`.
 - **`trace` names a node.** Per-node storage was a deliberate answer to R24's objection and should
   not be undone to make a CLI easier; the CLI should say which node it is reading, and default to
@@ -3622,6 +3627,22 @@ read as though it were the cluster's, and answering confidently with nothing in 
       block back — a snippet that does not parse sends the operator to a "no such file" error
       about a credential sitting right there.
 - [ ] `memory`, `policy` and `audit` work against a remote node.
+      **`audit` is done; `policy` and `memory` are blocked on RPCs that do not exist.**
+
+      `audit query` and `audit verify` now talk to a running node by default, with `--offline`
+      as the forensic opt-out for a cluster that will not start. Where the answer came from is
+      printed either way, because an empty audit log is indistinguishable from the wrong file
+      unless the source is on the page.
+
+      Two refusals carry the R28 rule. `verify` exits non-zero when no sink could be checked at
+      all — exiting 0 having verified nothing is precisely the confident-answer-about-nothing
+      failure this item exists to remove. And a sink the node does not run is reported as
+      unavailable rather than as a broken chain, because conflating the two sends somebody
+      looking for tampering that did not happen.
+
+      Sinks are walked one call each rather than in a single combined check: the service
+      flattens a combined verification into one verdict, and "the chain is broken" without
+      naming the sink is half an answer.
 - [ ] `session` and `identity` have services and live forms.
 - [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a
       remote cluster.
