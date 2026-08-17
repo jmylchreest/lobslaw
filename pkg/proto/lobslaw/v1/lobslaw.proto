@@ -1278,6 +1278,68 @@ message UserChannelAddress {
 // SessionRecord is the per-session index. Message bodies live in
 // BucketSessionMessages; this record tracks the cursor bounds so a
 // reader knows the retained range without scanning.
+// SessionService reads stored conversation transcripts.
+//
+// Read-only on purpose. Forgetting a conversation is a replicated
+// mutation with its own path; an operator browsing what was said does
+// not need one that can also delete it.
+//
+// Unscoped, like the other read services on this listener: the agent's
+// per-turn scoping lives in the session BUILTINS, which is where it
+// belongs, because that is the caller who must not read another user's
+// conversation. This surface is for operators and peers behind mTLS.
+service SessionService {
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse);
+  rpc SearchSessions(SearchSessionsRequest) returns (SearchSessionsResponse);
+}
+
+message ListSessionsRequest {
+  string channel = 1;
+  string user_id = 2;
+}
+message ListSessionsResponse {
+  // Most recently updated first. Session ids are addresses rather than
+  // sequence, so there is no other natural order.
+  repeated SessionRecord sessions = 1;
+}
+
+message GetSessionRequest {
+  string id = 1;
+}
+message GetSessionResponse {
+  SessionRecord session = 1;
+  // The full transcript in sequence order.
+  repeated SessionMessage messages = 2;
+}
+
+message SearchSessionsRequest {
+  // Matched case-insensitively against message content. Required —
+  // this is search, not enumeration; ListSessions covers that.
+  string text = 1;
+  string channel = 2;
+  string user_id = 3;
+  // limit caps SESSIONS, not messages. Zero takes the service default.
+  int32 limit = 4;
+  int32 snippets_per_session = 5;
+}
+message SessionSnippetProto {
+  uint64 seq = 1;
+  string role = 2;
+  string text = 3;
+}
+message SessionSearchHitProto {
+  SessionRecord session = 1;
+  // matches is every matching message, which may exceed the snippets
+  // returned — so a caller can tell a passing mention from a thread
+  // about the thing.
+  int32 matches = 2;
+  repeated SessionSnippetProto snippets = 3;
+}
+message SearchSessionsResponse {
+  repeated SessionSearchHitProto hits = 1;
+}
+
 message SessionRecord {
   string id = 1; // "<channel>:<channel_id>" — bucket key
   string channel = 2; // gateway channel kind: "telegram", "rest", ...

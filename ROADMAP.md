@@ -3680,6 +3680,25 @@ read as though it were the cluster's, and answering confidently with nothing in 
       caller may not read must leave the matched set before the cascade runs, or it pulls its
       consolidations down with it and deletes through a record they were never allowed to see.
 - [ ] `session` and `identity` have services and live forms.
+      **`session` is done. `identity rebind` is next and needs more than a wrapper.**
+
+      `SessionService` is read-only on purpose: forgetting a conversation is a replicated
+      mutation with its own path, and browsing what was said does not need one that can also
+      delete it. `SearchSessions` goes through the same `SearchTranscripts` the agent's
+      `session_search` tool uses, so what an operator sees is what the model would have found —
+      two search implementations would eventually disagree, and the operator would be the one
+      debugging it.
+
+      The filtering and the transcript scan moved from `cmd/lobslaw` into `internal/memory`, so
+      the CLI and the service answer with one definition of what `--channel telegram` selects.
+
+      An unwired service REFUSES rather than answering empty. A service that returns "no
+      sessions" because it has no store is indistinguishable from a quiet cluster, which is the
+      failure this whole item exists to remove.
+
+      `identity rebind` is not a thin wrapper: the rewriters live in `cmd/lobslaw` and write
+      straight to the store, bypassing raft. A live form has to move them into `internal/memory`
+      and replicate each rewrite.
 - [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a
       remote cluster.
 - [ ] Every command either reaches the cluster or refuses; none reads a local `state.db` that is not

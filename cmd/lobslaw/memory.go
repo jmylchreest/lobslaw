@@ -744,13 +744,6 @@ func tsString(ts *timestamppb.Timestamp) string {
 	return ts.AsTime().UTC().Format("2006-01-02 15:04:05 UTC")
 }
 
-// laterThan orders by timestamp, treating a missing one as oldest.
-// Shared with session listing; the ordering rule itself lives in
-// internal/memory so the scan and the renderers cannot disagree.
-func laterThan(a, b *timestamppb.Timestamp) bool {
-	return memory.LaterThan(a, b)
-}
-
 func orNone(s string) string {
 	if s == "" {
 		return "-"

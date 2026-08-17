@@ -52,6 +52,25 @@ func (n *Node) wireMemoryService() error {
 	return nil
 }
 
+// wireSessionService registers the gRPC SessionService — read-only
+// transcript browsing for an operator who is not on the node.
+//
+// Skipped when there is no store, rather than registered against
+// nothing: a service that answers every call with "not wired" is worse
+// than an unimplemented one, because a client cannot tell it from an
+// empty cluster.
+func (n *Node) wireSessionService() error {
+	if n.raft == nil || n.store == nil {
+		n.log.Debug("session service: no local store; not registering")
+		return nil
+	}
+	svc := memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
+		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
+	})
+	lobslawv1.RegisterSessionServiceServer(n.server, memory.NewSessionRPC(svc))
+	return nil
+}
+
 // wireUserPrefs constructs the per-user preferences service. Reads
 // are local; writes go through raft. Solo deployments seed an
 // "owner" record from operator config; team deployments add records

@@ -36,7 +36,7 @@ lobslaw memory             # read + edit the memory store
   memory share <id>...     # make owned records readable cluster-wide (offline)
   memory unshare <id>...   # return shared records to their owner only (offline)
   memory consolidations    # what Dream merged, superseded or left alone (offline)
-lobslaw session            # read conversation transcripts (node must be STOPPED)
+lobslaw session            # read conversation transcripts
   session list             # one line per conversation
   session show <id>        # full transcript
   session search <text>    # substring search across transcripts
@@ -308,11 +308,29 @@ the same as an empty `--owner`: it selects records belonging to no principal at
 all. A truncated listing reports the pre-limit totals, so "20 of 400" never
 reads as 400.
 
+### `session list`, `show` and `search` talk to a running node
+
+```bash
+lobslaw session list   --context prod --channel telegram
+lobslaw session show   --context prod <id>
+lobslaw session search --context prod "the pelican brief"
+```
+
+Live by default, `--offline` to open `state.db` directly. Read-only in both
+forms: forgetting a conversation is a replicated mutation with its own path,
+and browsing what was said does not need one that can also delete it.
+
+`search` goes through the same `SearchTranscripts` the agent's `session_search`
+tool uses, so what an operator sees is what the model would have found. The
+match count reported per conversation is the **total**, which may exceed the
+snippets shown — that is what tells a passing mention from a thread about the
+thing. An empty search is refused rather than enumerating everything; use
+`session list` for that.
+
 ### Stop the node first — for the offline path
 
-`--offline`, and every subcommand in the `session` group, open the node's
-`state.db` directly. bbolt takes an **exclusive file lock**, so a running node
-makes them fail after a five-second wait with:
+`--offline` opens the node's `state.db` directly. bbolt takes an **exclusive
+file lock**, so a running node makes it fail after a five-second wait with:
 
 ```
 state.db at /var/lib/lobslaw/data/state.db is locked by another process —

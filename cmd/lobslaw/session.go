@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
@@ -17,11 +16,13 @@ import (
 
 // sessionUsage carries the stopped-node constraint for the group, the
 // same way memoryUsage does — both groups open state.db directly.
-const sessionUsage = `lobslaw session — read stored conversation transcripts offline
+const sessionUsage = `lobslaw session — read stored conversation transcripts
 
-The node must be STOPPED. These subcommands open state.db directly and
-bbolt takes an exclusive lock on the file, so a running node makes every
-one of them fail.
+All three talk to a RUNNING node over mTLS by default — use --context,
+or --addr with the credential flags. Pass --offline to open state.db
+directly instead; that path needs the node STOPPED, because bbolt takes
+an exclusive lock, and it exists for reading a cluster that will not
+start.
 
 subcommands:
   list             one line per conversation, plus its running summary
@@ -29,7 +30,32 @@ subcommands:
   search <text>    substring search across every transcript
 
 Read-only: forgetting a conversation is a replicated operation and goes
-through the running node, not through here.`
+through the running node's own path, not through here.`
+
+// sessionForms pairs each subcommand's live and offline implementation.
+//
+// A table rather than a switch so the ROUTING is a value a test can
+// assert. The bug worth catching is not a missing function — it is
+// `list` quietly reading a laptop-local state.db and printing
+// "Total sessions: 0" about a busy cluster.
+var sessionForms = map[string]struct{ live, offline func([]string) error }{
+	"list":   {live: sessionListLive, offline: sessionList},
+	"show":   {live: sessionShowLive, offline: sessionShow},
+	"search": {live: sessionSearchLive, offline: sessionSearch},
+}
+
+// sessionRoute returns the implementation for a subcommand, or nil if
+// there is none. Live is the default; --offline is the opt-out.
+func sessionRoute(sub string, offline bool) func([]string) error {
+	form, ok := sessionForms[sub]
+	if !ok {
+		return nil
+	}
+	if offline {
+		return form.offline
+	}
+	return form.live
+}
 
 // dispatchSession handles `lobslaw session <subcmd>`.
 func dispatchSession(args []string) bool {
@@ -42,18 +68,15 @@ func dispatchSession(args []string) bool {
 		fmt.Fprintln(os.Stderr, sessionUsage)
 		os.Exit(2)
 	}
-	switch sub[0] {
-	case "list":
-		runOffline("session list", sessionList, sub[1:])
-	case "show":
-		runOffline("session show", sessionShow, sub[1:])
-	case "search":
-		runOffline("session search", sessionSearch, sub[1:])
-	default:
+
+	rest, offline := takeOffline(sub[1:])
+	run := sessionRoute(sub[0], offline)
+	if run == nil {
 		fmt.Fprintf(os.Stderr, "lobslaw session: unknown subcommand %q\n\n", sub[0])
 		fmt.Fprintln(os.Stderr, sessionUsage)
 		os.Exit(2)
 	}
+	runOffline("session "+sub[0], run, rest)
 	return true
 }
 
@@ -68,7 +91,7 @@ func sessionList(args []string) error {
 		return err
 	}
 
-	store, _, err := opts.open()
+	store, path, err := opts.open()
 	if err != nil {
 		return err
 	}
@@ -78,30 +101,7 @@ func sessionList(args []string) error {
 	if err != nil {
 		return err
 	}
-
-	if *asJSON {
-		out := make([]map[string]any, 0, len(records))
-		for _, r := range records {
-			out = append(out, sessionFields(r))
-		}
-		return emitJSON(map[string]any{"sessions": out, "total": len(records)})
-	}
-
-	for _, r := range records {
-		fmt.Printf("\n  %s  channel=%s user=%s  retained=%d (seq %d..%d)  updated=%s\n",
-			r.Id, orNone(r.Channel), orNone(r.UserId), retained(r), r.FirstSeq, lastSeq(r), orNone(tsString(r.UpdatedAt)))
-		if r.Title != "" {
-			fmt.Printf("    title: %s\n", r.Title)
-		}
-		if r.Summary != "" {
-			fmt.Printf("    summary (through seq %d): %s\n", r.SummaryThroughSeq, collapse(r.Summary))
-		}
-	}
-	fmt.Printf("\nTotal sessions: %d\n", len(records))
-	if len(records) > 0 {
-		fmt.Println("run `lobslaw session show <id>` for a full transcript")
-	}
-	return nil
+	return renderSessionList(os.Stdout, records, path, *asJSON)
 }
 
 func sessionShow(args []string) error {
@@ -118,7 +118,7 @@ func sessionShow(args []string) error {
 	}
 	id := fs.Arg(0)
 
-	store, _, err := opts.open()
+	store, path, err := opts.open()
 	if err != nil {
 		return err
 	}
@@ -141,29 +141,7 @@ func sessionShow(args []string) error {
 		return err
 	}
 
-	if *asJSON {
-		out := make([]map[string]any, 0, len(msgs))
-		for _, m := range msgs {
-			out = append(out, messageFields(m, *trunc))
-		}
-		return emitJSON(map[string]any{"session": sessionFields(&rec), "messages": out})
-	}
-
-	fmt.Printf("%s  channel=%s user=%s  retained=%d (seq %d..%d)\n",
-		rec.Id, orNone(rec.Channel), orNone(rec.UserId), retained(&rec), rec.FirstSeq, lastSeq(&rec))
-	fmt.Printf("  title:   %s\n", orNone(rec.Title))
-	fmt.Printf("  created: %s\n", orNone(tsString(rec.CreatedAt)))
-	fmt.Printf("  updated: %s\n", orNone(tsString(rec.UpdatedAt)))
-	if rec.Summary != "" {
-		fmt.Printf("  summary (through seq %d, updated %s):\n    %s\n",
-			rec.SummaryThroughSeq, orNone(tsString(rec.SummaryUpdatedAt)), collapse(rec.Summary))
-	}
-	fmt.Println()
-	for _, m := range msgs {
-		fmt.Println(messageLine(m, *trunc))
-	}
-	fmt.Printf("\n%d message(s).\n", len(msgs))
-	return nil
+	return renderTranscript(os.Stdout, &rec, msgs, path, *trunc, *asJSON)
 }
 
 func sessionSearch(args []string) error {
@@ -183,7 +161,7 @@ func sessionSearch(args []string) error {
 	}
 	query := strings.Join(fs.Args(), " ")
 
-	store, _, err := opts.open()
+	store, path, err := opts.open()
 	if err != nil {
 		return err
 	}
@@ -204,82 +182,40 @@ func sessionSearch(args []string) error {
 		return err
 	}
 
-	if *asJSON {
-		out := make([]map[string]any, 0, len(hits))
-		for _, h := range hits {
-			sn := make([]map[string]any, 0, len(h.Snippets))
-			for _, s := range h.Snippets {
-				sn = append(sn, map[string]any{"seq": s.Seq, "role": s.Role, "text": s.Text})
-			}
-			out = append(out, map[string]any{
-				"session":  sessionFields(h.Session),
-				"matches":  h.Matches,
-				"snippets": sn,
-			})
-		}
-		return emitJSON(map[string]any{"query": query, "hits": out})
-	}
-
-	fmt.Printf("=== TRANSCRIPT SEARCH: %q ===\n", query)
-	if len(hits) == 0 {
-		fmt.Println("no matches")
-		return nil
-	}
+	// Converted to the wire shape so the two forms render through one
+	// function. A second renderer would drift, and the operator would
+	// be the one noticing that live and offline disagree about what a
+	// match looks like.
+	out := make([]*lobslawv1.SessionSearchHitProto, 0, len(hits))
 	for _, h := range hits {
-		title := h.Session.Title
-		if title == "" {
-			title = "(untitled)"
+		sn := make([]*lobslawv1.SessionSnippetProto, 0, len(h.Snippets))
+		for _, s := range h.Snippets {
+			sn = append(sn, &lobslawv1.SessionSnippetProto{Seq: s.Seq, Role: s.Role, Text: s.Text})
 		}
-		fmt.Printf("\n  %s [%s]  %d match(es)\n", title, h.Session.Id, h.Matches)
-		for _, sn := range h.Snippets {
-			fmt.Printf("    [#%d %s] %s\n", sn.Seq, sn.Role, collapse(sn.Text))
-		}
+		out = append(out, &lobslawv1.SessionSearchHitProto{
+			Session: h.Session,
+			//nolint:gosec // a match count is bounded by the transcript
+			Matches:  int32(h.Matches),
+			Snippets: sn,
+		})
 	}
-	return nil
+	return renderSessionHits(os.Stdout, out, query, path, *asJSON)
 }
 
 // listSessions reads the session index, applying the CLI filters and
 // sorting most-recently-updated first.
+//
+// The filtering lives in internal/memory so this and SessionService
+// answer with one definition of what "--channel telegram" selects.
 func listSessions(store *memory.Store, channel, user string) ([]*lobslawv1.SessionRecord, error) {
 	svc := memory.NewSessionService(nil, store, memory.SessionConfig{})
-	all, err := svc.List(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*lobslawv1.SessionRecord, 0, len(all))
-	for _, r := range all {
-		if channel != "" && r.Channel != channel {
-			continue
-		}
-		if user != "" && r.UserId != user {
-			continue
-		}
-		out = append(out, r)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return laterThan(out[i].UpdatedAt, out[j].UpdatedAt)
-	})
-	return out, nil
+	return svc.ListFiltered(context.Background(), channel, user)
 }
 
 // loadMessages reads one conversation's transcript in sequence order.
-// Message keys are "<session id>:<zero-padded seq>", so the thread is
-// an ordered prefix scan rather than a decrypt of every message in the
-// cluster.
 func loadMessages(store *memory.Store, id string) ([]*lobslawv1.SessionMessage, error) {
-	var out []*lobslawv1.SessionMessage
-	err := store.ForEachPrefix(memory.BucketSessionMessages, id+":", func(key string, raw []byte) error {
-		var m lobslawv1.SessionMessage
-		if err := proto.Unmarshal(raw, &m); err != nil {
-			return fmt.Errorf("unmarshal message %q: %w", key, err)
-		}
-		out = append(out, &m)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+	svc := memory.NewSessionService(nil, store, memory.SessionConfig{})
+	return svc.LoadMessages(context.Background(), id)
 }
 
 func messageLine(m *lobslawv1.SessionMessage, trunc int) string {
