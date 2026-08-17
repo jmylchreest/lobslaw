@@ -960,6 +960,8 @@ const (
 	MemoryService_Dream_FullMethodName        = "/lobslaw.v1.MemoryService/Dream"
 	MemoryService_Forget_FullMethodName       = "/lobslaw.v1.MemoryService/Forget"
 	MemoryService_FindClusters_FullMethodName = "/lobslaw.v1.MemoryService/FindClusters"
+	MemoryService_ListRecords_FullMethodName  = "/lobslaw.v1.MemoryService/ListRecords"
+	MemoryService_GetRecord_FullMethodName    = "/lobslaw.v1.MemoryService/GetRecord"
 )
 
 // MemoryServiceClient is the client API for MemoryService service.
@@ -977,6 +979,19 @@ type MemoryServiceClient interface {
 	// + union-find); no LLM. See docs/MEMORY.md for the composition
 	// pattern with the Adjudicator LLM interface.
 	FindClusters(ctx context.Context, in *FindClustersRequest, opts ...grpc.CallOption) (*FindClustersResponse, error)
+	// ListRecords browses the record buckets with the same filters
+	// `lobslaw memory list` has always had. Read-only.
+	//
+	// Unscoped, like Recall beside it: every read on this service returns
+	// whatever the store holds, and the listener it is registered on is
+	// mTLS-only. That is a property of the whole service rather than a
+	// decision taken here, and it is worth knowing before adding a
+	// caller that is not an operator or a node.
+	ListRecords(ctx context.Context, in *ListRecordsRequest, opts ...grpc.CallOption) (*ListRecordsResponse, error)
+	// GetRecord returns one record plus the consolidations that name it
+	// among their sources — which is exactly what forgetting it would
+	// take with it, and finding that out afterwards is too late.
+	GetRecord(ctx context.Context, in *GetRecordRequest, opts ...grpc.CallOption) (*GetRecordResponse, error)
 }
 
 type memoryServiceClient struct {
@@ -1057,6 +1072,26 @@ func (c *memoryServiceClient) FindClusters(ctx context.Context, in *FindClusters
 	return out, nil
 }
 
+func (c *memoryServiceClient) ListRecords(ctx context.Context, in *ListRecordsRequest, opts ...grpc.CallOption) (*ListRecordsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRecordsResponse)
+	err := c.cc.Invoke(ctx, MemoryService_ListRecords_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *memoryServiceClient) GetRecord(ctx context.Context, in *GetRecordRequest, opts ...grpc.CallOption) (*GetRecordResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRecordResponse)
+	err := c.cc.Invoke(ctx, MemoryService_GetRecord_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MemoryServiceServer is the server API for MemoryService service.
 // All implementations should embed UnimplementedMemoryServiceServer
 // for forward compatibility.
@@ -1072,6 +1107,19 @@ type MemoryServiceServer interface {
 	// + union-find); no LLM. See docs/MEMORY.md for the composition
 	// pattern with the Adjudicator LLM interface.
 	FindClusters(context.Context, *FindClustersRequest) (*FindClustersResponse, error)
+	// ListRecords browses the record buckets with the same filters
+	// `lobslaw memory list` has always had. Read-only.
+	//
+	// Unscoped, like Recall beside it: every read on this service returns
+	// whatever the store holds, and the listener it is registered on is
+	// mTLS-only. That is a property of the whole service rather than a
+	// decision taken here, and it is worth knowing before adding a
+	// caller that is not an operator or a node.
+	ListRecords(context.Context, *ListRecordsRequest) (*ListRecordsResponse, error)
+	// GetRecord returns one record plus the consolidations that name it
+	// among their sources — which is exactly what forgetting it would
+	// take with it, and finding that out afterwards is too late.
+	GetRecord(context.Context, *GetRecordRequest) (*GetRecordResponse, error)
 }
 
 // UnimplementedMemoryServiceServer should be embedded to have
@@ -1101,6 +1149,12 @@ func (UnimplementedMemoryServiceServer) Forget(context.Context, *ForgetRequest) 
 }
 func (UnimplementedMemoryServiceServer) FindClusters(context.Context, *FindClustersRequest) (*FindClustersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FindClusters not implemented")
+}
+func (UnimplementedMemoryServiceServer) ListRecords(context.Context, *ListRecordsRequest) (*ListRecordsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListRecords not implemented")
+}
+func (UnimplementedMemoryServiceServer) GetRecord(context.Context, *GetRecordRequest) (*GetRecordResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetRecord not implemented")
 }
 func (UnimplementedMemoryServiceServer) testEmbeddedByValue() {}
 
@@ -1248,6 +1302,42 @@ func _MemoryService_FindClusters_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MemoryService_ListRecords_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRecordsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).ListRecords(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_ListRecords_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).ListRecords(ctx, req.(*ListRecordsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MemoryService_GetRecord_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRecordRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).GetRecord(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_GetRecord_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).GetRecord(ctx, req.(*GetRecordRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MemoryService_ServiceDesc is the grpc.ServiceDesc for MemoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1282,6 +1372,14 @@ var MemoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FindClusters",
 			Handler:    _MemoryService_FindClusters_Handler,
+		},
+		{
+			MethodName: "ListRecords",
+			Handler:    _MemoryService_ListRecords_Handler,
+		},
+		{
+			MethodName: "GetRecord",
+			Handler:    _MemoryService_GetRecord_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

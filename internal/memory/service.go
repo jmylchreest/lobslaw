@@ -281,53 +281,30 @@ func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lo
 		before = req.Before.AsTime()
 	}
 
-	// Build the matched-set. Explicit ids are accepted as-is (caller
-	// already decided what to delete); query/tags/before feed the scan.
-	// Both paths can coexist: pass ids for explicit additions plus a
-	// query for broader matches, for instance.
-	matched := make(map[string]struct{}, len(req.Ids))
-	for _, id := range req.Ids {
-		if id != "" {
-			matched[id] = struct{}{}
-		}
-	}
-	if req.Query != "" || req.Before != nil || len(req.Tags) > 0 {
-		scanned, err := forgetScan(s.store, req.Query, before, req.Tags)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "forget scan: %v", err)
-		}
-		for id := range scanned {
-			matched[id] = struct{}{}
-		}
-	}
-
-	// Drop anything the requester may not read before anything is
-	// deleted. Forget cascades through SourceIds and is irreversible,
-	// so this has to happen before the cascade, not after: a record
-	// filtered out here must not pull its consolidations down with it.
-	if err := retainForgettable(s.store, matched, forgetAudience(req.Requester)); err != nil {
-		return nil, status.Errorf(codes.Internal, "forget scope: %v", err)
-	}
-
-	swept, err := forgetCascade(s.store, matched)
+	// One definition of what a forget matches, shared with the offline
+	// path. The scoping happens inside, between matching and cascading,
+	// because a record the requester may not read must not pull its
+	// consolidations down with it.
+	plan, err := PlanForgetFor(s.store, ForgetQuery{
+		IDs:    req.Ids,
+		Text:   req.Query,
+		Before: before,
+		Tags:   req.Tags,
+	}, forgetAudience(req.Requester))
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "forget cascade: %v", err)
+		return nil, status.Errorf(codes.Internal, "forget plan: %v", err)
 	}
 
-	// Delete each matched and swept record through Raft. We don't know
-	// the bucket of each id at this layer; the FSM-level dispatch
-	// requires the record type, so we issue deletes with a VectorRecord
-	// payload stub as the type discriminator. The actual bucket is
-	// determined from the SourceIDs we already saw — but both buckets
-	// use the same-id-space so we try both for robustness.
-	for id := range matched {
-		if err := s.deleteFromBothBuckets(ctx, id); err != nil {
-			return nil, status.Errorf(codes.Internal, "delete %q: %v", id, err)
+	if !req.DryRun {
+		for _, id := range plan.Matched {
+			if derr := s.deleteFromBothBuckets(ctx, id); derr != nil {
+				return nil, status.Errorf(codes.Internal, "delete %q: %v", id, derr)
+			}
 		}
-	}
-	for id := range swept {
-		if err := s.deleteFromBothBuckets(ctx, id); err != nil {
-			return nil, status.Errorf(codes.Internal, "delete cascade %q: %v", id, err)
+		for _, id := range plan.Swept {
+			if derr := s.deleteFromBothBuckets(ctx, id); derr != nil {
+				return nil, status.Errorf(codes.Internal, "delete cascade %q: %v", id, derr)
+			}
 		}
 	}
 
@@ -335,13 +312,20 @@ func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lo
 		"query", req.Query,
 		"before", before,
 		"tags", req.Tags,
-		"direct", len(matched),
-		"cascaded", len(swept),
+		"direct", len(plan.Matched),
+		"cascaded", len(plan.Swept),
+		"missing", len(plan.Missing),
+		"dry_run", req.DryRun,
 	)
 
 	return &lobslawv1.ForgetResponse{
-		RecordsRemoved:         int32(len(matched)),
-		ConsolidationsReforged: int32(len(swept)),
+		//nolint:gosec // plan sizes are bounded by the store, not by a caller
+		RecordsRemoved: int32(len(plan.Matched)),
+		//nolint:gosec // plan sizes are bounded by the store, not by a caller
+		ConsolidationsReforged: int32(len(plan.Swept)),
+		Matched:                plan.Matched,
+		Swept:                  plan.Swept,
+		Missing:                plan.Missing,
 	}, nil
 }
 

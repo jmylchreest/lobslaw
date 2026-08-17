@@ -3626,8 +3626,8 @@ read as though it were the cluster's, and answering confidently with nothing in 
       `contexts.toml` block for the credential it just signed, and a test loads that printed
       block back — a snippet that does not parse sends the operator to a "no such file" error
       about a credential sitting right there.
-- [ ] `memory`, `policy` and `audit` work against a remote node.
-      **`audit` is done; `policy` and `memory` are blocked on RPCs that do not exist.**
+- [x] `memory`, `policy` and `audit` work against a remote node.
+      **All three, though "rewiring, not new protocol" only held for `audit`.**
 
       `audit query` and `audit verify` now talk to a running node by default, with `--offline`
       as the forensic opt-out for a cluster that will not start. Where the answer came from is
@@ -3661,6 +3661,24 @@ read as though it were the cluster's, and answering confidently with nothing in 
       not minted by an approval is *refused*; an id that does not exist is *not found*. Kept
       apart because they are different mistakes, and "not revoked" without saying which leaves
       the operator to guess.
+
+      **`memory show`, `list` and `forget` are live**, and the scan moved to `internal/memory` so
+      both sides of the wire answer with one definition of what each filter means. `share`,
+      `unshare` and `consolidations` have no live form yet — they still run, and they SAY SO on
+      stderr rather than quietly reading a local `state.db` that is not the cluster's. Announcing
+      it beats refusing a command that works to make a point about a flag.
+
+      Two things the live `forget` needed that the RPC did not have. **A dry run** — `memory
+      forget` has always been one unless `--apply`, and forget is irreversible, so the remote
+      form must not be the one that deletes on the first try. And **the resolved plan**: matched,
+      swept, and requested ids that do not exist.
+
+      `Service.Forget` also carried its own copy of the matching, while the comment on
+      `ForgetQuery` claimed the CLI and the RPC "cannot diverge on what forget these means" — a
+      claim with two implementations either side of it. They share `PlanForgetFor` now, and the
+      requester scoping happens where it has to: BETWEEN matching and cascading. A record the
+      caller may not read must leave the matched set before the cascade runs, or it pulls its
+      consolidations down with it and deletes through a record they were never allowed to see.
 - [ ] `session` and `identity` have services and live forms.
 - [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a
       remote cluster.

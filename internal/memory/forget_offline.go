@@ -57,6 +57,23 @@ func (p ForgetPlan) Total() int { return len(p.Matched) + len(p.Swept) }
 // delete, without deleting anything. Split from ApplyForgetPlan so an
 // offline caller can show the operator the blast radius first.
 func PlanForget(store *Store, q ForgetQuery) (ForgetPlan, error) {
+	return PlanForgetFor(store, q, Everyone())
+}
+
+// PlanForgetFor is PlanForget with a requester's read scope applied
+// BETWEEN matching and cascading.
+//
+// The ordering is the point. Forget cascades through SourceIds and is
+// irreversible, so a record the requester may not read has to leave
+// the matched set before the cascade runs — otherwise it would pull
+// its consolidations down with it, deleting through a record the
+// caller was never allowed to see.
+//
+// Service.Forget used to carry its own copy of this matching, and the
+// comment on ForgetQuery claimed the CLI and the RPC "cannot diverge
+// on what forget these means" while two implementations sat either
+// side of the wire. This is the one they now share.
+func PlanForgetFor(store *Store, q ForgetQuery, audience Audience) (ForgetPlan, error) {
 	matched := make(map[string]struct{}, len(q.IDs))
 	var missing []string
 	for _, id := range q.IDs {
@@ -82,6 +99,10 @@ func PlanForget(store *Store, q ForgetQuery) (ForgetPlan, error) {
 		for id := range scanned {
 			matched[id] = struct{}{}
 		}
+	}
+
+	if err := retainForgettable(store, matched, audience); err != nil {
+		return ForgetPlan{}, fmt.Errorf("forget scope: %w", err)
 	}
 
 	swept, err := forgetCascade(store, matched)

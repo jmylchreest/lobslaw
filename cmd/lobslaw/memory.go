@@ -5,8 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,26 +18,69 @@ import (
 )
 
 // memoryUsage is printed for a bare `lobslaw memory` and for an
-// unknown subcommand. The stopped-node constraint lives here, once,
-// rather than being repeated on five subcommands that all share it.
-const memoryUsage = `lobslaw memory — read and edit the memory store offline
+// unknown subcommand.
+const memoryUsage = `lobslaw memory — read and edit the memory store
 
-The node must be STOPPED. These subcommands open state.db directly and
-bbolt takes an exclusive lock on the file, so a running node makes every
-one of them fail.
+show, list and forget talk to a RUNNING node over mTLS by default —
+use --context, or --addr with the credential flags. Pass --offline to
+open state.db directly instead; that path needs the node STOPPED,
+because bbolt takes an exclusive lock, and it exists for reading a
+cluster that will not start.
 
 subcommands:
   show <id>        print one vector or episodic record in full
   list             list records, with filters
   forget <filter>  delete records AND the consolidations built from them
-  share <id>...    make owned records readable cluster-wide
-  unshare <id>...  return shared records to their owner only
-  consolidations   what Dream merged, superseded or left alone, and why
+  share <id>...    make owned records readable cluster-wide (offline)
+  unshare <id>...  return shared records to their owner only (offline)
+  consolidations   what Dream merged, superseded or left alone (offline)
 
 forget, share and unshare are DRY RUN unless --apply is given.
 
 Adding records is deliberately absent: a memory needs an embedding to
 be findable and the CLI has no embedder wired.`
+
+// memoryForms pairs each subcommand's live and offline implementation.
+//
+// A table rather than a switch so the ROUTING is a value a test can
+// assert. The bug worth catching is not a missing function — it is
+// `list` quietly reading a laptop-local state.db and reporting an
+// empty store as an empty cluster.
+//
+// share, unshare and consolidations are offline-only for now: they
+// need RPCs that do not exist, and pretending otherwise would be worse
+// than saying so.
+var memoryForms = map[string]struct{ live, offline func([]string) error }{
+	"show":   {live: memoryShowLive, offline: memoryShow},
+	"list":   {live: memoryListLive, offline: memoryList},
+	"forget": {live: memoryForgetLive, offline: memoryForget},
+}
+
+// memoryOfflineOnly are the subcommands with no live form yet.
+var memoryOfflineOnly = map[string]func([]string) error{
+	"share":          memoryShare,
+	"unshare":        memoryUnshare,
+	"consolidations": memoryConsolidations,
+}
+
+// memoryRoute returns the implementation for a subcommand, or nil if
+// there is none. Live is the default; --offline is the opt-out.
+//
+// An offline-only subcommand runs offline whether or not the flag was
+// given, and says so — the alternative is refusing a command that
+// works, to make a point about a flag.
+func memoryRoute(sub string, offline bool) (fn func([]string) error, liveMissing bool) {
+	if form, ok := memoryForms[sub]; ok {
+		if offline {
+			return form.offline, false
+		}
+		return form.live, false
+	}
+	if fn, ok := memoryOfflineOnly[sub]; ok {
+		return fn, !offline
+	}
+	return nil, false
+}
 
 // dispatchMemory handles `lobslaw memory <subcmd>`. Returns true if it
 // handled the args.
@@ -51,24 +94,24 @@ func dispatchMemory(args []string) bool {
 		fmt.Fprintln(os.Stderr, memoryUsage)
 		os.Exit(2)
 	}
-	switch sub[0] {
-	case "show":
-		runOffline("memory show", memoryShow, sub[1:])
-	case "list":
-		runOffline("memory list", memoryList, sub[1:])
-	case "forget":
-		runOffline("memory forget", memoryForget, sub[1:])
-	case "share":
-		runOffline("memory share", memoryShare, sub[1:])
-	case "consolidations":
-		runOffline("memory consolidations", memoryConsolidations, sub[1:])
-	case "unshare":
-		runOffline("memory unshare", memoryUnshare, sub[1:])
-	default:
+
+	rest, offline := takeOffline(sub[1:])
+	run, liveMissing := memoryRoute(sub[0], offline)
+	if run == nil {
 		fmt.Fprintf(os.Stderr, "lobslaw memory: unknown subcommand %q\n\n", sub[0])
 		fmt.Fprintln(os.Stderr, memoryUsage)
 		os.Exit(2)
 	}
+	if liveMissing {
+		// Announced rather than silent. Somebody who did not pass
+		// --offline believes they are talking to the cluster, and a
+		// command that quietly opened a local state.db instead is the
+		// exact failure this work exists to remove.
+		fmt.Fprintf(os.Stderr,
+			"lobslaw memory %s: no live form yet — running against a local state.db, "+
+				"which is NOT the cluster's unless this machine is the node\n", sub[0])
+	}
+	runOffline("memory "+sub[0], run, rest)
 	return true
 }
 
@@ -125,24 +168,7 @@ func memoryShow(args []string) error {
 		})
 	}
 
-	fmt.Printf("%s %s\n", rec.kind(), rec.id())
-	fields := rec.fields()
-	for _, k := range rec.fieldOrder() {
-		v := fields[k]
-		if isEmptyField(v) {
-			continue
-		}
-		fmt.Printf("  %-12s %v\n", k+":", v)
-	}
-	if rec.owner() == "" {
-		fmt.Println("  " + unownedNote)
-	}
-	if len(refs) > 0 {
-		fmt.Printf("\n  referenced by %d consolidation(s) — forgetting this record sweeps them too:\n", len(refs))
-		for _, r := range refs {
-			fmt.Printf("    %s\n", r)
-		}
-	}
+	printRecord(os.Stdout, rec, refs)
 	return nil
 }
 
@@ -150,21 +176,19 @@ func memoryList(args []string) error {
 	fs := flag.NewFlagSet("memory list", flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
-	var filter memoryListFilter
-	kind := fs.String("kind", "all", "which records to list: all|vector|episodic")
-	fs.StringVar(&filter.owner, "owner", "", "only records with this exact owner")
-	fs.StringVar(&filter.scope, "scope", "", "only vector records with this scope")
-	fs.StringVar(&filter.tag, "tag", "", "only episodic records carrying this tag")
-	fs.BoolVar(&filter.unowned, "unowned", false, "only records with no owner")
-	limit := fs.Int("limit", 0, "cap records shown per kind (0 = no cap), newest first")
+	var filter memory.RecordFilter
+	fs.StringVar(&filter.Kind, "kind", "all", "which records to list: all|vector|episodic")
+	fs.StringVar(&filter.Owner, "owner", "", "only records with this exact owner")
+	fs.StringVar(&filter.Scope, "scope", "", "only vector records with this scope")
+	fs.StringVar(&filter.Tag, "tag", "", "only episodic records carrying this tag")
+	fs.BoolVar(&filter.Unowned, "unowned", false, "only records with no owner")
+	fs.IntVar(&filter.Limit, "limit", 0, "cap records shown per kind (0 = no cap), newest first")
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	switch *kind {
-	case "all", "vector", "episodic":
-	default:
-		return fmt.Errorf("--kind must be all, vector or episodic (got %q)", *kind)
+	if err := filter.Validate(); err != nil {
+		return err
 	}
 
 	store, _, err := opts.open()
@@ -173,7 +197,7 @@ func memoryList(args []string) error {
 	}
 	defer func() { _ = store.Close() }()
 
-	page, err := collectRecords(store, *kind, filter, *limit)
+	page, err := collectRecords(store, filter)
 	if err != nil {
 		return err
 	}
@@ -184,39 +208,10 @@ func memoryList(args []string) error {
 	return nil
 }
 
-// memoryListFilter is the set of `memory list` predicates. Scope only
-// exists on vector records and tags only on episodic ones, so either
-// filter excludes the other kind outright rather than silently
-// matching none of it.
-type memoryListFilter struct {
-	owner   string
-	scope   string
-	tag     string
-	unowned bool
-}
-
-func (f memoryListFilter) keepVector(v *lobslawv1.VectorRecord) bool {
-	if f.tag != "" {
-		return false
-	}
-	if f.scope != "" && v.Scope != f.scope {
-		return false
-	}
-	return ownerMatches(v.Owner, f.owner, f.unowned)
-}
-
-func (f memoryListFilter) keepEpisodic(e *lobslawv1.EpisodicRecord) bool {
-	if f.scope != "" {
-		return false
-	}
-	if f.tag != "" && !containsString(e.Tags, f.tag) {
-		return false
-	}
-	return ownerMatches(e.Owner, f.owner, f.unowned)
-}
-
-// recordPage is a rendered-ready slice of the store: what matched,
-// what is being shown after --limit, and how much of it is anomalous.
+// recordPage is a rendered-ready view of a scan. The scan itself lives
+// in internal/memory, because MemoryService answers the same question
+// and two implementations of "--unowned" would drift the day somebody
+// fixed a filter in one of them.
 type recordPage struct {
 	vectors   []*lobslawv1.VectorRecord
 	episodics []*lobslawv1.EpisodicRecord
@@ -225,68 +220,22 @@ type recordPage struct {
 	unowned   int
 }
 
-func collectRecords(store *memory.Store, kind string, filter memoryListFilter, limit int) (recordPage, error) {
-	var page recordPage
-
-	if kind != "episodic" {
-		err := store.ForEach(memory.BucketVectorRecords, func(key string, raw []byte) error {
-			var v lobslawv1.VectorRecord
-			if err := proto.Unmarshal(raw, &v); err != nil {
-				return fmt.Errorf("unmarshal vector %q: %w", key, err)
-			}
-			if !filter.keepVector(&v) {
-				return nil
-			}
-			if v.Owner == "" {
-				page.unowned++
-			}
-			page.vectors = append(page.vectors, &v)
-			return nil
-		})
-		if err != nil {
-			return recordPage{}, err
-		}
+func pageFrom(p memory.RecordPage) recordPage {
+	return recordPage{
+		vectors:   p.Vectors,
+		episodics: p.Episodics,
+		totalV:    p.VectorTotal,
+		totalE:    p.EpisodicTotal,
+		unowned:   p.Unowned,
 	}
+}
 
-	if kind != "vector" {
-		err := store.ForEach(memory.BucketEpisodicRecords, func(key string, raw []byte) error {
-			var e lobslawv1.EpisodicRecord
-			if err := proto.Unmarshal(raw, &e); err != nil {
-				return fmt.Errorf("unmarshal episodic %q: %w", key, err)
-			}
-			if !filter.keepEpisodic(&e) {
-				return nil
-			}
-			if e.Owner == "" {
-				page.unowned++
-			}
-			page.episodics = append(page.episodics, &e)
-			return nil
-		})
-		if err != nil {
-			return recordPage{}, err
-		}
+func collectRecords(store *memory.Store, filter memory.RecordFilter) (recordPage, error) {
+	page, err := memory.QueryRecords(store, filter)
+	if err != nil {
+		return recordPage{}, err
 	}
-
-	// Newest first: an operator scanning a store is nearly always
-	// looking at what happened recently.
-	sort.SliceStable(page.vectors, func(i, j int) bool {
-		return laterThan(page.vectors[i].CreatedAt, page.vectors[j].CreatedAt)
-	})
-	sort.SliceStable(page.episodics, func(i, j int) bool {
-		return laterThan(page.episodics[i].Timestamp, page.episodics[j].Timestamp)
-	})
-
-	page.totalV, page.totalE = len(page.vectors), len(page.episodics)
-	if limit > 0 {
-		if len(page.vectors) > limit {
-			page.vectors = page.vectors[:limit]
-		}
-		if len(page.episodics) > limit {
-			page.episodics = page.episodics[:limit]
-		}
-	}
-	return page, nil
+	return pageFrom(page), nil
 }
 
 func (p recordPage) json() map[string]any {
@@ -402,24 +351,7 @@ func memoryForget(args []string) error {
 		})
 	}
 
-	fmt.Printf("%s\n", path)
-	fmt.Printf("matched:   %d record(s)\n", len(plan.Matched))
-	printSample(plan.Matched)
-	fmt.Printf("cascade:   %d consolidation(s) whose sources are in the matched set\n", len(plan.Swept))
-	printSample(plan.Swept)
-	if len(plan.Missing) > 0 {
-		fmt.Printf("not found: %d requested id(s) — %s\n", len(plan.Missing), strings.Join(plan.Missing, ", "))
-	}
-	fmt.Printf("total:     %d record(s)\n", plan.Total())
-
-	switch {
-	case plan.Total() == 0:
-		fmt.Println("\nnothing to do.")
-	case *apply:
-		fmt.Printf("\nDELETED %d record(s).\n", plan.Total())
-	default:
-		fmt.Println("\nDRY RUN — nothing was written. Re-run with --apply to delete.")
-	}
+	printForgetPlan(os.Stdout, path, plan.Matched, plan.Swept, plan.Missing, *apply)
 	return nil
 }
 
@@ -598,28 +530,14 @@ type memRecord struct {
 // loadMemRecord finds id in either record bucket, returning (nil, nil)
 // when it is in neither.
 func loadMemRecord(store *memory.Store, id string) (*memRecord, error) {
-	raw, err := store.Get(memory.BucketVectorRecords, id)
+	v, e, err := memory.FindRecord(store, id)
 	switch {
-	case err == nil:
-		var v lobslawv1.VectorRecord
-		if err := proto.Unmarshal(raw, &v); err != nil {
-			return nil, fmt.Errorf("unmarshal vector %q: %w", id, err)
-		}
-		return &memRecord{bucket: memory.BucketVectorRecords, vector: &v}, nil
-	case !memory.IsNotFound(err):
+	case err != nil:
 		return nil, err
-	}
-
-	raw, err = store.Get(memory.BucketEpisodicRecords, id)
-	switch {
-	case err == nil:
-		var e lobslawv1.EpisodicRecord
-		if err := proto.Unmarshal(raw, &e); err != nil {
-			return nil, fmt.Errorf("unmarshal episodic %q: %w", id, err)
-		}
-		return &memRecord{bucket: memory.BucketEpisodicRecords, episodic: &e}, nil
-	case !memory.IsNotFound(err):
-		return nil, err
+	case v != nil:
+		return &memRecord{bucket: memory.BucketVectorRecords, vector: v}, nil
+	case e != nil:
+		return &memRecord{bucket: memory.BucketEpisodicRecords, episodic: e}, nil
 	}
 	return nil, nil
 }
@@ -737,35 +655,7 @@ func episodicLine(e *lobslawv1.EpisodicRecord) string {
 // referencedBy lists the consolidations that name id among their
 // sources — exactly the set forget would cascade into.
 func referencedBy(store *memory.Store, id string) ([]string, error) {
-	var out []string
-	err := store.ForEach(memory.BucketVectorRecords, func(key string, raw []byte) error {
-		var v lobslawv1.VectorRecord
-		if err := proto.Unmarshal(raw, &v); err != nil {
-			return fmt.Errorf("unmarshal vector %q: %w", key, err)
-		}
-		if containsString(v.SourceIds, id) {
-			out = append(out, v.Id)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	err = store.ForEach(memory.BucketEpisodicRecords, func(key string, raw []byte) error {
-		var e lobslawv1.EpisodicRecord
-		if err := proto.Unmarshal(raw, &e); err != nil {
-			return fmt.Errorf("unmarshal episodic %q: %w", key, err)
-		}
-		if containsString(e.SourceIds, id) {
-			out = append(out, e.Id)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(out)
-	return out, nil
+	return memory.ReferencedBy(store, id)
 }
 
 // stringList collects a repeatable string flag.
@@ -797,13 +687,13 @@ func parseBefore(s string) (time.Time, error) {
 // what is about to go, short enough to read.
 const sampleSize = 10
 
-func printSample(ids []string) {
+func fprintSample(w io.Writer, ids []string) {
 	for i, id := range ids {
 		if i == sampleSize {
-			fmt.Printf("             … and %d more\n", len(ids)-sampleSize)
+			_, _ = fmt.Fprintf(w, "             … and %d more\n", len(ids)-sampleSize)
 			return
 		}
-		fmt.Printf("             %s\n", id)
+		_, _ = fmt.Fprintf(w, "             %s\n", id)
 	}
 }
 
@@ -832,13 +722,6 @@ func isEmptyField(v any) bool {
 	}
 }
 
-func ownerMatches(owner, want string, unownedOnly bool) bool {
-	if unownedOnly {
-		return owner == ""
-	}
-	return want == "" || owner == want
-}
-
 func ownedMarker(owner string) string {
 	if owner == "" {
 		return "!"
@@ -861,15 +744,11 @@ func tsString(ts *timestamppb.Timestamp) string {
 	return ts.AsTime().UTC().Format("2006-01-02 15:04:05 UTC")
 }
 
+// laterThan orders by timestamp, treating a missing one as oldest.
+// Shared with session listing; the ordering rule itself lives in
+// internal/memory so the scan and the renderers cannot disagree.
 func laterThan(a, b *timestamppb.Timestamp) bool {
-	switch {
-	case a == nil:
-		return false
-	case b == nil:
-		return true
-	default:
-		return a.AsTime().After(b.AsTime())
-	}
+	return memory.LaterThan(a, b)
 }
 
 func orNone(s string) string {
@@ -884,15 +763,6 @@ func shownOf(shown, total int) string {
 		return fmt.Sprintf("%d", total)
 	}
 	return fmt.Sprintf("%d of %d", shown, total)
-}
-
-func containsString(hay []string, needle string) bool {
-	for _, s := range hay {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // collapse flattens whitespace so a multi-line field stays on one

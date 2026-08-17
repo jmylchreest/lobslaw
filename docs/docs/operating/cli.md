@@ -29,12 +29,13 @@ lobslaw audit              # the tamper-evident record
 lobslaw policy             # see and undo "always" approvals
   policy approvals         # list the rules an approval minted
   policy revoke-approvals  # delete them, all or by id
-lobslaw memory             # read + edit the memory store (node must be STOPPED)
+lobslaw memory             # read + edit the memory store
   memory show <id>         # one record in full
   memory list              # list vector + episodic records
   memory forget            # delete records and their consolidations
-  memory share <id>...     # make owned records readable cluster-wide
-  memory unshare <id>...   # return shared records to their owner only
+  memory share <id>...     # make owned records readable cluster-wide (offline)
+  memory unshare <id>...   # return shared records to their owner only (offline)
+  memory consolidations    # what Dream merged, superseded or left alone (offline)
 lobslaw session            # read conversation transcripts (node must be STOPPED)
   session list             # one line per conversation
   session show <id>        # full transcript
@@ -270,11 +271,48 @@ found*. Those are different mistakes with different fixes.
 
 ## `lobslaw memory` and `lobslaw session`
 
-### Stop the node first
+### `memory show`, `list` and `forget` talk to a running node
 
-Both groups open the node's `state.db` directly. bbolt takes an **exclusive
-file lock**, so a running node makes every subcommand in both groups fail
-after a five-second wait with:
+```bash
+lobslaw memory list --context prod --kind episodic --tag meeting
+lobslaw memory show --context prod <id>
+lobslaw memory forget --context prod --tag scratch --apply
+```
+
+Reading the store only from the local filesystem made these the record of what
+*this machine* remembers — which on a laptop is nothing, and an empty listing
+reads as an empty cluster. Live is the default; `--offline` opens `state.db`
+directly and needs the node stopped (see below).
+
+`memory share`, `unshare` and `consolidations` have **no live form yet**. They
+still run, and they say so on stderr rather than quietly reading a local
+`state.db` that is not the cluster's.
+
+`forget` is a **dry run unless `--apply`**, in both forms. It is irreversible
+and it cascades: a consolidation whose sources are deleted is deleted too,
+because keeping a summary of removed records leaks the removed content through
+the summary's own text and embedding. The dry run names both sets, plus any
+requested id that does not exist — for a hand-typed id, "no such record" is
+nearly always a typo, and a forget that quietly deletes nothing is the worst
+outcome.
+
+`--requester <principal>` runs the forget on somebody's behalf: records that
+principal may not read are left alone, and — crucially — they are dropped
+*before* the cascade runs, so they cannot pull their consolidations down with
+them. Omitting it is the operator's unrestricted view.
+
+Filters: `--kind all|vector|episodic`, `--owner`, `--scope` (vector only),
+`--tag` (episodic only), `--unowned`, `--limit`. `--scope` and `--tag` exclude
+the other kind outright rather than returning it unfiltered. `--unowned` is not
+the same as an empty `--owner`: it selects records belonging to no principal at
+all. A truncated listing reports the pre-limit totals, so "20 of 400" never
+reads as 400.
+
+### Stop the node first — for the offline path
+
+`--offline`, and every subcommand in the `session` group, open the node's
+`state.db` directly. bbolt takes an **exclusive file lock**, so a running node
+makes them fail after a five-second wait with:
 
 ```
 state.db at /var/lib/lobslaw/data/state.db is locked by another process —
@@ -286,7 +324,7 @@ command, start it again.
 
 ### Locating the store
 
-Every subcommand in both groups accepts the same four flags:
+The offline path in both groups accepts the same four flags:
 
 ```
 --config <path>          # reads [cluster] data_dir and [memory.encryption] key_ref

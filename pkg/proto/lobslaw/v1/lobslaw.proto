@@ -304,6 +304,56 @@ service MemoryService {
   // + union-find); no LLM. See docs/MEMORY.md for the composition
   // pattern with the Adjudicator LLM interface.
   rpc FindClusters(FindClustersRequest) returns (FindClustersResponse);
+  // ListRecords browses the record buckets with the same filters
+  // `lobslaw memory list` has always had. Read-only.
+  //
+  // Unscoped, like Recall beside it: every read on this service returns
+  // whatever the store holds, and the listener it is registered on is
+  // mTLS-only. That is a property of the whole service rather than a
+  // decision taken here, and it is worth knowing before adding a
+  // caller that is not an operator or a node.
+  rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
+  // GetRecord returns one record plus the consolidations that name it
+  // among their sources — which is exactly what forgetting it would
+  // take with it, and finding that out afterwards is too late.
+  rpc GetRecord(GetRecordRequest) returns (GetRecordResponse);
+}
+
+message ListRecordsRequest {
+  // "" or "all" | "vector" | "episodic". An unrecognised value is an
+  // error rather than a silent "all": a mistyped kind that meant
+  // everything would show records the caller asked to exclude.
+  string kind = 1;
+  string owner = 2;
+  // scope only exists on vector records and tag only on episodic ones,
+  // so either one excludes the other kind outright.
+  string scope = 3;
+  string tag = 4;
+  // unowned selects records belonging to no principal, which is a
+  // different question from an empty owner filter.
+  bool unowned = 5;
+  // limit caps each kind separately. The totals below are the counts
+  // BEFORE the limit, so a truncated listing can say what it is not
+  // showing rather than implying it is everything.
+  int32 limit = 6;
+}
+message ListRecordsResponse {
+  repeated VectorRecord vectors = 1;
+  repeated EpisodicRecord episodics = 2;
+  int32 vector_total = 3;
+  int32 episodic_total = 4;
+  int32 unowned = 5;
+}
+
+message GetRecordRequest {
+  string id = 1;
+}
+message GetRecordResponse {
+  // Exactly one of these is set. Both empty means no such record,
+  // reported as NOT_FOUND rather than as an empty success.
+  VectorRecord vector = 1;
+  EpisodicRecord episodic = 2;
+  repeated string referenced_by = 3;
 }
 
 // Retention governs how long a memory record lives before it's a
@@ -447,10 +497,28 @@ message ForgetRequest {
   // reaching this over mTLS. The agent's memory_forget always sets it
   // from the turn.
   string requester = 5;
+  // dry_run resolves the blast radius and writes nothing.
+  //
+  // `lobslaw memory forget` has always been a dry run unless --apply,
+  // and the live form must not be the one that deletes on the first
+  // try. Forget is irreversible: it cascades through SourceIds, so
+  // "just run it and see" is not available.
+  bool dry_run = 6;
 }
 message ForgetResponse {
   int32 records_removed = 1;
+  // Named "reforged" historically; these consolidations are DELETED,
+  // because keeping a summary whose sources are gone leaks the deleted
+  // content through the summary's own text and embedding.
   int32 consolidations_reforged = 2;
+  // The resolved plan, populated on a dry run and on a real one alike.
+  repeated string matched = 3;
+  repeated string swept = 4;
+  // missing are requested ids that exist in neither record bucket.
+  // Reported rather than silently dropped: for a hand-typed id, "no
+  // such record" is nearly always a typo, and a forget that quietly
+  // deletes nothing is the worst outcome.
+  repeated string missing = 5;
 }
 
 // FindClusters groups near-duplicate VectorRecords for the Dream-

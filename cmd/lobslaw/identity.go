@@ -141,7 +141,7 @@ func identityRebind(args []string) error {
 	for _, bucket := range sortedKeys(plan.Changes) {
 		ids := plan.Changes[bucket]
 		fmt.Printf("  %-20s %d record(s)\n", bucket, len(ids))
-		printSample(ids)
+		fprintSample(os.Stdout, ids)
 	}
 	for _, c := range plan.Conflicts {
 		fmt.Printf("  SKIPPED: %s\n", c)
