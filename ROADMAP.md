@@ -79,6 +79,7 @@ Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detai
 | **R33** | [Delegation as a primitive](#r33--delegation-as-a-primitive) | ⬜ | 🟠 P1 | M | — |
 | **R34** | [Skill bundles and the bootstrap](#r34--skill-bundles-and-the-bootstrap) | ⬜ | 🟠 P1 | M | — |
 | **R35** | [What the sandbox actually enforces](#r35--what-the-sandbox-actually-enforces) | ⬜ | 🔴 P0 | M | — |
+| **R36** | [The agent cannot say what it can do](#r36--the-agent-cannot-say-what-it-can-do) | ⬜ | 🟠 P1 | M | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -4838,3 +4839,119 @@ ordering rationale above while there.
 - [ ] `SANDBOX.md` states which mechanism covers which concern, the install ordering and why, and
       what none of them cover.
 - [ ] `netfilter/doc.go` no longer describes its own wiring as a follow-up step.
+
+---
+
+## R36 — the agent cannot say what it can do
+
+⬜ **Not started.** 🟠 P1.
+
+### Problem
+
+Found by asking a running bot three ordinary questions. All three answers were wrong, and none of
+them was a model failure — each one is a missing surface, and the model behaved reasonably given
+what it had.
+
+**"Do you have any proposed learnings?"** — *"There are currently no proposed learnings or recent
+memories stored that qualify for episodic retention."* Meanwhile `lobslaw learned list` showed two:
+
+```
+skill:Triage Incident        skill  proposed   taught by turn rest-01M0BCMD0F1ZR9RXW9MM0AD4XD
+skill:Prepare Release Notes  skill  proposed   taught by turn rest-01M0B5JKVH6B9QNHS7YSNDFHVW
+```
+
+The phrase *"qualify for episodic retention"* is `memory_recent`'s own vocabulary — its description
+reads "filter by retention (session|episodic|long-term)". The agent queried the **episodic store**,
+got a truthful empty, and reported it. Its proposals live in `BucketSelfTaught`, which **no builtin
+tool can read.** Fifty-six builtins; none of them touch it. The store's only readers are the review
+fork (writes), the curator (lifecycle) and `SelfLearningService` over gRPC, which is what
+`lobslaw learned` talks to.
+
+**"What skills do you have?"** — it rendered a table of **providers**, headed *Capabilities*: chat,
+vision, image, speak. Those are modalities. `list_providers`' description ends *"Use when the user
+asks who's available, **which model does what**"*, which is close enough to "what can you do" to
+attract the call, and it is the only inventory-shaped tool in the set.
+
+**"Can you search clawhub for skills?"** — a 404. There is no search. `internal/clawhub` exposes
+`GetSkill(name, version)` and two bundle downloads, and `clawhub_install` takes a slug or a
+name+version. **Discovery is not merely unimplemented, it is not expressible:** you must already
+know the exact identifier before the catalogue can tell you anything.
+
+### The shape
+
+Asked what it knows, the agent has exactly one source: a static system-prompt section.
+`BuildSkills` renders `"(none installed)"` when the list is empty, and that answer was *correct* —
+the corpus is empty ([R34](#r34--skill-bundles-and-the-bootstrap)) and PROPOSED artefacts are
+deliberately not materialised. But there is nothing behind the string. **No tool enumerates skills**
+— `skill_view` requires a name you must already have — **no tool reads proposals, and no tool
+searches the catalogue.** Three questions about its own capabilities, three dead ends, and in two of
+them it answered confidently rather than saying it could not tell.
+
+This is R12 (memory transparency) landing on the wrong audience. R12 shipped so a person can see what
+the agent taught itself — over mTLS, from a laptop. The primary interface is a chat channel, and
+there the same question gets the opposite of the truth.
+
+### Proposal
+
+Four pieces. The first is a one-line fix that stops the wrong answer; the rest give the right one
+somewhere to come from.
+
+**1 · Stop `list_providers` answering "what can you do".** Drop *"which model does what"* from its
+description and add an explicit negative — this lists model providers, not skills; for skills use
+`skill_list`. The word *capabilities* in its output means modalities and should say so.
+
+**2 · `skill_list` — read-only enumeration.** Name, one-line description, tier, and whether the skill
+is active. Exactly the trade `skill_view` already makes explicit in its own doc comment: *"READ-ONLY,
+AND THAT IS WHY IT IS CHEAP TO ALLOW. Viewing a skill runs nothing."* Enumerating is strictly less
+sensitive than reading a skill's full instructions, which is already permitted.
+
+**3 · `learned_list` — the agent can see its own proposals.** Read-only, owner-scoped, mirroring
+`lobslaw learned list`.
+
+> **Approval stays off the tool surface.** R16 made `ArtefactStore` the review fork's entire write
+> surface so the fork cannot reach past its own namespace; a tool that let the agent accept its own
+> proposals would hand back exactly what that design withholds. `accept` / `reject` remain
+> operator-only, via the CLI or an R2 prompt. **Reading is not approving**, and conflating them is
+> the reason this gap has stayed open.
+
+**4 · Make the empty state informative.** `"(none installed)"` becomes *"(none installed; 2 awaiting
+your approval — ask me to list them)"* when proposals exist. This is the answer the user actually
+wanted, and it needs the self-taught store wired into promptgen — the same missing link as piece 3.
+
+### ClawHub discovery — separate, and larger
+
+Piece 4 does not cover *"search clawhub"*, and that one is not a missing tool so much as a missing
+protocol. `internal/clawhub/doc.go` is honest about it:
+
+> the clawhub.ai service implementation is out of scope. The wire protocol **mirrors what the
+> OpenClaw/clawhub-compatible registry shape implies.**
+
+So the client was written against an **inferred** API, for a service nobody has verified, and the
+404 is the first real evidence of what that service does or does not serve. Before designing a
+`clawhub_search` builtin, establish what is actually there:
+
+- Does `https://clawhub.ai/v1/skills/<name>/<version>` respond at all?
+- Is there a search or index endpoint, under any path?
+- Does the bundle format match what `install.go` expects to unpack?
+
+**If the answer is "the catalogue does not exist in this shape", that is the finding**, and it
+changes R34 rather than extending it: bundles would then be published by this project rather than
+resolved from a third party, and the `clawhub_install` tool description promises a catalogue that
+cannot be reached. This is exactly the R31 pattern one layer out — the code, its documentation and
+its tool description all agree with each other and none of them has been checked against the thing
+they describe.
+
+Do the probe first. It is an afternoon, and it decides whether the rest is a tool or a redesign.
+
+### Acceptance
+
+- [ ] Asking "what skills do you have" does not return a provider table.
+- [ ] `skill_list` enumerates installed skills, and a turn with no skills says so rather than
+      reaching for a neighbouring tool.
+- [ ] `learned_list` shows PROPOSED artefacts, and the count matches `lobslaw learned list` against
+      the same node.
+- [ ] No tool can accept or reject a proposal — asserted structurally, the way R16's write surface is.
+- [ ] With proposals pending and no skills installed, the prompt says so.
+- [ ] The clawhub probe is recorded: which endpoints exist, which do not, and whether the bundle
+      format matches. Written down even if the answer is "none of it".
+- [ ] `clawhub_install`'s description does not promise a catalogue that cannot be reached.
