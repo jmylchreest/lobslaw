@@ -139,7 +139,7 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 	// Mirrors the predicate applyModelsDevAutoCapabilities uses, so
 	// the allowance exists exactly when the fetch happens.
 	for _, prov := range n.cfg.Compute.Providers {
-		if prov.AutoCapabilities {
+		if prov.AutoCapabilities || prov.AutoPricing {
 			in.WantsModelDiscovery = true
 			break
 		}

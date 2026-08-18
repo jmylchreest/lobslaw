@@ -434,6 +434,13 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		bcastAddr = "255.255.255.255"
 	}
 
+	// Resolved before the node config is built, so the node receives a
+	// decided audience rather than raw fields plus the rules for
+	// interpreting them. mode = "propose" defaults the nudge ON; see
+	// resolveNoticeAudience.
+	audience := resolveNoticeAudience(
+		cfg.SelfLearning.Mode, cfg.SelfLearning.Notify, cfg.Gateway.Channels)
+
 	return node.Config{
 		NodeID:           nodeID,
 		Functions:        funcs,
@@ -460,8 +467,8 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		SelfTaughtStaleAfterDays:     cfg.SelfLearning.StaleAfterDays,
 		SelfTaughtArchiveAfterDays:   cfg.SelfLearning.ArchiveAfterDays,
 		SelfTaughtProposalExpiryDays: cfg.SelfLearning.ProposalExpiryDays,
-		NotifyChannels:               cfg.SelfLearning.Notify.Channels,
-		NotifySubjects:               cfg.SelfLearning.Notify.Subjects,
+		NotifyChannels:               audience.Channels,
+		NotifySubjects:               audience.Subjects,
 		NotifyInterval:               cfg.SelfLearning.Notify.Interval,
 		Trace:                        cfg.Trace,
 		MTLS:                         cfg.Cluster.MTLS,

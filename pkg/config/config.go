@@ -247,11 +247,30 @@ type TraceConfig struct {
 //	subjects = ["user:tg-@john"]
 //	interval = "24h"
 type NotifyConfig struct {
+	// Disabled turns the nudge off in propose mode.
+	//
+	// An opt-OUT, because mode = "propose" is already the statement
+	// that a human should look before anything the agent wrote takes
+	// effect. Requiring a second, separately-populated block to hear
+	// about the queue made "propose" mean "write to a queue nobody is
+	// told about" — which is auto mode with extra steps, and worse,
+	// because proposal expiry then discards things nobody declined.
+	//
+	// Ignored in auto and off modes, where there is no queue to
+	// nudge about.
+	Disabled bool `koanf:"disabled,omitempty"`
+
 	// Channels that may carry notices, by gateway kind ("telegram",
-	// "rest"). Empty means none: silence is the safe default.
+	// "rest"). Empty in propose mode takes every configured gateway
+	// channel — a notice about a queue is for whoever can reach the
+	// assistant, and naming them again here is a second list to keep
+	// in step with the first.
 	Channels []string `koanf:"channels,omitempty"`
 
-	// Subjects that may receive them, as principals. Empty means none.
+	// Subjects that may receive them, as principals. Empty in propose
+	// mode takes the owner-scoped users from the channel config: the
+	// people already trusted to approve things are the people to tell
+	// there is something to approve.
 	Subjects []string `koanf:"subjects,omitempty"`
 
 	// Interval is the minimum gap between notices in one conversation.
@@ -690,11 +709,21 @@ type ProviderConfig struct {
 	// disk cache), the configured model is looked up, and the
 	// discovered modalities are MERGED with declared capabilities.
 	// Declared capabilities always win on conflict. Off by default.
-	AutoCapabilities bool                  `koanf:"auto_capabilities,omitempty"`
-	APIKeyRef        string                `koanf:"api_key_ref,omitempty"`
-	Capabilities     []string              `koanf:"capabilities,omitempty"`
-	TrustTier        types.TrustTier       `koanf:"trust_tier"`
-	Pricing          types.ProviderPricing `koanf:"pricing,omitempty"`
+	AutoCapabilities bool `koanf:"auto_capabilities,omitempty"`
+	// AutoPricing fills this provider's rate card from the same
+	// catalogue, when no pricing block is declared. Off by default,
+	// and separate from AutoCapabilities because they fail
+	// differently: a wrong capability breaks a feature loudly, a
+	// wrong price misreports money quietly.
+	//
+	// Declared pricing always wins, whole-block. The catalogue quotes
+	// per MILLION tokens and lobslaw per thousand; the conversion
+	// lives in one named function so the factor is not retyped.
+	AutoPricing  bool                  `koanf:"auto_pricing,omitempty"`
+	APIKeyRef    string                `koanf:"api_key_ref,omitempty"`
+	Capabilities []string              `koanf:"capabilities,omitempty"`
+	TrustTier    types.TrustTier       `koanf:"trust_tier"`
+	Pricing      types.ProviderPricing `koanf:"pricing,omitempty"`
 
 	// Backup is the label of the provider to fall back to when this
 	// one fails with a transient hard error (5xx, rate-limit, network

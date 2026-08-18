@@ -351,12 +351,16 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Provider:     n.llmProvider,
 		PrimaryLabel: primaryLabel,
 		Traces:       n.traces,
-		Providers:    n.providerRegistry,
-		Resolver:     n.resolver,
-		Judge:        n.newJudge(),
-		Health:       n.providerHealth,
-		Executor:     n.executor,
-		Registry:     n.toolRegistry,
+		// So the assistant can answer truthfully when asked what it
+		// is configured to do, rather than from the shape of its tool
+		// list.
+		SelfLearningMode: n.cfg.SelfLearningMode,
+		Providers:        n.providerRegistry,
+		Resolver:         n.resolver,
+		Judge:            n.newJudge(),
+		Health:           n.providerHealth,
+		Executor:         n.executor,
+		Registry:         n.toolRegistry,
 		Soul: func() *types.SoulConfig {
 			s := n.Soul()
 			if s == nil {
@@ -606,7 +610,10 @@ func (n *Node) resolvePDFEndpoints() []*llmEndpoint {
 func (n *Node) applyModelsDevAutoCapabilities(ctx context.Context) {
 	wantsDiscovery := false
 	for _, p := range n.cfg.Compute.Providers {
-		if p.AutoCapabilities {
+		// One fetch serves both. They are separate opt-ins because
+		// they fail differently, not because they need separate
+		// catalogues.
+		if p.AutoCapabilities || p.AutoPricing {
 			wantsDiscovery = true
 			break
 		}
@@ -632,7 +639,7 @@ func (n *Node) applyModelsDevAutoCapabilities(ctx context.Context) {
 
 	for i := range n.cfg.Compute.Providers {
 		p := &n.cfg.Compute.Providers[i]
-		if !p.AutoCapabilities {
+		if !p.AutoCapabilities && !p.AutoPricing {
 			continue
 		}
 		// The endpoint identifies WHICH catalog provider this is, and
@@ -664,6 +671,12 @@ func (n *Node) applyModelsDevAutoCapabilities(ctx context.Context) {
 				"label", p.Label, "model", p.Model)
 			continue
 		}
+		if p.AutoPricing {
+			n.applyCatalogPricing(p, matches)
+		}
+		if !p.AutoCapabilities {
+			continue
+		}
 		discovered := compute.CapabilitiesFromConsensus(matches)
 		merged := compute.MergeCapabilities(p.Capabilities, discovered)
 		if len(merged) == len(p.Capabilities) {
@@ -680,6 +693,35 @@ func (n *Node) applyModelsDevAutoCapabilities(ctx context.Context) {
 	}
 
 	n.warnUnsupportedCapabilities(cat)
+}
+
+// applyCatalogPricing fills a rate card from the catalogue.
+//
+// Only from the PROVIDER-SPECIFIC entry. The consensus rule takes an
+// intersection, which is a defensible answer for "can it do X" and a
+// meaningless one for "what does it cost" — the cheapest listing
+// across twelve resellers is not this endpoint's price. When the
+// endpoint matches no catalogue provider there is no price to fill,
+// and reporting nothing beats reporting somebody else's.
+func (n *Node) applyCatalogPricing(p *config.ProviderConfig, matches []modelsdev.Model) {
+	if len(matches) != 1 {
+		n.log.Debug("modelsdev: no provider-specific entry, leaving pricing alone",
+			"label", p.Label, "model", p.Model, "matches", len(matches))
+		return
+	}
+	discovered := compute.PricingFromModel(matches[0])
+	merged := compute.MergePricing(p.Pricing, discovered)
+	// Nothing to say when the declared card won, or when the
+	// catalogue's rate is the zero one a plan-billed provider has.
+	if compute.PricingIsZero(merged) || !compute.PricingIsZero(p.Pricing) {
+		return
+	}
+	p.Pricing = merged
+	n.log.Info("modelsdev: pricing taken from catalog",
+		"label", p.Label, "model", p.Model,
+		"input_per_1k", merged.InputUSDPer1K,
+		"output_per_1k", merged.OutputUSDPer1K,
+		"cached_per_1k", merged.CachedUSDPer1K)
 }
 
 // warnUnsupportedCapabilities tells an operator when a provider claims

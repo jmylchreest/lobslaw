@@ -507,6 +507,17 @@ type RuntimeInfo struct {
 	// (scheduler-driven, no inbound channel).
 	Channel   string
 	ChannelID string
+
+	// SelfLearning is the [self_learning] mode in force: "propose",
+	// "auto", or empty when off.
+	//
+	// Here because the assistant was asked whether it had
+	// self-learning enabled and said no, on a node where the review
+	// fork had proposed an artefact ten minutes earlier. Nothing in
+	// the prompt or the tool list mentioned it, so the honest answer
+	// was unavailable and a confident wrong one took its place — the
+	// same shape as list_providers not reporting roles.
+	SelfLearning string
 }
 
 // BuildRuntime renders host, OS, node-id, model-in-use. Same
@@ -535,6 +546,16 @@ func BuildRuntime(info RuntimeInfo) Section {
 		// or scheduled tasks (where the firing turn has no chat
 		// to reply into automatically).
 		fmt.Fprintf(&b, "  (use this as chat_id when calling notify_%s for proactive messages)\n", info.Channel)
+	}
+	if info.SelfLearning != "" {
+		fmt.Fprintf(&b, "- self_learning: %s\n", info.SelfLearning)
+		switch info.SelfLearning {
+		case "propose":
+			b.WriteString("  (you may write instructions for yourself; they wait in a review " +
+				"queue until a human approves them, and do NOT take effect before that)\n")
+		case "auto":
+			b.WriteString("  (you may write instructions for yourself and they take effect immediately)\n")
+		}
 	}
 	if b.Len() == 0 {
 		b.WriteString("(runtime info unavailable)\n")

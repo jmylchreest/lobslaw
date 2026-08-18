@@ -123,6 +123,11 @@ type AgentConfig struct {
 	// nil recorder is usable, so no call site branches on it.
 	Traces *trace.Recorder
 
+	// SelfLearningMode is the [self_learning] mode, surfaced in the
+	// system prompt so the assistant can answer truthfully about its
+	// own configuration. Empty when off.
+	SelfLearningMode string
+
 	// PrimaryLabel names the provider that maps to Provider above
 	// in the registry. Used as the starting point for backup-chain
 	// walks. Empty → no chain walk, single-provider behaviour.
@@ -577,8 +582,9 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 				Pinned:   pinned,
 				Binaries: bins,
 				Runtime: promptgen.RuntimeInfo{
-					Channel:   req.Channel,
-					ChannelID: req.ChannelID,
+					Channel:      req.Channel,
+					ChannelID:    req.ChannelID,
+					SelfLearning: a.cfg.SelfLearningMode,
 				},
 			})
 		}

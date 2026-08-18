@@ -235,3 +235,39 @@ func TestBuildWorkspaceCustomPath(t *testing.T) {
 		t.Errorf("custom path should render: %q", s.Body)
 	}
 }
+
+// The assistant was asked whether it had self-learning enabled and
+// said no, on a node where the review fork had proposed an artefact
+// ten minutes earlier. Nothing in the prompt or the tool list
+// mentioned it, so the honest answer was unavailable and a confident
+// wrong one took its place.
+func TestTheRuntimeSectionSaysWhetherSelfLearningIsOn(t *testing.T) {
+	t.Parallel()
+	body := BuildRuntime(RuntimeInfo{SelfLearning: "propose"}).Body
+	if !strings.Contains(body, "self_learning: propose") {
+		t.Errorf("mode missing from the runtime section:\n%s", body)
+	}
+	// The mode alone is a word; what matters to an answer is that
+	// approval gates it.
+	if !strings.Contains(body, "review queue") {
+		t.Errorf("propose mode does not explain that approval gates it:\n%s", body)
+	}
+}
+
+func TestAutoModeSaysItTakesEffectImmediately(t *testing.T) {
+	t.Parallel()
+	body := BuildRuntime(RuntimeInfo{SelfLearning: "auto"}).Body
+	if !strings.Contains(body, "immediately") {
+		t.Errorf("auto mode does not say artefacts apply at once:\n%s", body)
+	}
+}
+
+// Off is the default, and a line claiming a capability the node does
+// not have is worse than no line.
+func TestSelfLearningIsUnmentionedWhenOff(t *testing.T) {
+	t.Parallel()
+	body := BuildRuntime(RuntimeInfo{Channel: "telegram", SelfLearning: ""}).Body
+	if strings.Contains(body, "self_learning") {
+		t.Errorf("a node with self-learning off advertises it:\n%s", body)
+	}
+}

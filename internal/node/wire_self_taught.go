@@ -51,10 +51,13 @@ func (n *Node) wireSelfTaught() error {
 	}
 
 	// The in-channel nudge. Built here rather than in the gateway
-	// stage because it needs the store, and left nil when nobody opted
-	// in — a channel that was never named cannot carry a notice,
-	// which is absence rather than a runtime check somebody has to
-	// have remembered.
+	// stage because it needs the store.
+	//
+	// The audience is DECIDED before it reaches this struct — propose
+	// mode defaults it on, derived from the configured channels and
+	// the owner-scoped users, unless notify.disabled says otherwise.
+	// See resolveNoticeAudience in cmd/lobslaw. Empty here now means "resolved
+	// to nobody", not "nobody typed a list".
 	n.notices = gateway.NewNotices(pendingReviewSource{store: store}, gateway.NoticeConfig{
 		Channels: n.cfg.NotifyChannels,
 		Subjects: n.cfg.NotifySubjects,
