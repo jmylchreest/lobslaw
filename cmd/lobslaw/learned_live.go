@@ -326,7 +326,7 @@ func liveList(args []string) error {
 	defer cancel()
 	resp, err := client.ListArtefacts(ctx, &lobslawv1.ListArtefactsRequest{Archived: *archived})
 	if err != nil {
-		return err
+		return explainUnimplemented(err, node.addr)
 	}
 
 	// Owner filtering is client-side because the RPC has no such

@@ -102,7 +102,7 @@ func skillsList(args []string) error {
 	defer cancel()
 	resp, err := client.ListSkills(ctx, &lobslawv1.ListSkillsRequest{ActiveOnly: !*all})
 	if err != nil {
-		return err
+		return explainUnimplemented(err, node.addr)
 	}
 	if len(resp.GetSkills()) == 0 {
 		fmt.Println("no skills installed")
