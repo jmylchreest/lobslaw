@@ -121,6 +121,12 @@ func (n *Node) wireCompute() error {
 	// list_providers and council_review have never registered on any
 	// node. The guard read like a capability check and was really a
 	// read of a variable that did not exist yet.
+	// After the self-taught stage, which runs earlier in nodeWireStages
+	// and is what sets n.selfTaught. Registering before it would find
+	// nil and skip the tool on every node that has the store.
+	if err := n.wireLearnedTools(builtins); err != nil {
+		return err
+	}
 	if err := n.wireCouncilTools(builtins); err != nil {
 		return err
 	}

@@ -207,6 +207,16 @@ type TelegramConfig struct {
 // every operator-authored `user:tg-@name` rule and of role assignment,
 // so binding approvals to something else would be inconsistent without
 // fixing the larger problem. Tracked as its own roadmap item.
+// numericSubject is the "user:tg-<id>" form, which config can name
+// because the numeric id is stable and visible in the Telegram
+// console. Empty when there is no user to attribute.
+func numericSubject(u *tgUser) string {
+	if u == nil || u.ID == 0 {
+		return ""
+	}
+	return "user:tg-" + strconv.FormatInt(u.ID, 10)
+}
+
 func grantSubject(claims *types.Claims) string {
 	if claims == nil || claims.UserID == "" || claims.UserID == "tg-unknown" {
 		return ""
@@ -570,8 +580,13 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		// message is one the model reads next turn and reasons about —
 		// at which point the agent is discussing its own pending
 		// proposals with the user, and it is in the summary forever.
+		// The numeric id travels alongside the principal: a user with
+		// a Telegram username is attributed as "tg-@name", which no
+		// config file can predict, while the id is what the operator
+		// wrote down and what identity resolution is keyed on.
 		h.sendText(msg.Chat.ID, h.cfg.Notices.Append(ctx,
-			"telegram", sessionRef.ChannelID, grantSubject(claims), resp.Reply))
+			"telegram", sessionRef.ChannelID, grantSubject(claims), resp.Reply,
+			numericSubject(msg.From)))
 	}
 	// After the text: a file the turn produced is context for the
 	// reply, not a replacement for it.

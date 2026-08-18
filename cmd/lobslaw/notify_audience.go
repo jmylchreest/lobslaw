@@ -88,9 +88,20 @@ func ownerSubjects(channels []config.GatewayChannelConfig) []string {
 			if scope != "owner" || id == "" {
 				continue
 			}
-			seen[id] = struct{}{}
+			// The "user:" namespace is what the channels actually
+			// pass — grantSubject and noticeSubject both build it.
+			// Emitting a bare id here produced a subject list that
+			// could not match anything, and the nudge reported itself
+			// enabled while being unable to fire.
+			seen["user:"+id] = struct{}{}
 			if ch.Type == "telegram" {
-				seen["tg-"+id] = struct{}{}
+				// The channel-prefixed form, which is what a Telegram
+				// turn is attributed as when the account has no
+				// username. When it HAS one the principal is
+				// "tg-@name" instead — unpredictable from config,
+				// which is why Notices.Append also matches the
+				// numeric identity the channel passes alongside it.
+				seen["user:tg-"+id] = struct{}{}
 			}
 		}
 	}

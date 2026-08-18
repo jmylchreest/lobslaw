@@ -109,8 +109,22 @@ func NewNotices(src NoticeSource, cfg NoticeConfig) *Notices {
 // else's turn, and failing a reply the user is waiting for because the
 // courtesy could not be assembled would be the wrong trade in every
 // case.
-func (n *Notices) Append(ctx context.Context, channel, conversationID, principal, reply string) string {
-	if n == nil || !n.permitted(channel, principal) {
+// alsoKnownAs are additional identities the caller may be recognised
+// by. Variadic so every existing call site is unchanged.
+//
+// A Telegram account with a username is attributed as "tg-@name",
+// which is not a thing config can predict — an operator writes down
+// the numeric id, because that is what the console shows and what
+// identity resolution is keyed on. Matching only the principal meant
+// a subject list naming the id could never match a turn from a user
+// who had set a username, so the nudge was configured, reported
+// enabled, and unable to fire.
+//
+// isAudience has tolerated exactly this mismatch for prompts since it
+// was written. This is the same tolerance for notices.
+func (n *Notices) Append(ctx context.Context, channel, conversationID, principal, reply string,
+	alsoKnownAs ...string) string {
+	if n == nil || !n.permitted(channel, principal, alsoKnownAs...) {
 		return reply
 	}
 	key := channel + ":" + conversationID
@@ -149,8 +163,19 @@ func (n *Notices) Append(ctx context.Context, channel, conversationID, principal
 // tells a group chat what the operator has pending; a subject
 // allowlist without a channel one puts it wherever the operator
 // happens to be, including channels they never configured for it.
-func (n *Notices) permitted(channel, principal string) bool {
-	return contains(n.cfg.Channels, channel) && contains(n.cfg.Subjects, principal)
+func (n *Notices) permitted(channel, principal string, alsoKnownAs ...string) bool {
+	if !contains(n.cfg.Channels, channel) {
+		return false
+	}
+	if contains(n.cfg.Subjects, principal) {
+		return true
+	}
+	for _, alt := range alsoKnownAs {
+		if contains(n.cfg.Subjects, alt) {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(list []string, want string) bool {

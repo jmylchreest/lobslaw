@@ -31,7 +31,7 @@ func TestProposeModeNudgesWithoutBeingAskedTwice(t *testing.T) {
 	// Both forms: a Telegram turn is attributed under the tg- prefixed
 	// principal while the scope map is keyed by the bare numeric id.
 	// That mismatch already made a confirmation unattributable once.
-	want := []string{"6972251926", "tg-6972251926"}
+	want := []string{"user:6972251926", "user:tg-6972251926"}
 	if !reflect.DeepEqual(got.Subjects, want) {
 		t.Errorf("subjects = %v, want %v", got.Subjects, want)
 	}

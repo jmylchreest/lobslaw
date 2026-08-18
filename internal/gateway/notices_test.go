@@ -270,3 +270,49 @@ func TestNoticeSubjectIsEmptyForAnonymousClaims(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// A Telegram account with a username is attributed as "tg-@name",
+// which no config file can predict — the operator writes down the
+// numeric id, because that is what the console shows and what
+// identity resolution is keyed on.
+//
+// Matching only the principal meant a subject list naming the id
+// could never match a turn from a user who had set a username, so the
+// nudge was configured, logged itself enabled, and could not fire.
+func TestANoticeReachesAUserKnownByTheirNumericIDInstead(t *testing.T) {
+	t.Parallel()
+	n := NewNotices(fixedNotices{"two proposals are waiting"}, NoticeConfig{
+		Channels: []string{"telegram"},
+		Subjects: []string{"user:tg-6972251926"},
+		Interval: time.Nanosecond,
+	})
+	// The principal carries the username form; the id travels beside it.
+	got := n.Append(context.Background(), "telegram", "chat-1",
+		"user:tg-@jmylchreest", "the reply", "user:tg-6972251926")
+	if !strings.Contains(got, "two proposals are waiting") {
+		t.Errorf("the notice did not reach a user matched by their numeric id:\n%s", got)
+	}
+}
+
+// Tolerance is not permission. Somebody else's id must not let a
+// notice through.
+func TestAnUnlistedIdentityStillGetsNothing(t *testing.T) {
+	t.Parallel()
+	n := NewNotices(fixedNotices{"waiting"}, NoticeConfig{
+		Channels: []string{"telegram"},
+		Subjects: []string{"user:tg-6972251926"},
+		Interval: time.Nanosecond,
+	})
+	got := n.Append(context.Background(), "telegram", "chat-1",
+		"user:tg-@someoneelse", "the reply", "user:tg-999")
+	if got != "the reply" {
+		t.Errorf("a notice reached an unlisted identity:\n%s", got)
+	}
+}
+
+// fixedNotices is a source with one always-pending notice.
+type fixedNotices struct{ text string }
+
+func (f fixedNotices) Notices(_ context.Context, _ string) ([]Notice, error) {
+	return []Notice{{Text: f.text}}, nil
+}
