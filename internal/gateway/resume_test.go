@@ -125,7 +125,7 @@ func TestTelegramCallbackDenyDoesNotResume(t *testing.T) {
 		"update_id": 801,
 		"callback_query": {
 			"id": "cb-dny",
-			"from": {"id": 1},
+			"from": {"id": 1, "username": "u"},
 			"message": {"message_id": 2, "chat": {"id": 42, "type": "private"}, "date": 0},
 			"data": "prompt:deny:` + p.ID + `"
 		}
@@ -167,6 +167,7 @@ func TestTelegramCallbackApproveWithoutContinuation(t *testing.T) {
 	// whose record predates this field.
 	p, err := h.registry.Create(NewPrompt{
 		TurnID: "t", Reason: "r", Channel: "telegram", TTL: time.Minute,
+		RaisedFor: "tg-@u",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +177,7 @@ func TestTelegramCallbackApproveWithoutContinuation(t *testing.T) {
 		"update_id": 802,
 		"callback_query": {
 			"id": "cb-orphan",
-			"from": {"id": 1},
+			"from": {"id": 1, "username": "u"},
 			"message": {"message_id": 2, "chat": {"id": 42, "type": "private"}, "date": 0},
 			"data": "prompt:approve:` + p.ID + `"
 		}
@@ -212,6 +213,7 @@ func pausedPrompt(t *testing.T, h *tgPromptHarness, turnID string, msgs []comput
 		Channel:   "telegram",
 		ChannelID: "42",
 		TTL:       time.Minute,
+		RaisedFor: "tg-@u",
 		Continuation: &Continuation{
 			Request:  compute.ProcessMessageRequest{TurnID: turnID, Budget: budget},
 			Messages: msgs,

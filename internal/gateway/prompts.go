@@ -122,6 +122,16 @@ type NewPrompt struct {
 	// Continuation is the paused turn. Nil where the channel resumes
 	// in-process and has no need to move it.
 	Continuation *Continuation
+
+	// RaisedFor is the channel-native id of the user this question is
+	// being asked OF — the Telegram user id, not the canonical
+	// principal, because that is what a callback arrives carrying.
+	//
+	// Captured when the prompt is raised rather than read off the
+	// answer, for the reason the "always" grant path already gives:
+	// a callback is attacker-shaped input, and the turn that
+	// triggered the confirmation is not.
+	RaisedFor string
 }
 
 // Prompt is one pending confirmation. Created by the channel when
@@ -164,6 +174,10 @@ type Prompt struct {
 
 	// Continuation is the paused turn, when the channel stored one.
 	Continuation *Continuation
+
+	// RaisedFor is the channel-native id of the user the question was
+	// asked of. Only they may answer it.
+	RaisedFor string
 
 	// Decision holds the resolution once the user answers (or the
 	// timeout fires).
@@ -223,6 +237,7 @@ func (r *PromptRegistry) Create(np NewPrompt) (*Prompt, error) {
 		Action:       np.Action,
 		Resource:     np.Resource,
 		Continuation: np.Continuation,
+		RaisedFor:    np.RaisedFor,
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(ttl),
 		Decision:     PromptPending,

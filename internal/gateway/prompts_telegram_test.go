@@ -145,7 +145,7 @@ func TestTelegramCallbackApproveResolves(t *testing.T) {
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	p, _ := h.registry.Create(NewPrompt{TurnID: "turn-x", Reason: "reason", Channel: "telegram", TTL: time.Minute})
+	p, _ := h.registry.Create(NewPrompt{TurnID: "turn-x", Reason: "reason", Channel: "telegram", TTL: time.Minute, RaisedFor: "tg-@u"})
 
 	update := `{
 		"update_id": 700,
@@ -194,7 +194,7 @@ func TestTelegramCallbackDenyResolves(t *testing.T) {
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	p, _ := h.registry.Create(NewPrompt{TurnID: "turn-x", Reason: "reason", Channel: "telegram", TTL: time.Minute})
+	p, _ := h.registry.Create(NewPrompt{TurnID: "turn-x", Reason: "reason", Channel: "telegram", TTL: time.Minute, RaisedFor: "tg-1"})
 
 	update := `{
 		"update_id": 701,
@@ -286,7 +286,7 @@ func TestTelegramCallbackDoubleResolveReportsGracefully(t *testing.T) {
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	p, _ := h.registry.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "telegram", TTL: time.Minute})
+	p, _ := h.registry.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "telegram", TTL: time.Minute, RaisedFor: "tg-1"})
 	_ = h.registry.Resolve(p.ID, PromptApproved, PromptScopeOnce)
 
 	update := `{

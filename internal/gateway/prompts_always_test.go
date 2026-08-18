@@ -75,7 +75,7 @@ func raiseConfirmation(t *testing.T, h *tgPromptHarness, action, resource string
 			ConfirmationAction:   action,
 			ConfirmationResource: resource,
 		},
-		SessionRef{Channel: "telegram", ChannelID: "99"},
+		SessionRef{Channel: "telegram", ChannelID: "99", UserID: "tg-@alice"},
 	)
 }
 

@@ -596,6 +596,11 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 		Action:       resp.ConfirmationAction,
 		Resource:     resp.ConfirmationResource,
 		Continuation: &Continuation{Request: req, Messages: resp.Messages},
+		// Who may answer. Captured here rather than read off the tap,
+		// for the same reason the "always" subject is: a callback is
+		// attacker-shaped input and the turn that raised the question
+		// is not.
+		RaisedFor: session.UserID,
 	})
 	if err != nil {
 		h.log.Error("telegram: prompt registration failed", "err", err)
@@ -643,6 +648,63 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	})
 }
 
+// mayResolve reports whether this tap is allowed to answer this
+// prompt.
+//
+// A prompt id is 128 bits of randomness, which makes it unguessable —
+// but unguessable is not the same as authorised. The button is
+// rendered into a chat, and in a group every member can see it and
+// tap it. Without this check the person who answers a confirmation is
+// simply whoever got there first.
+//
+// The comparison is principal-to-principal rather than raw id to raw
+// id, so it survives an `identity rebind` and a renamed handle.
+//
+// Fails CLOSED. A prompt with no recorded audience is one this node
+// cannot attribute an answer to, and guessing in favour of the tapper
+// is the wrong way to be wrong about who approved something.
+func (h *TelegramHandler) mayResolve(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
+	p, err := h.cfg.Prompts.Get(promptID)
+	if err != nil || p == nil {
+		// Not an authorisation failure — the prompt expired or was
+		// reaped. Resolve would say so anyway; this just stops the
+		// lookup being repeated.
+		return true
+	}
+	if p.RaisedFor == "" {
+		h.log.Warn("telegram: refusing a callback on a prompt with no recorded audience",
+			"prompt", promptID)
+		h.answerCallback(q, "This confirmation cannot be attributed to anyone; it was not applied.")
+		return false
+	}
+	if q.From == nil {
+		h.log.Warn("telegram: refusing an unattributed callback", "prompt", promptID)
+		return false
+	}
+	if who := h.principalFor(ctx, q.From); who != p.RaisedFor {
+		// Logged with both principals: somebody tapping a colleague's
+		// confirmation is worth seeing, and it is indistinguishable
+		// from an attack in the logs otherwise.
+		h.log.Warn("telegram: refusing a callback from somebody the question was not asked of",
+			"prompt", promptID, "tapped_by", who, "raised_for", p.RaisedFor)
+		h.answerCallback(q, "That confirmation was not for you.")
+		return false
+	}
+	return true
+}
+
+// answerCallback surfaces a refusal on the tapper's own screen.
+//
+// Silence would read as a broken button and invite retrying, which is
+// the worst outcome: the person keeps tapping and the person who can
+// actually answer never learns there is a question waiting.
+func (h *TelegramHandler) answerCallback(q *tgCallbackQuery, text string) {
+	if q.Message == nil {
+		return
+	}
+	h.sendText(q.Message.Chat.ID, text)
+}
+
 // handleCallbackQuery resolves a pending prompt based on the
 // callback_data tag format "prompt:<verb>:<id>" produced by
 // sendConfirmationKeyboard. Any other callback_data shape is
@@ -666,6 +728,10 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 
 	if h.cfg.Prompts == nil {
 		h.log.Warn("telegram: callback arrived but no prompt registry configured")
+		return
+	}
+
+	if !h.mayResolve(ctx, promptID, q) {
 		return
 	}
 

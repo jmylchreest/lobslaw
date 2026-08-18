@@ -69,6 +69,8 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R25** | [Retire the node functions that select nothing](#r25--retire-the-node-functions-that-do-not-select-anything) | ⬜ | 🟡 P2 | S | — |
 | **R26** | [A second vendor per generation modality](#r26--a-second-vendor-per-generation-modality) | ⬜ | 🟠 P1 | M | R22 |
 | **R28** | [The operator's laptop](#r28--the-operators-laptop) | ✅ | 🟠 P1 | L | — |
+| **R29** | [Enrolling an operator without moving a private key](#r29--enrolling-an-operator-without-moving-a-private-key) | ⬜ | 🟠 P1 | M | R28 |
+| **R30** | [Cross-network node enrolment](#r30--cross-network-node-enrolment) | ⬜ | 🔵 P2 | M | R29 |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -3513,6 +3515,126 @@ which a `*types.Named` assertion skips in silence.
 It earned its keep immediately: it caught `StorageMountConfig.Server`
 during this very change, when the config edit landed and the wiring edit
 silently did not.
+
+## R30 — cross-network node enrolment
+
+### Problem
+
+A node in another network cannot use the broadcast hint — UDP broadcast does not cross subnets —
+so it needs `seed_nodes` AND a node certificate copied to it by hand. The copying is the friction,
+and it is the same friction R29 removes for operators.
+
+### Why it is not just R29 again
+
+The credential is a different order of grant. An operator certificate is ClientAuth-only, carries
+`OU=operator`, and is refused on the raft transport. A node certificate carries `ServerAuth` too,
+joins raft as a VOTER, and receives a full replica of memory, sessions and credentials.
+
+So the operator-scoped intermediate from R29 must not be able to sign it. If it could, a
+compromised node mints a peer, that peer can mint peers, and one compromise grows without bound.
+
+### Proposal
+
+Same CSR-and-approve shape, different authority:
+
+- the node submits a CSR and the cluster QUEUES it — no online signing key can satisfy it
+- issuance happens at the offline CA, one command, once per node
+- or an enrolment token minted AT THE CA is presented with the CSR
+
+Nodes are rare; operators are not. Requiring a trip to the CA machine per node is proportionate in
+a way it would not be per person.
+
+Worth noting separately: raft across networks has non-credential problems — election timeouts
+tuned for a LAN, partition behaviour, and a voter whose round-trip is an order of magnitude worse
+than its peers. Solving the credential path does not make cross-network clustering advisable on
+its own.
+
+### Acceptance
+
+- [ ] A node can submit a CSR to a running cluster and have it queued.
+- [ ] Nothing online can issue a node certificate; issuance requires the offline CA.
+- [ ] An operator-scoped intermediate cannot sign a node certificate, and there is a test.
+- [ ] The join path documents that discovery is a hint and trust is not.
+
+## R29 — enrolling an operator without moving a private key
+
+### Problem
+
+`cluster sign-operator` generates the keypair ON THE SIGNER'S MACHINE and writes both halves to a
+directory. Getting them to the laptop is left to the operator: scp, a USB stick, a password
+manager. The command prints a `contexts.toml` block that assumes the files already arrived.
+
+So the private key travels. That is the weakness, and it is upstream of any question about
+transport — encrypting it in flight does not stop it existing in a second place.
+
+Delivering it over a channel is worse, not better. A private key sent over Telegram lands in a
+message store, a phone backup, Telegram's servers, and — in this system specifically — the node's
+own transcript store, where `lobslaw session show` will print it back.
+
+### Proposal
+
+**The key never moves.** The laptop generates its own keypair, keeps the private half, and sends
+only a CSR. A certificate and a CSR are both public; they can cross any channel.
+
+- **`cluster sign-operator` becomes `cluster export-operator`**, named for what it does. It stays,
+  because bootstrap needs it — the first operator has nobody to approve them — and it carries a
+  warning that the private key travels.
+- **`lobslaw enrol --addr node:9090 --name alice`** generates ed25519 locally, writes
+  `operator-key.pem` 0600, and submits a CSR. The node raises a prompt naming the key fingerprint;
+  the approver checks it against what the laptop printed before tapping.
+- **An operator-scoped intermediate CA** on the node does the signing. The cluster CA stays
+  offline. The intermediate is path-len 0 and can only mint ClientAuth `OU=operator` certs, so a
+  node compromise mints operator credentials — bad, and bounded — but cannot mint a NODE cert and
+  therefore cannot manufacture a peer.
+- **Approval** comes from the configured owner over a channel, or from any existing operator via
+  `lobslaw enrol approve <id>`. The second path matters: it does not depend on a channel being up.
+
+One piece of out-of-band material is unavoidable. The laptop must authenticate the NODE before
+trusting anything it sends, so it needs the CA fingerprint. `enrol` prints what it received and
+requires `--ca-fingerprint` to match.
+
+### What this is NOT
+
+Node enrolment. The same CSR-and-approve shape would work for a machine that wants to be a peer,
+and it would solve a real problem — UDP broadcast does not cross subnets, so a remote node already
+needs `seed_nodes` plus a hand-copied cert. But the authority deliberately does not generalise: if
+the node-held intermediate could sign node certs, a compromised node mints a peer, that peer is a
+voter with a full replica of memory, sessions and credentials, and it can mint more peers.
+Unbounded from one compromise.
+
+There is a proportionality point too. A Telegram tap is a reasonable bar for "let alice's laptop
+READ the cluster" — the credential is ClientAuth-only and refused on the raft transport. It is not
+a reasonable bar for "add a voting replica that receives a copy of everything". Same button, very
+different blast radius. Cross-network node enrolment is R30.
+
+### Acceptance
+
+- [x] A prompt can only be answered by the person it was asked of.
+      **A prerequisite, and a live gap in shipped code rather than a new-feature concern.**
+
+      `handleCallbackQuery` resolved a prompt straight from `callback_data` and never looked at
+      `q.From`. Prompt ids are 128 bits of randomness, so this was capability-by-obscurity — in a
+      DM only that user sees the button — but in ANY GROUP CHAT the bot is in, every member could
+      see a pending confirmation and tap Approve. That already applied to tool execution; wiring
+      certificate issuance to the same mechanism would have made a tap a cluster takeover.
+
+      The audience is captured when the prompt is RAISED, not read off the answer — the same
+      reasoning the "always" grant path already documented: a callback is attacker-shaped input
+      and the turn that triggered the confirmation is not. The comparison is
+      principal-to-principal rather than raw id to raw id, so it survives an `identity rebind`.
+
+      Fails CLOSED, and says which of the two failures happened. A prompt with no recorded
+      audience is a broken RAISE path; a prompt belonging to somebody else is not. Reporting both
+      as "not for you" would send an operator looking for the wrong problem.
+
+      The refusal reaches the tapper. Silence reads as a broken button and invites retrying, after
+      which they keep tapping and the person who can actually answer never learns there is a
+      question waiting.
+- [ ] `cluster export-operator` replaces `sign-operator` and says the key travels.
+- [ ] An operator-scoped intermediate CA signs enrolments; the cluster CA stays offline.
+- [ ] `lobslaw enrol` generates its keypair locally and never transmits the private half.
+- [ ] An enrolment is approved by the owner over a channel, or by an existing operator.
+- [ ] The approver sees the key fingerprint, and the laptop prints the same one.
 
 ## R28 — the operator's laptop
 
