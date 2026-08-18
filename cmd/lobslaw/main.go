@@ -224,6 +224,16 @@ func main() {
 		}
 	}
 
+	// Nothing matched. Starting a node is now something you ASK for:
+	// a bare `lobslaw` lists the commands, and a typo costs a usage
+	// message rather than a second assistant on somebody's machine.
+	nodeArgs, wantsNode := dispatchRun(os.Args[1:])
+	if !wantsNode {
+		printCommandList(os.Stdout)
+		return
+	}
+	os.Args = append(os.Args[:1], nodeArgs...)
+
 	var f flags
 	if err := parseFlags(os.Args[1:], &f); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
