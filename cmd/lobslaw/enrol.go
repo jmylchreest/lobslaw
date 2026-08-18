@@ -148,9 +148,6 @@ func enrolRequest(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", keyPath, err)
-	}
 
 	client, closeConn, err := enrolClient(*addr, *caFile)
 	if err != nil {
@@ -165,7 +162,21 @@ func enrolRequest(args []string) error {
 		CsrDer:        csrDER,
 	})
 	if err != nil {
+		// Nothing is written on a failed submission. The key exists
+		// only in memory until the node has accepted the request —
+		// otherwise a connection error strands a key on disk, and the
+		// retry is then refused by the overwrite guard above. Found by
+		// running this against a node whose certificate did not cover
+		// the address it was dialled at.
 		return err
+	}
+
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		// The request is queued and the key is gone, which is
+		// recoverable only by letting it expire. Said plainly rather
+		// than wrapped, because the next step is not obvious.
+		return fmt.Errorf("the request was accepted as %s but the key could not be saved to %s: %w — "+
+			"let that request expire and enrol again", res.GetId(), keyPath, err)
 	}
 
 	printRequestSubmitted(os.Stdout, res, fingerprint, keyPath)

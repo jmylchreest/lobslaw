@@ -71,6 +71,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R28** | [The operator's laptop](#r28--the-operators-laptop) | ✅ | 🟠 P1 | L | — |
 | **R29** | [Enrolling an operator without moving a private key](#r29--enrolling-an-operator-without-moving-a-private-key) | ✅ | 🟠 P1 | M | R28 |
 | **R30** | [Cross-network node enrolment](#r30--cross-network-node-enrolment) | ⬜ | 🔵 P2 | M | R29 |
+| **R31** | [Run it before believing it](#r31--run-it-before-believing-it) | 🟨 | 🔴 P0 | S | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -3555,6 +3556,58 @@ its own.
 - [ ] Nothing online can issue a node certificate; issuance requires the offline CA.
 - [ ] An operator-scoped intermediate cannot sign a node certificate, and there is a test.
 - [ ] The join path documents that discovery is a hint and trust is not.
+
+## R31 — run it before believing it
+
+### Problem
+
+R28 and R29 shipped with strong tests: unit, in-process raft and bbolt, real TLS
+handshakes over sockets, and a mutation pass on every change. Every test was green.
+
+Then somebody ran the binary, and the feature did not work at all.
+
+An enrolled operator credential could not be used by the CLI that issued it. The
+client verified its own certificate against the CLUSTER CA — right for a node, wrong
+for an operator, whose certificate chains to the operator CA. And even after that,
+the server refused it: `ServerCreds()` snapshots the client-CA pool when the gRPC
+server is constructed, which happens BEFORE the wire stage that trusts the operator
+CA, so the running node never learned about the root it had just created.
+
+Neither is subtle. Both were invisible to every test written, because the tests
+exercised the pieces and never the path.
+
+### What running it found
+
+- `lobslaw nodeid` was documented, used in the getting-started guide, and dispatched
+  by nothing — it fell through and booted a whole node. So did `lobslaw dispatch`,
+  a documented command that does not exist.
+- Node certificates carry no IP or extra DNS SANs, so a node is reachable only at a
+  hostname equal to its node id. `--addr node1.example.com:9090`, the form R28 and
+  R29 both assume, could never have worked.
+- `enrol request` wrote its private key BEFORE the submission succeeded, so any
+  connection failure stranded a key that the overwrite guard then refused to replace.
+- `liveNode.resolve()` returned the resolved address without storing it, so every
+  "this came from &lt;where&gt;" label — the whole point of R28's last box — printed
+  blank whenever the address came from a context.
+- The configuration reference documents 19 keys that do not exist. koanf discards
+  unknown keys silently, so following the docs produces defaults with no warning.
+
+### The pattern
+
+Every one of these is a seam: between a command and its dispatcher, between a
+certificate and the name it is reached at, between a value being computed and being
+stored, between documentation and the thing it describes. Unit tests live inside the
+pieces and cannot see the joins.
+
+### Acceptance
+
+- [x] A documented command that no dispatcher claims fails a test.
+- [x] A documented config key that no struct field claims fails a test.
+- [x] `sign-node` can issue certificates for the names a node is actually reached at.
+- [x] An enrolled credential works end to end: request, approve, collect, connect.
+- [ ] A scripted smoke test boots a node and runs that flow, so this cannot regress
+      silently. Done by hand this time; it needs to be a target somebody can run.
+- [ ] The 19 phantom configuration keys are triaged: renamed, moved, or deleted.
 
 ## R29 — enrolling an operator without moving a private key
 

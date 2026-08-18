@@ -10,10 +10,10 @@ Full TOML reference. Every key, type, default. The authoritative source is `pkg/
 
 ```toml
 [cluster]
-node_id        = "node-1"           # required; lobslaw nodeid for default
-listen_address = "0.0.0.0:7000"     # raft + intra-cluster gRPC
-gateway_port   = 8443               # gateway TLS listen
-peers          = ["node-2:7000", "node-3:7000"]   # static peer list
+listen_addr    = "0.0.0.0:7443"     # raft + intra-cluster gRPC
+advertise_addr = "10.0.0.4:7443"    # what peers dial; derived from listen_addr
+data_dir       = "data"             # raft log + state.db + snapshots
+bootstrap      = true               # form a cluster alone; false requires a seed
 
 [cluster.mtls]
 ca_cert   = "certs/ca.pem"
@@ -28,6 +28,12 @@ operator_ca_key  = "certs/operator-ca-key.pem" # created on first use
 enrol_addr       = ":9091"                     # empty disables enrolment
 enrol_valid_for  = "2160h"                     # 90d default
 ```
+
+There is no `node_id` key. The node identity comes from `$LOBSLAW_NODE_ID`, or the
+short hostname, or a random fallback — `lobslaw nodeid` prints what this host
+would resolve to.
+
+Peers are `[discovery] seed_nodes`, and the gateway port is `[gateway] http_port`.
 
 `enrol_addr` is a **separate listener** that requires no client certificate,
 because a laptop enrolling does not have one yet. It serves only the submit and

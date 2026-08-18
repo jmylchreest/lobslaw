@@ -355,3 +355,27 @@ func TestAMalformedContextsFileIsAnError(t *testing.T) {
 		t.Fatal("a malformed contexts.toml parsed as empty")
 	}
 }
+
+// Every live command labels its output with the address it dialled.
+// resolve() returned the resolved address but never stored it, so a
+// connection made through a context left liveNode.addr empty and the
+// source line printed blank — the exact failure R28's "say where this
+// came from" rule exists to prevent, in the code that implements it.
+//
+// Found by running the binary. The renderer tests all passed a literal
+// address, so none of them could see that the caller supplied nothing.
+func TestDiallingRecordsTheAddressItResolved(t *testing.T) {
+	writeContexts(t, twoClusters)
+	node := boundNode(t, "--context", "prod")
+
+	if node.addr != "" {
+		t.Fatalf("precondition: addr should start empty, got %q", node.addr)
+	}
+	// dial fails — nothing is listening — but resolution happens first
+	// and is what the label depends on.
+	_, _ = node.dial()
+
+	if node.addr != "prod.example:9090" {
+		t.Errorf("addr = %q after dialling; every source label would print blank", node.addr)
+	}
+}

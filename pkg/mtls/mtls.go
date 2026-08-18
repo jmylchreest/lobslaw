@@ -37,7 +37,13 @@ type NodeCreds struct {
 	// can never be presented BY a server — which is the property that
 	// keeps an online operator-signing key from being able to
 	// manufacture a peer.
-	clientAuthPool *x509.CertPool
+	// Held atomically and read at HANDSHAKE time, not when ServerCreds
+	// is called. The gRPC server is constructed during node startup,
+	// before the wire stage that trusts the operator CA — so a pool
+	// captured at construction would never learn about it, and every
+	// enrolled operator would be told "certificate required" by a node
+	// that had been configured to accept them.
+	clientAuthPool atomic.Pointer[x509.CertPool]
 	// operatorCA is retained so callers can ask which root actually
 	// signed a client cert, rather than trusting an OU string.
 	operatorCA *x509.Certificate
@@ -148,7 +154,7 @@ func (n *NodeCreds) OperatorCA() *x509.Certificate { return n.operatorCA }
 
 func (n *NodeCreds) rebuildClientAuthPool() {
 	if n.operatorCA == nil {
-		n.clientAuthPool = n.pool
+		n.clientAuthPool.Store(n.pool)
 		return
 	}
 	// A fresh pool rather than AppendCertsFromPEM onto n.pool: mutating
@@ -160,7 +166,7 @@ func (n *NodeCreds) rebuildClientAuthPool() {
 		merged.AddCert(c)
 	}
 	merged.AddCert(n.operatorCA)
-	n.clientAuthPool = merged
+	n.clientAuthPool.Store(merged)
 }
 
 // poolCerts re-reads the cluster CA file so the merged pool can be
@@ -226,7 +232,18 @@ func (n *NodeCreds) ServerCreds() credentials.TransportCredentials {
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return n.activeCert(), nil
 		},
-		ClientCAs:  n.clientAuthPool,
+		// Resolved per handshake so a later TrustOperatorCA or Reload
+		// takes effect on the running server.
+		GetConfigForClient: func(_ *tls.ClientHelloInfo) (*tls.Config, error) {
+			return &tls.Config{
+				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return n.activeCert(), nil
+				},
+				ClientCAs:  n.clientAuthPool.Load(),
+				ClientAuth: tls.RequireAndVerifyClientCert,
+				MinVersion: tls.VersionTLS13,
+			}, nil
+		},
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS13,
 	})
@@ -262,4 +279,39 @@ func (n *NodeCreds) ClientCreds() credentials.TransportCredentials {
 		RootCAs:    n.pool,
 		MinVersion: tls.VersionTLS13,
 	})
+}
+
+// LoadClientCreds loads a credential for something that only ever
+// DIALS.
+//
+// Distinct from LoadNodeCreds, which verifies the certificate it loads
+// against the CA pool — correct for a node, whose identity must chain
+// to the cluster CA, and wrong for an operator, whose certificate
+// chains to the OPERATOR CA. Using the node loader for an operator
+// credential fails with "certificate signed by unknown authority"
+// before a single byte is sent, which is how an enrolled credential
+// turned out to be unusable by the CLI that issued it.
+//
+// Verifying your own certificate is a sanity check, not a security
+// control: the server is what must verify it, and the server holds
+// both roots. What the client genuinely needs is RootCAs, so it can
+// verify the NODE — and that is the cluster CA either way.
+func LoadClientCreds(caCertPath, certPath, keyPath string) (credentials.TransportCredentials, error) {
+	caPEM, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA cert %q: %w", caCertPath, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("CA cert %q is invalid or empty", caCertPath)
+	}
+	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert+key: %w", err)
+	}
+	return credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{pair},
+		RootCAs:      pool,
+		MinVersion:   tls.VersionTLS13,
+	}), nil
 }

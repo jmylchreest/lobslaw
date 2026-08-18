@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"time"
 )
@@ -17,6 +18,16 @@ type SignOpts struct {
 	NodeID   string
 	ValidFor time.Duration
 	Now      time.Time // zero = time.Now()
+
+	// DNSNames and IPs are the OTHER names this node answers at.
+	//
+	// A certificate is only valid for the names it carries, and the
+	// node id alone is rarely one of them from outside the cluster: an
+	// operator's laptop dialling "node1.example.com:9090" or
+	// "10.0.0.4:9090" gets a certificate that verifies for neither.
+	// Peers are fine either way, because they dial each other by id.
+	DNSNames []string
+	IPs      []net.IP
 }
 
 // LoadCA reads the CA cert + private key from disk. This function is
@@ -93,7 +104,13 @@ func SignNodeCert(caCert *x509.Certificate, caKey ed25519.PrivateKey, opts SignO
 			x509.ExtKeyUsageServerAuth,
 			x509.ExtKeyUsageClientAuth,
 		},
-		DNSNames: []string{opts.NodeID},
+		// The node id is always a SAN, because peers dial each other by
+		// it. Everything else has to be declared: a certificate is only
+		// valid for the names it carries, and a node reached at
+		// "node1.example.com" or at an IP by an operator's laptop
+		// presents one that verifies for neither.
+		DNSNames:    append([]string{opts.NodeID}, opts.DNSNames...),
+		IPAddresses: opts.IPs,
 	}
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, pub, caKey)

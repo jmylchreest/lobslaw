@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,10 @@ func clusterSignNode(args []string) {
 	nodeCert := fs.String("node-cert", envOr("LOBSLAW_NODE_CERT", ""), "path to write the signed node certificate")
 	nodeKey := fs.String("node-key", envOr("LOBSLAW_NODE_KEY", ""), "path to write the node private key")
 	nodeID := fs.String("node-id", "", "node identifier (cert CN/SAN); defaults to the short hostname so the cert binds to the host running it")
+	var dnsNames stringList
+	fs.Var(&dnsNames, "dns", "another DNS name this node answers at (repeatable)")
+	var ips stringList
+	fs.Var(&ips, "ip", "an IP address this node answers at (repeatable)")
 	validFor := fs.Duration("valid-for", 365*24*time.Hour, "node certificate validity duration")
 	copyCA := fs.Bool("copy-ca-public", true, "also copy the CA public cert next to the node cert for the main container")
 	if err := fs.Parse(args); err != nil {
@@ -156,6 +161,8 @@ func clusterSignNode(args []string) {
 
 	certPEM, keyPEM, err := mtls.SignNodeCert(ca, key, mtls.SignOpts{
 		NodeID:   *nodeID,
+		DNSNames: dnsNames,
+		IPs:      parseSignIPs(ips),
 		ValidFor: *validFor,
 	})
 	if err != nil {
@@ -413,4 +420,22 @@ func operatorContextSnippet(cert, key, ca string) string {
   cert    = %q
   key     = %q
 `, ca, cert, key)
+}
+
+// parseSignIPs turns --ip values into addresses, exiting on the first
+// unparseable one.
+//
+// Refused rather than skipped: a certificate quietly missing the
+// address somebody asked for fails at handshake time, a long way from
+// the typo that caused it.
+func parseSignIPs(vals []string) []net.IP {
+	out := make([]net.IP, 0, len(vals))
+	for _, v := range vals {
+		ip := net.ParseIP(strings.TrimSpace(v))
+		if ip == nil {
+			exitWith(fmt.Sprintf("cluster sign-node: --ip %q is not an IP address", v))
+		}
+		out = append(out, ip)
+	}
+	return out
 }

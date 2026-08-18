@@ -65,11 +65,22 @@ func (l *liveNode) dial() (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	creds, err := mtls.LoadNodeCreds(ca, cert, key)
+	// Written back so every "this came from <where>" label reports the
+	// address actually dialled. Without it a connection resolved from
+	// a context or a config.toml left l.addr empty, and the source
+	// line — the whole point of naming where an answer came from —
+	// printed blank.
+	l.addr = addr
+	// The CLI only ever dials, so it loads a CLIENT credential. The
+	// node loader would verify this certificate against the cluster
+	// CA — right for a node, wrong for an OPERATOR, whose certificate
+	// chains to the operator CA and would be rejected here before a
+	// byte was sent.
+	creds, err := mtls.LoadClientCreds(ca, cert, key)
 	if err != nil {
 		return nil, fmt.Errorf("load client credentials: %w", err)
 	}
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds.ClientCreds()))
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
