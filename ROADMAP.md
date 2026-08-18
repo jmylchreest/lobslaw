@@ -4093,3 +4093,120 @@ read as though it were the cluster's, and answering confidently with nothing in 
       the gap on stderr and carry an `[offline]` marker in the usage. Announcing beats refusing a
       command that works to make a point about a flag — and it beats running silently, which is
       the failure this item names.
+
+## R32 — MCP over SSE, off unless asked for
+
+### Problem
+
+The MCP client speaks one transport. `internal/mcp` defines a `Transport` interface, and
+`StdioTransport` over an `exec.Cmd` is the only implementation — so every MCP server must be a
+local subprocess. `MCPServerConfig` is `command`, `args`, `env`, `secret_env`, `install`,
+`disabled`: there is nowhere to put a URL.
+
+That rules out the whole class of MCP servers that are hosted rather than installed — a remote
+one has to be wrapped in a local proxy process to be reachable at all, which is a second moving
+part to install, supervise and keep patched, for a server whose entire point was that somebody
+else runs it.
+
+### Why this is a security item and not a plumbing one
+
+A stdio server and an SSE server are not the same grant wearing different clothes.
+
+A stdio server is a process this node spawned. It runs under the sandbox, its egress goes through
+smokescreen as role `mcp/<name>`, and the set of hosts it may reach comes from config. If it
+misbehaves the blast radius is a local process under confinement.
+
+An SSE server is a URL. Nothing about it is confined by us. It is a third party that receives
+every argument of every tool call routed to it, returns content that lands in the model's context,
+and — because MCP servers advertise their own tool list — chooses what capabilities to offer and
+how to describe them. A tool description is instruction text the model reads. A hostile or
+compromised SSE server therefore has a prompt-injection surface pointed at the agent, from
+outside, with no subprocess boundary in between.
+
+That is why this is off unless asked for, and why "asked for" has to mean more than reachable.
+
+### Proposal
+
+Transport chosen by which field is set, because a server is one or the other and a config that
+allows both would need a precedence rule nobody would remember:
+
+```toml
+[mcp.servers.gmail]              # unchanged — stdio, the default
+command = "uvx"
+args    = ["mcp-server-gmail"]
+
+[mcp.servers.weather]            # SSE
+url     = "https://mcp.example.com/sse"
+# Required, not derived from the URL. A redirect that moves the host
+# must fail rather than silently widen what this server may reach.
+network = ["mcp.example.com"]
+auth_header_ref = "env:WEATHER_MCP_TOKEN"
+```
+
+Declaring both `command` and `url` is a config error, named as one.
+
+The gates, in order:
+
+- **`[mcp] allow_remote = false` by default.** A `url` in config with the flag unset is a boot
+  error naming the flag, not a warning. An operator who has not said the word does not get remote
+  MCP because they pasted an example.
+- **HTTPS only**, and no `localhost` exemption. A plaintext exemption for local development is
+  exactly the line that ends up in a deployed config.
+- **Egress through `egress.ForMCP(name)`**, never a bare `http.Client`, so a server that redirects
+  elsewhere is refused by smokescreen rather than by our own good intentions.
+
+  This one is more work than it looks. The role NAME and the client helper exist — `builder.go`
+  reads `MCPServerNetworks` and `egress.ForMCP` wires role `mcp/<name>` — but nothing populates
+  that map. `wire_egress.go` sets it to `map[string][]string{}` with a comment deferring the real
+  rules to "Phase E.4 + E.6", and `MCPServerConfig` has no `network` field to populate it FROM.
+  So the per-server host ACL is plumbed and empty, and today's stdio servers are confined by the
+  sandbox rather than by that allowlist.
+
+  For stdio that is a gap. For SSE it is the whole control: there is no subprocess to confine, so
+  the ACL is the only thing standing between "a URL an operator declared" and "any host the far end
+  redirects to". Populating `MCPServerNetworks` from a new `network` field is therefore part of
+  THIS item, not a prerequisite somebody else will do.
+- **`trust_tier` on the server entry**, defaulting to `public`, so the existing trust floor applies
+  to remote tool results the way it applies to providers.
+- **Tool descriptions from a remote server are content, not instructions.** They already reach the
+  model; today they come from a local process the operator installed. Namespacing (`weather.forecast`)
+  makes provenance visible in the tool list, but the description text is still authored remotely and
+  should be treated as untrusted the way recalled memory already is — R5's reasoning about the system
+  prompt being the wrong place for untrusted text applies here unchanged.
+
+### Configuring it from a channel
+
+Worth stating because it is the obvious next question, and the answer differs per transport.
+
+`mcp_add` already exists and is reachable from Telegram — it takes `name`, `command`, `args`, `env`
+and starts a server node-locally, at `RiskCommunicating`. Two things bound it today: the management
+builtins only register when MCP is already wired (`n.mcpLoader != nil`), so an operator opted in
+via config before any of this is reachable; and additions are node-local and do not survive
+restart, so a chat message cannot durably change what the cluster runs.
+
+For SSE the same shape is **not** acceptable as-is. `mcp_add` with a `url` would let a message in a
+chat window point the agent at an arbitrary remote endpoint that then supplies its own tool
+descriptions — an injection path that starts in a channel and ends in the model's tool list. So:
+
+- `mcp_add` gains no `url` parameter while `allow_remote` is false, and the tool definition should
+  not mention one — a parameter the model can see is a parameter it will try.
+- With `allow_remote` true, a `url` addition goes through the durable confirmation prompt, the same
+  path operator enrolment uses, and names the host being added. The prompt exists precisely for
+  decisions that should not be inferable from the conversation that requested them.
+- The host must still be in `network` for a configured server, or the addition is refused. A chat
+  message may pick from what the operator allowed; it may not widen it.
+
+### Acceptance
+
+- [ ] `url` and `command` on one server entry is a named config error.
+- [ ] A `url` server with `[mcp] allow_remote` unset fails boot, naming the flag.
+- [ ] Plaintext `http://` is refused, including for loopback, and there is a test.
+- [ ] `MCPServerNetworks` is populated from config — it is an empty map today — and a stdio
+      server's declared `network` reaches smokescreen as role `mcp/<name>`.
+- [ ] The SSE transport dials through `egress.ForMCP(name)`; a host outside `network` is refused,
+      and the test asserts the refusal comes from the ACL rather than from the transport.
+- [ ] `mcp_add` exposes no `url` parameter when remote is disabled.
+- [ ] A remote `mcp_add` raises a confirmation prompt naming the host, and is refused for a host
+      outside the configured allowlist.
+- [ ] `mcp_list` distinguishes stdio from SSE, so "what is this node talking to" is answerable
+      without reading config.
