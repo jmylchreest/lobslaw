@@ -79,7 +79,7 @@ Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detai
 | **R33** | [Delegation as a primitive](#r33--delegation-as-a-primitive) | ⬜ | 🟠 P1 | M | — |
 | **R34** | [Skill bundles and the bootstrap](#r34--skill-bundles-and-the-bootstrap) | ⬜ | 🟠 P1 | M | — |
 | **R35** | [What the sandbox actually enforces](#r35--what-the-sandbox-actually-enforces) | ⬜ | 🔴 P0 | M | — |
-| **R36** | [The agent cannot say what it can do](#r36--the-agent-cannot-say-what-it-can-do) | ⬜ | 🟠 P1 | M | — |
+| **R36** | [The agent cannot say what it can do](#r36--the-agent-cannot-say-what-it-can-do) | 🟨 | 🟠 P1 | S | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -4844,7 +4844,25 @@ ordering rationale above while there.
 
 ## R36 — the agent cannot say what it can do
 
-⬜ **Not started.** 🟠 P1.
+🟨 **Partial.** 🟠 P1.
+
+> **Half of this landed while it was being written.** #150 shipped `learned_list` — piece 3 below —
+> and merged *between* this section being drafted against `ff7fb80` and the section itself merging
+> in #151. It reached the same conclusions independently, including the refusal to ship a
+> `learned_approve`, which is reassuring about the reasoning and embarrassing about the sequencing.
+>
+> A roadmap item obsoleted by the tree before it lands is the drift this document exists to prevent,
+> arriving from the one direction nobody watches: not a claim that decayed, but one that was
+> answered faster than it was filed. Corrected below rather than quietly rewritten, because the
+> sequence is the useful part.
+>
+> | Piece | State |
+> |---|---|
+> | 1 · `list_providers` stops answering "what can you do" | ⬜ open — the phrase is still on `main` |
+> | 2 · `skill_list` | ❌ **withdrawn** — see below |
+> | 3 · `learned_list` | ✅ **done** (#150), read-only, with no `learned_approve` |
+> | 4 · informative empty state | ⬜ open |
+> | ClawHub discovery probe | ⬜ open, and unchanged |
 
 ### Problem
 
@@ -4900,13 +4918,27 @@ somewhere to come from.
 description and add an explicit negative — this lists model providers, not skills; for skills use
 `skill_list`. The word *capabilities* in its output means modalities and should say so.
 
-**2 · `skill_list` — read-only enumeration.** Name, one-line description, tier, and whether the skill
-is active. Exactly the trade `skill_view` already makes explicit in its own doc comment: *"READ-ONLY,
-AND THAT IS WHY IT IS CHEAP TO ALLOW. Viewing a skill runs nothing."* Enumerating is strictly less
-sensitive than reading a skill's full instructions, which is already permitted.
+**2 · ~~`skill_list` — read-only enumeration.~~ Withdrawn 2026-08-18, on reading the code it would
+have duplicated.**
 
-**3 · `learned_list` — the agent can see its own proposals.** Read-only, owner-scoped, mirroring
-`lobslaw learned list`.
+The level-0 index is **already complete**, and `skill_index.go` says so at length: *"It has to be
+COMPLETE. Ranking and showing the top few is the obvious optimisation and it is the wrong one — a
+retrieval miss makes a capability invisible and the model then confabulates about what it has."*
+Every installed skill this node can run is in the prompt on every turn, so a tool to enumerate them
+would return what the model has already been given.
+
+`wireSkillViewTool` also settles the empty case, with a rule worth keeping: it declines to register
+`skill_view` at all when there is no registry, because a tool that can only answer *"no skill named
+that is installed"* **"teaches the model to stop asking"**. A `skill_list` on a node with no skills
+would be exactly that tool.
+
+So the second answer's real cause was not a missing enumeration. It was an empty section plus a
+neighbouring tool that invited the call — pieces 1 and 4, which is where the effort goes.
+
+**3 · `learned_list` — the agent can see its own proposals.** ✅ **Done (#150.)** Read-only,
+owner-scoped, mirroring `lobslaw learned list`. Ships without bodies on purpose — the body is what a
+person reads before approving, and returning it here would put the agent's own instructions back
+into its context every time somebody asked it a question about itself.
 
 > **Approval stays off the tool surface.** R16 made `ArtefactStore` the review fork's entire write
 > surface so the fork cannot reach past its own namespace; a tool that let the agent accept its own
@@ -4915,8 +4947,15 @@ sensitive than reading a skill's full instructions, which is already permitted.
 > the reason this gap has stayed open.
 
 **4 · Make the empty state informative.** `"(none installed)"` becomes *"(none installed; 2 awaiting
-your approval — ask me to list them)"* when proposals exist. This is the answer the user actually
-wanted, and it needs the self-taught store wired into promptgen — the same missing link as piece 3.
+your approval — use `learned_list`)"* when proposals exist, which piece 3 now makes actionable rather
+than a tease.
+
+**The empty branch also drops the framing the populated one carries.** With skills installed the
+section says *"This list is complete: every skill installed on this node is here. If something is not
+listed, it is not available — do not assume otherwise."* With none installed it says `(none
+installed)` and nothing else — so the completeness claim disappears at exactly the moment the model
+has nothing else to anchor on, which is when it went looking at `list_providers`. The empty case
+should keep the assertion, not just the fact.
 
 ### ClawHub discovery — separate, and larger
 
@@ -4946,11 +4985,11 @@ Do the probe first. It is an afternoon, and it decides whether the rest is a too
 ### Acceptance
 
 - [ ] Asking "what skills do you have" does not return a provider table.
-- [ ] `skill_list` enumerates installed skills, and a turn with no skills says so rather than
-      reaching for a neighbouring tool.
-- [ ] `learned_list` shows PROPOSED artefacts, and the count matches `lobslaw learned list` against
-      the same node.
-- [ ] No tool can accept or reject a proposal — asserted structurally, the way R16's write surface is.
+- [x] `learned_list` shows PROPOSED artefacts, and the count matches `lobslaw learned list` against
+      the same node. (#150)
+- [x] No tool can accept or reject a proposal — asserted structurally, the way R16's write surface
+      is. (#150: a test asserts no tool here names approve, accept, activate, reject or archive.)
+- [ ] The empty skills section keeps the completeness assertion, not just the fact of being empty.
 - [ ] With proposals pending and no skills installed, the prompt says so.
 - [ ] The clawhub probe is recorded: which endpoints exist, which do not, and whether the bundle
       format matches. Written down even if the answer is "none of it".
