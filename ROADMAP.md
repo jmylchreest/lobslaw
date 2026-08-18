@@ -80,6 +80,7 @@ Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detai
 | **R34** | [Skill bundles and the bootstrap](#r34--skill-bundles-and-the-bootstrap) | ⬜ | 🟠 P1 | M | — |
 | **R35** | [What the sandbox actually enforces](#r35--what-the-sandbox-actually-enforces) | ⬜ | 🔴 P0 | M | — |
 | **R36** | [The agent cannot say what it can do](#r36--the-agent-cannot-say-what-it-can-do) | 🟨 | 🟠 P1 | S | — |
+| **R37** | [A queue mode that reads the messages](#r37--a-queue-mode-that-reads-the-messages) | ⬜ | 🟡 P2 | M | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -169,6 +170,23 @@ inside a group deferred for performance reasons that do not apply to either.
 
 **The whole open set**, after the corrections above: R6a, R6b, R7, R11, R20 (20d only), R20e,
 R21, R23, R30, R32, R33, R34, R35. Everything else in the index is done.
+
+### Bookkeeping (2026-08-18, later the same day)
+
+- **Two sections were both numbered R36.** "The agent cannot say what it can do" (#151) and "a queue
+  mode that reads the messages" (#153) were written in parallel and both took the next free number,
+  because for each of them it *was* the next free number. The queue-mode item is renumbered **R37**
+  and has a row.
+
+  This is the fifth time a section has landed without a row, and the first time two have collided
+  outright. The earlier note said it should be a test rather than a habit; a collision says the test
+  has to check two things — that every section has a row, **and that no number is used twice.**
+  Both are three lines of `grep` against a document that already fails CI for phantom config keys
+  and undispatched commands.
+
+- **R36 itself was overtaken while being written** — see its own header note. Between that and the
+  collision, the pattern worth naming is that this document is now edited concurrently and its
+  numbering assumes it is not.
 
 ### Status drift
 
@@ -4973,14 +4991,56 @@ So the client was written against an **inferred** API, for a service nobody has 
 - Is there a search or index endpoint, under any path?
 - Does the bundle format match what `install.go` expects to unpack?
 
-**If the answer is "the catalogue does not exist in this shape", that is the finding**, and it
-changes R34 rather than extending it: bundles would then be published by this project rather than
-resolved from a third party, and the `clawhub_install` tool description promises a catalogue that
-cannot be reached. This is exactly the R31 pattern one layer out — the code, its documentation and
-its tool description all agree with each other and none of them has been checked against the thing
-they describe.
+#### The probe, run 2026-08-18
 
-Do the probe first. It is an afternoon, and it decides whether the rest is a tool or a redesign.
+Against the live `https://clawhub.ai`. Every line below is a response code observed, not inferred.
+
+| Request | Result |
+|---|---|
+| `GET /v1/skills/cofferline/1.0.0` — **what `GetSkill` builds** | **404** |
+| `GET /api/v1/skills` | 200 · `{items[25], nextCursor}` |
+| `GET /api/v1/skills?q=git` | 200 · same shape |
+| `GET /api/v1/skills/<slug>` | 200 · `{skill, latestVersion, metadata, owner, moderation}` |
+| `GET /api/v1/skills/<slug>/<version>` | **404** |
+| `GET /api/v1/download?slug=<slug>` — **what `DownloadBundleBySlug` builds** | 200 · `application/zip` |
+
+**The code was more right than the review assumed, and wrong in a narrower and sharper place.**
+
+- **The slug path works end to end.** The download returns a zip, `extractAny` already handles zip,
+  and its comment already says *"the actual clawhub.ai serves zip"* — somebody checked. An earlier
+  draft of this section claimed a tar.gz/zip mismatch; there is none.
+- **The native path is not broken so much as aspirational.** `/v1/skills/<name>/<version>` 404s
+  because clawhub.ai is not a lobslaw-format catalogue, which `clawhub_install`'s own description
+  already says it is for. Nothing to fix; something to stop implying.
+- **Discovery exists in the API and lobslaw does not use it.** `/api/v1/skills` is paginated and
+  takes `?q=`. So *"can you search clawhub"* returning a 404 is a **lobslaw gap, not a catalogue
+  gap** — and `clawhub_search` is buildable today against a contract that is already live.
+
+**The real finding is that nothing on the catalogue can be verified.** The detail response carries
+`slug`, `displayName`, `summary`, `description`, `topics`, `tags`, `stats`, `owner`, `moderation`
+and `latestVersion{version, changelog, license, createdAt}`. It carries **no bundle digest and no
+signature** — checked field by field, not by eyeballing. `InstallBySlug` reflects that honestly: it
+calls `installFromBody` with `expectedSHA` empty, so the digest check is skipped because there is no
+digest to check.
+
+So R19's model — a detached signature over a manifest pinning `handler_sha256`, verified before exec
+— **has nothing to verify against on the only catalogue that exists.** Signed skills are a lobslaw
+format that clawhub.ai does not publish.
+
+#### What this changes
+
+- **R34's bundles must be published by this project**, not resolved from clawhub. Pinning version
+  and digest is the whole point of that item, and the upstream supplies neither. This confirms the
+  hedge R34 already carried rather than contradicting it.
+- **A slug install is unverified by construction**, and should say so at the point of installing
+  rather than only in this document. It is trust-on-first-use over TLS: fine as a considered choice,
+  not fine as an unstated one.
+- **`clawhub_search` is worth building** and is the smallest item here — a live, paginated, already
+  filterable endpoint, and the answer to a question a user actually asked.
+
+The wider lesson is the R31 one, one layer out: the client, its doc comment and its tool description
+all agreed with each other, and the parts that had been checked against the real service were right
+while the parts that had not were 404s. Agreement between three things you wrote is not evidence.
 
 ### Acceptance
 
@@ -4994,7 +5054,7 @@ Do the probe first. It is an afternoon, and it decides whether the rest is a too
 - [ ] The clawhub probe is recorded: which endpoints exist, which do not, and whether the bundle
       format matches. Written down even if the answer is "none of it".
 - [ ] `clawhub_install`'s description does not promise a catalogue that cannot be reached.
-## R36 — a queue mode that reads the messages
+## R37 — a queue mode that reads the messages
 
 ### Problem
 
