@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -165,5 +167,56 @@ func TestARemoteTurnRendersLikeALocalOne(t *testing.T) {
 	if local.String() != remote.String() {
 		t.Errorf("a round-tripped turn renders differently:\nlocal:\n%s\nremote:\n%s",
 			local.String(), remote.String())
+	}
+}
+
+// Reading the turn id from args[0] BEFORE parsing flags meant
+// `lobslaw trace --context prod <turn-id>` took "--context" as the
+// turn id. Nothing said so: the command then failed to connect for
+// unrelated reasons, and on a reachable node reported "no spans for
+// turn --context", which reads as "that turn ran elsewhere" — the one
+// answer guaranteed to send an operator looking at the wrong node.
+func TestTraceShowTakesTheTurnIdWhicheverSideTheFlagsAreOn(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{
+		{"turn-1"},
+		{"turn-1", "--timeout", "3s"},
+		{"--timeout", "3s", "turn-1"},
+		{"--timeout=3s", "turn-1"},
+	} {
+		fs := flag.NewFlagSet("trace", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		var node liveNode
+		node.bind(fs)
+
+		got, err := traceTurnID(fs, args)
+		if err != nil {
+			t.Errorf("%v: %v", args, err)
+			continue
+		}
+		if got != "turn-1" {
+			t.Errorf("%v: turn id = %q, want \"turn-1\"", args, got)
+		}
+		// The flags either side of it must still have been applied,
+		// or they were skipped rather than parsed.
+		if len(args) > 1 && node.timeout != 3*time.Second {
+			t.Errorf("%v: --timeout not applied (got %s)", args, node.timeout)
+		}
+	}
+}
+
+// A turn id is required, and two are a typo rather than a request for
+// both — silently using the first would answer about a turn the
+// operator did not name.
+func TestTraceTurnIdRefusesNoneAndTwo(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{nil, {"turn-1", "turn-2"}} {
+		fs := flag.NewFlagSet("trace", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		var node liveNode
+		node.bind(fs)
+		if _, err := traceTurnID(fs, args); err == nil {
+			t.Errorf("%v was accepted", args)
+		}
 	}
 }

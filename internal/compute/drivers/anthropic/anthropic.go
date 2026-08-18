@@ -39,6 +39,30 @@ const apiVersion = "2023-06-01"
 // has no server-side default and the request is rejected without it.
 const defaultMaxTokens = 4096
 
+// normaliseEndpoint accepts a base URL as well as a full one.
+//
+// The openai driver has always taken either — LLMClient appends
+// /chat/completions when it is absent, because that is the form every
+// vendor's documentation quotes. This driver did not, so the same
+// [[compute.providers]] field meant different things depending on the
+// driver name beside it: endpoint = "https://api.anthropic.com" is
+// what the Anthropic docs print, and it POSTed to the bare host.
+//
+// The failure was invisible until the first real turn, and then
+// surfaced as "HTTP 404: " with an empty body — which reads as a
+// broken vendor, not a config typo. One concept, one meaning.
+func normaliseEndpoint(endpoint string) string {
+	e := strings.TrimRight(endpoint, "/")
+	switch {
+	case strings.HasSuffix(e, "/messages"):
+		return e
+	case strings.HasSuffix(e, "/v1"):
+		return e + "/messages"
+	default:
+		return e + "/v1/messages"
+	}
+}
+
 // Config wires a driver instance.
 type Config struct {
 	Endpoint   string
@@ -78,6 +102,7 @@ func New(cfg Config) (*Driver, error) {
 	if d.endpoint == "" {
 		d.endpoint = DefaultEndpoint
 	}
+	d.endpoint = normaliseEndpoint(d.endpoint)
 	if d.client == nil {
 		d.client = &http.Client{Timeout: 120 * time.Second}
 	}

@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -315,6 +316,9 @@ type messageResponse struct {
 	// via POST /v1/prompts/<id>/resolve.
 	PromptID string          `json:"prompt_id,omitempty"`
 	Budget   budgetStateJSON `json:"budget,omitempty"`
+	// TurnID is what `lobslaw trace <turn-id>` wants. Always set,
+	// including when the server minted it.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 type toolCallJSON struct {
@@ -403,6 +407,16 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Message) == "" {
 		s.jsonErr(w, http.StatusBadRequest, "message is required")
 		return
+	}
+	// A turn with no id is a turn with no trace. The Telegram path
+	// always mints one; this one passed through whatever the caller
+	// sent, so a REST turn from a client that supplied none recorded
+	// its spans under the empty id and `trace list` came back empty —
+	// tracing looked switched OFF on a node where it was switched on.
+	// Returned in the response too: an id the caller cannot see is an
+	// id they cannot look the turn up by.
+	if req.TurnID == "" {
+		req.TurnID = "rest-" + ids.New()
 	}
 
 	budget, err := compute.NewTurnBudget(s.cfg.DefaultBudget)
@@ -588,6 +602,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		NeedsConfirmation:  resp.NeedsConfirmation,
 		ConfirmationReason: resp.ConfirmationReason,
 		PromptID:           lastPromptID,
+		TurnID:             req.TurnID,
 		Budget: budgetStateJSON{
 			ToolCalls:   resp.BudgetState.ToolCalls,
 			SpendUSD:    resp.BudgetState.SpendUSD,

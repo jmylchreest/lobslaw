@@ -385,3 +385,47 @@ func TestRESTAddrExposedAfterStart(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// A turn with no id is a turn with no trace: spans key off the turn
+// id, so an empty one made `trace list` come back empty on a node
+// with tracing switched ON. Telegram has always minted one; this
+// path passed through whatever the caller sent.
+func TestRESTMintsATurnIDWhenTheCallerSendsNone(t *testing.T) {
+	t.Parallel()
+	agent := mockAgent(t, compute.MockResponse{Content: "ok"})
+	url, _ := startREST(t, agent)
+
+	out := postMessage(t, url, messageRequest{Message: "hello"})
+	if out.TurnID == "" {
+		t.Fatal("no turn id was minted; this turn's spans are unreachable by `lobslaw trace`")
+	}
+}
+
+// Two turns must not share an id, or their spans merge into one
+// trace and the per-turn cost question has no answer.
+func TestRESTMintedTurnIDsAreDistinct(t *testing.T) {
+	t.Parallel()
+	agent := mockAgent(t,
+		compute.MockResponse{Content: "one"},
+		compute.MockResponse{Content: "two"})
+	url, _ := startREST(t, agent)
+
+	first := postMessage(t, url, messageRequest{Message: "hello"})
+	second := postMessage(t, url, messageRequest{Message: "hello again"})
+	if first.TurnID == second.TurnID {
+		t.Errorf("both turns got id %q; their spans would merge", first.TurnID)
+	}
+}
+
+// A caller that supplies its own id is correlating these turns with
+// something on its side. Minting over it would break that.
+func TestRESTKeepsACallerSuppliedTurnID(t *testing.T) {
+	t.Parallel()
+	agent := mockAgent(t, compute.MockResponse{Content: "ok"})
+	url, _ := startREST(t, agent)
+
+	out := postMessage(t, url, messageRequest{Message: "hello", TurnID: "caller-owned-1"})
+	if out.TurnID != "caller-owned-1" {
+		t.Errorf("turn id = %q, want the caller's own %q", out.TurnID, "caller-owned-1")
+	}
+}

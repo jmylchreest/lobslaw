@@ -215,3 +215,34 @@ func readAll(r *http.Request) ([]byte, error) {
 	defer func() { _ = r.Body.Close() }()
 	return io.ReadAll(r.Body)
 }
+
+// The same [[compute.providers]] endpoint field must mean the same
+// thing whichever driver sits beside it. The openai driver has always
+// accepted a base URL; this one required the full path and answered a
+// bare host with "HTTP 404: " on the first real turn — an empty-bodied
+// 404 that reads as a broken vendor rather than a config typo.
+func TestEndpointAcceptsABaseURLLikeTheOpenAIDriver(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		given, want string
+	}{
+		// What https://docs.claude.com prints, and what an operator
+		// copies into config.toml.
+		{"https://api.anthropic.com", "https://api.anthropic.com/v1/messages"},
+		{"https://api.anthropic.com/", "https://api.anthropic.com/v1/messages"},
+		{"https://api.anthropic.com/v1", "https://api.anthropic.com/v1/messages"},
+		// Already complete: left exactly as given, so an operator who
+		// spelled it out in full is not second-guessed.
+		{"https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1/messages"},
+		// A gateway on a non-standard prefix still gets the API path.
+		{"https://proxy.internal/anthropic", "https://proxy.internal/anthropic/v1/messages"},
+	} {
+		d, err := New(Config{Endpoint: tc.given, Credential: compute.NewHeaderCredential("x-api-key", "k")})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.given, err)
+		}
+		if d.endpoint != tc.want {
+			t.Errorf("endpoint %q resolved to %q, want %q", tc.given, d.endpoint, tc.want)
+		}
+	}
+}

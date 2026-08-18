@@ -87,18 +87,38 @@ func traceListLive(args []string) error {
 	return nil
 }
 
-func traceShowLive(args []string) error {
-	// Guarded rather than trusted. The dispatcher only calls this
-	// with a turn id present, but a panic is a worse way to learn
-	// that changed than an error is.
-	if len(args) == 0 {
-		return errors.New("a turn id is required: lobslaw trace <turn-id>")
+// traceTurnID parses fs and returns the single positional turn id.
+//
+// Split out from traceShowLive so the parse can be tested without a
+// node to dial: the bug it fixes was invisible in every error message.
+// Reading the turn id from args[0] BEFORE parsing flags meant
+// `trace --context prod <id>` took "--context" as the turn id, then
+// failed to connect for unrelated reasons — so the wrong-id part
+// never showed up, and the eventual "no spans recorded for that turn"
+// read as "it ran on another node".
+func traceTurnID(fs *flag.FlagSet, args []string) (string, error) {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
+		return "", err
 	}
+	switch len(positional) {
+	case 1:
+		return positional[0], nil
+	case 0:
+		return "", errors.New("a turn id is required: lobslaw trace <turn-id>")
+	default:
+		// Two ids is a typo, not a request for both. Quietly using the
+		// first would answer about a turn nobody asked about.
+		return "", fmt.Errorf("exactly one turn id is required, got %d: %v", len(positional), positional)
+	}
+}
+
+func traceShowLive(args []string) error {
 	fs := flag.NewFlagSet("trace", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
-	turnID := args[0]
-	if err := fs.Parse(args[1:]); err != nil {
+	turnID, err := traceTurnID(fs, args)
+	if err != nil {
 		return err
 	}
 
