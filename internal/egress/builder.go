@@ -40,6 +40,14 @@ type ACLInputs struct {
 	// declaring no network access).
 	SkillNetworks map[string][]string
 
+	// WantsModelDiscovery is true when any provider opted into
+	// auto_capabilities. The role is only created then: a node that
+	// never fetches the catalog should not be allowed to.
+	WantsModelDiscovery bool
+	// ModelsDevURL is the catalog endpoint, so a private mirror gets
+	// the allowance instead of the public host.
+	ModelsDevURL string
+
 	// ClawhubBaseURL is the API endpoint for clawhub.ai. Empty when
 	// the operator hasn't enabled clawhub installation.
 	ClawhubBaseURL string
@@ -135,6 +143,22 @@ func Build(in ACLInputs) Rules {
 			continue
 		}
 		rules.Roles[role] = hosts
+	}
+
+	// models.dev capability catalog. The fetcher calls
+	// egress.For("modelsdev"), and without a matching role here the
+	// proxy refused it — so auto_capabilities logged
+	//
+	//	modelsdev: fetch failed; ... Request rejected by proxy
+	//
+	// and every opted-in provider silently fell back to whatever the
+	// operator had hand-declared. The feature was wired end to end
+	// except for the one line that let it out of the box.
+	//
+	// Gated on somebody having asked for discovery, so a node that
+	// never fetches the catalog carries no allowance for it.
+	if in.WantsModelDiscovery {
+		rules.Roles["modelsdev"] = []string{hostOfOrSelf(in.ModelsDevURL)}
 	}
 
 	// Clawhub installer — hardcoded host set (clawhub API + the

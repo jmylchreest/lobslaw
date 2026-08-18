@@ -151,3 +151,46 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// The catalog fetcher calls egress.For("modelsdev"). Without a
+// matching role the proxy refused it, auto_capabilities logged
+// "Request rejected by proxy", and every opted-in provider silently
+// fell back to hand-declared capabilities — a feature wired end to
+// end except for the line that let it out of the box.
+func TestModelDiscoveryGetsAnEgressRoleWhenAsked(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{
+		WantsModelDiscovery: true,
+		ModelsDevURL:        "https://models.dev/api.json",
+	})
+	hosts, ok := rules.Roles["modelsdev"]
+	if !ok {
+		t.Fatal("no modelsdev role; the catalog fetch is refused by our own proxy")
+	}
+	if len(hosts) != 1 || hosts[0] != "models.dev" {
+		t.Errorf("modelsdev hosts = %v, want just the catalog host", hosts)
+	}
+}
+
+// A node that never fetches the catalog should not be allowed to.
+func TestNoDiscoveryRoleWhenNobodyOptedIn(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{ModelsDevURL: "https://models.dev/api.json"})
+	if _, ok := rules.Roles["modelsdev"]; ok {
+		t.Error("a node with no auto_capabilities provider carries an allowance it never uses")
+	}
+}
+
+// A private mirror gets the allowance instead of the public host —
+// otherwise an operator pointing at their own catalog is refused by
+// the proxy while the public one they are not using is permitted.
+func TestAPrivateCatalogMirrorGetsTheAllowance(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{
+		WantsModelDiscovery: true,
+		ModelsDevURL:        "https://catalog.internal.example.com/api.json",
+	})
+	if got := rules.Roles["modelsdev"]; len(got) != 1 || got[0] != "catalog.internal.example.com" {
+		t.Errorf("modelsdev hosts = %v, want the mirror", got)
+	}
+}

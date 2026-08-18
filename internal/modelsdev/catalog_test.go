@@ -155,3 +155,50 @@ func TestLookupReturnsFalseForUnknown(t *testing.T) {
 		t.Error("expected miss for unknown model")
 	}
 }
+
+// The endpoint identifies WHICH provider a config entry points at,
+// and that entry is better evidence than a vote across providers
+// nobody uses. Lookup's fallback — any provider carrying the name —
+// answers a different question, so a hint-only form exists.
+func TestLookupProviderDoesNotFallBackToAnotherVendor(t *testing.T) {
+	t.Parallel()
+	cat := Catalog{
+		"vendor-a": Provider{
+			ID:  "vendor-a",
+			API: "https://a.example.com/v1",
+			Models: map[string]Model{
+				"shared-model": {ID: "shared-model", Modalities: Modalities{Input: []string{"text", "image"}}},
+			},
+		},
+		"vendor-b": Provider{
+			ID:     "vendor-b",
+			API:    "https://b.example.com/v1",
+			Models: map[string]Model{"only-here": {ID: "only-here"}},
+		},
+	}
+
+	// The configured endpoint is vendor-b, which does not list it.
+	if _, ok := cat.LookupProvider("https://b.example.com/v1", "shared-model"); ok {
+		t.Error("LookupProvider answered from a vendor the caller is not configured against")
+	}
+	// Lookup, by contrast, is allowed to: it answers "tell me about
+	// this model", not "what does my endpoint say".
+	if _, ok := cat.Lookup("https://b.example.com/v1", "shared-model"); !ok {
+		t.Error("Lookup lost its documented fallback")
+	}
+	// And the hint that DOES match still resolves.
+	m, ok := cat.LookupProvider("https://a.example.com/v1", "shared-model")
+	if !ok || len(m.Modalities.Input) != 2 {
+		t.Errorf("LookupProvider(a) = %+v, %v", m, ok)
+	}
+}
+
+// An empty hint cannot mean "any provider will do" here, or the
+// consensus path it exists to preserve becomes unreachable.
+func TestLookupProviderNeedsAHint(t *testing.T) {
+	t.Parallel()
+	cat := Catalog{"v": Provider{ID: "v", API: "https://v/v1", Models: map[string]Model{"m": {ID: "m"}}}}
+	if _, ok := cat.LookupProvider("", "m"); ok {
+		t.Error("an empty hint matched; consensus would become dead code")
+	}
+}

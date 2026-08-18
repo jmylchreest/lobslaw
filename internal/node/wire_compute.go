@@ -635,14 +635,29 @@ func (n *Node) applyModelsDevAutoCapabilities(ctx context.Context) {
 		if !p.AutoCapabilities {
 			continue
 		}
-		// Provider hint = endpoint hostname (lookupInProvider does
-		// substring match against catalog providers' API URLs).
+		// The endpoint identifies WHICH catalog provider this is, and
+		// that entry is better evidence than a vote across providers
+		// nobody here uses.
+		//
+		// The consensus rule is an intersection, and it was reached
+		// FIRST — so qwen3.7-plus, listed by twelve providers, lost
+		// its image input because two of them (aihubmix, hyper) have
+		// it wrong. The ten that agree include alibaba-token-plan,
+		// which is the endpoint actually configured. Discovery then
+		// reported "no new capabilities" and read_image did not
+		// register, on a provider whose own catalogue entry says it
+		// takes images.
+		//
+		// Consensus still covers the case it was written for: when
+		// the endpoint matches no catalogue provider, a vote across
+		// everything carrying that model name is the best available
+		// evidence, and its conservatism is right there.
 		hint := p.Endpoint
-		matches := cat.LookupAll(p.Model)
-		if len(matches) == 0 {
-			if hinted, ok := cat.Lookup(hint, p.Model); ok {
-				matches = []modelsdev.Model{hinted}
-			}
+		var matches []modelsdev.Model
+		if hinted, ok := cat.LookupProvider(hint, p.Model); ok {
+			matches = []modelsdev.Model{hinted}
+		} else {
+			matches = cat.LookupAll(p.Model)
 		}
 		if len(matches) == 0 {
 			n.log.Info("modelsdev: model not found in catalog; using declared caps only",

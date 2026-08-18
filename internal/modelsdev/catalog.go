@@ -249,6 +249,20 @@ func (f *Fetcher) fetchHTTP(ctx context.Context) (Catalog, error) {
 	return cat, nil
 }
 
+// LookupProvider returns the model as THAT provider lists it, and
+// nothing else.
+//
+// Distinct from Lookup, which falls back to any provider carrying the
+// name. That fallback is right for "tell me about this model" and
+// wrong for "what does the endpoint I am configured against say",
+// where an answer from a different vendor is not an answer.
+func (c Catalog) LookupProvider(providerHint, modelName string) (Model, bool) {
+	if c == nil || providerHint == "" || modelName == "" {
+		return Model{}, false
+	}
+	return c.lookupInProvider(providerHint, modelName)
+}
+
 // Lookup finds a model by name. Search strategy:
 //
 //  1. If providerHint is non-empty, try that provider's models first.

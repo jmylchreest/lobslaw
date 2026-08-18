@@ -3,6 +3,7 @@ package node
 import (
 	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/modelsdev"
 )
 
 // wireEgress builds the smokescreen provider from current config +
@@ -135,6 +136,16 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 	}
 	// MCP servers + skill networks: rules emerge once subprocesses
 	// spawn. Phase E.4 + E.6 fold them in.
+	// Mirrors the predicate applyModelsDevAutoCapabilities uses, so
+	// the allowance exists exactly when the fetch happens.
+	for _, prov := range n.cfg.Compute.Providers {
+		if prov.AutoCapabilities {
+			in.WantsModelDiscovery = true
+			break
+		}
+	}
+	in.ModelsDevURL = modelsdev.DefaultURL
+
 	in.MCPServerNetworks = map[string][]string{}
 	in.SkillNetworks = map[string][]string{}
 	return in

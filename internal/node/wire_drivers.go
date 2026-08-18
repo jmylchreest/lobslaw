@@ -54,6 +54,7 @@ func (n *Node) drivers() *compute.DriverSet {
 		// sensible to default to.
 		s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
 		s.RegisterSpeak(elevenlabs.DriverName, elevenlabsSpeakFactory)
+		s.RegisterSpeak(minimax.DriverName, minimaxSpeakFactory)
 		s.RegisterSpeak(compute.DriverMock, compute.MockSpeakFactory)
 		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
 		s.RegisterImage(imagen.DriverName, imagenImageFactory)
@@ -192,6 +193,19 @@ func dashscopeImageFactory(cfg compute.ImageDriverConfig) (compute.ImageDriver, 
 	return dashscope.NewImage(dashscope.ImageConfig{
 		Endpoint:   cfg.Endpoint,
 		Model:      cfg.Model,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+		Logger:     cfg.Logger,
+	})
+}
+
+// minimaxSpeakFactory adapts MiniMax's text-to-audio endpoint.
+func minimaxSpeakFactory(cfg compute.SpeakDriverConfig) (compute.SpeakDriver, error) {
+	return minimax.NewSpeak(minimax.SpeakConfig{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
+		Voice:      cfg.Voice,
+		Format:     cfg.Format,
 		Credential: cfg.Credential,
 		HTTPClient: cfg.HTTPClient,
 		Logger:     cfg.Logger,
