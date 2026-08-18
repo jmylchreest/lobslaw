@@ -11,6 +11,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"log/slog"
+
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
@@ -24,10 +27,22 @@ import (
 // scope — which is why the signing-key handling lives here rather than
 // in internal/memory.
 
+// EnrolmentAsker puts a pending request in front of a human over a
+// channel.
+//
+// An interface so the node does not reach into a specific gateway, and
+// so a deployment with no channel wired simply asks nobody — which is
+// not a failure, because an operator can still decide from the CLI.
+type EnrolmentAsker interface {
+	AskEnrolment(ctx context.Context, req gateway.EnrolmentRequest) (promptID string, err error)
+}
+
 // enrolmentService serves EnrolmentService.
 type enrolmentService struct {
 	lobslawv1.UnimplementedEnrolmentServiceServer
 
+	asker      EnrolmentAsker
+	log        *slog.Logger
 	store      *memory.EnrolmentStore
 	caCert     *x509.Certificate
 	caKey      ed25519.PrivateKey
@@ -38,7 +53,7 @@ type enrolmentService struct {
 
 // SubmitEnrolment queues a request. Served WITHOUT a client
 // certificate: a laptop enrolling does not have one yet.
-func (s *enrolmentService) SubmitEnrolment(_ context.Context, req *lobslawv1.SubmitEnrolmentRequest) (
+func (s *enrolmentService) SubmitEnrolment(ctx context.Context, req *lobslawv1.SubmitEnrolmentRequest) (
 	*lobslawv1.SubmitEnrolmentResponse, error) {
 	if s.store == nil {
 		return nil, status.Error(codes.FailedPrecondition, "enrolment is not configured on this node")
@@ -50,11 +65,69 @@ func (s *enrolmentService) SubmitEnrolment(_ context.Context, req *lobslawv1.Sub
 		// prove possession of its own key.
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	// Asked AFTER the request is durably queued, and never fatally.
+	// A channel outage must not lose an enrolment somebody could still
+	// approve from the CLI — the request is the record, the prompt is
+	// only a way of noticing it.
+	s.ask(ctx, rec)
+
 	return &lobslawv1.SubmitEnrolmentResponse{
 		Id:          rec.GetId(),
 		Fingerprint: rec.GetFingerprint(),
 		ExpiresAt:   rec.GetExpiresAt(),
 	}, nil
+}
+
+// ask raises the approval prompt, if a channel is wired.
+func (s *enrolmentService) ask(ctx context.Context, rec *lobslawv1.EnrolmentRecord) {
+	if s.asker == nil {
+		return
+	}
+	var expires time.Time
+	if e := rec.GetExpiresAt(); e != nil {
+		expires = e.AsTime()
+	}
+	promptID, err := s.asker.AskEnrolment(ctx, gateway.EnrolmentRequest{
+		ID:            rec.GetId(),
+		RequestedName: rec.GetRequestedName(),
+		Fingerprint:   rec.GetFingerprint(),
+		ExpiresAt:     expires,
+	})
+	if err != nil {
+		// Logged at WARN, not returned. Nobody was asked, which is
+		// worth knowing, but the request is queued and decidable.
+		s.log.Warn("enrolment: nobody could be asked to approve",
+			"enrolment", rec.GetId(), "err", err)
+		return
+	}
+	s.log.Info("enrolment: approval requested",
+		"enrolment", rec.GetId(), "prompt", promptID)
+}
+
+// DecideFromChannel applies a decision reached over a channel.
+//
+// Satisfies gateway.EnrolmentDecider. Separate from DecideEnrolment
+// because the identity arrives differently: over gRPC it comes from a
+// verified client certificate, and here it comes from the prompt's
+// audience check, which the gateway has already performed.
+func (s *enrolmentService) Decide(ctx context.Context, id string, approve bool, by string) error {
+	if s.store == nil {
+		return errors.New("enrolment is not configured on this node")
+	}
+	if strings.TrimSpace(by) == "" {
+		// Same rule as the gRPC path. An unattributed approval is an
+		// operator credential nobody is accountable for.
+		return errors.New("an enrolment decision must name who made it")
+	}
+	if approve && (s.caCert == nil || s.caKey == nil) {
+		return errors.New("this node holds no operator CA and cannot issue certificates")
+	}
+	_, err := s.store.Decide(id, approve, "", by,
+		func(csr *x509.CertificateRequest, name string) ([]byte, error) {
+			return mtls.SignOperatorCSR(s.caCert, s.caKey, csr, name, s.validFor)
+		})
+	_ = ctx
+	return err
 }
 
 // PollEnrolment reports whether a request has been answered.

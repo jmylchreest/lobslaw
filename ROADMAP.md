@@ -69,7 +69,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R25** | [Retire the node functions that select nothing](#r25--retire-the-node-functions-that-do-not-select-anything) | ⬜ | 🟡 P2 | S | — |
 | **R26** | [A second vendor per generation modality](#r26--a-second-vendor-per-generation-modality) | ⬜ | 🟠 P1 | M | R22 |
 | **R28** | [The operator's laptop](#r28--the-operators-laptop) | ✅ | 🟠 P1 | L | — |
-| **R29** | [Enrolling an operator without moving a private key](#r29--enrolling-an-operator-without-moving-a-private-key) | ⬜ | 🟠 P1 | M | R28 |
+| **R29** | [Enrolling an operator without moving a private key](#r29--enrolling-an-operator-without-moving-a-private-key) | ✅ | 🟠 P1 | M | R28 |
 | **R30** | [Cross-network node enrolment](#r30--cross-network-node-enrolment) | ⬜ | 🔵 P2 | M | R29 |
 
 ### Bookkeeping (reviewed 2026-08-17)
@@ -3699,8 +3699,8 @@ different blast radius. Cross-network node enrolment is R30.
       the usage teaches only that one; `enroll` is aliased because it is the spelling half the
       world's muscle memory produces, and a typo that prints "unknown subcommand" teaches
       nothing.
-- [ ] An enrolment is approved by the owner over a channel, or by an existing operator.
-      **The operator half is done; the channel half is next.**
+- [x] An enrolment is approved by the owner over a channel, or by an existing operator.
+      **Both, and the channel path inherits the audience check rather than working around it.**
 
       `enrol approve` requires `--fingerprint`. An approval without one is somebody clicking yes
       to a request they have not checked is the one they were told about, which is the failure
@@ -3713,6 +3713,28 @@ different blast radius. Cross-network node enrolment is R30.
       Every decision names somebody, read from the VERIFIED client certificate rather than from
       anything the request carries. An unattributed approval is an operator credential nobody is
       accountable for.
+
+      The channel path reuses the confirmation machinery instead of adding a second callback
+      shape. A pending enrolment raises a prompt carrying the request id, delivered to whoever
+      holds the owner scope — so the audience check from the callback-authentication fix applies
+      unchanged, and a bystander in a group chat cannot admit an operator. The keyboard is
+      approve/deny only: an always-grant for issuing operator credentials would be a standing
+      authority to admit anyone who asks.
+
+      Asked AFTER the request is durably queued, and never fatally. A channel outage must not
+      lose an enrolment somebody could still approve from the CLI — the request is the record,
+      the prompt is only a way of noticing it.
+
+      A failed issue is reported to the person who approved, not merely logged: they tapped
+      Approve and would otherwise tell somebody to collect a certificate that does not exist.
+
+      **A real bug surfaced here.** `tgUserIdentity` is not stable across updates — it prefers the
+      username and falls back to the numeric id, so the same person is "tg-@alice" from a message
+      that carried one and "tg-1" from one that did not. An enrolment prompt is raised from a
+      context where nobody has messaged us, so it only has the id, and the audience check refused
+      the very person it was raised for. It now matches on either form; the numeric one is the
+      stable identity underneath and admits nobody extra. The same latent bug would have locked a
+      user out of their own confirmations after they removed their Telegram username.
 - [x] The approver sees the key fingerprint, and the laptop prints the same one.
       **And a mismatch is a refusal, not a footnote.**
 

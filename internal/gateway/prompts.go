@@ -123,6 +123,14 @@ type NewPrompt struct {
 	// in-process and has no need to move it.
 	Continuation *Continuation
 
+	// Enrolment links this question to an operator enrolment request.
+	//
+	// The answer has to reach somewhere other than a paused turn:
+	// there is no turn. Carried like Continuation is, so the
+	// resolution path stays one path rather than growing a parallel
+	// one that would need its own audience check.
+	Enrolment string
+
 	// RaisedFor is the channel-native id of the user this question is
 	// being asked OF — the Telegram user id, not the canonical
 	// principal, because that is what a callback arrives carrying.
@@ -178,6 +186,9 @@ type Prompt struct {
 	// RaisedFor is the channel-native id of the user the question was
 	// asked of. Only they may answer it.
 	RaisedFor string
+
+	// Enrolment is the operator enrolment request this answers, if any.
+	Enrolment string
 
 	// Decision holds the resolution once the user answers (or the
 	// timeout fires).
@@ -238,6 +249,7 @@ func (r *PromptRegistry) Create(np NewPrompt) (*Prompt, error) {
 		Resource:     np.Resource,
 		Continuation: np.Continuation,
 		RaisedFor:    np.RaisedFor,
+		Enrolment:    np.Enrolment,
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(ttl),
 		Decision:     PromptPending,

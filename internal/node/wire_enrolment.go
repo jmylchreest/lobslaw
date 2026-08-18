@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
@@ -107,6 +108,7 @@ func (n *Node) wireEnrolment() error {
 
 	svc := &enrolmentService{
 		store:      store,
+		log:        n.log,
 		caCert:     caCert,
 		caKey:      caKey,
 		clusterCA:  clusterPEM,
@@ -216,4 +218,36 @@ func (n *Node) startEnrolmentSweeper(ctx context.Context) {
 			n.log.Warn("enrolment sweeper stopped", "err", err)
 		}
 	}()
+}
+
+// attachEnrolmentAsker closes the loop between the enrolment service
+// and a channel.
+//
+// The two need each other: the service asks the channel to put a
+// question in front of somebody, and the channel asks the service to
+// apply the answer. Enrolment wires first, so the service exists when
+// the handler is built and only this direction needs a late setter.
+//
+// Called with nil when no channel is configured, which leaves
+// enrolment decidable from the CLI alone.
+func (n *Node) attachEnrolmentAsker(asker EnrolmentAsker) {
+	if n.enrolmentSvc == nil {
+		return
+	}
+	n.enrolmentSvc.asker = asker
+	if asker == nil {
+		n.log.Debug("enrolment: no channel wired; approval is CLI-only")
+	}
+}
+
+// enrolmentDecider returns the service as a gateway decider, or nil.
+//
+// Typed nil is a real hazard here: returning n.enrolmentSvc directly
+// when it is nil would hand the gateway a non-nil interface holding a
+// nil pointer, and its `Enrolments == nil` guard would not fire.
+func (n *Node) enrolmentDecider() gateway.EnrolmentDecider {
+	if n.enrolmentSvc == nil {
+		return nil
+	}
+	return n.enrolmentSvc
 }

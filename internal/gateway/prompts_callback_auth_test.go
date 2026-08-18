@@ -163,3 +163,49 @@ func (r *PromptRegistry) pendingIDs() []string {
 	}
 	return out
 }
+
+// tgUserIdentity is not stable across updates: it prefers the username
+// and falls back to the numeric id, so the same person yields
+// "tg-@alice" from a message that carried one and "tg-1" from one that
+// did not.
+//
+// A prompt raised from a context with only the id — an enrolment,
+// where nobody has messaged us — would otherwise refuse the very
+// person it was raised for. This is a real bug the enrolment tests
+// surfaced, not a test artifact.
+func TestTheAudienceMatchesOnEitherFormOfTheSameUser(t *testing.T) {
+	t.Parallel()
+	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
+
+	// Raised knowing only the numeric id.
+	p, _ := h.registry.Create(NewPrompt{
+		TurnID: "t", Reason: "r", Channel: "telegram",
+		TTL: time.Minute, RaisedFor: "tg-1",
+	})
+
+	// Answered from an update that carries a username.
+	tapPrompt(t, h, p.ID, `{"id": 1, "username": "alice"}`)
+
+	snap, _ := h.registry.Get(p.ID)
+	if snap.Decision != PromptApproved {
+		t.Fatalf("the person the question was raised for was refused: %s", snap.Decision)
+	}
+}
+
+// And widening to the numeric form must admit nobody extra.
+func TestTheNumericFormDoesNotAdmitADifferentUser(t *testing.T) {
+	t.Parallel()
+	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
+
+	p, _ := h.registry.Create(NewPrompt{
+		TurnID: "t", Reason: "r", Channel: "telegram",
+		TTL: time.Minute, RaisedFor: "tg-1",
+	})
+
+	tapPrompt(t, h, p.ID, `{"id": 2, "username": "mallory"}`)
+
+	snap, _ := h.registry.Get(p.ID)
+	if snap.Decision != PromptPending {
+		t.Fatalf("a different user was admitted by the numeric form: %s", snap.Decision)
+	}
+}

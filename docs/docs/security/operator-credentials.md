@@ -128,12 +128,36 @@ Private key:       ~/.config/lobslaw/operator-key.pem (never sent)
 Fingerprint:       SHA256:a3:9f:...:b1
 ```
 
-Then somebody who already holds a credential approves it:
+Then somebody approves it. Either from a chat:
+
+> A laptop is asking for an operator credential.
+>
+> Name requested: alice
+>
+> Fingerprint:
+> SHA256:a3:9f:...:b1
+>
+> Approve ONLY if that matches what they read you. An operator credential can
+> administer this cluster.
+>
+> \[ Approve ] \[ Deny ]
+
+…or from a machine that already holds a credential:
 
 ```bash
 lobslaw enrol list
 lobslaw enrol approve 4f2a9c... --fingerprint SHA256:a3:9f:...:b1
 ```
+
+The chat question goes to whoever holds the **owner** scope, and **only they can
+answer it** — the button is visible to everyone in a group chat, but a tap from
+anyone else is refused and told why. There is no "always" button: a standing
+authority to admit anyone who asks is not a thing this should be able to
+express.
+
+The prompt is raised *after* the request is durably queued and never fails the
+submission. A channel outage means nobody was notified, not that the enrolment
+was lost — it is still in `enrol list` and still approvable from the CLI.
 
 **Read the fingerprint aloud.** It is the only thing distinguishing the request
 you were told about from another that arrived at the same moment. `--fingerprint`

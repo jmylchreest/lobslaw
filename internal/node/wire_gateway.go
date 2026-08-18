@@ -33,6 +33,10 @@ func (n *Node) wireGateway() error {
 			}
 			tg = h
 			n.telegramHandler = h
+			// Both directions of the enrolment loop. The handler was
+			// built with Enrolments already set; this is the half that
+			// could not be, because the handler did not exist yet.
+			n.attachEnrolmentAsker(h)
 		case "webhook":
 			h, err := n.buildWebhookHandler(ch)
 			if err != nil {
@@ -190,18 +194,21 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		channelState = memory.NewChannelStateService(n.raft, n.store)
 	}
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
-		Notices:          n.notices,
-		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
-		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
-		Approvals:        n.approvals,
-		ApprovalRules:    n.approvalRules,
-		Identity:         n.identityResolver(),
-		Leaser:           n.newSessionLeaser(),
-		ArtifactOpener:   n.artifactOpener(),
-		BotToken:         botToken,
-		Mode:             mode,
-		WebhookSecret:    webhookSecret,
-		UserIDScopes:     userScopes,
+		Notices:        n.notices,
+		QueueMode:      gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
+		QueueDebounce:  n.cfg.Gateway.QueueDebounce,
+		Approvals:      n.approvals,
+		ApprovalRules:  n.approvalRules,
+		Identity:       n.identityResolver(),
+		Leaser:         n.newSessionLeaser(),
+		ArtifactOpener: n.artifactOpener(),
+		BotToken:       botToken,
+		Mode:           mode,
+		WebhookSecret:  webhookSecret,
+		UserIDScopes:   userScopes,
+		// Nil when enrolment is not wired, which disables channel
+		// approval and leaves the CLI path working.
+		Enrolments:       n.enrolmentDecider(),
 		Roles:            n.resolveUserRoles,
 		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
 		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),

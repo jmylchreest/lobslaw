@@ -92,6 +92,11 @@ type TelegramConfig struct {
 	// derived id, which is today's behaviour.
 	Identity *identity.Resolver
 
+	// Enrolments applies an operator-enrolment decision reached over
+	// this channel. Nil disables channel approval; the CLI path still
+	// works, so an enrolment is never stranded by this being unset.
+	Enrolments EnrolmentDecider
+
 	// UnknownUserScope is the scope assigned to unmapped user IDs.
 	// Empty → reject unknown users with 403. Useful defaults:
 	// "" (strict), "public" (open bot with least-privilege scope).
@@ -681,16 +686,38 @@ func (h *TelegramHandler) mayResolve(ctx context.Context, promptID string, q *tg
 		h.log.Warn("telegram: refusing an unattributed callback", "prompt", promptID)
 		return false
 	}
-	if who := h.principalFor(ctx, q.From); who != p.RaisedFor {
+	if !h.isAudience(ctx, q.From, p.RaisedFor) {
 		// Logged with both principals: somebody tapping a colleague's
 		// confirmation is worth seeing, and it is indistinguishable
 		// from an attack in the logs otherwise.
 		h.log.Warn("telegram: refusing a callback from somebody the question was not asked of",
-			"prompt", promptID, "tapped_by", who, "raised_for", p.RaisedFor)
+			"prompt", promptID, "tapped_by", h.principalFor(ctx, q.From), "raised_for", p.RaisedFor)
 		h.answerCallback(q, "That confirmation was not for you.")
 		return false
 	}
 	return true
+}
+
+// isAudience reports whether this user is who the question was asked
+// of.
+//
+// Two comparisons, because tgUserIdentity is not stable across
+// updates: it prefers the username and falls back to the numeric id,
+// so the same person yields "tg-@alice" from a message that carried a
+// username and "tg-1" from one that did not. A prompt raised from a
+// context with only the id — an enrolment, where nobody has messaged
+// us — would otherwise refuse the very person it was raised for.
+//
+// Widening to the numeric form admits nobody extra: the id is the
+// stable identity underneath, and a different user matches neither.
+func (h *TelegramHandler) isAudience(ctx context.Context, u *tgUser, raisedFor string) bool {
+	if raisedFor == "" || u == nil {
+		return false
+	}
+	if h.principalFor(ctx, u) == raisedFor {
+		return true
+	}
+	return "tg-"+strconv.FormatInt(u.ID, 10) == raisedFor
 }
 
 // answerCallback surfaces a refusal on the tapper's own screen.
@@ -793,6 +820,17 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	if q.Message != nil {
 		h.sendText(q.Message.Chat.ID, reply)
 	}
+	// An enrolment answer goes somewhere other than a paused turn.
+	// Handled before the continuation branch below, and for DENIED as
+	// well as approved: refusing a request has to actually close it,
+	// or the laptop keeps polling a question somebody already said no
+	// to.
+	if getErr == nil && prompt != nil && prompt.Enrolment != "" {
+		h.applyEnrolmentDecision(ctx, prompt, decision == PromptApproved,
+			h.principalFor(ctx, q.From))
+		return
+	}
+
 	if decision == PromptDenied {
 		return
 	}
