@@ -4994,3 +4994,81 @@ Do the probe first. It is an afternoon, and it decides whether the rest is a too
 - [ ] The clawhub probe is recorded: which endpoints exist, which do not, and whether the bundle
       format matches. Written down even if the answer is "none of it".
 - [ ] `clawhub_install`'s description does not promise a catalogue that cannot be reached.
+## R36 — a queue mode that reads the messages
+
+### Problem
+
+Four queue modes decide what happens to a message that arrives while a turn is running, and none of
+them looks at what it says. `serial` answers both halves of one thought separately; `debounce` folds
+on a timer that cannot tell a follow-up from a change of subject; `latest` and `off` discard.
+
+Typed in the same minute, this is one question:
+
+    what about rain? wind?
+    sunset? sunrise?
+
+and this is two:
+
+    what about rain? wind?
+    also cancel the 3pm meeting
+
+`debounce` folds both pairs. A four-second window is a guess about intent, and it is wrong in the
+second case in the direction that loses work.
+
+### Proposal
+
+A mode — call it `smart` — where an arriving message is judged against the turn already running:
+related, and it folds; unrelated, and it queues as its own turn. The preflight role already exists
+for exactly this shape of work, a small model classifying ahead of the main turn, and the judge
+already takes a short prompt and returns structured output.
+
+The call is cheap in the way that matters: the judge sees the in-flight prompt and the new message,
+not the transcript.
+
+### The three things that make it harder than it sounds
+
+**Folding after a turn has started is not the same as folding before it.** Today a fold happens at
+the GATE, before the agent runs, so the folded text simply joins the batch. Once a turn is in flight
+it may have called tools, and some of those are irreversible. "Interrupt and combine" is safe only
+before the first side effect — after that, the honest options are to queue, or to let the running
+turn finish and treat the new message as a follow-up with the answer already in context. Which
+means the mode needs the executor's opinion about what has happened so far, not just the gate's.
+
+**Parallel is not a knob.** Turns on one conversation never overlap in ANY mode, and the reason is
+in rest.go: Load → run → Append is not atomic and each request is its own goroutine. Running two
+turns on one session concurrently is a rework of transcript ownership, not a fifth enum value. A
+`smart` mode that queues unrelated messages rather than running them alongside is the version that
+fits what exists.
+
+**The judge is now on the latency path of every message.** Not every turn, every MESSAGE, including
+the ones that arrive while nothing is running. Debounce costs 4 seconds of waiting and no tokens;
+this costs a round trip and a small number of tokens per message, to save a round trip and a large
+number sometimes. That trade is worth measuring before it is worth shipping.
+
+### Related: the judge should not pay the main model's price
+
+`newJudge` falls back to the primary provider when `roles.preflight` is unset — deliberately, so a
+deployment that never configured one still routes, "just at the main model's price". With `smart`
+running the judge per message rather than per routed turn, that fallback stops being a rounding
+error.
+
+Worth deciding at the same time: when the resolved preflight provider IS the main one, whether to
+run the judge at all. The review fork already asks this question in its own terms — `IsMain(RoleReview)`
+decides how much transcript to replay, because a different model cannot reuse the prefix cache. The
+same reasoning applies here and nothing consults it.
+
+Note that preflight only runs today when `[[compute.chains]]` are configured: `resolveRoute` returns
+early with no resolver, so the judge is never called. Any measurement has to start by turning it on.
+
+### Acceptance
+
+- [ ] `queue_mode = "smart"` folds a follow-up and queues a change of subject, with a test for each.
+- [ ] A message that arrives after the running turn has taken an irreversible action is QUEUED, not
+      folded, and there is a test that names the action.
+- [ ] The judge sees the in-flight prompt and the new message only — never the transcript — and a
+      test asserts the request size does not grow with conversation length.
+- [ ] A judge failure or timeout degrades to `debounce` rather than failing the message.
+- [ ] The per-message cost is recorded in the trace like any other llm_call, so the trade is
+      visible rather than argued about.
+- [ ] `smart` is not the default. `serial` stays the default for the reason ParseQueueMode already
+      gives: the modes that can lose a message should never be reached by a typo.
