@@ -321,7 +321,7 @@ func TestTheListingMarksTheDefault(t *testing.T) {
 	}
 }
 
-// `cluster sign-operator` prints a block to paste into contexts.toml.
+// `cluster export-operator` prints a block to paste into contexts.toml.
 // A snippet that does not parse — or that the loader reads back with
 // different paths — sends the operator to a "no such file" error about
 // a credential that is sitting right there.

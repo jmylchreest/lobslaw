@@ -39,6 +39,13 @@ Someone messages your bot who isn't you. Their messages enter the agent loop wit
 
 **Defended by:** policy engine — every sensitive tool's allow rules are scoped (`subject = "scope:owner"`). Strangers default-deny on credentials, OAuth, soul mutations. Rate-limit + per-channel quotas live at the gateway.
 
+They also **cannot answer somebody else's confirmation prompt**. The buttons on a
+pending confirmation are visible to everyone in a group chat, and a tap used to
+resolve it regardless of who sent it — the person who answered was whoever got
+there first. The audience is now recorded when the prompt is raised and compared
+against the tapper's principal, and a mismatch is refused and explained on their
+screen rather than silently ignored.
+
 ### 4. A network adversary on the path between nodes (multi-node only)
 
 Someone on the LAN, or a malicious peer reachable on the cluster network.
@@ -52,6 +59,18 @@ For single-node deployments this is moot — there is no inter-node traffic.
 One of the cluster's nodes is fully compromised — the attacker has the node's private key, can read the bolt store, can submit Raft entries.
 
 **Defended by:** intentionally limited. Once a peer is compromised, the credentials it held are exposed (encrypted with the cluster MemoryKey, which every node has). Quorum still requires majority — a single compromised node can't unilaterally rewrite history. **Credential rotation post-incident is the operator's responsibility.** The cluster MemoryKey rotation surface is deferred (see DEFERRED.md).
+
+A compromised node also holds the **operator CA private key**, which is online by
+design. The attacker can therefore mint operator credentials and administer the
+cluster. What they cannot do is mint a **node** certificate: peers verify each
+other against the cluster CA, whose key is not on the node. That boundary is the
+reason the two CAs are separate keys rather than one chain — a node that could
+sign peers would let one compromise grow without bound, each new peer receiving a
+full replica and able to admit more. See [Operator credentials and the two
+CAs](/security/operator-credentials).
+
+Recovery is proportionate: rotating the operator CA re-enrols every operator and
+leaves node identities untouched. Rotating the cluster CA is a rebuild.
 
 For single-node, full host compromise = full credential exposure (no peers to slow the attacker down). The defence at that point is the OS, not lobslaw.
 
@@ -68,7 +87,10 @@ Kernel exploits, hardware side-channels, malicious firmware.
 | Agent ↔ tool subprocess | agent | subprocess | sandbox (namespaces + Landlock + seccomp + egress ACL) |
 | Agent ↔ MCP server | agent | MCP server | subprocess + egress ACL; **no sandbox** today (MCP servers live longer than a single call; opt-in netns is on the roadmap) |
 | Operator ↔ user-supplied content | operator | content | registry constraints + policy `require_confirmation` + PreToolUse hooks |
-| Cluster ↔ peer | cluster member | peer (until mTLS handshake) | mTLS with cluster CA verification |
+| Cluster ↔ peer | cluster member | peer (until mTLS handshake) | mTLS with **cluster** CA verification |
+| Cluster ↔ operator | cluster member | operator (until mTLS handshake) | mTLS with **operator** CA verification; `OU=operator` refused on the raft transport, enforced server-side on unary *and* streaming |
+| Node ↔ enrolling laptop | neither, until approved | the request | server-auth TLS; the laptop verifies the node via a CA fingerprint obtained out of band, and a human compares the key fingerprint before approving |
+| Confirmation prompt ↔ the person who taps it | the person the question was asked of | anyone else who can see the button | the audience is captured when the prompt is raised and compared principal-to-principal; fails closed |
 | User ↔ gateway | gateway | user (until claim resolution) | OAuth/JWT or channel-specific (Telegram chat ID + user prefs binding) |
 | Storage at rest | reader holding MemoryKey | bytes on disk | bbolt encryption per-bucket via `crypto.Seal` AEAD |
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/x509"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,5 +280,70 @@ func TestAnEmptyListingSaysSoAndNamesItsSource(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "prod:9090") || !strings.Contains(out, "nothing waiting") {
 		t.Errorf("empty listing:\n%s", out)
+	}
+}
+
+// --- positionals before flags ------------------------------------------
+
+// Go's flag package stops at the first non-flag argument, so
+// `enrol approve <id> --fingerprint X` left BOTH the id and every flag
+// in Args() — and the command rejected its own documented usage.
+//
+// `cluster export-operator alice --out ./alice` had the same bug, and
+// its own error message told you to use the form that did not work.
+func TestPositionalsMayComeBeforeFlags(t *testing.T) {
+	for name, args := range map[string][]string{
+		"before": {"the-id", "--fingerprint", "SHA256:aa"},
+		"after":  {"--fingerprint", "SHA256:aa", "the-id"},
+		"around": {"--fingerprint", "SHA256:aa", "the-id"},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		fs.SetOutput(&bytes.Buffer{})
+		fp := fs.String("fingerprint", "", "")
+
+		rest, err := parseFlagsAndPositionals(fs, args)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(rest) != 1 || rest[0] != "the-id" {
+			t.Errorf("%s: positionals = %v, want [the-id]", name, rest)
+		}
+		if *fp != "SHA256:aa" {
+			t.Errorf("%s: the flag was not parsed (%q)", name, *fp)
+		}
+	}
+}
+
+// A flag whose VALUE looks like a positional must not be mistaken for
+// one — this is why the parse loop exists rather than a naive split on
+// leading non-flag arguments.
+func TestAFlagValueIsNotMistakenForAPositional(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(&bytes.Buffer{})
+	out := fs.String("out", "", "")
+
+	rest, err := parseFlagsAndPositionals(fs, []string{"alice", "--out", "./somewhere"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 1 || rest[0] != "alice" {
+		t.Errorf("positionals = %v; a flag value was taken as one", rest)
+	}
+	if *out != "./somewhere" {
+		t.Errorf("--out = %q", *out)
+	}
+}
+
+func TestSeveralPositionalsKeepTheirOrder(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(&bytes.Buffer{})
+	fs.Bool("apply", false, "")
+
+	rest, err := parseFlagsAndPositionals(fs, []string{"one", "--apply", "two", "three"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 3 || rest[0] != "one" || rest[1] != "two" || rest[2] != "three" {
+		t.Errorf("positionals = %v", rest)
 	}
 }

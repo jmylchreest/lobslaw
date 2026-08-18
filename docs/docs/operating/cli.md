@@ -14,11 +14,17 @@ lobslaw init               # interactive config scaffold
 lobslaw doctor             # config + connectivity checks
 lobslaw context            # the clusters this machine can reach
   context list             # show the configured contexts
+lobslaw enrol              # ask a cluster for an operator credential
+  enrol request            # generate a key locally and ask
+  enrol status             # has the request been answered
+  enrol list               # requests waiting (operator)
+  enrol approve <id>       # admit one (operator)
+  enrol deny <id>          # refuse one (operator)
 lobslaw nodeid             # derive a deterministic node ID for this host
 lobslaw cluster            # cluster + cert lifecycle
   cluster ca-init          # create cluster CA
   cluster sign-node        # sign a node cert against the CA
-  cluster sign-operator    # sign an OPERATOR cert — administers, cannot join
+  cluster export-operator  # export an OPERATOR keypair — bootstrap only
   cluster reset            # nuke the local raft state (DESTRUCTIVE)
 lobslaw plugin             # plugin lifecycle
   plugin install <bundle>  # install a clawhub bundle
@@ -109,10 +115,10 @@ lobslaw cluster sign-node \
 
 Signs a node keypair against the CA. CN = node ID, SAN = `<id>` + `<id>.cluster.local`.
 
-## `lobslaw cluster sign-operator`
+## `lobslaw cluster export-operator`
 
 ```bash
-lobslaw cluster sign-operator alice \
+lobslaw cluster export-operator alice \
   --ca-cert certs/ca.pem \
   --ca-key  certs/ca-key.pem \
   --out     ./alice
@@ -136,6 +142,54 @@ It is deliberately not a node certificate:
 Revoking one does not require rotating any node's identity. The command writes
 `operator.pem`, `operator-key.pem` and a copy of `ca.pem` into `--out`, and
 prints the `contexts.toml` block for them.
+
+:::warning
+This **exports a private key**, which then has to reach the laptop somehow — and
+must not travel over a chat channel, where it would land in a message store, a
+phone backup, and this cluster's own transcripts.
+
+Prefer [`lobslaw enrol`](#lobslaw-enrol), where the key is generated on the
+laptop and never moves. Use `export-operator` for the **first** operator, who has
+nobody to approve them.
+
+`cluster sign-operator` is the old name; it still works and prints a note.
+:::
+
+## `lobslaw enrol`
+
+Getting a credential onto a laptop without moving a private key. Full reasoning
+in [Operator credentials and the two CAs](/security/operator-credentials).
+
+```bash
+# on the laptop, which has no credential yet
+lobslaw enrol request --addr node.example.com:9091 \
+  --ca-cert ca.pem --name alice --wait 5m
+```
+
+Generates ed25519 **locally**, writes `operator-key.pem` mode `0600`, and sends
+only a certificate signing request. It prints a fingerprint; read that to
+whoever is approving.
+
+```bash
+# on a machine that already holds a credential
+lobslaw enrol list
+lobslaw enrol approve <id> --fingerprint SHA256:a3:9f:...
+```
+
+`--fingerprint` is **required to approve** and checked at the server, so a
+request that changed between reading it and approving it is refused rather than
+approved in place of the one you verified. Denial does not need one — refusing
+something you cannot identify is the safe direction.
+
+`--name` issues under a different name from the one requested; both are recorded.
+
+`request` and `status` talk to the node's **enrolment listener**
+(`[cluster.mtls] enrol_addr`), which requires no client certificate because the
+caller does not have one yet. `list`, `approve` and `deny` use the usual
+`--context` / `--addr` flags.
+
+`--ca-cert` is not optional: without it the laptop cannot tell your cluster from
+anything else answering on that address.
 
 ## `lobslaw context`
 

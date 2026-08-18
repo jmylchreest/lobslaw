@@ -23,7 +23,7 @@ func dispatchCluster(args []string) bool {
 	sub := args[idx+1:]
 	if len(sub) == 0 {
 		fmt.Fprintln(os.Stderr, "lobslaw cluster: subcommand required")
-		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, sign-operator")
+		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, export-operator")
 		os.Exit(2)
 	}
 	switch sub[0] {
@@ -31,13 +31,16 @@ func dispatchCluster(args []string) bool {
 		clusterCAInit(sub[1:])
 	case "sign-node":
 		clusterSignNode(sub[1:])
-	case "sign-operator":
-		clusterSignOperator(sub[1:])
+	case "export-operator", "sign-operator":
+		// sign-operator is the old name, kept working rather than
+		// broken. The new one says what it does: it EXPORTS a keypair,
+		// both halves, and the private one then has to travel.
+		clusterExportOperator(sub[1:], sub[0] == "sign-operator")
 	case "reset":
 		clusterReset(sub[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "lobslaw cluster: unknown subcommand %q\n", sub[0])
-		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, sign-operator, reset")
+		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, export-operator, reset")
 		os.Exit(2)
 	}
 	return true
@@ -283,15 +286,24 @@ func exitWith(msg string) {
 	os.Exit(1)
 }
 
-// clusterSignOperator issues a credential for a PERSON.
+// clusterExportOperator issues a credential for a PERSON, keypair and all.
 //
 // Distinct from sign-node because a node certificate is the wrong
 // thing to hand somebody: it carries ServerAuth, so a laptop holding
 // one can present itself as a cluster member. Revoking one operator
 // would also mean rotating a node's identity, and every action they
 // took would be attributed to a host rather than to them.
-func clusterSignOperator(args []string) {
-	fs := flag.NewFlagSet("cluster sign-operator", flag.ExitOnError)
+func clusterExportOperator(args []string, legacyName bool) {
+	if legacyName {
+		// A deprecation notice, not a refusal. Somebody with this in a
+		// runbook should get the credential they asked for and learn
+		// the new name at the same time.
+		fmt.Fprintln(os.Stderr,
+			"note: `cluster sign-operator` is now `cluster export-operator` — "+
+				"renamed because it hands over a PRIVATE KEY, which then has to travel. "+
+				"`lobslaw enrol` avoids that; see the operator-credentials docs.")
+	}
+	fs := flag.NewFlagSet("cluster export-operator", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""),
 		"path to config.toml; pre-fills --ca-cert from [cluster.mtls]")
 	caCert := fs.String("ca-cert", envOr("LOBSLAW_CA_CERT", ""), "path to the CA public certificate")
@@ -300,20 +312,20 @@ func clusterSignOperator(args []string) {
 	out := fs.String("out", "", "directory to write operator.pem, operator-key.pem and ca.pem into")
 	validFor := fs.Duration("valid-for", 90*24*time.Hour,
 		"validity duration; shorter than a node's by default because a person's credential travels")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		os.Exit(2)
 	}
-	rest := fs.Args()
 	if len(rest) != 1 || strings.TrimSpace(rest[0]) == "" {
-		exitWith("cluster sign-operator: exactly one operator name is required\n\n" +
-			"  lobslaw cluster sign-operator alice --out ~/.config/lobslaw/prod")
+		exitWith("cluster export-operator: exactly one operator name is required\n\n" +
+			"  lobslaw cluster export-operator alice --out ~/.config/lobslaw/prod")
 	}
 	name := strings.TrimSpace(rest[0])
 
 	if *cfgPath != "" {
 		cfg, err := config.Load(config.LoadOptions{Path: *cfgPath, SkipEnv: true})
 		if err != nil {
-			exitWith(fmt.Sprintf("cluster sign-operator: load --config %q: %v", *cfgPath, err))
+			exitWith(fmt.Sprintf("cluster export-operator: load --config %q: %v", *cfgPath, err))
 		}
 		if *caCert == "" {
 			*caCert = cfg.Cluster.MTLS.CACert
@@ -328,11 +340,11 @@ func clusterSignOperator(args []string) {
 		}
 	}
 	if *caCert == "" || *caKey == "" {
-		exitWith("cluster sign-operator: --ca-cert and --ca-key are required " +
+		exitWith("cluster export-operator: --ca-cert and --ca-key are required " +
 			"(or pass --config to read them from [cluster.mtls])")
 	}
 	if *out == "" {
-		exitWith("cluster sign-operator: --out is required; it names the directory the operator " +
+		exitWith("cluster export-operator: --out is required; it names the directory the operator " +
 			"will point --context at")
 	}
 
@@ -376,6 +388,10 @@ func clusterSignOperator(args []string) {
 	fmt.Println("  - client authentication only, so nothing can serve with it")
 	fmt.Println("  - refused on the raft transport, enforced at the server")
 	fmt.Println("Revoking it does not require rotating any node's identity.")
+	fmt.Println()
+	fmt.Println("This command EXPORTS a private key, which now has to reach that laptop somehow.")
+	fmt.Println("`lobslaw enrol` avoids that: the key is generated on the laptop and never moves.")
+	fmt.Println("Use this one for bootstrap — the first operator has nobody to approve them.")
 
 	// The credential is useless until the operator can point a command
 	// at it, and the alternative to this is four flags on every

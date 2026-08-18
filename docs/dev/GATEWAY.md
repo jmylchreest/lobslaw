@@ -627,7 +627,7 @@ An operator administering the cluster from a laptop needs a credential
 that is **not** a node's.
 
 ```console
-$ lobslaw cluster sign-operator alice \
+$ lobslaw cluster export-operator alice \
     --config /etc/lobslaw/config.toml \
     --out ~/.config/lobslaw/prod
 Signed an OPERATOR certificate for "alice":

@@ -6,6 +6,13 @@ sidebar_position: 8
 
 All inter-node and gateway traffic is mutual-TLS, signed by a per-cluster CA.
 
+:::note
+This page covers the **cluster** CA, which signs nodes. There is a second CA that
+signs **people** — see [Operator credentials and the two
+CAs](/security/operator-credentials). The separation is deliberate and the reasoning
+there is worth reading before touching either.
+:::
+
 ## What's protected
 
 | Surface | Protocol | Auth |
@@ -14,6 +21,8 @@ All inter-node and gateway traffic is mutual-TLS, signed by a per-cluster CA.
 | Inter-node gRPC (memory writes, audit replay) | gRPC over HTTP/2 | mTLS via cluster CA |
 | Gateway → user | TLS to client (or reverse proxy) | mTLS optional, JWT/OAuth or channel-specific |
 | Gateway → cluster | gRPC | mTLS via cluster CA |
+| Operator CLI → cluster | gRPC | mTLS via **operator** CA |
+| Enrolment (`enrol request` / `status`) | gRPC, separate listener | **Server-auth TLS only** — the caller has no certificate yet |
 
 Every node has:
 
@@ -84,14 +93,30 @@ For multi-node:
 
 ## Trust model
 
-A peer is trusted iff its cert is signed by the cluster CA. There is no per-peer revocation list today (a deferred feature; current alternative is rotating the CA and re-signing every legitimate peer).
+A **peer** is trusted iff its cert is signed by the cluster CA — and that is the
+only thing the cluster CA signs.
+
+An **operator** is trusted iff their cert is signed by the operator CA. Such a
+certificate is `ClientAuth`-only, carries `OU=operator`, and is refused on the
+raft transport, so holding one lets you administer the cluster and never join it.
+The two roots and why they are separate are covered in [Operator credentials and
+the two CAs](/security/operator-credentials).
+
+Concretely, a node's `ClientCAs` pool holds both roots while its `RootCAs` pool
+holds only the cluster CA — so an operator credential can never be presented *by*
+something this node dials.
+
+There is no per-cert revocation list today (a deferred feature; the current
+alternative is rotating a CA and re-issuing). Rotating the operator CA is cheap —
+every operator re-enrols — which is part of why it is a separate key.
 
 The cluster MemoryKey (separate from mTLS) seeds AEAD on the credentials bucket; rotation is the operator's responsibility post-incident.
 
 ## Common pitfalls
 
 - **CN must equal node ID.** `cluster sign-node` enforces this; manual signing won't.
-- **CA private key on every host.** Don't. It only needs to be where you sign certs, and ideally only when signing.
+- **CA private key on every host.** Don't. It only needs to be where you sign certs, and ideally only when signing. The *operator* CA key is the exception — it is online by design, which is exactly why it is not the cluster CA.
+- **Sending an operator private key over a chat channel.** It lands in a message store, a phone backup, and this cluster's own transcripts. Use `lobslaw enrol`, where the key is generated on the laptop and never moves.
 - **Cert with no SAN.** The signing helper sets a SAN of `<node-id>` and `<node-id>.cluster.local`. Manual workflows that omit SANs cause Go's TLS verifier to reject the handshake.
 - **System time skew.** mTLS cert validity is ±5 min by default — large clock drift between peers breaks consensus joins. Run NTP.
 
@@ -99,5 +124,6 @@ The cluster MemoryKey (separate from mTLS) seeds AEAD on the credentials bucket;
 
 - `pkg/mtls/mtls.go` — `NodeCreds` + atomic.Pointer reload
 - `pkg/mtls/sign.go` — CA + node-cert signing helpers
-- `cmd/lobslaw/cluster.go` — `cluster ca-init` + `cluster sign-node` subcommands
+- `pkg/mtls/operator_ca.go` — the operator root and CSR signing
+- `cmd/lobslaw/cluster.go` — `cluster ca-init` + `cluster sign-node` + `cluster export-operator`
 - `cmd/lobslaw/main.go` — SIGHUP handler wiring

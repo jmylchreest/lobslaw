@@ -456,10 +456,11 @@ func enrolDecide(args []string, approve bool) error {
 	name := fs.String("name", "", "issue under this name instead of the requested one")
 	fingerprint := fs.String("fingerprint", "", "the fingerprint you verified; refuses if it does not match")
 	validFor := fs.Duration("valid-for", 0, "certificate lifetime (0 = the node's default)")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if len(rest) != 1 {
 		return fmt.Errorf("exactly one request id required: lobslaw enrol %s <id>", verb)
 	}
 	if approve && strings.TrimSpace(*fingerprint) == "" {
@@ -480,7 +481,7 @@ func enrolDecide(args []string, approve bool) error {
 	client := lobslawv1.NewEnrolmentServiceClient(conn)
 
 	req := &lobslawv1.DecideEnrolmentRequest{
-		Id:          fs.Arg(0),
+		Id:          rest[0],
 		Approve:     approve,
 		Name:        strings.TrimSpace(*name),
 		Fingerprint: strings.TrimSpace(*fingerprint),

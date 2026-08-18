@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"os"
 	"strings"
 )
@@ -86,4 +87,29 @@ func findSubcmd(args []string, name string) int {
 		return -1
 	}
 	return -1
+}
+
+// parseFlagsAndPositionals parses a flag set whose positional
+// arguments may appear BEFORE the flags.
+//
+// Go's flag package stops at the first non-flag argument, so
+// `cluster export-operator alice --out ./alice` leaves alice AND every
+// flag in Args() — and the command then rejects its own documented
+// usage. The loop re-parses the tail after each positional, which is
+// the standard idiom for this.
+//
+// Returns the positionals in order.
+func parseFlagsAndPositionals(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positional, nil
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
 }

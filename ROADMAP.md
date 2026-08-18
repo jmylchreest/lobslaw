@@ -3643,7 +3643,20 @@ different blast radius. Cross-network node enrolment is R30.
       The refusal reaches the tapper. Silence reads as a broken button and invites retrying, after
       which they keep tapping and the person who can actually answer never learns there is a
       question waiting.
-- [ ] `cluster export-operator` replaces `sign-operator` and says the key travels.
+- [x] `cluster export-operator` replaces `sign-operator` and says the key travels.
+      **Renamed because "sign" understated it.** The command hands over BOTH halves of a keypair,
+      and the private one then has to reach a laptop somehow. The output now says so and points
+      at `lobslaw enrol`, which does not.
+
+      `sign-operator` still works and prints a deprecation note rather than failing. Somebody
+      with the old name in a runbook should get the credential they asked for and learn the new
+      name at the same time.
+
+      Renaming surfaced a pre-existing bug worth recording: `cluster sign-operator alice --out X`
+      had NEVER worked, because Go's flag package stops at the first non-flag argument — and the
+      command's own error message told you to use exactly that form. `enrol approve <id>
+      --fingerprint X` had the same shape. Both now go through `parseFlagsAndPositionals`, which
+      re-parses the tail after each positional.
 - [x] A separate operator CA signs enrolments; the cluster CA stays offline.
       **The intermediate design was impossible here, and the replacement is better.**
 

@@ -19,7 +19,20 @@ peers          = ["node-2:7000", "node-3:7000"]   # static peer list
 ca_cert   = "certs/ca.pem"
 node_cert = "certs/node.pem"
 node_key  = "certs/node-key.pem"
+
+# Operator enrolment. The operator CA signs PEOPLE and is online; the
+# cluster CA above signs NODES and stays offline. Separate keys on
+# purpose — see /security/operator-credentials.
+operator_ca_cert = "certs/operator-ca.pem"    # default: beside ca_cert
+operator_ca_key  = "certs/operator-ca-key.pem" # created on first use
+enrol_addr       = ":9091"                     # empty disables enrolment
+enrol_valid_for  = "2160h"                     # 90d default
 ```
+
+`enrol_addr` is a **separate listener** that requires no client certificate,
+because a laptop enrolling does not have one yet. It serves only the submit and
+poll RPCs. Leaving it empty disables new enrolments; credentials already issued
+keep working.
 
 ## `[memory]`
 
