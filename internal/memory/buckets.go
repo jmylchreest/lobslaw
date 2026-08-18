@@ -118,6 +118,15 @@ const (
 	// reference store it once, and so listing skills does not pull
 	// every payload they mention.
 	BucketSkillBlobs = "skill_blobs"
+
+	// BucketEnrolments holds operator enrolment requests.
+	//
+	// Replicated rather than in-memory, unlike the confirmation
+	// registry: a request that vanished on restart would leave a
+	// laptop polling an id no node has heard of, with no way to tell
+	// that from "still waiting". It also lets the node that ANSWERS an
+	// enrolment be a different one from the node that received it.
+	BucketEnrolments = "enrolments"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -150,4 +159,5 @@ var allBuckets = []string{
 	BucketSkills,
 	BucketSkillBlobs,
 	BucketSelfTaughtHistory,
+	BucketEnrolments,
 }

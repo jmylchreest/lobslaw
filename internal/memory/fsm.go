@@ -482,6 +482,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketEnrolments:
+		var r lobslawv1.EnrolmentRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	case BucketPrompts:
 		var r lobslawv1.PromptRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -530,7 +536,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
-		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs:
+		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments:
 		return true
 	default:
 		return false
@@ -608,6 +614,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSkills, p.Skill, nil
 	case *lobslawv1.LogEntry_SkillBlob:
 		return BucketSkillBlobs, p.SkillBlob, nil
+	case *lobslawv1.LogEntry_Enrolment:
+		return BucketEnrolments, p.Enrolment, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

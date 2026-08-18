@@ -1278,6 +1278,134 @@ message UserChannelAddress {
 // SessionRecord is the per-session index. Message bodies live in
 // BucketSessionMessages; this record tracks the cursor bounds so a
 // reader knows the retained range without scanning.
+// EnrolmentService issues an operator credential to a key the
+// requester already holds.
+//
+// The problem it solves: `cluster export-operator` generates the
+// keypair centrally and hands over both halves, so the PRIVATE KEY has
+// to travel — over scp, a USB stick, or worse, a chat channel where it
+// lands in a message store, a phone backup, and this cluster's own
+// transcripts.
+//
+// Here the key never moves. The laptop generates it, keeps the private
+// half, and sends a CSR. A certificate signing request and a
+// certificate are both public; they can cross any channel.
+//
+// Submit and Poll are served WITHOUT a client certificate — a laptop
+// enrolling does not have one yet, which is the entire point. They are
+// therefore on their own listener, and they are the only two RPCs on
+// it. List and Decide require an operator credential and live on the
+// cluster listener with everything else.
+service EnrolmentService {
+  rpc SubmitEnrolment(SubmitEnrolmentRequest) returns (SubmitEnrolmentResponse);
+  rpc PollEnrolment(PollEnrolmentRequest) returns (PollEnrolmentResponse);
+  rpc ListEnrolments(ListEnrolmentsRequest) returns (ListEnrolmentsResponse);
+  rpc DecideEnrolment(DecideEnrolmentRequest) returns (DecideEnrolmentResponse);
+}
+
+enum EnrolmentState {
+  ENROLMENT_STATE_UNSPECIFIED = 0;
+  ENROLMENT_STATE_PENDING = 1;
+  ENROLMENT_STATE_ISSUED = 2;
+  ENROLMENT_STATE_DENIED = 3;
+  // Reached by the sweeper. A request nobody answered must not stay
+  // approvable forever — an operator returning to a week-old prompt
+  // has no idea whether the laptop that asked is still the one they
+  // would be admitting.
+  ENROLMENT_STATE_EXPIRED = 4;
+}
+
+message EnrolmentRecord {
+  string id = 1;
+  // requested_name is what the laptop asked to be called. It is NOT
+  // what ends up in the certificate unless an approver agrees to it:
+  // a request is attacker-shaped input and its subject is whatever the
+  // requester typed.
+  string requested_name = 2;
+  // csr_der is the DER-encoded PKCS#10 request. Public.
+  bytes csr_der = 3;
+  // fingerprint is SHA-256 of the public key, formatted for a human to
+  // compare. This is what an approver checks against what the laptop
+  // printed, and it is the only defence against approving somebody
+  // else's request that arrived at the same moment.
+  string fingerprint = 4;
+  EnrolmentState state = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  // decided_by is the principal who approved or denied, for audit.
+  string decided_by = 8;
+  google.protobuf.Timestamp decided_at = 9;
+  // issued_name is the name actually certified, which the approver
+  // chose. Usually the requested one; recorded separately so the
+  // difference is visible when it is not.
+  string issued_name = 10;
+  // cert_pem is the issued certificate. Public — a certificate is not
+  // a secret, and without the private half it is useless.
+  bytes cert_pem = 11;
+  // prompt_id links to the confirmation raised for this request, so a
+  // channel answer and a CLI answer resolve the same thing.
+  string prompt_id = 12;
+
+  // claimed_by and revision drive the same compare-and-set the prompt
+  // store uses. Two approvers answering at once must not both issue a
+  // certificate — the second read is stale and its apply is refused.
+  string claimed_by = 13;
+  uint64 revision = 14;
+}
+
+message SubmitEnrolmentRequest {
+  string requested_name = 1;
+  bytes csr_der = 2;
+}
+message SubmitEnrolmentResponse {
+  string id = 1;
+  // fingerprint is echoed so the laptop can print the same string the
+  // approver will see. If they differ, something is between them.
+  string fingerprint = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message PollEnrolmentRequest {
+  string id = 1;
+}
+message PollEnrolmentResponse {
+  EnrolmentState state = 1;
+  bytes cert_pem = 2;
+  // ca_pem is the OPERATOR root, which the laptop needs in order to
+  // present a chain the node will accept.
+  bytes ca_pem = 3;
+  // cluster_ca_pem is what the laptop verifies the NODE against on
+  // every later connection.
+  bytes cluster_ca_pem = 4;
+  string issued_name = 5;
+}
+
+message ListEnrolmentsRequest {
+  // pending_only narrows to what still needs an answer.
+  bool pending_only = 1;
+}
+message ListEnrolmentsResponse {
+  repeated EnrolmentRecord enrolments = 1;
+}
+
+message DecideEnrolmentRequest {
+  string id = 1;
+  bool approve = 2;
+  // name overrides the requested one. Empty accepts what was asked
+  // for.
+  string name = 3;
+  // fingerprint, when set, must match the record's. A caller who has
+  // verified a fingerprint out of band can pin it here, so a request
+  // replaced between reading and approving is refused rather than
+  // silently approved in place of the one they checked.
+  string fingerprint = 4;
+  // valid_for overrides the default certificate lifetime.
+  google.protobuf.Duration valid_for = 5;
+}
+message DecideEnrolmentResponse {
+  EnrolmentRecord enrolment = 1;
+}
+
 // TraceService reads this node's turn traces.
 //
 // Traces are per-node FILES, deliberately: R24 kept them out of raft
@@ -1626,6 +1754,7 @@ message LogEntry {
     SessionGrant session_grant = 32;
     SkillRecord skill = 33;
     SkillBlob skill_blob = 34;
+    EnrolmentRecord enrolment = 35;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

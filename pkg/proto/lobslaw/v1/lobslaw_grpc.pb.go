@@ -2503,6 +2503,264 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	EnrolmentService_SubmitEnrolment_FullMethodName = "/lobslaw.v1.EnrolmentService/SubmitEnrolment"
+	EnrolmentService_PollEnrolment_FullMethodName   = "/lobslaw.v1.EnrolmentService/PollEnrolment"
+	EnrolmentService_ListEnrolments_FullMethodName  = "/lobslaw.v1.EnrolmentService/ListEnrolments"
+	EnrolmentService_DecideEnrolment_FullMethodName = "/lobslaw.v1.EnrolmentService/DecideEnrolment"
+)
+
+// EnrolmentServiceClient is the client API for EnrolmentService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// SessionRecord is the per-session index. Message bodies live in
+// BucketSessionMessages; this record tracks the cursor bounds so a
+// reader knows the retained range without scanning.
+// EnrolmentService issues an operator credential to a key the
+// requester already holds.
+//
+// The problem it solves: `cluster export-operator` generates the
+// keypair centrally and hands over both halves, so the PRIVATE KEY has
+// to travel — over scp, a USB stick, or worse, a chat channel where it
+// lands in a message store, a phone backup, and this cluster's own
+// transcripts.
+//
+// Here the key never moves. The laptop generates it, keeps the private
+// half, and sends a CSR. A certificate signing request and a
+// certificate are both public; they can cross any channel.
+//
+// Submit and Poll are served WITHOUT a client certificate — a laptop
+// enrolling does not have one yet, which is the entire point. They are
+// therefore on their own listener, and they are the only two RPCs on
+// it. List and Decide require an operator credential and live on the
+// cluster listener with everything else.
+type EnrolmentServiceClient interface {
+	SubmitEnrolment(ctx context.Context, in *SubmitEnrolmentRequest, opts ...grpc.CallOption) (*SubmitEnrolmentResponse, error)
+	PollEnrolment(ctx context.Context, in *PollEnrolmentRequest, opts ...grpc.CallOption) (*PollEnrolmentResponse, error)
+	ListEnrolments(ctx context.Context, in *ListEnrolmentsRequest, opts ...grpc.CallOption) (*ListEnrolmentsResponse, error)
+	DecideEnrolment(ctx context.Context, in *DecideEnrolmentRequest, opts ...grpc.CallOption) (*DecideEnrolmentResponse, error)
+}
+
+type enrolmentServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewEnrolmentServiceClient(cc grpc.ClientConnInterface) EnrolmentServiceClient {
+	return &enrolmentServiceClient{cc}
+}
+
+func (c *enrolmentServiceClient) SubmitEnrolment(ctx context.Context, in *SubmitEnrolmentRequest, opts ...grpc.CallOption) (*SubmitEnrolmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitEnrolmentResponse)
+	err := c.cc.Invoke(ctx, EnrolmentService_SubmitEnrolment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *enrolmentServiceClient) PollEnrolment(ctx context.Context, in *PollEnrolmentRequest, opts ...grpc.CallOption) (*PollEnrolmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PollEnrolmentResponse)
+	err := c.cc.Invoke(ctx, EnrolmentService_PollEnrolment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *enrolmentServiceClient) ListEnrolments(ctx context.Context, in *ListEnrolmentsRequest, opts ...grpc.CallOption) (*ListEnrolmentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListEnrolmentsResponse)
+	err := c.cc.Invoke(ctx, EnrolmentService_ListEnrolments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *enrolmentServiceClient) DecideEnrolment(ctx context.Context, in *DecideEnrolmentRequest, opts ...grpc.CallOption) (*DecideEnrolmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecideEnrolmentResponse)
+	err := c.cc.Invoke(ctx, EnrolmentService_DecideEnrolment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EnrolmentServiceServer is the server API for EnrolmentService service.
+// All implementations should embed UnimplementedEnrolmentServiceServer
+// for forward compatibility.
+//
+// SessionRecord is the per-session index. Message bodies live in
+// BucketSessionMessages; this record tracks the cursor bounds so a
+// reader knows the retained range without scanning.
+// EnrolmentService issues an operator credential to a key the
+// requester already holds.
+//
+// The problem it solves: `cluster export-operator` generates the
+// keypair centrally and hands over both halves, so the PRIVATE KEY has
+// to travel — over scp, a USB stick, or worse, a chat channel where it
+// lands in a message store, a phone backup, and this cluster's own
+// transcripts.
+//
+// Here the key never moves. The laptop generates it, keeps the private
+// half, and sends a CSR. A certificate signing request and a
+// certificate are both public; they can cross any channel.
+//
+// Submit and Poll are served WITHOUT a client certificate — a laptop
+// enrolling does not have one yet, which is the entire point. They are
+// therefore on their own listener, and they are the only two RPCs on
+// it. List and Decide require an operator credential and live on the
+// cluster listener with everything else.
+type EnrolmentServiceServer interface {
+	SubmitEnrolment(context.Context, *SubmitEnrolmentRequest) (*SubmitEnrolmentResponse, error)
+	PollEnrolment(context.Context, *PollEnrolmentRequest) (*PollEnrolmentResponse, error)
+	ListEnrolments(context.Context, *ListEnrolmentsRequest) (*ListEnrolmentsResponse, error)
+	DecideEnrolment(context.Context, *DecideEnrolmentRequest) (*DecideEnrolmentResponse, error)
+}
+
+// UnimplementedEnrolmentServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedEnrolmentServiceServer struct{}
+
+func (UnimplementedEnrolmentServiceServer) SubmitEnrolment(context.Context, *SubmitEnrolmentRequest) (*SubmitEnrolmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SubmitEnrolment not implemented")
+}
+func (UnimplementedEnrolmentServiceServer) PollEnrolment(context.Context, *PollEnrolmentRequest) (*PollEnrolmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PollEnrolment not implemented")
+}
+func (UnimplementedEnrolmentServiceServer) ListEnrolments(context.Context, *ListEnrolmentsRequest) (*ListEnrolmentsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListEnrolments not implemented")
+}
+func (UnimplementedEnrolmentServiceServer) DecideEnrolment(context.Context, *DecideEnrolmentRequest) (*DecideEnrolmentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DecideEnrolment not implemented")
+}
+func (UnimplementedEnrolmentServiceServer) testEmbeddedByValue() {}
+
+// UnsafeEnrolmentServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EnrolmentServiceServer will
+// result in compilation errors.
+type UnsafeEnrolmentServiceServer interface {
+	mustEmbedUnimplementedEnrolmentServiceServer()
+}
+
+func RegisterEnrolmentServiceServer(s grpc.ServiceRegistrar, srv EnrolmentServiceServer) {
+	// If the following call pancis, it indicates UnimplementedEnrolmentServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&EnrolmentService_ServiceDesc, srv)
+}
+
+func _EnrolmentService_SubmitEnrolment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitEnrolmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrolmentServiceServer).SubmitEnrolment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnrolmentService_SubmitEnrolment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrolmentServiceServer).SubmitEnrolment(ctx, req.(*SubmitEnrolmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EnrolmentService_PollEnrolment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PollEnrolmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrolmentServiceServer).PollEnrolment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnrolmentService_PollEnrolment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrolmentServiceServer).PollEnrolment(ctx, req.(*PollEnrolmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EnrolmentService_ListEnrolments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEnrolmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrolmentServiceServer).ListEnrolments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnrolmentService_ListEnrolments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrolmentServiceServer).ListEnrolments(ctx, req.(*ListEnrolmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EnrolmentService_DecideEnrolment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecideEnrolmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrolmentServiceServer).DecideEnrolment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EnrolmentService_DecideEnrolment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrolmentServiceServer).DecideEnrolment(ctx, req.(*DecideEnrolmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// EnrolmentService_ServiceDesc is the grpc.ServiceDesc for EnrolmentService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var EnrolmentService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.EnrolmentService",
+	HandlerType: (*EnrolmentServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SubmitEnrolment",
+			Handler:    _EnrolmentService_SubmitEnrolment_Handler,
+		},
+		{
+			MethodName: "PollEnrolment",
+			Handler:    _EnrolmentService_PollEnrolment_Handler,
+		},
+		{
+			MethodName: "ListEnrolments",
+			Handler:    _EnrolmentService_ListEnrolments_Handler,
+		},
+		{
+			MethodName: "DecideEnrolment",
+			Handler:    _EnrolmentService_DecideEnrolment_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
 	TraceService_ListTurns_FullMethodName = "/lobslaw.v1.TraceService/ListTurns"
 	TraceService_ReadTurn_FullMethodName  = "/lobslaw.v1.TraceService/ReadTurn"
 )
@@ -2511,9 +2769,6 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SessionRecord is the per-session index. Message bodies live in
-// BucketSessionMessages; this record tracks the cursor bounds so a
-// reader knows the retained range without scanning.
 // TraceService reads this node's turn traces.
 //
 // Traces are per-node FILES, deliberately: R24 kept them out of raft
@@ -2567,9 +2822,6 @@ func (c *traceServiceClient) ReadTurn(ctx context.Context, in *ReadTurnRequest, 
 // All implementations should embed UnimplementedTraceServiceServer
 // for forward compatibility.
 //
-// SessionRecord is the per-session index. Message bodies live in
-// BucketSessionMessages; this record tracks the cursor bounds so a
-// reader knows the retained range without scanning.
 // TraceService reads this node's turn traces.
 //
 // Traces are per-node FILES, deliberately: R24 kept them out of raft
