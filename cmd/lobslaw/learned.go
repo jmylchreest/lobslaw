@@ -28,6 +28,7 @@ Approving a proposal is routine, so it should not require an outage.
 
 subcommands:
   list                 what the agent has written for itself
+  show <id>            read one artefact in full, before deciding on it
   archive <id>...      move artefacts out of the live set, recoverably
   discard              archive everything (except pinned artefacts) [offline]
   restore <id>...      bring archived artefacts back, as proposals
@@ -75,6 +76,11 @@ var learnedOfflineOnly = map[string]func([]string) error{
 // learnedLiveOnly are the subcommands with no offline form.
 var learnedLiveOnly = map[string]func([]string) error{
 	"approve": liveApprove,
+	// show has no offline form because it does not need one: the
+	// offline path exists for reading a cluster that will not start,
+	// and reading a proposal is something you do in order to approve
+	// it — which is live-only anyway.
+	"show": learnedShowLive,
 }
 
 // learnedRoute resolves a subcommand.

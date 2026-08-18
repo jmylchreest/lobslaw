@@ -24,6 +24,16 @@ const councilMaxFanout = 4
 // builtins.
 type CouncilConfig struct {
 	Registry *ProviderRegistry
+
+	// Roles answers "which provider does what". Without it
+	// list_providers returned labels, tiers and backup pointers and
+	// nothing about PURPOSE — so when asked which model handles the
+	// fast classification path, the agent had no way to know and
+	// answered from the shape of the list. A confident wrong answer
+	// about your own configuration.
+	//
+	// Optional: nil omits the roles field rather than inventing one.
+	Roles *RoleMap
 }
 
 // RegisterCouncilBuiltins installs list_providers + council_review
@@ -33,7 +43,7 @@ func RegisterCouncilBuiltins(b *Builtins, cfg CouncilConfig) error {
 	if cfg.Registry == nil {
 		return errors.New("council builtins: Registry required")
 	}
-	if err := b.Register("list_providers", newListProvidersHandler(cfg.Registry)); err != nil {
+	if err := b.Register("list_providers", newListProvidersHandler(cfg.Registry, cfg.Roles)); err != nil {
 		return err
 	}
 	return b.Register("council_review", newCouncilReviewHandler(cfg.Registry))
@@ -47,7 +57,7 @@ func CouncilToolDefs() []*types.ToolDef {
 		{
 			Name:        "list_providers",
 			Path:        BuiltinScheme + "list_providers",
-			Description: "List the LLM providers configured on this node. Returns label, trust tier, capabilities, and backup label for each — NO model names, NO endpoints, NO credentials. Use when the user asks who's available, or before council_review to pick providers. Present as a markdown table.",
+			Description: "List the LLM providers configured on this node. Returns label, trust tier, capabilities, backup label, and the roles each provider serves — NO model names, NO endpoints, NO credentials. Roles are 'main' (the user-facing turn), 'preflight' (fast classification on every turn), 'reranker' (memory rerank) and 'summariser'; a provider with no roles listed serves none and is available only via council_review. Use when the user asks who's available, which model does what, or before council_review to pick providers. Report the roles as given — do not infer purpose from the ordering or from backup pointers. Present as a markdown table.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},
@@ -74,7 +84,13 @@ func CouncilToolDefs() []*types.ToolDef {
 	}
 }
 
-func newListProvidersHandler(reg *ProviderRegistry) BuiltinFunc {
+// reportedRoles are the roles list_providers names, in the order an
+// operator thinks about them. RoleReview is omitted: it is an internal
+// pass with no user-facing meaning, and listing it invites questions
+// about a knob that is not in [compute.roles].
+var reportedRoles = []Role{RoleMain, RolePreflight, RoleReranker, RoleSummariser}
+
+func newListProvidersHandler(reg *ProviderRegistry, roles *RoleMap) BuiltinFunc {
 	return func(_ context.Context, _ map[string]string) ([]byte, int, error) {
 		entries := reg.List()
 		type view struct {
@@ -82,7 +98,22 @@ func newListProvidersHandler(reg *ProviderRegistry) BuiltinFunc {
 			TrustTier    string   `json:"trust_tier"`
 			Capabilities []string `json:"capabilities,omitempty"`
 			Backup       string   `json:"backup,omitempty"`
+			// Roles this provider actually serves, resolved through
+			// the fallback chain rather than read off config.
+			Roles []string `json:"roles,omitempty"`
 		}
+
+		// Built once, so a provider filling three roles is named three
+		// times rather than searched for three times.
+		byLabel := map[string][]string{}
+		if roles != nil {
+			for _, r := range reportedRoles {
+				if l := roles.LabelFor(r); l != "" {
+					byLabel[l] = append(byLabel[l], string(r))
+				}
+			}
+		}
+
 		out := make([]view, 0, len(entries))
 		for _, e := range entries {
 			out = append(out, view{
@@ -90,6 +121,7 @@ func newListProvidersHandler(reg *ProviderRegistry) BuiltinFunc {
 				TrustTier:    e.TrustTier.String(),
 				Capabilities: e.Capabilities,
 				Backup:       e.Backup,
+				Roles:        byLabel[e.Label],
 			})
 		}
 		payload, err := json.Marshal(map[string]any{

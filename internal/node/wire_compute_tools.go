@@ -561,6 +561,7 @@ func (n *Node) wireCouncilTools(builtins *compute.Builtins) error {
 	}
 	if err := compute.RegisterCouncilBuiltins(builtins, compute.CouncilConfig{
 		Registry: n.providerRegistry,
+		Roles:    n.roleMap,
 	}); err != nil {
 		return fmt.Errorf("register council builtins: %w", err)
 	}

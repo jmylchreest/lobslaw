@@ -261,6 +261,22 @@ func (n *Node) wireLLMProviders() (map[string]compute.LLMProvider, error) {
 	return clientsByLabel, nil
 }
 
+// defaultProviderLabel names the provider used when compute.roles.main
+// is unset — the first declared one, matching wireLLMProviders.
+//
+// Named rather than left blank, because "no label" and "the first one"
+// read identically to anyone asking which provider serves main, and
+// the first-provider default is precisely the case where they cannot
+// tell from config alone.
+func (n *Node) defaultProviderLabel() string {
+	for _, p := range n.cfg.Compute.Providers {
+		if p.Label != "" {
+			return p.Label
+		}
+	}
+	return ""
+}
+
 // wireRoleMap resolves [compute.roles] against the built clients. An
 // explicit role map from config overrides fallback picks.
 func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error {
@@ -269,6 +285,7 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 		return nil
 	}
 	roleAssignments := map[compute.Role]compute.LLMProvider{}
+	roleLabels := map[compute.Role]string{}
 	pickRole := func(role compute.Role, label string) error {
 		if label == "" {
 			return nil
@@ -278,6 +295,7 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 			return fmt.Errorf("compute.roles.%s: unknown provider label %q", role, label)
 		}
 		roleAssignments[role] = c
+		roleLabels[role] = label
 		return nil
 	}
 	if err := pickRole(compute.RoleMain, n.cfg.Compute.Roles.Main); err != nil {
@@ -294,11 +312,13 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 	}
 	// If compute.roles.main was set, it overrides first-provider.
 	main := n.llmProvider
+	mainLabel := n.defaultProviderLabel()
 	if override, ok := roleAssignments[compute.RoleMain]; ok {
 		main = override
 		n.llmProvider = override
+		mainLabel = roleLabels[compute.RoleMain]
 	}
-	rm, err := compute.NewRoleMap(main, roleAssignments)
+	rm, err := compute.NewRoleMapWithLabels(main, roleAssignments, mainLabel, roleLabels)
 	if err != nil {
 		return fmt.Errorf("role map: %w", err)
 	}
