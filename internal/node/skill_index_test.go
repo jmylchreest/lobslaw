@@ -112,7 +112,7 @@ func TestIndexNamesReferencesWithoutReadingThem(t *testing.T) {
 		t.Errorf("references = %v", index[0].References)
 	}
 
-	rendered := promptgen.BuildSkills(index).Body
+	rendered := promptgen.BuildSkills(index, 0).Body
 	if !strings.Contains(rendered, "references/api.md") {
 		t.Errorf("the index does not say what the skill carries:\n%s", rendered)
 	}
@@ -129,7 +129,7 @@ func TestRenderedIndexClaimsCompleteness(t *testing.T) {
 	t.Parallel()
 	body := promptgen.BuildSkills([]promptgen.SkillInfo{
 		{Name: "alpha", Description: "does alpha"},
-	}).Body
+	}, 0).Body
 	if !strings.Contains(strings.ToLower(body), "complete") {
 		t.Errorf("the index does not tell the model it is exhaustive:\n%s", body)
 	}

@@ -80,3 +80,39 @@ func (n *Node) wireLearnedTools(builtins *compute.Builtins) error {
 	n.log.Debug("compute: learned_list registered")
 	return nil
 }
+
+// proposalsProvider counts this owner's artefacts awaiting approval,
+// for the Installed Skills section of the system prompt.
+//
+// Nil when there is no store, and that is the whole reason it is a
+// provider rather than a number: with self-learning off the section
+// says nothing about proposals, instead of asserting zero. "None
+// pending" and "the feature is not running" are different statements,
+// and only one of them is true.
+//
+// Counts PROPOSED only. A refinement pending on an already-active
+// artefact is a different question with a different answer, and
+// folding the two into one number would make the count wrong in the
+// way that is hardest to notice — plausible, and quietly off by the
+// number of pending refinements.
+//
+// Errors count as zero rather than propagating. This runs while
+// building a prompt, on every turn; failing the turn because a
+// supplementary count could not be read would trade an answer for a
+// footnote.
+func (n *Node) proposalsProvider() func(string) int {
+	if n.selfTaught == nil {
+		return nil
+	}
+	return func(owner string) int {
+		recs, err := n.selfTaught.List(memory.SelfTaughtQuery{
+			Owner: owner,
+			State: lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED,
+		})
+		if err != nil {
+			n.log.Debug("compute: proposal count unavailable", "err", err)
+			return 0
+		}
+		return len(recs)
+	}
+}

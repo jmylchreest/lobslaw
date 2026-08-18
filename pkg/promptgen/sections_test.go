@@ -141,11 +141,84 @@ func TestBuildToolingSortedByName(t *testing.T) {
 	}
 }
 
-func TestBuildSkillsEmpty(t *testing.T) {
+// The empty branch has to carry the SAME completeness assertion the
+// populated one does, and this test replaced one that only checked for
+// the string "(none installed)".
+//
+// That string was the whole body, and dropping the assertion is what
+// left the model with nothing to anchor on: asked "what skills do you
+// have", it answered out of the provider table instead. The assertion
+// matters most when there is nothing to list.
+func TestBuildSkillsEmptyStillClaimsCompleteness(t *testing.T) {
 	t.Parallel()
-	s := BuildSkills(nil)
-	if !strings.Contains(s.Body, "(none installed)") {
-		t.Error("empty skill list should surface cleanly")
+	s := BuildSkills(nil, 0)
+	body := strings.ToLower(s.Body)
+	if !strings.Contains(body, "no skills are installed") {
+		t.Errorf("empty skill list should say so plainly:\n%s", s.Body)
+	}
+	if !strings.Contains(body, "complete") {
+		t.Errorf("empty branch dropped the completeness assertion:\n%s", s.Body)
+	}
+	if !strings.Contains(body, "provider") {
+		t.Errorf("empty branch does not steer away from the provider list, which is "+
+			"where the wrong answer came from:\n%s", s.Body)
+	}
+}
+
+// A count of zero must produce no sentence at all. "0 proposals
+// awaiting approval" and saying nothing look similar and are not: the
+// provider is nil when self-learning is off, and a hardcoded zero
+// would assert "none pending" for a feature that is not running.
+func TestBuildSkillsSilentWhenNoProposals(t *testing.T) {
+	t.Parallel()
+	for _, s := range []Section{
+		BuildSkills(nil, 0),
+		BuildSkills([]SkillInfo{{Name: "alpha", Description: "a"}}, 0),
+	} {
+		if strings.Contains(strings.ToLower(s.Body), "approval") {
+			t.Errorf("zero proposals should produce no approval line:\n%s", s.Body)
+		}
+	}
+}
+
+// Pending proposals are announced in both branches, and must never
+// read as capability. They are inert: not materialised, invisible to
+// the skill index, impossible to invoke.
+func TestBuildSkillsAnnouncesProposalsWithoutOfferingThem(t *testing.T) {
+	t.Parallel()
+	for name, s := range map[string]Section{
+		"empty":     BuildSkills(nil, 2),
+		"populated": BuildSkills([]SkillInfo{{Name: "alpha", Description: "a"}}, 2),
+	} {
+		body := s.Body
+		if !strings.Contains(body, "2 self-taught proposals are awaiting") {
+			t.Errorf("%s: proposal count not announced:\n%s", name, body)
+		}
+		if !strings.Contains(body, "NOT active") {
+			t.Errorf("%s: a proposal must not read as available capability:\n%s", name, body)
+		}
+		if !strings.Contains(body, "learned_list") {
+			t.Errorf("%s: announcing a count without naming the tool that shows them "+
+				"is a tease:\n%s", name, body)
+		}
+	}
+}
+
+// Singular reads as singular. Small, and it is the difference between
+// prose and a template somebody stopped reading.
+func TestBuildSkillsProposalSingular(t *testing.T) {
+	t.Parallel()
+	body := BuildSkills(nil, 1).Body
+	if !strings.Contains(body, "1 self-taught proposal is awaiting") {
+		t.Errorf("singular proposal rendered as plural:\n%s", body)
+	}
+	// The first version got the verb right and the pronoun wrong —
+	// "1 proposal is awaiting ... They are NOT active" — which is
+	// exactly the half-pluralised sentence a single `noun` variable
+	// produces. Both halves are checked so the next edit cannot fix
+	// one and leave the other.
+	if !strings.Contains(body, "It is NOT active") {
+		t.Errorf("singular proposal described with a plural pronoun:\n%s", body)
 	}
 }
 
@@ -155,7 +228,7 @@ func TestBuildSkillsSortedByName(t *testing.T) {
 		{Name: "writer", Description: "w", Location: "/opt/skills/writer"},
 		{Name: "reader", Description: "r"},
 	}
-	s := BuildSkills(skills)
+	s := BuildSkills(skills, 0)
 	posReader := strings.Index(s.Body, "reader")
 	posWriter := strings.Index(s.Body, "writer")
 	if !(posReader < posWriter) {

@@ -212,6 +212,17 @@ type AgentConfig struct {
 	// that guessed its name.
 	SkillsProvider func() []promptgen.SkillInfo
 
+	// ProposalsProvider counts the self-taught artefacts awaiting this
+	// owner's approval, for the Installed Skills section.
+	//
+	// Owner-scoped and therefore per-turn, which is why it takes an
+	// argument where SkillsProvider does not — same shape as
+	// PinnedProvider. Nil when self-learning is off, and then the
+	// section says nothing about proposals rather than saying zero:
+	// "none pending" and "the feature is not running" are different
+	// statements and only one of them is true.
+	ProposalsProvider func(owner string) int
+
 	// Logger is used for structured log entries. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -575,12 +586,17 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 			if a.cfg.PinnedProvider != nil {
 				pinned = a.cfg.PinnedProvider(sessionKeyFor(req), userIDFor(req))
 			}
+			var proposals int
+			if a.cfg.ProposalsProvider != nil {
+				proposals = a.cfg.ProposalsProvider(userIDFor(req))
+			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
-				Soul:     soul,
-				Tools:    toPromptgenTools(req.Tools),
-				Skills:   skillIndex,
-				Pinned:   pinned,
-				Binaries: bins,
+				Soul:           soul,
+				Tools:          toPromptgenTools(req.Tools),
+				Skills:         skillIndex,
+				SkillProposals: proposals,
+				Pinned:         pinned,
+				Binaries:       bins,
 				Runtime: promptgen.RuntimeInfo{
 					Channel:      req.Channel,
 					ChannelID:    req.ChannelID,

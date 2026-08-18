@@ -342,9 +342,27 @@ type SkillInfo struct {
 // BuildSkills renders the installed skills list. Skills are
 // long-form capabilities (often bundles of tools + prompt segments).
 // Sorted by name for determinism.
-func BuildSkills(skills []SkillInfo) Section {
+//
+// pendingProposals is how many self-taught artefacts are awaiting the
+// owner's approval. They are NOT installed and must never read as
+// though they were — but staying silent about them is what produced
+// the bug this argument exists for: asked what it had taught itself,
+// a bot said "nothing" while two proposals sat in the store.
+//
+// The empty case used to be the bare string "(none installed)", which
+// dropped the completeness assertion the populated branch makes. That
+// assertion matters MOST when the list is empty: with nothing to
+// anchor on, the model went looking for an inventory elsewhere and
+// answered "what skills do you have" out of the provider table.
+func BuildSkills(skills []SkillInfo, pendingProposals int) Section {
 	if len(skills) == 0 {
-		return Section{Title: "Installed Skills", Priority: PriorityPrimary, Body: "(none installed)\n"}
+		var b strings.Builder
+		b.WriteString("No skills are installed on this node.\n")
+		b.WriteString("This is complete: if something is not listed here, it is not available — " +
+			"do not assume otherwise. Do not answer questions about your skills from the " +
+			"provider list; providers are models, not skills.\n")
+		b.WriteString(proposalNote(pendingProposals))
+		return Section{Title: "Installed Skills", Priority: PriorityPrimary, Body: b.String()}
 	}
 	sorted := append([]SkillInfo(nil), skills...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
@@ -365,7 +383,27 @@ func BuildSkills(skills []SkillInfo) Section {
 			fmt.Fprintf(&b, "  - bundled references: %s\n", strings.Join(s.References, ", "))
 		}
 	}
+	b.WriteString(proposalNote(pendingProposals))
 	return Section{Title: "Installed Skills", Priority: PriorityPrimary, Body: b.String()}
+}
+
+// proposalNote renders the pending-approval line, or nothing at all.
+//
+// Deliberately blunt about what a proposal is not. An artefact awaiting
+// approval is inert — it is not materialised, the skill index cannot
+// see it, and invoking it is not possible — so the wording has to stop
+// the model treating the count as latent capability it can reach for.
+func proposalNote(pending int) string {
+	if pending <= 0 {
+		return ""
+	}
+	noun, subject := "proposals are", "They are"
+	if pending == 1 {
+		noun, subject = "proposal is", "It is"
+	}
+	return fmt.Sprintf(
+		"\n%d self-taught %s awaiting your approval. %s NOT active and cannot be used; "+
+			"call learned_list to see them.\n", pending, noun, subject)
 }
 
 // PinnedBlocks are the always-on memory blocks: what the assistant

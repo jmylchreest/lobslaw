@@ -20,6 +20,12 @@ type GenerateInput struct {
 	Tools  []ToolInfo
 	Skills []SkillInfo
 
+	// SkillProposals is how many self-taught artefacts await the
+	// owner's approval. Rendered alongside Skills because that is
+	// where somebody asks the question, and because a count with no
+	// home is a count nobody reads.
+	SkillProposals int
+
 	// Pinned is the always-on memory: what the assistant knows about
 	// this user and about this environment. Rendered in the stable
 	// prefix and expected to be a per-session snapshot, so a write
@@ -88,7 +94,7 @@ func Generate(in GenerateInput) string {
 		BuildPersonality(in.Soul),
 		BuildFragments(in.Soul),
 		BuildTooling(in.Tools),
-		BuildSkills(in.Skills),
+		BuildSkills(in.Skills, in.SkillProposals),
 		BuildBinaries(in.Binaries),
 		// Pinned memory sits AFTER tooling and BEFORE the volatile
 		// sections. It is stable for the session, so keeping it above
