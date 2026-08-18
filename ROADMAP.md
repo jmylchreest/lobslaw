@@ -3605,8 +3605,17 @@ pieces and cannot see the joins.
 - [x] A documented config key that no struct field claims fails a test.
 - [x] `sign-node` can issue certificates for the names a node is actually reached at.
 - [x] An enrolled credential works end to end: request, approve, collect, connect.
-- [ ] A scripted smoke test boots a node and runs that flow, so this cannot regress
-      silently. Done by hand this time; it needs to be a target somebody can run.
+- [x] A scripted smoke test boots a node and runs that flow, so this cannot regress
+      silently. `make smoke`.
+
+      Hermetic: its own temp directory, `HOME` and `XDG_CONFIG_HOME`, loopback only, ports
+      asserted free before it starts. It never reads the operator's real configuration, which is
+      how a stray `lobslaw nodeid` booted somebody's live assistant.
+
+      Verified against the bugs it exists for. All four of the originals fail it: the client
+      verifying its own certificate against the cluster CA, the server snapshotting a CA pool
+      before the operator root existed, node certificates losing their IP SAN, and the resolved
+      address not being recorded so every source label printed blank.
 - [ ] The 19 phantom configuration keys are triaged: renamed, moved, or deleted.
 
 ## R29 — enrolling an operator without moving a private key

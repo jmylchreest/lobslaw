@@ -1,4 +1,4 @@
-.PHONY: proto proto-lint proto-breaking proto-tools build test lint lint-tools tidy hooks hook-tools
+.PHONY: proto proto-lint proto-breaking proto-tools build test smoke lint lint-tools tidy hooks hook-tools
 
 # Go-tool-installed binaries live under $(go env GOPATH)/bin. Prepend to PATH
 # for targets that shell out to them (buf invokes protoc-gen-go via PATH).
@@ -32,6 +32,19 @@ build:
 
 test:
 	@go test -race -cover ./...
+
+# Boots a real node and enrols an operator end to end.
+#
+# Separate from `test` because it binds ports and takes ~30s, and
+# because it answers a different question: `test` asks whether the
+# pieces behave, this asks whether the path works. R28 and R29 shipped
+# with a green `test` and a flow that failed before its first RPC.
+#
+# Hermetic — its own temp dir, HOME and XDG_CONFIG_HOME, loopback only.
+# Override SMOKE_CLUSTER_PORT / SMOKE_ENROL_PORT / SMOKE_GATEWAY_PORT
+# if those ports are taken.
+smoke:
+	@./scripts/smoke.sh
 
 # `config verify` runs first because the GitHub action does the same, and it
 # rejects config keys that `golangci-lint run` silently tolerates — without it
