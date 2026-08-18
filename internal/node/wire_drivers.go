@@ -10,6 +10,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/elevenlabs"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/gemini"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/imagen"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/minimax"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/veo"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
@@ -34,6 +35,17 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterChat(compute.DriverOpenAI, compute.OpenAIChatFactory)
 		s.RegisterChat(compute.DriverAnthropic, anthropicChatFactory)
 		s.RegisterChat(compute.DriverMock, compute.MockChatFactory)
+		// MiniMax and DashScope speak OpenAI-compatible CHAT and their
+		// own image shape. Registering the vendor name for both means
+		// `driver = "minimax"` selects the right wire format per
+		// modality — which is what an operator naming a vendor means.
+		//
+		// Without these two lines a provider entry declared for image
+		// generation fails BOOT on "unknown chat driver", because the
+		// one driver field is consulted for every modality and the
+		// chat lookup happens first.
+		s.RegisterChat(minimax.DriverName, compute.OpenAIChatFactory)
+		s.RegisterChat(dashscope.DriverName, compute.OpenAIChatFactory)
 
 		// Generation modalities resolve their driver by name too, so a
 		// second vendor is a registration rather than a rewrite of the
@@ -45,6 +57,8 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterSpeak(compute.DriverMock, compute.MockSpeakFactory)
 		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
 		s.RegisterImage(imagen.DriverName, imagenImageFactory)
+		s.RegisterImage(minimax.DriverName, minimaxImageFactory)
+		s.RegisterImage(dashscope.DriverName, dashscopeImageFactory)
 		s.RegisterImage(compute.DriverMock, compute.MockImageFactory)
 		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
 		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
@@ -158,5 +172,28 @@ func imagenImageFactory(cfg compute.ImageDriverConfig) (compute.ImageDriver, err
 		Size:       cfg.Size,
 		Credential: cfg.Credential,
 		HTTPClient: cfg.HTTPClient,
+	})
+}
+
+// minimaxImageFactory adapts MiniMax's image-generation endpoint.
+func minimaxImageFactory(cfg compute.ImageDriverConfig) (compute.ImageDriver, error) {
+	return minimax.NewImage(minimax.ImageConfig{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+		Logger:     cfg.Logger,
+	})
+}
+
+// dashscopeImageFactory adapts DashScope's synchronous
+// multimodal-generation path — the Wan and Qwen-Image models.
+func dashscopeImageFactory(cfg compute.ImageDriverConfig) (compute.ImageDriver, error) {
+	return dashscope.NewImage(dashscope.ImageConfig{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+		Logger:     cfg.Logger,
 	})
 }
