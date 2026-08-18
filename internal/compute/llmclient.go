@@ -105,14 +105,41 @@ type LLMClientConfig struct {
 // (e.g. "https://openrouter.ai/api/v1/chat/completions"). Most
 // OpenAI-compat provider docs quote the base URL; auto-appending
 // /chat/completions matches operator expectation.
+// Paths appended to a provider's base endpoint by whichever
+// consumer needs them.
+const (
+	ChatCompletionsPath = "/chat/completions"
+	TranscriptionsPath  = "/audio/transcriptions"
+)
+
+// NormaliseEndpoint accepts either a base URL or a complete one.
+//
+// [[compute.providers]] endpoints are BASE urls — that is the form
+// every vendor's documentation quotes, and LLMClient has always
+// appended the path. The modality builtins inherit that same field
+// and used it verbatim, so read_image against a provider entry POSTed
+// to the bare base and got "HTTP 404: " with an empty body. The agent
+// then reported it as a missing FILE, because a 404 is what a missing
+// file looks like — sending the operator to check a path that was
+// correct all along.
+//
+// Idempotent, so an operator who wrote the full URL is not
+// second-guessed. One implementation, because a second one would
+// eventually disagree about a trailing slash and the symptom would be
+// this same empty 404.
+func NormaliseEndpoint(endpoint, path string) string {
+	e := strings.TrimRight(endpoint, "/")
+	if strings.HasSuffix(e, path) {
+		return e
+	}
+	return e + path
+}
+
 func NewLLMClient(cfg LLMClientConfig) (*LLMClient, error) {
 	if cfg.Endpoint == "" {
 		return nil, errors.New("LLMClient: endpoint is required")
 	}
-	endpoint := strings.TrimRight(cfg.Endpoint, "/")
-	if !strings.HasSuffix(endpoint, "/chat/completions") {
-		endpoint += "/chat/completions"
-	}
+	endpoint := NormaliseEndpoint(cfg.Endpoint, ChatCompletionsPath)
 	hc := cfg.HTTPClient
 	if hc == nil {
 		// All LLM provider HTTP traffic routes through the egress

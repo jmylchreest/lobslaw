@@ -66,7 +66,7 @@ func RegisterAudioBuiltin(b *Builtins, cfgs ...AudioConfig) error {
 			return errors.New("read_audio: Driver required (resolve it from the DriverSet)")
 		}
 		if cfg.AllowedRoot == "" {
-			cfg.AllowedRoot = "/workspace/incoming"
+			cfg.AllowedRoot = DefaultIncomingDir
 		}
 		client := cfg.HTTPClient
 		if client == nil {

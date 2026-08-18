@@ -235,7 +235,14 @@ compaction is off and long conversations simply lose their oldest messages.
 [gateway]
 require_auth        = false
 unknown_user_scope  = "public"
-unknown_user_scope  = "public"
+
+# Where inbound attachments are written, and the ONLY directory
+# read_image / read_audio / read_pdf will open a path in. The default
+# only exists inside the container image: on a host install nothing
+# creates /workspace, so a photograph sent to the bot cannot be
+# received AND cannot be read. Set it to a directory the node can
+# write.
+incoming_dir        = "/workspace/incoming"
 
 # What happens when a message arrives while a turn is already running
 # for the same conversation. Turns on one conversation never overlap in

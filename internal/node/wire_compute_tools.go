@@ -698,12 +698,13 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 			return fmt.Errorf("read_image: provider %q: %w", ep.label, err)
 		}
 		cfgs = append(cfgs, compute.VisionConfig{
-			Label:     ep.label,
-			TrustTier: ep.trustTier,
-			Endpoint:  ep.endpoint,
-			Model:     ep.model,
-			APIKey:    ep.apiKey,
-			Driver:    driver,
+			Label:       ep.label,
+			TrustTier:   ep.trustTier,
+			Endpoint:    ep.endpoint,
+			Model:       ep.model,
+			APIKey:      ep.apiKey,
+			Driver:      driver,
+			AllowedRoot: n.incomingDir(),
 		})
 	}
 	if err := compute.RegisterVisionBuiltin(builtins, cfgs...); err != nil {
@@ -752,12 +753,13 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 			return fmt.Errorf("read_audio: provider %q: %w", ep.label, err)
 		}
 		cfgs = append(cfgs, compute.AudioConfig{
-			Label:     ep.label,
-			TrustTier: ep.trustTier,
-			Endpoint:  ep.endpoint,
-			Model:     ep.model,
-			APIKey:    ep.apiKey,
-			Driver:    driver,
+			Label:       ep.label,
+			TrustTier:   ep.trustTier,
+			Endpoint:    ep.endpoint,
+			Model:       ep.model,
+			APIKey:      ep.apiKey,
+			Driver:      driver,
+			AllowedRoot: n.incomingDir(),
 		})
 	}
 	if err := compute.RegisterAudioBuiltin(builtins, cfgs...); err != nil {
@@ -807,11 +809,12 @@ func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
 	cfgs := make([]compute.PDFConfig, 0, len(eps))
 	for _, ep := range eps {
 		cfgs = append(cfgs, compute.PDFConfig{
-			Label:     ep.label,
-			TrustTier: ep.trustTier,
-			Endpoint:  ep.endpoint,
-			Model:     ep.model,
-			APIKey:    ep.apiKey,
+			Label:       ep.label,
+			TrustTier:   ep.trustTier,
+			Endpoint:    ep.endpoint,
+			Model:       ep.model,
+			APIKey:      ep.apiKey,
+			AllowedRoot: n.incomingDir(),
 		})
 	}
 	if err := compute.RegisterPDFBuiltin(builtins, cfgs...); err != nil {
@@ -865,4 +868,19 @@ func (n *Node) wireSkillViewTool(builtins *compute.Builtins) error {
 		return fmt.Errorf("register skill_view tool def: %w", err)
 	}
 	return nil
+}
+
+// incomingDir is where inbound attachments land and the only place
+// the read_* builtins will open a path.
+//
+// One accessor for both halves. The channel writes here and the
+// builtins read here; two settings that had to agree would eventually
+// not, and the failure mode is a file sitting somewhere the agent is
+// not allowed to look at it — which reads as "the model cannot see
+// images" rather than as a path mismatch.
+func (n *Node) incomingDir() string {
+	if d := n.cfg.Gateway.IncomingDir; d != "" {
+		return d
+	}
+	return compute.DefaultIncomingDir
 }

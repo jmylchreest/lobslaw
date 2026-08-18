@@ -42,6 +42,12 @@ type TelegramConfig struct {
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
 
+	// IncomingDir is where inbound attachments are written. Empty →
+	// DefaultIncomingDownloadDir. The vision/audio/pdf builtins read
+	// from the SAME value, so a file landing somewhere the agent may
+	// not look is not expressible.
+	IncomingDir string
+
 	// Notices appends operator notices to outbound replies. Nil
 	// disables them entirely, which is what a deployment that never
 	// opted this channel in gets.

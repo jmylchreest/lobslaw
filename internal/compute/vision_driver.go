@@ -112,6 +112,11 @@ func OpenAIVisionFactory(cfg VisionDriverConfig) (VisionDriver, error) {
 	if cfg.Model == "" {
 		return nil, errors.New("vision: model required")
 	}
+	// Inherited from a [[compute.providers]] entry, whose endpoint is
+	// a BASE url. Used verbatim it POSTed to the base and returned an
+	// empty-bodied 404, which the agent reported as a missing image
+	// file.
+	cfg.Endpoint = NormaliseEndpoint(cfg.Endpoint, ChatCompletionsPath)
 	return &openAIVisionDriver{cfg: cfg, client: HTTPClientOr(cfg.HTTPClient)}, nil
 }
 

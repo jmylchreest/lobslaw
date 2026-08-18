@@ -59,8 +59,11 @@ func RegisterPDFBuiltin(b *Builtins, cfgs ...PDFConfig) error {
 		if cfg.Model == "" {
 			return errors.New("read_pdf: Model required (e.g. \"google/gemini-2.0-flash-001\", \"anthropic/claude-opus-4\")")
 		}
+		// Inherited from a provider entry, whose endpoint is a base
+		// URL. Used verbatim this posts to the base and 404s.
+		cfg.Endpoint = NormaliseEndpoint(cfg.Endpoint, ChatCompletionsPath)
 		if cfg.AllowedRoot == "" {
-			cfg.AllowedRoot = "/workspace/incoming"
+			cfg.AllowedRoot = DefaultIncomingDir
 		}
 		client := cfg.HTTPClient
 		if client == nil {

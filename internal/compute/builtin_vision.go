@@ -14,6 +14,21 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
+// DefaultIncomingDir is where channel handlers materialise inbound
+// attachments, and the only directory the read_* builtins will open a
+// path in when no root is configured.
+//
+// Defined here rather than in gateway because gateway imports compute
+// and the reverse would cycle — and because the writer and the reader
+// of this directory must never hold two different opinions about
+// where it is.
+//
+// Only the CONTAINER image has a /workspace. On a host install
+// nothing creates it, MkdirAll under it fails for an unprivileged
+// process, and the result was that an inbound photograph could not be
+// received AND could not be read. See [gateway] incoming_dir.
+const DefaultIncomingDir = "/workspace/incoming"
+
 // VisionConfig wires the read_image builtin to a vision-capable
 // endpoint. Empty Endpoint OR APIKey leaves the builtin
 // unregistered — the agent will see no read_image tool and reply
@@ -30,7 +45,7 @@ type VisionConfig struct {
 	// hoping nobody had added a third switch elsewhere.
 	Driver VisionDriver
 	// AllowedRoot scopes which paths the agent can read. Empty →
-	// "/workspace/incoming" (where the channel attachment downloader
+	// DefaultIncomingDir (where the channel attachment downloader
 	// drops files). Set to "" via SetAllowedRoot if you really want
 	// to disable scoping (only sensible in tests).
 	AllowedRoot string
@@ -72,7 +87,7 @@ func RegisterVisionBuiltin(b *Builtins, cfgs ...VisionConfig) error {
 			return errors.New("read_image: Driver required (resolve it from the DriverSet)")
 		}
 		if cfg.AllowedRoot == "" {
-			cfg.AllowedRoot = "/workspace/incoming"
+			cfg.AllowedRoot = DefaultIncomingDir
 		}
 		client := cfg.HTTPClient
 		if client == nil {

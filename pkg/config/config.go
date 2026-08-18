@@ -835,6 +835,23 @@ type GatewayConfig struct {
 	// responses, scheduled-task descriptions, commitment due_at, etc.
 	DefaultTimezone string `koanf:"default_timezone,omitempty"`
 
+	// IncomingDir is where channel handlers materialise inbound
+	// attachments, and the only directory read_image / read_audio /
+	// read_pdf will open a path in. Empty → "/workspace/incoming".
+	//
+	// Configurable because the default only exists inside the
+	// container image. On a host install nothing creates /workspace,
+	// os.MkdirAll under it fails for an unprivileged process, and the
+	// result is that sending the bot a photograph fails AND the agent
+	// can never read one — with the refusal naming a path the
+	// operator has no way to change.
+	//
+	// ONE key for both halves. The handler writes here and the vision
+	// builtin only reads here; two settings that had to agree would
+	// eventually not, and the failure would be a file that exists
+	// where nothing is allowed to look at it.
+	IncomingDir string `koanf:"incoming_dir,omitempty"`
+
 	// SessionMaxMessages caps how many messages each conversation
 	// transcript retains in the durable session store. Trimming drops
 	// the oldest first. Zero takes memory.DefaultSessionMaxMessages.

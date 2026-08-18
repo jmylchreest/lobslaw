@@ -83,6 +83,11 @@ func WhisperAudioFactory(cfg AudioDriverConfig) (AudioDriver, error) {
 	if err := checkAudioConfig(cfg); err != nil {
 		return nil, err
 	}
+	// A base URL from the provider entry, plus the path this driver
+	// actually posts to — a DIFFERENT one from the chat drivers, which
+	// is exactly why the suffix is a parameter rather than a constant
+	// buried in the helper.
+	cfg.Endpoint = NormaliseEndpoint(cfg.Endpoint, TranscriptionsPath)
 	return &whisperAudioDriver{cfg: cfg, client: HTTPClientOr(cfg.HTTPClient)}, nil
 }
 
@@ -93,6 +98,7 @@ func ChatMultimodalAudioFactory(cfg AudioDriverConfig) (AudioDriver, error) {
 	if err := checkAudioConfig(cfg); err != nil {
 		return nil, err
 	}
+	cfg.Endpoint = NormaliseEndpoint(cfg.Endpoint, ChatCompletionsPath)
 	return &chatMultimodalAudioDriver{cfg: cfg, client: HTTPClientOr(cfg.HTTPClient)}, nil
 }
 

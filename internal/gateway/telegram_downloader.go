@@ -11,17 +11,32 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// IncomingDownloadDir is where channel handlers materialise inbound
-// attachments. Inside /workspace so it lives in the operator's
-// host-visible bind-mount + is reachable from MCP-spawned tools.
-// Per-message subdir keeps unrelated turns isolated.
-const IncomingDownloadDir = "/workspace/incoming"
+// DefaultIncomingDownloadDir is where channel handlers materialise
+// inbound attachments when [gateway] incoming_dir is unset. Inside
+// /workspace so it lives in the operator's host-visible bind-mount +
+// is reachable from MCP-spawned tools. Per-message subdir keeps
+// unrelated turns isolated.
+//
+// Only the CONTAINER image has a /workspace. It used to be a
+// constant, so on a host install MkdirAll under it failed for an
+// unprivileged process and an inbound photograph could not be
+// received at all.
+const DefaultIncomingDownloadDir = compute.DefaultIncomingDir
+
+// incomingDir is the configured directory, or the default.
+func (h *TelegramHandler) incomingDir() string {
+	if d := h.cfg.IncomingDir; d != "" {
+		return d
+	}
+	return DefaultIncomingDownloadDir
+}
 
 // downloadAttachments fetches each attachment in im.Attachments
-// from Telegram and stores it under IncomingDownloadDir/<turn>/.
+// from Telegram and stores it under <incoming dir>/<turn>/.
 // Mutates the slice in place to set LocalPath. Best-effort: a
 // single failure logs + skips that attachment; the agent still
 // gets the others. Returns nil unless the download dir itself
@@ -30,7 +45,7 @@ func (h *TelegramHandler) downloadAttachments(ctx context.Context, turnID string
 	if !im.HasMedia() {
 		return nil
 	}
-	turnDir := filepath.Join(IncomingDownloadDir, turnID)
+	turnDir := filepath.Join(h.incomingDir(), turnID)
 	if err := os.MkdirAll(turnDir, 0o755); err != nil {
 		return fmt.Errorf("telegram: prep download dir %q: %w", turnDir, err)
 	}

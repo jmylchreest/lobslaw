@@ -35,7 +35,7 @@ The comparison's one-line conclusion, which sets the ordering below:
 
 ## Order of work
 
-Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detail).
+Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detail).
 ✅ done · 🟨 partial · ⬜ not started.
 
 | # | Item | Status | Priority | Effort | Blocks |
@@ -43,12 +43,14 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R0** | [Leader-forwarding write path](#r0--leader-forwarding-write-path) | ✅ | 🔴 P0 | S | R1, R2, R3 |
 | **R1** | [Session layer](#r1--session-layer) | ✅ | 🔴 P0 | L | R2, R3, R4 |
 | **R2** | [Durable, cluster-wide confirmations](#r2--durable-cluster-wide-confirmations) | ✅ | 🔴 P0 | M | — |
-| **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | 🟨 | 🔴 P0 | M | — |
+| **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | ✅ | 🔴 P0 | M | — |
 | **R4** | [Policy engine fails closed](#r4--policy-engine-fails-closed) | ✅ | 🔴 P0 | XS | — |
 | **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | ✅ | 🔴 P0 | M | — |
-| **R6** | [Retrieval mechanics](#r6--retrieval-mechanics) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🟠 P1 | L | — |
-| **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🟠 P1 | M | — |
-| **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🟠 P1 | S | — |
+| **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🔴 P0 | S | — |
+| **R20e** | [Minimum score floor](#20e--minimum-score-floor--open) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🔴 P0 | XS | — |
+| **R6a** | [Ranking that needs no index](#r6a--ranking-that-needs-no-index) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🟠 P1 | M | — |
+| **R6b** | [The lexical index in the FSM](#r6b--the-lexical-index-in-the-fsm) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🔵 P3 | L | — |
+| **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🔵 P3 | M | — |
 | **R7** | [Principal identity](#r7--principal-identity) | 🟨 | 🟠 P1 | M | — |
 | **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | ✅ | 🟠 P1 | M | — |
 | **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | ✅ | 🟠 P1 | S | — |
@@ -66,12 +68,15 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
 | **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | ✅ | 🟠 P1 | M | — |
 | **R27** | [The config sweep](#r27--the-config-sweep-done-2026-08-17) | ✅ | 🟠 P1 | M | — |
-| **R25** | [Retire the node functions that select nothing](#r25--retire-the-node-functions-that-do-not-select-anything) | ⬜ | 🟡 P2 | S | — |
-| **R26** | [A second vendor per generation modality](#r26--a-second-vendor-per-generation-modality) | ⬜ | 🟠 P1 | M | R22 |
+| **R25** | [Retire the node functions that select nothing](#r25--retire-the-node-functions-that-do-not-select-anything) | ✅ | 🟡 P2 | S | — |
+| **R26** | [A second vendor per generation modality](#r26--a-second-vendor-per-generation-modality) | ✅ | 🟠 P1 | M | R22 |
 | **R28** | [The operator's laptop](#r28--the-operators-laptop) | ✅ | 🟠 P1 | L | — |
 | **R29** | [Enrolling an operator without moving a private key](#r29--enrolling-an-operator-without-moving-a-private-key) | ✅ | 🟠 P1 | M | R28 |
 | **R30** | [Cross-network node enrolment](#r30--cross-network-node-enrolment) | ⬜ | 🔵 P2 | M | R29 |
-| **R31** | [Run it before believing it](#r31--run-it-before-believing-it) | 🟨 | 🔴 P0 | S | — |
+| **R31** | [Run it before believing it](#r31--run-it-before-believing-it) | ✅ | 🔴 P0 | S | — |
+| **R32** | [MCP over SSE, off unless asked for](#r32--mcp-over-sse-off-unless-asked-for) | ⬜ | 🟡 P2 | M | — |
+| **R33** | [Delegation as a primitive](#r33--delegation-as-a-primitive) | ⬜ | 🟠 P1 | M | — |
+| **R34** | [Skill bundles and the bootstrap](#r34--skill-bundles-and-the-bootstrap) | ⬜ | 🟠 P1 | M | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -81,6 +86,9 @@ The status column and the acceptance boxes had drifted apart, in both directions
 - **R18 → 🟨, from ✅.** Marked complete when its CLI landed, but `skills rollback` is on the
   acceptance list and does not exist. Two boxes were ticked against tests that already cover them;
   three describe behaviour that is probably present and has never been verified.
+  **Superseded the same day:** `skills rollback` landed in #100 and R18 is ✅ again. This bullet is
+  kept because the demotion was correct when it was written — the table moving twice in one day is
+  the process working, not a mistake.
 - **R22 → 🟨, from ⬜.** Three generation modalities shipped while this said "not started". The
   driver consolidation genuinely has not.
 - **R25 and R26** had sections but no row in the table above, so they were invisible to anyone
@@ -95,9 +103,11 @@ three boxes across the two were true in a way nothing tested.
 The lesson is worth keeping: a ✅ with unticked boxes is not bookkeeping debt, it is an untested
 claim.
 
-**Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
-persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
-`LogEntry.expected_revision`, which is the CAS primitive its atomic resolve needs.
+~~**Remaining P0: R2, R5, and the persisted pending queue in R3.**~~ **Stale, corrected
+2026-08-18.** All three had already closed when this was written, and the [Status drift](#status-drift)
+table immediately below it said so — R2 done, R3 done with the pending queue deliberately not built,
+R5 complete. A summary line that disagrees with the table it summarises is worse than no summary,
+because it is the line people quote. See the 2026-08-18 review below for the replacement.
 
 R13–R17 are the self-learning group, derived from reading hermes-agent's implementation
 (`agent/background_review.py`, `agent/curator.py`, `tools/memory_tool.py`,
@@ -108,6 +118,49 @@ R15 is the foundation for R16/R17: nothing self-taught is shippable until the st
 **R18 changes where skills live at all, and precedes R15.** Sequence for this group:
 R13 → R18 → R14 → R15 → R16 → R17. R13 and R14 are independent of R18 and can land in any order
 alongside it.
+
+### Bookkeeping (reviewed 2026-08-18)
+
+A second pass, prompted by a feature comparison against hermes-agent and nullclaw. Four status
+corrections, one missing row, and three findings that came from reading the code rather than the
+document. **Every correction below is upward** — the tree was further along than the index said,
+which is the direction that costs you work you have already done.
+
+- **R3 → ✅, from 🟨.** All four boxes are ticked and the [Status drift](#status-drift) row already
+  read "Done". The pending queue was deliberately not built, which is a recorded deviation, not
+  outstanding work.
+- **R25 → ✅, from ⬜.** All three acceptance bullets hold: `NormalizeFunctions` rewrites the
+  deprecated aliases and `node.go` warns naming `memory`, `TestPolicyAliasKeepsTheNodeOnRaft`
+  asserts the alias so removing it later is deliberate, and neither `docs/` nor
+  `examples/config.toml` lists `policy` as a role any more.
+- **R26 → ✅, from ⬜.** Its own section has said "Status: done" since ElevenLabs, Imagen and Veo
+  landed; only the table did not know. `internal/compute/drivers/` confirms all three.
+- **R31 → ✅, from 🟨.** All six boxes are ticked, including the two that needed a human tapping
+  Approve against a real bot.
+- **R32 had a section and no row**, so it was invisible to anyone reading the index — the third time
+  this exact thing has happened, after R25 and R26. Rows are now added when the section is, and
+  a section with no row should fail a test the way a documented command with no dispatcher does.
+
+**Three findings from the code that the document did not have.** Each is written up in the item it
+belongs to; they are listed together here because they share a shape — *the document describes an
+intention, and the code has moved past it in a way nobody wrote down.*
+
+1. **Delegation already exists.** `research:run` is a planner → workers → synthesiser fan-out where
+   each worker is a full agent turn with tools. The open question was never "should lobslaw
+   delegate"; it is why the fan-out is bound to one hardcoded workflow. See [R33](#r33--delegation-as-a-primitive).
+2. **The research fan-out's budget does not add up**, and its tool description tells the model that
+   it does. Live defect. See [R33](#r33--delegation-as-a-primitive), step 33a.
+3. **RRF, temporal decay and MMR do not need the inverted index.** They were filed behind it, and
+   the whole retrieval group was then deferred as one unit. Re-split into
+   [R6a](#r6a--ranking-that-needs-no-index) and [R6b](#r6b--the-lexical-index-in-the-fsm).
+
+**The remaining P0s are now R21 and R20e**, and both are correctness rather than performance: a
+record whose embedding failed is stored and never becomes searchable, and a query with no good match
+injects its three least-bad results into the prompt as relevant context. Both were sitting at P1
+inside a group deferred for performance reasons that do not apply to either.
+
+**Everything else outstanding is new work, not unfinished work.** R6a/R6b, R7, R11, R23, R30, R32,
+R33 and R34 are the whole open set.
 
 ### Status drift
 
@@ -903,6 +956,34 @@ One body of work, three landable pieces. Addresses review §3.4.
 **Rewritten 2026-08-15** after reading hermes-agent's and nullclaw's retrieval source, re-reading
 what lobslaw actually ships, and — for the first time — **measuring it**.
 
+## Re-split, 2026-08-18
+
+This group was framed as "one body of work, three landable pieces" and then deferred as **one
+unit**. The three pieces have unrelated value and effort profiles, and the bundling is why the cheap
+ones have not shipped: they were hostage to a decision about the inverted index that has nothing to
+do with any of them.
+
+**The finding that forced the re-split: RRF, temporal decay and MMR do not need the index.**
+`memory_search` already runs semantic first and augments with tokenised substring when semantic
+under-delivers, and already reports which ran (`semantic` / `semantic+substring` /
+`tokenised-substring`). That is **two ranked lists, produced today, on every query.** Reciprocal rank
+fusion merges *ranks*; temporal decay is a multiplier on a score already computed; MMR reorders a
+top-K already returned. None of the three reads a posting list. They were listed under
+[Reference points](#reference-points) beside the index proposal, and inherited its deferral by
+adjacency.
+
+The group is therefore now four items, in priority order:
+
+| # | Item | Needs | Why here |
+|---|---|---|---|
+| [R21](#r21--embedding-outbox) | Embedding outbox | nothing | 🔴 A record whose embedding failed is stored and never becomes searchable. Silent. |
+| [R20e](#20e--minimum-score-floor--open) | Minimum score floor | nothing | 🔴 A query with no good match injects its three least-bad results as "relevant context". |
+| [R6a](#r6a--ranking-that-needs-no-index) | Ranking + transcript fixes | nothing | 🟠 What a person actually notices. Fusion, decay, MMR, relevance ordering. |
+| [R6b](#r6b--the-lexical-index-in-the-fsm) | Lexical index in the FSM | a corpus that needs it | 🔵 Held on a measured trigger. See the section. |
+
+R21 and R20e are **correctness, not performance**, and both sat at P1 inside a group deferred on
+performance grounds that never applied to either.
+
 ## Ground rule: Raft only
 
 Per `lobslaw-retrieval-raft-only`: every index and every derived structure in this section lives in
@@ -1046,9 +1127,40 @@ and its BM25 needed a hand-written C SQLite tokenizer (`native/fts5_cjk/fts5_cjk
 watermark-gated triggers to keep an external-content FTS5 index from corrupting. That is a strong
 argument *against* SQLite here, not for it.
 
+The proposal below was one list. It is now two items — see [Re-split](#re-split-2026-08-18).
+[R6a](#r6a--ranking-that-needs-no-index) is everything that can be built today;
+[R6b](#r6b--the-lexical-index-in-the-fsm) is the index, and is held.
+
+---
+
+## R6a — ranking that needs no index
+
+⬜ **Not started.** Everything here operates on result lists the current code already produces. No
+new bucket, no FSM-resident derived state, no migration.
+
 ### Proposal
 
-**1 · Lexical index in bbolt, inside the FSM.** Pure-Go / no-CGO is a recorded decision worth keeping.
+**1 · Fuse the two strategies that already run.** `memory_search` returns a semantic list and,
+when semantic under-delivers, a tokenised-substring list. Merge them with reciprocal rank fusion —
+`Σ 1/(k + rank)`, `k = 60` — rather than a weighted score sum.
+
+The argument for RRF over `α·bm25_norm + (1-α)·cosine_norm` is in
+[Reference points](#reference-points) and it holds: BM25 is unbounded and corpus-dependent, cosine
+is [0,1], and the two do not normalise onto a comparable scale stably. RRF merges *ranks*, so there
+is nothing to calibrate and it degrades gracefully when one source returns nothing. What changed on
+2026-08-18 is only the dependency — this needs the two lists, not a posting list.
+
+Keep the existing `strategy` reporting and make it name the fusion rather than just the fallback.
+
+**2 · Temporal decay as a multiplier.** `score *= exp(-ln2 · age_days / half_life)`, half-life 30d,
+with an evergreen exemption — `Retention` is the natural signal, and nullclaw's `isEvergreen()` is
+the precedent. Post-processing on a score already computed.
+
+**3 · MMR diversity reranking** over the top-K already returned, so top-3 is not three views of one
+memory. Directly relevant because Dream clusters near-duplicates and does not always merge them:
+the `keep_distinct` verdicts R12 now records are exactly the population this protects against.
+
+**4 · Fix transcript search.** Five independent fixes, none of which need the index:
 
 ```go
 BucketTermPostings = "term_postings"  // term -> posting list (doc ID + term freq)
@@ -1076,25 +1188,89 @@ breakdown says the prefilter has to be designed around the decrypt, not around t
 | Best-N snippets | Snippets are the first N in sequence order, so an early throwaway mention beats the substantive later one |
 | Source dimension | hermes hit "recall blindness" (#19434) where repetitive cron vocabulary dominated BM25 and starved interactive sessions; it **demotes rather than excludes**. lobslaw will hit this once scheduler-originated turns accumulate and has no source signal to fix it with |
 
-**4 · API.** Implement `SearchRequest.Text` (currently `Unimplemented`), and add
-`SearchRequest.Mode = vector | lexical | hybrid`, `hybrid` being the default for the `ContextEngine`
-hot path. Keep the existing `strategy` reporting — it is good observability and should name the
-fusion, not just the fallback.
-
 **5 · Surfaces**, which also serve R12: `lobslaw history list | show <session> | search <query>`.
 The `session_search` / `session_list` / `session_read` builtins already shipped.
+
+### Acceptance
+
+- [ ] Fused ranking beats either strategy alone on a fixture where each has exactly one uniquely
+      correct hit — the one test that distinguishes fusion from "run both and concatenate".
+- [ ] A CJK query still matches after tokenisation lands.
+- [ ] Transcript hits are ordered by relevance with recency as a decay multiplier, not as the
+      primary key.
+- [ ] Top-K contains no two near-duplicate memories (MMR).
+- [ ] An evergreen record does not decay out of reach, and the exemption is driven by `Retention`
+      rather than a second list somebody has to maintain.
+- [ ] Scheduler-originated turns are demoted, not excluded, and are still reachable when they are the
+      only match.
+- [ ] `strategy` names the fusion, not just the fallback.
+
+---
+
+## R6b — the lexical index in the FSM
+
+⬜ **Not started, and deliberately held (2026-08-18).** This is the only part of the retrieval group
+that is a real architecture commitment, and it is the only part whose failure mode is unrecoverable.
+
+### Why it is held
+
+Two reasons, both from this document rather than from taste.
+
+**The measurement moved against it.** Decrypt fell from ~71% of a query to ~32% after #21 and #25,
+so the cosine arithmetic is now the largest single share. R20 already records that this weakens
+20d's payoff relative to the estimate that justified it; the same shift narrows the gap an inverted
+index closes on the lexical side, because the scan it replaces is no longer dominated by I/O.
+
+**Its failure mode is the worst available.** Index updates must happen *inside* `FSM.Apply` for the
+record's own log entry (see the invariant below). Getting the derivation wrong produces replicas
+that disagree — **a divergent FSM, unrecoverable without a snapshot restore.** That is a serious
+thing to take on for a corpus that is comfortable to 10,000 records and tolerable to 100,000, on a
+personal store that has never been deployed.
+
+### The trigger, which is a reading and not a guess
+
+Not "as the corpus approaches 100k" — that number was inferred from a benchmark, not from a
+deployment. Instrument it instead, in the same debug surface as R21's outbox depth:
+
+- episodic record count, and
+- p95 recall latency on the `ContextEngine` hot path.
+
+Build R6b when p95 on a real deployment crosses the threshold, or when [R6a](#r6a--ranking-that-needs-no-index)
+has landed and exact-token recall is still the top complaint. This project built a benchmark culture
+during R20; the deferral trigger should use it.
+
+### Proposal
+
+**1 · Lexical index in bbolt, inside the FSM.** Pure-Go / no-CGO is a recorded decision worth keeping.
+
+```go
+BucketTermPostings = "term_postings"  // term -> posting list (doc ID + term freq)
+BucketDocStats     = "doc_stats"      // doc ID -> length; plus corpus totals for IDF
+```
+
+Indexes **both** episodic records and session messages, under one posting namespace with a doc-kind
+prefix, so one query can rank across distilled memory and verbatim transcript.
+
+> **FSM invariant, and the one way to get this wrong:** index updates must happen *inside*
+> `FSM.Apply` for the record's own log entry, derived from it — never as a second `raft.Apply`.
+> A crash between two applies leaves replicas with different indexes, and a divergent FSM is
+> unrecoverable without a snapshot restore.
+
+**2 · Approximate vector search — moved to [R20](#r20--vector-scan-cost)**, because the measured
+breakdown says the prefilter has to be designed around the decrypt, not around the arithmetic.
+
+**3 · API.** Implement `SearchRequest.Text` (currently `Unimplemented`), and add
+`SearchRequest.Mode = vector | lexical | hybrid`, `hybrid` being the default for the `ContextEngine`
+hot path. R6a's fusion is what `hybrid` means; this adds the third source to it.
 
 ### Acceptance
 
 - [ ] An exact-token query ("ERR_2291", a PR number) retrieves the right record where vector search
       does not.
 - [ ] No recall path performs a full bucket scan at steady state.
-- [ ] A CJK query still matches after tokenisation lands.
-- [ ] Transcript hits are ordered by relevance with recency as a decay multiplier, not as the primary key.
-- [ ] Top-K contains no two near-duplicate memories (MMR).
-- [ ] Scheduler-originated turns are demoted, not excluded, and are still reachable when they are the
-      only match.
 - [ ] Index rebuild from snapshot produces byte-identical postings on every replica.
+- [ ] A crash between the record write and the index write is not expressible — asserted against the
+      FSM, not against a caller.
 
 ---
 
@@ -1153,22 +1329,34 @@ BucketVectorBands = "vector_bands"  // key: "<hmac(band_i)>:<record_id>" -> nil
 - Recall must be **measured against exact scan**, with automatic fallback when it degrades. An ANN
   that silently loses recall is worse than a slow exact scan, because the failure is invisible.
 
+### 20e · Minimum score floor — ⬜ open
+
+**🔴 P0, and promoted out of a prose bullet on 2026-08-18** because it was described as "the most
+valuable thing left in this section that is not 20d" while having no number, no anchor and no row —
+which is how something stays unbuilt while everyone agrees it matters.
+
+Nothing anywhere applies a floor, so a query with no good match still injects the top-3 **least-bad**
+records into the prompt as *"Relevant context from prior conversations"*. Cosine-0.1 noise presented
+to the model as relevant context is not a performance bug; it is the retrieval layer asserting
+something false on the hot path of every turn, and the model has no way to tell.
+
+It is also the cheapest correctness fix in the document — a comparison and a config key.
+
+`TestCosineAccumulationPrecision` notes the precision caveat that becomes relevant once an absolute
+threshold exists: float32 accumulator, measured relative error 4.6e-07 at D=4096. Fine for a floor,
+and worth writing down beside it so the next person does not re-derive it.
+
+- [ ] A query with no good match returns nothing rather than the least-bad three.
+- [ ] The floor is configurable, and its default is stated with the reasoning for the number.
+- [ ] `ContextEngine` emitting no recall block is a normal outcome, not an error path.
+
 ### Also worth fixing here
 
 - ~~**Delete the "fine for personal scale (< ~100k records)" comment**~~ — ✅ done (#21).
 - ~~**Surface dimension mismatch.**~~ — ✅ done (#21): `vectorSearch` counts skipped records and
   warns once per query with the query width. Uses `slog.Default()` because it is a free function;
-  threading the node logger through is still open.
-- **Add a minimum score floor** — ⬜ still open, and now the most valuable thing left in this
-  section that is not 20d. Nothing anywhere applies one. Nothing anywhere applies one, so a query with no good match still
-  injects the top-3 least-bad records into the prompt as *"Relevant context from prior
-  conversations"*. Cosine 0.1 noise presented as relevant context is an effectiveness bug, not a
-  performance one. `TestCosineAccumulationPrecision` notes the precision caveat that becomes relevant
-  once an absolute threshold exists (float32 accumulator, measured rel. error 4.6e-07 at D=4096 —
-  fine for a floor, worth knowing about).
-- **Surface dimension mismatch.** `vectorSearch` silently skips records whose width differs from the
-  query. Changing embedding model therefore makes the entire existing corpus invisible with no error,
-  no warning and no metric. Count them and log once per query at WARN.
+  threading the node logger through is still open. *(This bullet appeared twice, once done and once
+  not; the open copy was stale and was removed 2026-08-18.)*
 
 ### Acceptance
 
@@ -1220,6 +1408,14 @@ Three things worth carrying forward:
 ⬜ **Not started.** Re-verified 2026-08-15: `episodic_ingest.go` still skips silently, and the
 `builtin_memory.go` comment still reasons about a backfill that does not exist. Unchanged by the
 R20 work — that made the scan cheap, not the corpus complete.
+
+> **Raised to 🔴 P0, 2026-08-18.** This is filed as a performance item inside a group deferred on
+> performance grounds, and it is neither. A record whose embedding failed is **stored, unsearchable,
+> and silent** — there is no retry, no queue, no backfill and no signal to anyone, so the corpus
+> degrades in a way nobody can observe and nobody can repair after the fact. The only thing masking
+> it is the substring augment in `memory_search`, which means a fallback designed to close a
+> *ranking* gap is quietly compensating for a *durability* one. The deferral that covers R6 was
+> never an argument about this.
 
 ### Problem
 
