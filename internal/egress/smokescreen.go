@@ -488,10 +488,20 @@ func buildSmokescreenACL(rules Rules) *smokeacl.ACL {
 		}
 	}
 	for role := range rules.Permissive {
+		// Open, not Enforce-with-a-star. smokescreen's matcher does
+		// not treat a bare "*" as "everything" — an Enforce rule
+		// carrying it matched no host at all, so the role documented
+		// as "deliberately permissive" denied every request. fetch_url
+		// therefore could not reach anything on any node that had not
+		// set an explicit allowlist, and the agent reported it as an
+		// external restriction rather than as our own.
+		//
+		// Open still refuses private addresses; that check is
+		// smokescreen's, not this rule's, and is the part that
+		// actually matters here.
 		acl.Rules[role] = smokeacl.Rule{
-			Project:     "lobslaw",
-			Policy:      smokeacl.Enforce,
-			DomainGlobs: []string{"*"},
+			Project: "lobslaw",
+			Policy:  smokeacl.Open,
 		}
 	}
 	if len(rules.DefaultAllowedHosts) > 0 {
