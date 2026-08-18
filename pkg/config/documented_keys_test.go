@@ -40,27 +40,12 @@ var tomlKeyRe = regexp.MustCompile(`(?m)^([a-z_0-9]+)\s*=`)
 // The list only shrinks. A NEW phantom key fails immediately, which is
 // the point: this stops the drift getting worse while the backlog is
 // worked through.
-var knownWrongInTheReference = map[string]bool{
-	"clawhub_signing_policy": true,
-	"council":                true,
-	"default_mount":          true,
-	"default_provider":       true,
-	"default_scope":          true,
-	"default_signing_policy": true,
-	"dimensions":             true,
-	"discover_paths":         true,
-	"dream_interval":         true,
-	"fragments":              true,
-	"jwt_validator":          true,
-	"listen":                 true,
-	"max_turn_seconds":       true,
-	"networks":               true,
-	"threshold":              true,
-	"tick_interval":          true,
-	"token_ref":              true,
-	"trailing_logs":          true,
-	"worker":                 true,
-}
+// knownWrongInTheReference is documentation debt.
+//
+// Empty, and it should stay that way. Every entry would be a key the
+// reference teaches which no struct field claims: koanf discards it
+// silently, so an operator writing it gets the default and no warning.
+var knownWrongInTheReference = map[string]bool{}
 
 func TestEveryDocumentedKeyExists(t *testing.T) {
 	t.Parallel()

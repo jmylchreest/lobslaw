@@ -50,16 +50,17 @@ data_dir = "data"
 key_ref = "env:LOBSLAW_MEMORY_KEY"   # base64 32-byte key
 
 [memory.snapshot]
-interval         = "1h"
-trailing_logs    = 10000
-threshold        = 8192
+# Boot validation only today: a memory node with neither a snapshot
+# target nor seed nodes is a single point of loss. Shipping is not
+# implemented, so there is no schedule or retention to configure.
+target = "local"
 ```
 
 ## `[storage]`
 
 ```toml
 [storage]
-default_mount = "workspace"
+enabled = true
 
 [[storage.mounts]]
 label = "workspace"
@@ -85,7 +86,8 @@ egress_uds_path              = ""             # required for netns skills
 clawhub_base_url             = ""             # set to enable clawhub_install
 clawhub_binary_hosts         = []             # default github.com release hosts
 clawhub_install_mount        = "skill-tools"
-clawhub_signing_policy       = "prefer"       # off | prefer | require
+# Skill signing policy lives in [skills], not here.
+clawhub_base_url             = "https://clawhub.dev" | require
 fetch_url_allow_hosts        = []             # empty = permissive
 
 # Per-provider OAuth configuration
@@ -122,7 +124,7 @@ See [policy rules](/configuration/policy-rules) for matching semantics.
 
 ```toml
 [compute]
-default_provider = "openrouter"
+default_chain = "main"
 
 [[compute.providers]]
 label              = "openrouter"
@@ -164,11 +166,12 @@ trust_tier = "local"
 endpoint    = "https://openrouter.ai/api/v1/embeddings"
 api_key_ref = "env:OPENROUTER_API_KEY"
 model       = "openai/text-embedding-3-small"
-dimensions  = 1536
+dims        = 1536
 
 [compute.roles]
-worker = "openrouter"
-council = ["openrouter", "anthropic-direct"]
+# main, preflight, reranker, summariser. There is no "worker" or
+# "council" role.
+main = "openrouter"
 
 [compute.web_search]
 provider = "tavily"
@@ -176,7 +179,6 @@ api_key_ref = "env:TAVILY_API_KEY"
 
 [compute.limits]
 max_tool_calls_per_turn = 25
-max_turn_seconds        = 600
 
 [compute.context]
 # How much prior conversation each turn replays, and how the rest is
@@ -232,7 +234,7 @@ compaction is off and long conversations simply lose their oldest messages.
 ```toml
 [gateway]
 require_auth        = false
-default_scope       = "public"
+unknown_user_scope  = "public"
 unknown_user_scope  = "public"
 
 # What happens when a message arrives while a turn is already running
@@ -296,15 +298,15 @@ session_cache_ttl      = "30m"
 
 [[gateway.channels]]
 type      = "telegram"
-token_ref = "env:TELEGRAM_BOT_TOKEN"
+bot_token_ref = "env:TELEGRAM_BOT_TOKEN"
 
 [gateway.channels.user_scopes]
 "123456789" = "owner"        # chat_id → scope override
 
 [[gateway.channels]]
+# The REST listener is [gateway] http_port; a channel has no listen
+# address of its own.
 type      = "rest"
-listen    = ":8443"
-jwt_validator = "google"
 ```
 
 ## `[mcp.servers.<name>]`
@@ -314,23 +316,18 @@ jwt_validator = "google"
 command  = "uvx"
 args     = ["minimax-mcp-server"]
 env      = { MINIMAX_API_KEY = "ref:env:MINIMAX_API_KEY" }
-networks = ["api.minimax.chat"]
 ```
 
 ## `[scheduler]`
 
 ```toml
-[scheduler]
-storage = "raft"             # raft | local
-tick_interval = "1m"
 ```
 
 ## `[skills]`
 
 ```toml
 [skills]
-discover_paths = ["/var/lib/lobslaw/skills"]
-default_signing_policy = "prefer"
+signing_policy = "prefer"
 ```
 
 ## `[soul]`
@@ -338,8 +335,6 @@ default_signing_policy = "prefer"
 ```toml
 [soul]
 path = "SOUL.md"
-fragments = 16
-dream_interval = "24h"
 ```
 
 ## `[audit.local]`

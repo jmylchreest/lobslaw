@@ -3616,7 +3616,18 @@ pieces and cannot see the joins.
       verifying its own certificate against the cluster CA, the server snapshotting a CA pool
       before the operator root existed, node certificates losing their IP SAN, and the resolved
       address not being recorded so every source label printed blank.
-- [ ] The 19 phantom configuration keys are triaged: renamed, moved, or deleted.
+- [x] The 19 phantom configuration keys are triaged: renamed, moved, or deleted.
+      **Three of them were whole sections describing configuration that does not exist.**
+
+      Renamed: `default_provider` → `default_chain`, `dimensions` → `dims`, `default_scope` →
+      `unknown_user_scope`, `token_ref` → `bot_token_ref`, `default_signing_policy` →
+      `signing_policy`. Moved: skill signing policy is `[skills]`, not `[security]`. Deleted
+      because the feature is not there: `[scheduler]` entirely, the `worker` and `council` roles,
+      `max_turn_seconds`, `discover_paths`, `default_mount`, `fragments`, `dream_interval`,
+      snapshot `interval`/`trailing_logs`/`threshold`, a per-channel `listen` and
+      `jwt_validator`, and MCP `networks`.
+
+      The allowlist is empty and should stay that way.
 
 ## R29 — enrolling an operator without moving a private key
 
