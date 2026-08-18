@@ -29,6 +29,14 @@ lobslaw cluster            # cluster + cert lifecycle
 lobslaw plugin             # plugin lifecycle
   plugin install <bundle>  # install a clawhub bundle
   plugin list              # list installed skills
+lobslaw skills             # skills held in the cluster store
+  skills list              # what is installed
+  skills import <path>     # add one
+  skills remove <name>     # take one out
+lobslaw learned            # what the agent taught itself
+  learned list             # artefacts it wrote for itself
+  learned pending          # refinements awaiting a decision
+  learned approve <id>     # let a proposal out of PROPOSED
 lobslaw audit              # the tamper-evident record
   audit query              # read entries
   audit verify             # walk the hash chain
@@ -52,7 +60,6 @@ lobslaw session            # read conversation transcripts
   session show <id>        # full transcript
   session search <text>    # substring search across transcripts
 lobslaw sandbox-exec       # hidden — used by the sandbox reexec helper
-lobslaw dispatch           # hidden — used by hooks / scheduler dispatch
 ```
 
 ## Global flags

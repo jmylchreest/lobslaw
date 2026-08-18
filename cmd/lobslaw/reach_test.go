@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -186,4 +188,85 @@ func TestNoDeclaredSubcommandIsNil(t *testing.T) {
 			}
 		}
 	}
+}
+
+// --- the documented surface --------------------------------------------
+
+// `lobslaw nodeid` was documented — and used in the getting-started
+// guide as `--node-id $(lobslaw nodeid)` — with NO dispatcher. It fell
+// through to the main path and booted a whole node: reading whatever
+// config was on the machine, joining raft, starting every channel.
+// Following the documentation started a second assistant.
+//
+// The inventory above only ever looked at commands that already had a
+// dispatcher, so it could not see a gap shaped like this one. This
+// checks the other direction: everything the docs teach must be
+// claimed by something.
+func TestEveryDocumentedCommandIsDispatched(t *testing.T) {
+	documented := documentedCommands(t)
+	if len(documented) < 5 {
+		t.Fatalf("only %d documented commands found; the parser has probably drifted "+
+			"from the docs and is no longer checking anything", len(documented))
+	}
+
+	known := map[string]bool{}
+	for _, d := range topLevelDispatchers() {
+		known[d.name] = true
+	}
+	// Accepted spellings that are aliases rather than commands.
+	known["enroll"] = true
+
+	for _, name := range documented {
+		if !known[name] {
+			t.Errorf("`lobslaw %s` is documented but no dispatcher claims it; "+
+				"it will fall through and boot a node", name)
+		}
+	}
+}
+
+// And the reverse: a command that exists but is taught nowhere.
+func TestEveryDispatchedCommandIsDocumented(t *testing.T) {
+	documented := map[string]bool{}
+	for _, name := range documentedCommands(t) {
+		documented[name] = true
+	}
+	for _, d := range topLevelDispatchers() {
+		if !documented[d.name] {
+			t.Errorf("`lobslaw %s` is dispatched but appears in no documentation", d.name)
+		}
+	}
+}
+
+// documentedCommands reads the top-level names out of the CLI
+// reference's subcommand block.
+//
+// Parsed from the docs rather than duplicated here, because a second
+// hand-maintained list is a second thing to forget.
+func documentedCommands(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "docs", "operating", "cli.md"))
+	if err != nil {
+		t.Skipf("CLI reference not readable: %v", err)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		// Lines in the subcommand block look like:
+		//   lobslaw memory             # read + edit the memory store
+		if !strings.HasPrefix(line, "lobslaw ") {
+			continue
+		}
+		fields := strings.Fields(strings.TrimPrefix(line, "lobslaw "))
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		// "lobslaw --config ..." is the no-subcommand run line.
+		if strings.HasPrefix(name, "-") || strings.HasPrefix(name, "#") || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }

@@ -218,47 +218,10 @@ func main() {
 	// `lobslaw cluster sign-node --config X` — the global flag value
 	// reaches the subcommand via $LOBSLAW_CONFIG.
 	hoistGlobalFlagsToEnv(os.Args[1:])
-	if dispatchCluster(os.Args[1:]) {
-		return
-	}
-	if dispatchPlugin(os.Args[1:]) {
-		return
-	}
-	if dispatchAudit(os.Args[1:]) {
-		return
-	}
-	if dispatchSkills(os.Args[1:]) {
-		return
-	}
-	if dispatchTrace(os.Args[1:]) {
-		return
-	}
-	if dispatchLearned(os.Args[1:]) {
-		return
-	}
-	if dispatchIdentity(os.Args[1:]) {
-		return
-	}
-	if dispatchPolicy(os.Args[1:]) {
-		return
-	}
-	if dispatchMemory(os.Args[1:]) {
-		return
-	}
-	if dispatchSession(os.Args[1:]) {
-		return
-	}
-	if dispatchInit(os.Args[1:]) {
-		return
-	}
-	if dispatchEnrol(os.Args[1:]) {
-		return
-	}
-	if dispatchContext(os.Args[1:]) {
-		return
-	}
-	if dispatchDoctor(os.Args[1:]) {
-		return
+	for _, d := range topLevelDispatchers() {
+		if d.dispatch(os.Args[1:]) {
+			return
+		}
 	}
 
 	var f flags

@@ -3967,6 +3967,21 @@ read as though it were the cluster's, and answering confidently with nothing in 
       the one the operator meant.
       **Enforced by an inventory test, because a rule nothing checks is a rule that decays.**
 
+      **Amended after it missed one.** The original inventory walked commands that already HAD a
+      dispatcher, so it could not see a gap shaped like `lobslaw nodeid`: documented, used in the
+      getting-started guide as `--node-id $(lobslaw nodeid)`, and dispatched by nothing. It fell
+      through to the main path and BOOTED A WHOLE NODE — reading whatever config was on the
+      machine, joining raft, starting every channel. Following the documentation started a second
+      assistant.
+
+      Found by running the binary, not by reading it. The tests were green throughout.
+
+      The dispatch chain is now a table, so "which commands exist" is a value, and two tests
+      compare it against the CLI reference in both directions. That immediately found two more:
+      `lobslaw dispatch` was documented as a hidden helper that does not exist and nothing
+      invokes — it would have booted a node too — and `skills` and `learned` were dispatched
+      while appearing in no documentation.
+
       `cmd/lobslaw/reach_test.go` walks every dispatcher's declared surface and fails when a
       subcommand has not been placed on one side of the rule. It checks that anything with both
       forms goes live by default and that the two are genuinely different functions; that every

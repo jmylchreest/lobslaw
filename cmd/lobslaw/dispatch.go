@@ -113,3 +113,41 @@ func parseFlagsAndPositionals(fs *flag.FlagSet, args []string) ([]string, error)
 		args = rest[1:]
 	}
 }
+
+// topLevelCommand is one `lobslaw <name> ...` entry point.
+type topLevelCommand struct {
+	name     string
+	dispatch func(args []string) bool
+}
+
+// topLevelDispatchers is every subcommand this binary answers to.
+//
+// A table rather than a chain of ifs, so "which commands exist" is a
+// value a test can compare against the documentation. `nodeid` was
+// documented, dispatched by nothing, and therefore fell through to the
+// main path and booted a whole node — following the getting-started
+// guide started a second assistant. A list nobody can enumerate is a
+// list that grows holes.
+func topLevelDispatchers() []topLevelCommand {
+	return []topLevelCommand{
+		{name: "cluster", dispatch: dispatchCluster},
+		{name: "plugin", dispatch: dispatchPlugin},
+		{name: "audit", dispatch: dispatchAudit},
+		{name: "skills", dispatch: dispatchSkills},
+		{name: "trace", dispatch: dispatchTrace},
+		{name: "learned", dispatch: dispatchLearned},
+		{name: "identity", dispatch: dispatchIdentity},
+		{name: "policy", dispatch: dispatchPolicy},
+		{name: "memory", dispatch: dispatchMemory},
+		{name: "session", dispatch: dispatchSession},
+		{name: "init", dispatch: dispatchInit},
+		{name: "enrol", dispatch: dispatchEnrol},
+		{name: "nodeid", dispatch: dispatchNodeID},
+		{name: "context", dispatch: dispatchContext},
+		{name: "doctor", dispatch: dispatchDoctor},
+		// Documented despite being a reexec helper nobody types: it
+		// shows up in process lists, and a line explaining why beats
+		// somebody discovering an undocumented subcommand.
+		{name: "sandbox-exec", dispatch: dispatchSandboxExec},
+	}
+}
