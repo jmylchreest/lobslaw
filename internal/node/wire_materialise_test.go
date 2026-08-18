@@ -1,6 +1,7 @@
 package node
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/skills"
@@ -57,5 +58,42 @@ func TestAPendingRefinementIsNotMaterialised(t *testing.T) {
 	}})
 	if got[0].Body != "the approved procedure" {
 		t.Errorf("body = %q; a pending refinement reached the cache", got[0].Body)
+	}
+}
+
+// data_dir is relative in every example config, and raft resolves it
+// against the working directory without complaint. The materialiser
+// insists on an absolute root — rightly, it prunes directories — so a
+// node with the documented relative data_dir logged
+//
+//	skills: materialiser failed to start
+//	skills materialiser: materialiser root "data/skills-cache" must be absolute
+//
+// at boot and carried on with self-learning ENABLED and nothing able
+// to materialise. An error nobody reads, and a feature that is on and
+// cannot work.
+func TestARelativeDataDirStillGivesTheMaterialiserAnAbsoluteRoot(t *testing.T) {
+	for _, dataDir := range []string{"data", "./data", "var/lib/lobslaw"} {
+		root, err := skillsCacheRoot(dataDir)
+		if err != nil {
+			t.Fatalf("%q: %v", dataDir, err)
+		}
+		if _, err := skills.NewMaterialiser(root, nil); err != nil {
+			t.Errorf("relative data_dir %q was refused: %v", dataDir, err)
+		}
+	}
+}
+
+// An absolute data_dir must be left exactly as given — resolving one
+// that is already resolved would be a no-op at best and, if it ever
+// stopped being one, would relocate a node's skill cache on upgrade.
+func TestAnAbsoluteDataDirIsUnchanged(t *testing.T) {
+	abs := filepath.Join(t.TempDir(), "data")
+	root, err := skillsCacheRoot(abs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(abs, skillsCacheDirName); root != want {
+		t.Errorf("root = %q, want %q", root, want)
 	}
 }

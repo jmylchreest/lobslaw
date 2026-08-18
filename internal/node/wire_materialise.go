@@ -40,6 +40,27 @@ const materialiseInterval = time.Minute
 // a store that had moved on.
 const skillsCacheDirName = "skills-cache"
 
+// skillsCacheRoot is where the per-node skill cache lives.
+//
+// Absolute, because the materialiser insists on it — rightly, since it
+// PRUNES directories, and a relative root resolved against a working
+// directory that moved would prune somewhere else.
+//
+// Resolved rather than required, because data_dir is relative in every
+// example config and raft already resolves the same string against the
+// same working directory. Refusing it here made a node with the
+// documented relative data_dir log an error at boot and carry on with
+// self-learning enabled and nothing able to materialise — the exact
+// silent contradiction startMaterialiser warns about, arriving through
+// a different door.
+func skillsCacheRoot(dataDir string) (string, error) {
+	root, err := filepath.Abs(filepath.Join(dataDir, skillsCacheDirName))
+	if err != nil {
+		return "", fmt.Errorf("resolve data_dir %q: %w", dataDir, err)
+	}
+	return root, nil
+}
+
 // startMaterialiser reconciles the self-taught cache on boot and then
 // on a ticker. Returns nil having started nothing when there is
 // nothing to materialise.
@@ -56,7 +77,21 @@ func (n *Node) startMaterialiser(ctx context.Context) error {
 		return nil
 	}
 
-	root := filepath.Join(n.cfg.DataDir, skillsCacheDirName)
+	// Resolved because the materialiser insists on an absolute root —
+	// rightly, since it PRUNES directories, and a relative root
+	// resolved against a CWD that moved would prune somewhere else.
+	//
+	// But data_dir is relative in every example config, and raft
+	// already resolves the same string against the same working
+	// directory. Refusing it here made a node with a relative
+	// data_dir log an error at boot and carry on with self-learning
+	// enabled and nothing able to materialise — the exact silent
+	// contradiction the comment above this function warns about,
+	// arriving through a different door.
+	root, err := skillsCacheRoot(n.cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("skills materialiser: %w", err)
+	}
 	mat, err := skills.NewMaterialiser(root, n.log)
 	if err != nil {
 		return fmt.Errorf("skills materialiser: %w", err)

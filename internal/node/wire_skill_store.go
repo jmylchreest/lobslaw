@@ -65,26 +65,10 @@ func (n *Node) startSkillStoreLoader(ctx context.Context) error {
 	if n.skillStore == nil || n.skillRegistry == nil || n.materialiser == nil {
 		return nil
 	}
-	policy, verifier, err := n.skillSigning()
-	if err != nil {
-		// Fatal. A signing policy that cannot be honoured is a
-		// configuration the operator has to fix, and booting into it
-		// would either admit unsigned skills silently or refuse every
-		// skill confusingly.
-		return err
-	}
-	n.skillSigningPolicy, n.skillVerifier = policy, verifier
-
-	// Registered here, after the policy is resolved, so the service
-	// holds the same stance the loaders do. Registering it earlier
-	// would give it a zero-valued policy — SigningOff, the most
-	// permissive — on a node configured to require signatures.
-	if n.server != nil {
-		lobslawv1.RegisterSkillServiceServer(n.server, &skillService{
-			store: n.skillStore, policy: policy, verifier: verifier,
-		})
-	}
-
+	// The policy and the service registration moved to
+	// wireSkillStore, which runs before Serve. Both are read from
+	// *Node here so the loaders hold exactly the stance the service
+	// does.
 	if err := n.loadStoredSkills(); err != nil {
 		n.log.Error("skills: initial store load failed", "err", err)
 	}
@@ -103,7 +87,7 @@ func (n *Node) startSkillStoreLoader(ctx context.Context) error {
 		}
 	}()
 	n.log.Info("skills: loading imported skills from the cluster store",
-		"root", n.materialiser.ImportedRoot(), "signing_policy", policy)
+		"root", n.materialiser.ImportedRoot(), "signing_policy", n.skillSigningPolicy)
 	return nil
 }
 
@@ -197,5 +181,32 @@ func (n *Node) wireSkillStore() error {
 		return fmt.Errorf("skill store: %w", err)
 	}
 	n.skillStore = store
+
+	// Resolved and registered HERE, during wiring, because Start()
+	// calls Serve immediately and gRPC makes RegisterService after
+	// Serve a FATAL — it kills the process, it does not return an
+	// error.
+	//
+	// This used to live in startSkillStoreLoader, which runs after
+	// Serve and is gated on the materialiser. The materialiser
+	// refused a relative data_dir, so on every documented config it
+	// never started, the loader returned early, and the registration
+	// never ran. Fixing the path made the registration reachable and
+	// the node died on boot — the crash had been latent behind a
+	// failure, which is the worst place for one to hide.
+	//
+	// The policy still gates the service, as it must: a zero-valued
+	// policy is SigningOff, the most permissive, on a node that may
+	// be configured to require signatures.
+	policy, verifier, err := n.skillSigning()
+	if err != nil {
+		return err
+	}
+	n.skillSigningPolicy, n.skillVerifier = policy, verifier
+	if n.server != nil {
+		lobslawv1.RegisterSkillServiceServer(n.server, &skillService{
+			store: n.skillStore, policy: policy, verifier: verifier,
+		})
+	}
 	return nil
 }
