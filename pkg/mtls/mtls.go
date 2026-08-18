@@ -3,6 +3,7 @@ package mtls
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +28,19 @@ type NodeCreds struct {
 
 	active atomic.Pointer[tls.Certificate]
 	pool   *x509.CertPool
+
+	// clientAuthPool is what CLIENT certificates are verified against:
+	// the cluster CA, plus the operator CA when one is trusted.
+	//
+	// Deliberately not the same pool as RootCAs. This node dialling a
+	// peer must accept only the cluster CA, so an operator credential
+	// can never be presented BY a server — which is the property that
+	// keeps an online operator-signing key from being able to
+	// manufacture a peer.
+	clientAuthPool *x509.CertPool
+	// operatorCA is retained so callers can ask which root actually
+	// signed a client cert, rather than trusting an OU string.
+	operatorCA *x509.Certificate
 
 	// NodeID is the CommonName from the node cert at last load. Read
 	// without locking — only updated by Reload, which is single-writer.
@@ -99,7 +113,81 @@ func (n *NodeCreds) Reload() error {
 	n.active.Store(&nodeCert)
 	n.pool = pool
 	n.NodeID = leaf.Subject.CommonName
+	// Rebuilt from the freshly-read cluster CA so a Reload cannot
+	// silently drop the operator anchor — a rotation that logged
+	// every operator out would be a confusing way to find out.
+	n.rebuildClientAuthPool()
 	return nil
+}
+
+// TrustOperatorCA adds a second anchor accepted for CLIENT
+// certificates only.
+//
+// Additive, and it never touches RootCAs. An operator certificate is
+// ClientAuth-only in any case, but keeping the pools apart means the
+// guarantee does not rest on that alone.
+func (n *NodeCreds) TrustOperatorCA(caPEM []byte) error {
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		return errors.New("operator CA PEM is invalid or empty")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("parse operator CA: %w", err)
+	}
+	if !cert.IsCA {
+		return errors.New("operator CA certificate is not a CA")
+	}
+	n.operatorCA = cert
+	n.rebuildClientAuthPool()
+	return nil
+}
+
+// OperatorCA returns the trusted operator root, or nil.
+func (n *NodeCreds) OperatorCA() *x509.Certificate { return n.operatorCA }
+
+func (n *NodeCreds) rebuildClientAuthPool() {
+	if n.operatorCA == nil {
+		n.clientAuthPool = n.pool
+		return
+	}
+	// A fresh pool rather than AppendCertsFromPEM onto n.pool: mutating
+	// the cluster pool in place would put the operator root into
+	// RootCAs too, and that is exactly the mixing this design exists to
+	// prevent.
+	merged := x509.NewCertPool()
+	for _, c := range n.poolCerts() {
+		merged.AddCert(c)
+	}
+	merged.AddCert(n.operatorCA)
+	n.clientAuthPool = merged
+}
+
+// poolCerts re-reads the cluster CA file so the merged pool can be
+// built from certificates rather than from an opaque pool.
+//
+// x509.CertPool exposes no way to enumerate what is in it, so the
+// alternative would be keeping a parallel slice in step with it by
+// hand — one more thing to forget during a rotation.
+func (n *NodeCreds) poolCerts() []*x509.Certificate {
+	raw, err := os.ReadFile(n.caCertPath)
+	if err != nil {
+		return nil
+	}
+	var out []*x509.Certificate
+	for {
+		var block *pem.Block
+		block, raw = pem.Decode(raw)
+		if block == nil {
+			return out
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		if c, perr := x509.ParseCertificate(block.Bytes); perr == nil {
+			out = append(out, c)
+		}
+	}
 }
 
 // CAPool returns the cluster CA pool used to verify peers. Snapshot
@@ -138,7 +226,7 @@ func (n *NodeCreds) ServerCreds() credentials.TransportCredentials {
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return n.activeCert(), nil
 		},
-		ClientCAs:  n.pool,
+		ClientCAs:  n.clientAuthPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		MinVersion: tls.VersionTLS13,
 	})

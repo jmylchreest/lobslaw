@@ -3582,10 +3582,23 @@ only a CSR. A certificate and a CSR are both public; they can cross any channel.
 - **`lobslaw enrol --addr node:9090 --name alice`** generates ed25519 locally, writes
   `operator-key.pem` 0600, and submits a CSR. The node raises a prompt naming the key fingerprint;
   the approver checks it against what the laptop printed before tapping.
-- **An operator-scoped intermediate CA** on the node does the signing. The cluster CA stays
-  offline. The intermediate is path-len 0 and can only mint ClientAuth `OU=operator` certs, so a
-  node compromise mints operator credentials — bad, and bounded — but cannot mint a NODE cert and
-  therefore cannot manufacture a peer.
+- **A separate operator CA** on the node does the signing. The cluster CA stays offline.
+
+  This started as an intermediate under the cluster CA and could not stay one: `GenerateCA` emits
+  `MaxPathLen 0`, so the cluster CA signs end-entity certificates and nothing else. Go rejects a
+  chain through it with "too many intermediates for path length constraint" — verified rather than
+  assumed. Raising the path length means reissuing the root, which means reissuing every node
+  certificate.
+
+  So operator certificates chain to their OWN root, which the node holds. The property is the one
+  the intermediate would have given, arrived at more directly: the online key mints ClientAuth
+  `OU=operator` credentials, and cannot mint a NODE certificate because peers verify each other
+  against the cluster CA and this key is not in that chain. A node compromise buys the ability to
+  impersonate operators — bad, and bounded — not the ability to manufacture a peer.
+
+  It is also structural rather than attribute-based. `IsOperatorCert` reads an OU string;
+  `ChainsToOperatorCA` reads which key actually signed the certificate, and that is not forgeable
+  by naming yourself.
 - **Approval** comes from the configured owner over a channel, or from any existing operator via
   `lobslaw enrol approve <id>`. The second path matters: it does not depend on a channel being up.
 
@@ -3631,7 +3644,31 @@ different blast radius. Cross-network node enrolment is R30.
       which they keep tapping and the person who can actually answer never learns there is a
       question waiting.
 - [ ] `cluster export-operator` replaces `sign-operator` and says the key travels.
-- [ ] An operator-scoped intermediate CA signs enrolments; the cluster CA stays offline.
+- [x] A separate operator CA signs enrolments; the cluster CA stays offline.
+      **The intermediate design was impossible here, and the replacement is better.**
+
+      `GenerateCA` emits `MaxPathLen 0`, so the cluster CA cannot carry an intermediate at all —
+      confirmed empirically against Go's verifier, not inferred. Retrofitting would mean reissuing
+      the root and therefore every node certificate.
+
+      The operator root is separate, self-signed, path-len 0 (it signs people, never other CAs —
+      a root that could delegate would be a way to smuggle the authority elsewhere), and created
+      on first use so nobody has to know it exists before their first enrolment. A half-present
+      one is REFUSED rather than regenerated over: overwriting a surviving cert would invalidate
+      every credential issued under it, and doing that silently during a routine boot is not
+      recoverable from the logs.
+
+      The pools are kept apart. `ClientCAs` is cluster + operator; `RootCAs` stays cluster-only,
+      so an operator credential can never be presented BY a server. That separation is what a
+      handshake test proves — two mutations survived the field-level assertions, because the
+      server config reading the wrong pool and a `Reload` dropping the anchor both leave the
+      fields untouched and only show up in an actual handshake.
+
+      `SignOperatorCSR` takes the name from the APPROVER, never from the request. A CSR is
+      attacker-shaped input and its subject is whatever the requester typed; the name in the
+      certificate has to be the one the approver saw and agreed to. It also checks the request's
+      self-signature, without which somebody could get a certificate issued in a name they chose
+      for a key somebody else holds.
 - [ ] `lobslaw enrol` generates its keypair locally and never transmits the private half.
 - [ ] An enrolment is approved by the owner over a channel, or by an existing operator.
 - [ ] The approver sees the key fingerprint, and the laptop prints the same one.
