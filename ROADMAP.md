@@ -3669,9 +3669,46 @@ different blast radius. Cross-network node enrolment is R30.
       certificate has to be the one the approver saw and agreed to. It also checks the request's
       self-signature, without which somebody could get a certificate issued in a name they chose
       for a key somebody else holds.
-- [ ] `lobslaw enrol` generates its keypair locally and never transmits the private half.
+- [x] `lobslaw enrol` generates its keypair locally and never transmits the private half.
+      **The key is born on the laptop and stays there.**
+
+      `enrol request` generates ed25519 locally, writes `operator-key.pem` 0600, and sends only a
+      CSR. It refuses to overwrite an existing key: that file may be the private half of a
+      credential still valid somewhere, and replacing it is not recoverable. It also refuses
+      BEFORE generating anything when `--ca-cert` is missing — reading the CA later would fail
+      too, but only after a key had been written, which then blocks the retry via the
+      overwrite refusal.
+
+      `--ca-cert` is required and is the one piece of material enrolment cannot avoid needing: a
+      laptop that trusted whatever answered would enrol against an impostor and never know.
+
+      Both spellings dispatch. British single-l is canonical — enrol, enrolling, enrolment — and
+      the usage teaches only that one; `enroll` is aliased because it is the spelling half the
+      world's muscle memory produces, and a typo that prints "unknown subcommand" teaches
+      nothing.
 - [ ] An enrolment is approved by the owner over a channel, or by an existing operator.
-- [ ] The approver sees the key fingerprint, and the laptop prints the same one.
+      **The operator half is done; the channel half is next.**
+
+      `enrol approve` requires `--fingerprint`. An approval without one is somebody clicking yes
+      to a request they have not checked is the one they were told about, which is the failure
+      this whole flow exists to make hard. The pin is enforced at the SERVER: a request that
+      changed between reading and approving is refused rather than approved in place of the one
+      that was verified. Denial does not require it — refusing a request you cannot identify is
+      the safe direction, and demanding a fingerprint to say no would leave junk requests
+      un-closable.
+
+      Every decision names somebody, read from the VERIFIED client certificate rather than from
+      anything the request carries. An unattributed approval is an operator credential nobody is
+      accountable for.
+- [x] The approver sees the key fingerprint, and the laptop prints the same one.
+      **And a mismatch is a refusal, not a footnote.**
+
+      The laptop prints the fingerprint of the key it generated; the node echoes what it
+      computed from the request. Different values mean the node is describing a key this laptop
+      did not generate — so the output says DO NOT APPROVE rather than noting it in passing.
+
+      In the listing the fingerprint gets its own line, because it is the thing a human has to
+      compare character by character rather than glance at.
 
 ## R28 — the operator's laptop
 

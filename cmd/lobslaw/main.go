@@ -251,6 +251,9 @@ func main() {
 	if dispatchInit(os.Args[1:]) {
 		return
 	}
+	if dispatchEnrol(os.Args[1:]) {
+		return
+	}
 	if dispatchContext(os.Args[1:]) {
 		return
 	}
@@ -498,6 +501,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		NotifySubjects:               cfg.SelfLearning.Notify.Subjects,
 		NotifyInterval:               cfg.SelfLearning.Notify.Interval,
 		Trace:                        cfg.Trace,
+		MTLS:                         cfg.Cluster.MTLS,
 
 		SessionGrantTTL:     cfg.Security.SessionGrantTTL,
 		Identity:            cfg.Identity,

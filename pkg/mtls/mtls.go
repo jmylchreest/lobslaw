@@ -232,6 +232,23 @@ func (n *NodeCreds) ServerCreds() credentials.TransportCredentials {
 	})
 }
 
+// EnrolmentServerConfig is TLS for the enrolment listener: this
+// node's certificate, and NO client certificate required.
+//
+// The one surface that cannot demand one, because the caller is asking
+// for the credential it would present. Kept as its own constructor so
+// the relaxation is a named, greppable thing rather than a flag on the
+// server config everything else uses.
+func (n *NodeCreds) EnrolmentServerConfig() *tls.Config {
+	return &tls.Config{
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return n.activeCert(), nil
+		},
+		ClientAuth: tls.NoClientCert,
+		MinVersion: tls.VersionTLS13,
+	}
+}
+
 // ClientCreds returns gRPC TransportCredentials for an mTLS client.
 // Verifies that the server presents a cert signed by the cluster CA.
 //

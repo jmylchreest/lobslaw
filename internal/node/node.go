@@ -151,6 +151,11 @@ type Config struct {
 	Creds     *mtls.NodeCreds
 	MemoryKey crypto.Key // 32-byte key for state.db value encryption
 
+	// MTLS carries the certificate PATHS, which Creds does not expose.
+	// Enrolment needs them: it reads the cluster CA to hand back to a
+	// laptop, and it creates the operator CA beside it.
+	MTLS config.MTLSConfig
+
 	// Compute function configuration. Consumed only when
 	// types.FunctionCompute is in Functions. Nil / zero values are
 	// valid — a Compute-enabled node with no providers simply
@@ -392,6 +397,12 @@ type Node struct {
 	telegramHandler *gateway.TelegramHandler
 	promptRegistry  gateway.Prompts
 
+	// enrolments queues operator certificate requests; enrolmentSvc
+	// is the gRPC face of it, retained so the separate enrolment
+	// listener can serve a narrowed view of the same service.
+	enrolments   *memory.EnrolmentStore
+	enrolmentSvc *enrolmentService
+
 	// promptStore is the raft-backed confirmation store behind
 	// promptRegistry, kept separately because the sweeper needs the
 	// concrete type. Nil on a gateway node that does not host raft —
@@ -626,6 +637,10 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	}
 
 	n.startPromptSweeper(ctx)
+	n.startEnrolmentSweeper(ctx)
+	if err := n.startEnrolmentListener(ctx); err != nil {
+		return err
+	}
 
 	// Initial storage reconcile. Catches the case where the cluster
 	// already has storage_mounts entries from prior sessions — the

@@ -3,6 +3,7 @@ package grpcinterceptors
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"log/slog"
 	"runtime/debug"
@@ -181,21 +182,37 @@ func isPeerOnly(fullMethod string) bool {
 	return false
 }
 
-func denyOperator(ctx context.Context) error {
+// VerifiedPeerCert returns the leaf certificate the caller presented,
+// taken from the VERIFIED chain.
+//
+// Not PeerCertificates: that is what the client sent, and an
+// unverified certificate can claim anything. Every caller that needs
+// to know who is on the other end goes through here so the
+// distinction is made once rather than remembered N times.
+//
+// Nil when there is no verified chain, which callers must treat as
+// "unidentified" rather than as an absent constraint.
+func VerifiedPeerCert(ctx context.Context) *x509.Certificate {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		return ErrOperatorNotAPeer
+		return nil
 	}
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		return ErrOperatorNotAPeer
+		return nil
 	}
-	// The VERIFIED chain, not PeerCertificates: the latter is what the
-	// client sent, and an unverified certificate can claim anything.
 	if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
+		return nil
+	}
+	return tlsInfo.State.VerifiedChains[0][0]
+}
+
+func denyOperator(ctx context.Context) error {
+	cert := VerifiedPeerCert(ctx)
+	if cert == nil {
 		return ErrOperatorNotAPeer
 	}
-	if mtls.IsOperatorCert(tlsInfo.State.VerifiedChains[0][0]) {
+	if mtls.IsOperatorCert(cert) {
 		return ErrOperatorNotAPeer
 	}
 	return nil

@@ -1004,6 +1004,32 @@ type MTLSConfig struct {
 	CACert   string `koanf:"ca_cert"`
 	NodeCert string `koanf:"node_cert"`
 	NodeKey  string `koanf:"node_key"`
+
+	// OperatorCACert and OperatorCAKey hold the root that signs
+	// OPERATOR credentials. Separate from the cluster CA on purpose:
+	// this key is online, and a key that can mint people must not be
+	// one that can mint peers.
+	//
+	// Empty defaults to operator-ca.pem / operator-ca-key.pem beside
+	// the cluster CA, created on first use. An operator CA is not
+	// something anybody should have to configure before their first
+	// enrolment.
+	OperatorCACert string `koanf:"operator_ca_cert"`
+	OperatorCAKey  string `koanf:"operator_ca_key"`
+
+	// EnrolAddr is where a laptop with no credential yet submits a
+	// certificate request. Empty disables enrolment entirely.
+	//
+	// Its own listener because it is the one surface that CANNOT
+	// require a client certificate — the caller does not have one,
+	// which is the whole point. Keeping it separate means the
+	// cluster listener's "every caller presents a cert" is never
+	// weakened to accommodate it.
+	EnrolAddr string `koanf:"enrol_addr"`
+
+	// EnrolValidFor is how long an issued operator certificate lasts.
+	// Zero takes the 90-day default a travelling credential gets.
+	EnrolValidFor time.Duration `koanf:"enrol_valid_for"`
 }
 
 // SoulLoaderConfig is the [soul] section, pointing at the SOUL.md
