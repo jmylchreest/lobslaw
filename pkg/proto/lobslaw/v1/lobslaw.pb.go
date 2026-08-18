@@ -11583,8 +11583,20 @@ type PromptRecord struct {
 	ClaimedBy      string                 `protobuf:"bytes,16,opt,name=claimed_by,json=claimedBy,proto3" json:"claimed_by,omitempty"`
 	ClaimExpiresAt *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=claim_expires_at,json=claimExpiresAt,proto3" json:"claim_expires_at,omitempty"`
 	Revision       uint64                 `protobuf:"varint,18,opt,name=revision,proto3" json:"revision,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// raised_for is the channel-native audience: only they may answer.
+	//
+	// Carried on the DURABLE record, not just in memory. The in-memory
+	// registry had it and this did not, so on a real node the field was
+	// dropped in conversion and every prompt came back unattributable —
+	// the fail-closed guard then refused the very person it was raised
+	// for, and said so on their screen.
+	RaisedFor string `protobuf:"bytes,19,opt,name=raised_for,json=raisedFor,proto3" json:"raised_for,omitempty"`
+	// enrolment links this question to an operator enrolment request,
+	// for the same reason: the answer has to reach something other than
+	// a paused turn.
+	Enrolment     string `protobuf:"bytes,20,opt,name=enrolment,proto3" json:"enrolment,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PromptRecord) Reset() {
@@ -11741,6 +11753,20 @@ func (x *PromptRecord) GetRevision() uint64 {
 		return x.Revision
 	}
 	return 0
+}
+
+func (x *PromptRecord) GetRaisedFor() string {
+	if x != nil {
+		return x.RaisedFor
+	}
+	return ""
+}
+
+func (x *PromptRecord) GetEnrolment() string {
+	if x != nil {
+		return x.Enrolment
+	}
+	return ""
 }
 
 var File_lobslaw_v1_lobslaw_proto protoreflect.FileDescriptor
@@ -12667,7 +12693,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	" \x01(\tR\x05model\x121\n" +
 	"\x14conversation_summary\x18\v \x01(\tR\x13conversationSummary\x12)\n" +
 	"\x10recalled_context\x18\f \x01(\tR\x0frecalledContext\x12!\n" +
-	"\fegress_bytes\x18\r \x01(\x03R\vegressBytes\"\xae\x05\n" +
+	"\fegress_bytes\x18\r \x01(\x03R\vegressBytes\"\xeb\x05\n" +
 	"\fPromptRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\aturn_id\x18\x02 \x01(\tR\x06turnId\x12\x1d\n" +
@@ -12693,7 +12719,10 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"claimed_by\x18\x10 \x01(\tR\tclaimedBy\x12D\n" +
 	"\x10claim_expires_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x1a\n" +
-	"\brevision\x18\x12 \x01(\x04R\brevision*W\n" +
+	"\brevision\x18\x12 \x01(\x04R\brevision\x12\x1d\n" +
+	"\n" +
+	"raised_for\x18\x13 \x01(\tR\traisedFor\x12\x1c\n" +
+	"\tenrolment\x18\x14 \x01(\tR\tenrolment*W\n" +
 	"\n" +
 	"Visibility\x12\x1a\n" +
 	"\x16VISIBILITY_UNSPECIFIED\x10\x00\x12\x16\n" +

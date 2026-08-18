@@ -3599,12 +3599,30 @@ certificate and the name it is reached at, between a value being computed and be
 stored, between documentation and the thing it describes. Unit tests live inside the
 pieces and cannot see the joins.
 
+The sharpest instance came from a human tapping a button. `RaisedFor` and `Enrolment`
+were added to the IN-MEMORY prompt and to nothing else, so on a real node — which uses
+the raft-backed store — both were dropped in conversion. Every prompt came back
+unattributable, and the fail-closed guard refused the very person it had been raised
+for, telling them so on their own screen.
+
+`prompts_conformance_test.go` already existed, and its opening comment already stated
+the rule: *the channels talk to Prompts, not to a particular implementation, so
+swapping the in-memory registry for the raft-backed one must not change what a user
+sees.* The check was there. The new fields were simply never put under it.
+
+**Three times in one session, the same shape: two implementations of one concept, tests
+covering one.** `Service.Forget` against the offline plan; the client and server
+certificate paths; the two prompt stores. "Is there a second implementation of this?"
+belongs in the writing, not the post-mortem.
+
 ### Acceptance
 
 - [x] A documented command that no dispatcher claims fails a test.
 - [x] A documented config key that no struct field claims fails a test.
 - [x] `sign-node` can issue certificates for the names a node is actually reached at.
 - [x] An enrolled credential works end to end: request, approve, collect, connect.
+      Verified twice: by CLI approval in `make smoke`, and by a human tapping Approve in
+      Telegram against a real bot — which is what found the prompt-store bug.
 - [x] A scripted smoke test boots a node and runs that flow, so this cannot regress
       silently. `make smoke`.
 

@@ -1977,4 +1977,17 @@ message PromptRecord {
   string claimed_by = 16;
   google.protobuf.Timestamp claim_expires_at = 17;
   uint64 revision = 18;
+  // raised_for is the channel-native audience: only they may answer.
+  //
+  // Carried on the DURABLE record, not just in memory. The in-memory
+  // registry had it and this did not, so on a real node the field was
+  // dropped in conversion and every prompt came back unattributable —
+  // the fail-closed guard then refused the very person it was raised
+  // for, and said so on their screen.
+  string raised_for = 19;
+
+  // enrolment links this question to an operator enrolment request,
+  // for the same reason: the answer has to reach something other than
+  // a paused turn.
+  string enrolment = 20;
 }

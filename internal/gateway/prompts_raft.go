@@ -46,6 +46,11 @@ func (r *RaftPrompts) Create(np NewPrompt) (*Prompt, error) {
 		Action:       np.Action,
 		Resource:     np.Resource,
 		Continuation: continuationToProto(np.Continuation),
+		// Both carried through raft. Dropping them here is what made a
+		// prompt come back unattributable on a real node while every
+		// in-memory test passed.
+		RaisedFor: np.RaisedFor,
+		Enrolment: np.Enrolment,
 	}
 	if np.TTL > 0 {
 		rec.ExpiresAt = timestamppb.New(time.Now().Add(np.TTL))
@@ -99,6 +104,8 @@ func (r *RaftPrompts) fromRecord(rec *lobslawv1.PromptRecord) (*Prompt, error) {
 		Resource:  rec.Resource,
 		Decision:  fromDecision(rec.Decision),
 		Scope:     fromScope(rec.Scope),
+		RaisedFor: rec.RaisedFor,
+		Enrolment: rec.Enrolment,
 	}
 	if rec.CreatedAt != nil {
 		p.CreatedAt = rec.CreatedAt.AsTime()

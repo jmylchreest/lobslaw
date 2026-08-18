@@ -335,3 +335,50 @@ func TestPromptsExpiryDoesNotOverwriteAnAnswer(t *testing.T) {
 		}
 	})
 }
+
+// The audience and the enrolment link must survive BOTH stores.
+//
+// They did not. Both fields were added to the in-memory Prompt and to
+// nothing else, so on a real node — which uses the raft-backed store —
+// they were dropped in conversion. Every prompt came back
+// unattributable, and the fail-closed guard then refused the very
+// person it had been raised for, telling them on their own screen that
+// the confirmation "cannot be attributed to anyone".
+//
+// Every gateway test passed, because they all used the in-memory
+// registry. This file already existed, and its opening comment already
+// said why: the channels talk to Prompts, not to an implementation.
+// The fix was to put the new fields under that same rule.
+func TestPromptsCarryTheAudienceAndEnrolment(t *testing.T) {
+	t.Parallel()
+	eachPromptImpl(t, func(t *testing.T, r Prompts) {
+		p, err := r.Create(NewPrompt{
+			TurnID: "turn-1", Reason: "operator enrolment: alice",
+			Channel: "telegram", ChannelID: "6972251926", TTL: longTTL,
+			RaisedFor: "tg-6972251926",
+			Enrolment: "enr-abc123",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.RaisedFor != "tg-6972251926" {
+			t.Errorf("Create returned RaisedFor %q; nobody could answer this prompt", p.RaisedFor)
+		}
+		if p.Enrolment != "enr-abc123" {
+			t.Errorf("Create returned Enrolment %q; the answer reaches nothing", p.Enrolment)
+		}
+
+		// The read-back is what the callback path actually uses.
+		got, err := r.Get(p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.RaisedFor != "tg-6972251926" {
+			t.Errorf("Get returned RaisedFor %q; the guard would refuse the person it was raised for",
+				got.RaisedFor)
+		}
+		if got.Enrolment != "enr-abc123" {
+			t.Errorf("Get returned Enrolment %q; an approval would issue nothing", got.Enrolment)
+		}
+	})
+}
