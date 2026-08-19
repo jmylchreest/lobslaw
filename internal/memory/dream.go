@@ -442,8 +442,20 @@ func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
 		due    time.Time
 		reason string
 		prompt string
+		owner  string
 	}
-	byDay := map[string][]entry{}
+	// Keyed by OWNER AND DAY, not day alone.
+	//
+	// A digest carries the commitments' own text — "16:00 — remind me
+	// about the scan results" — so one record per day put every
+	// person's reminders in one place, with no owner on it, which
+	// ownedVisibility reads as readable by all. The same leak
+	// consolidation had, one function over.
+	type dayKeyed struct {
+		owner string
+		day   string
+	}
+	byDay := map[dayKeyed][]entry{}
 	err := d.store.ForEach(BucketCommitments, func(_ string, raw []byte) error {
 		var c lobslawv1.AgentCommitment
 		if err := proto.Unmarshal(raw, &c); err != nil {
@@ -459,12 +471,21 @@ func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
 		if !due.Before(cutoff) {
 			return nil
 		}
-		dayKey := due.UTC().Format("2006-01-02")
-		byDay[dayKey] = append(byDay[dayKey], entry{
+		// CreatedFor when there is no Owner: an older commitment
+		// predates the field, and attributing it to nobody would put
+		// it back in the shared digest this grouping exists to
+		// prevent.
+		owner := c.Owner
+		if owner == "" {
+			owner = c.CreatedFor
+		}
+		key := dayKeyed{owner: owner, day: due.UTC().Format("2006-01-02")}
+		byDay[key] = append(byDay[key], entry{
 			id:     c.Id,
 			due:    due,
 			reason: c.Reason,
 			prompt: c.Params["prompt"],
+			owner:  owner,
 		})
 		return nil
 	})
@@ -475,16 +496,23 @@ func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
 		return 0, 0, nil
 	}
 
-	days := make([]string, 0, len(byDay))
+	days := make([]dayKeyed, 0, len(byDay))
 	for k := range byDay {
 		days = append(days, k)
 	}
-	sort.Strings(days)
+	// Deterministic: dream runs on every node, and two orderings are
+	// two different records.
+	sort.Slice(days, func(i, j int) bool {
+		if days[i].owner != days[j].owner {
+			return days[i].owner < days[j].owner
+		}
+		return days[i].day < days[j].day
+	})
 
 	digested := 0
 	digestsWritten := 0
-	for _, day := range days {
-		es := byDay[day]
+	for _, key := range days {
+		day, es := key.day, byDay[key]
 		sort.Slice(es, func(i, j int) bool { return es[i].due.Before(es[j].due) })
 
 		var lines strings.Builder
@@ -501,13 +529,21 @@ func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
 		}
 
 		digest := &lobslawv1.EpisodicRecord{
-			Id:         fmt.Sprintf("commitment-digest-%s-%d", day, now.UnixNano()),
+			// The owner is in the id as well as the field: two people
+			// with commitments on the same day would otherwise write
+			// the same key within one nanosecond of each other and one
+			// digest would silently replace the other.
+			Id:         fmt.Sprintf("commitment-digest-%s-%s-%d", key.owner, day, now.UnixNano()),
 			Event:      fmt.Sprintf("commitment digest %s: %d delivered", day, len(es)),
 			Context:    lines.String(),
 			Importance: 4,
 			Timestamp:  timestamppb.New(now),
 			Tags:       []string{"commitment-history", "commitment-digest"},
 			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
+			// Inherited, for the reason a consolidation inherits: a
+			// digest of somebody's reminders is as private as they are.
+			Owner:      key.owner,
+			Visibility: ownedVisibility(key.owner),
 		}
 		if err := d.applyEntry(&lobslawv1.LogEntry{
 			Op:      lobslawv1.LogOp_LOG_OP_PUT,

@@ -586,3 +586,71 @@ func TestCandidatesAreGroupedByOwnerBeforeSummarising(t *testing.T) {
 		t.Errorf("groups are not in a stable order: first is %q", groups[0][0].record.GetOwner())
 	}
 }
+
+// A digest carries the commitments' own text — "16:00 — remind me
+// about the scan results" — so keying it by day alone put every
+// person's reminders in one record, with no owner, which
+// ownedVisibility reads as readable by all. The same leak
+// consolidation had, one function over.
+func TestCommitmentDigestsAreNotSharedBetweenPeople(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	d := NewDreamRunner(svc.raft, svc.store, nil, DreamConfig{Now: time.Now}, nil)
+	store := svc.store
+
+	due := time.Now().Add(-48 * time.Hour)
+	for _, c := range []*lobslawv1.AgentCommitment{
+		{Id: "a1", Owner: "user:alice", Status: "done", DueAt: timestamppb.New(due),
+			Reason: "alice's scan results", Params: map[string]string{"prompt": "alice private"}},
+		{Id: "b1", Owner: "user:bob", Status: "done", DueAt: timestamppb.New(due),
+			Reason: "bob's mortgage call", Params: map[string]string{"prompt": "bob private"}},
+	} {
+		raw, err := proto.Marshal(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Put(BucketCommitments, c.Id, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, _, err := d.digestCommitments(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	var digests []*lobslawv1.EpisodicRecord
+	if err := store.ForEach(BucketEpisodicRecords, func(id string, raw []byte) error {
+		if !strings.HasPrefix(id, "commitment-digest-") {
+			return nil
+		}
+		var rec lobslawv1.EpisodicRecord
+		if err := proto.Unmarshal(raw, &rec); err != nil {
+			return err
+		}
+		digests = append(digests, &rec)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(digests) != 2 {
+		t.Fatalf("wrote %d digests for two people, want one each", len(digests))
+	}
+	for _, dg := range digests {
+		if dg.GetOwner() == "" {
+			t.Error("a digest was written with no owner, so it is readable by everyone")
+		}
+		if dg.GetVisibility() != lobslawv1.Visibility_VISIBILITY_PRIVATE {
+			t.Errorf("digest visibility = %v, want PRIVATE", dg.GetVisibility())
+		}
+		// THE LEAK ITSELF: nobody's digest may name anybody else.
+		other := "bob"
+		if strings.Contains(dg.GetOwner(), "bob") {
+			other = "alice"
+		}
+		if strings.Contains(dg.GetContext(), other) {
+			t.Errorf("%s's digest contains %s's commitment text:\n%s",
+				dg.GetOwner(), other, dg.GetContext())
+		}
+	}
+}
