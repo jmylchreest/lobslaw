@@ -84,13 +84,14 @@ func pluginInstall(args []string) {
 	fs := flag.NewFlagSet("plugin install", flag.ExitOnError)
 	root := fs.String("root", "", "skills root (default: $LOBSLAW_SKILLS_ROOT or ~/.local/share/lobslaw/plugins)")
 	yes := fs.Bool("yes", false, "skip the approval prompt (CI / scripted use)")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		os.Exit(2)
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		exitWith("plugin install: exactly one <source> argument required")
 	}
-	source := fs.Arg(0)
+	source := positional[0]
 
 	if strings.HasPrefix(source, "clawhub:") {
 		if err := pluginInstallClawhub(source, *root); err != nil {
@@ -273,13 +274,14 @@ func pluginDisable(args []string) {
 func pluginImport(args []string) {
 	fs := flag.NewFlagSet("plugin import", flag.ExitOnError)
 	yes := fs.Bool("yes", false, "skip the approval prompt")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		os.Exit(2)
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		exitWith("plugin import: exactly one <claude-dir> argument required")
 	}
-	source, err := filepath.Abs(fs.Arg(0))
+	source, err := filepath.Abs(positional[0])
 	if err != nil {
 		exitWith(fmt.Sprintf("plugin import: resolve source: %v", err))
 	}

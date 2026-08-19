@@ -99,10 +99,11 @@ func sessionShowLive(args []string) error {
 	node.bind(fs)
 	trunc := fs.Int("truncate", 0, "cap each message at N characters (0 = full text)")
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		return errors.New("exactly one session id required (as printed by `lobslaw session list`)")
 	}
 
@@ -114,7 +115,7 @@ func sessionShowLive(args []string) error {
 
 	ctx, cancel := node.ctx()
 	defer cancel()
-	res, err := client.GetSession(ctx, &lobslawv1.GetSessionRequest{Id: fs.Arg(0)})
+	res, err := client.GetSession(ctx, &lobslawv1.GetSessionRequest{Id: positional[0]})
 	if err != nil {
 		return err
 	}

@@ -130,13 +130,14 @@ func memoryShow(args []string) error {
 	var opts offlineStore
 	opts.bind(fs)
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		return errors.New("exactly one record id required")
 	}
-	id := fs.Arg(0)
+	id := positional[0]
 
 	store, _, err := opts.open()
 	if err != nil {

@@ -433,10 +433,11 @@ func learnedHistory(args []string) error {
 	fs := flag.NewFlagSet("learned history", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		return fmt.Errorf("usage: lobslaw learned history <id>")
 	}
 	s, path, err := store.open()
@@ -446,11 +447,11 @@ func learnedHistory(args []string) error {
 	defer func() { _ = s.Close() }()
 
 	st := memory.NewOfflineSelfTaught(s)
-	current, _, err := st.Find(fs.Arg(0))
+	current, _, err := st.Find(positional[0])
 	if err != nil {
 		return err
 	}
-	versions, err := st.History(fs.Arg(0))
+	versions, err := st.History(positional[0])
 	if err != nil {
 		return err
 	}
@@ -466,7 +467,7 @@ func learnedHistory(args []string) error {
 		fmt.Println("\nno prior versions retained.")
 		return nil
 	}
-	fmt.Printf("\nRestore with: lobslaw learned rollback %s <version> --apply\n", fs.Arg(0))
+	fmt.Printf("\nRestore with: lobslaw learned rollback %s <version> --apply\n", positional[0])
 	return nil
 }
 
@@ -475,13 +476,14 @@ func learnedRollback(args []string) error {
 	var store offlineStore
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually write (default is a dry run)")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 2 {
+	if len(positional) != 2 {
 		return fmt.Errorf("usage: lobslaw learned rollback <id> <version> [--apply]")
 	}
-	version, err := strconv.ParseUint(fs.Arg(1), 10, 32)
+	version, err := strconv.ParseUint(positional[1], 10, 32)
 	if err != nil {
 		return fmt.Errorf("version must be a number: %w", err)
 	}
@@ -493,13 +495,13 @@ func learnedRollback(args []string) error {
 	defer func() { _ = s.Close() }()
 
 	st := memory.NewOfflineSelfTaught(s)
-	current, _, err := st.Find(fs.Arg(0))
+	current, _, err := st.Find(positional[0])
 	if err != nil {
 		return err
 	}
 	fmt.Printf("%s\n", path)
 	fmt.Printf("  %-36s v%d -> restore v%d as v%d\n",
-		fs.Arg(0), current.Version, version, current.Version+1)
+		positional[0], current.Version, version, current.Version+1)
 	if !*apply {
 		fmt.Println("\nDRY RUN — nothing was written. Re-run with --apply.")
 		return nil

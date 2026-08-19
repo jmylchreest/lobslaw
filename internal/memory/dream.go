@@ -161,10 +161,24 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 
 	consolidated := 0
 	if d.summarizer != nil && len(candidates) > 0 {
-		if err := d.consolidate(ctx, candidates, now); err != nil {
-			return nil, fmt.Errorf("consolidate: %w", err)
+		// Grouped by OWNER, and one summary each.
+		//
+		// A single pass over everybody's candidates produced one
+		// record with no owner, and ownedVisibility reads an empty
+		// owner as UNSPECIFIED — readable by all. Every source here
+		// was PRIVATE, so consolidating them laundered private
+		// memories into a public summary of what they said.
+		//
+		// Consolidating ACROSS owners cannot be made safe by stamping
+		// one of them on the result either: the summary would still
+		// contain the others' content. So the grouping is the fix,
+		// not the labelling.
+		for _, group := range groupByOwner(candidates) {
+			if err := d.consolidate(ctx, group, now); err != nil {
+				return nil, fmt.Errorf("consolidate: %w", err)
+			}
+			consolidated++
 		}
-		consolidated = 1 // one summary per dream pass
 	}
 
 	pruned, err := d.prune(scored)
@@ -330,13 +344,20 @@ func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord
 	// episodic too — meaning a future dream run can prune it if its
 	// own score falls below threshold. Only sources tagged long-term
 	// make the consolidation long-term (durable summary).
+	// Owner and visibility are INHERITED. A summary of private
+	// records is as private as they are; leaving it unowned made it
+	// readable by everyone, which is the one outcome consolidation
+	// must not produce.
+	owner := candidates[0].record.GetOwner()
 	consolidated := &lobslawv1.VectorRecord{
-		Id:        fmt.Sprintf("dream-%d", now.UnixNano()),
-		Embedding: embedding,
-		Text:      summary,
-		Retention: highestRetention(retentions),
-		SourceIds: sourceIDs,
-		CreatedAt: timestamppb.New(now),
+		Id:         fmt.Sprintf("dream-%d", now.UnixNano()),
+		Embedding:  embedding,
+		Text:       summary,
+		Retention:  highestRetention(retentions),
+		SourceIds:  sourceIDs,
+		CreatedAt:  timestamppb.New(now),
+		Owner:      owner,
+		Visibility: strictestVisibility(candidates),
 	}
 	return d.applyEntry(&lobslawv1.LogEntry{
 		Op:      lobslawv1.LogOp_LOG_OP_PUT,
@@ -555,3 +576,50 @@ func (d *DreamRunner) applyEntry(e *lobslawv1.LogEntry) error {
 // the store is built later in the boot order than the runner, and a
 // constructor argument would force one of them to move.
 func (d *DreamRunner) SetPinnedStore(p *PinnedStore) { d.pinned = p }
+
+// groupByOwner splits candidates so each consolidation covers exactly
+// one principal.
+//
+// Deterministic order, because two records written in a different
+// order are two different bytes and dream runs on every node.
+func groupByOwner(candidates []scoredRecord) [][]scoredRecord {
+	byOwner := map[string][]scoredRecord{}
+	var owners []string
+	for _, c := range candidates {
+		o := c.record.GetOwner()
+		if _, seen := byOwner[o]; !seen {
+			owners = append(owners, o)
+		}
+		byOwner[o] = append(byOwner[o], c)
+	}
+	sort.Strings(owners)
+	out := make([][]scoredRecord, 0, len(owners))
+	for _, o := range owners {
+		out = append(out, byOwner[o])
+	}
+	return out
+}
+
+// strictestVisibility picks the least permissive visibility among the
+// sources.
+//
+// Least permissive rather than most: a summary is only as shareable as
+// the most private thing in it, and every other rule leaks the
+// difference.
+func strictestVisibility(candidates []scoredRecord) lobslawv1.Visibility {
+	strictest := lobslawv1.Visibility_VISIBILITY_UNSPECIFIED
+	for _, c := range candidates {
+		v := c.record.GetVisibility()
+		if v == lobslawv1.Visibility_VISIBILITY_UNSPECIFIED {
+			continue
+		}
+		// PRIVATE is stricter than SHARED, and the enum does not
+		// order them that way, so this is a decision rather than a
+		// comparison.
+		if v == lobslawv1.Visibility_VISIBILITY_PRIVATE {
+			return v
+		}
+		strictest = v
+	}
+	return strictest
+}

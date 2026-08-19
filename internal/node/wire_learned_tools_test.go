@@ -1,6 +1,8 @@
 package node
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -48,5 +50,55 @@ func TestTheEnumLabelsMatchTheCLIVocabulary(t *testing.T) {
 	// hand-written switch here did.
 	if got := kindName(lobslawv1.SelfTaughtKind_SELF_TAUGHT_KIND_PROCEDURE); got != "procedure" {
 		t.Errorf("a later-added kind rendered as %q", got)
+	}
+}
+
+// Dream's summarizer resolves the summariser ROLE, and the role map
+// is built in the compute stage. The dream HANDLER is registered from
+// wireScheduler, which runs earlier — attaching the summarizer there
+// would find a nil map and silently leave consolidation off, which is
+// indistinguishable from the state it has been in since it was
+// written ("candidates=10 consolidated=0", nightly, for months).
+//
+// The file already documents the pattern for research:run, which is
+// deliberately registered from wireCompute for the same reason.
+func TestTheSchedulerStageRunsBeforeComputeSoLateHandlersMustWait(t *testing.T) {
+	t.Parallel()
+	scheduler, compute := -1, -1
+	for i, st := range nodeWireStages() {
+		switch st.Name {
+		case "scheduler":
+			scheduler = i
+		case "compute":
+			compute = i
+		}
+	}
+	if scheduler < 0 || compute < 0 {
+		t.Fatalf("stages missing: scheduler=%d compute=%d", scheduler, compute)
+	}
+	if scheduler > compute {
+		t.Fatalf("scheduler runs at %d, after compute at %d — the ordering this guards has changed",
+			scheduler, compute)
+	}
+}
+
+// So the attach must happen from the compute stage, not alongside the
+// handler registration it belongs to conceptually.
+func TestTheDreamSummarizerIsAttachedFromTheComputeStage(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("wire_compute.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "n.attachDreamSummarizer()") {
+		t.Error("wire_compute.go does not attach the dream summarizer; " +
+			"anywhere earlier finds a nil role map and consolidation stays off")
+	}
+	sched, err := os.ReadFile("wire_subsystems.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sched), "attachDreamSummarizer") {
+		t.Error("the summarizer is attached from the scheduler stage, which runs before the role map exists")
 	}
 }

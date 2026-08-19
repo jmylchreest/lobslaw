@@ -525,3 +525,64 @@ func TestDreamDigestRespectsGraceWindow(t *testing.T) {
 		}
 	}
 }
+
+// THE LEAK. A single pass over everybody's candidates produced one
+// record with no owner, and ownedVisibility reads an empty owner as
+// UNSPECIFIED — readable by all. Every source in the first live run
+// was PRIVATE, so consolidation laundered private memories into a
+// public summary of what they said.
+func TestAConsolidationIsAsPrivateAsItsSources(t *testing.T) {
+	t.Parallel()
+	cands := []scoredRecord{
+		{record: &lobslawv1.EpisodicRecord{
+			Owner: "user:alice", Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE}},
+		{record: &lobslawv1.EpisodicRecord{
+			Owner: "user:alice", Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE}},
+	}
+	if got := strictestVisibility(cands); got != lobslawv1.Visibility_VISIBILITY_PRIVATE {
+		t.Errorf("visibility = %v, want PRIVATE", got)
+	}
+}
+
+// Least permissive, not most: a summary is only as shareable as the
+// most private thing in it, and every other rule leaks the difference.
+func TestOnePrivateSourceMakesTheWholeSummaryPrivate(t *testing.T) {
+	t.Parallel()
+	cands := []scoredRecord{
+		{record: &lobslawv1.EpisodicRecord{Visibility: lobslawv1.Visibility_VISIBILITY_SHARED}},
+		{record: &lobslawv1.EpisodicRecord{Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE}},
+		{record: &lobslawv1.EpisodicRecord{Visibility: lobslawv1.Visibility_VISIBILITY_SHARED}},
+	}
+	if got := strictestVisibility(cands); got != lobslawv1.Visibility_VISIBILITY_PRIVATE {
+		t.Errorf("visibility = %v; a private source was summarised into a shared record", got)
+	}
+}
+
+// Stamping one owner on a mixed summary does not make it safe — the
+// text would still contain the others' content. So the grouping is
+// the fix, and each consolidation covers exactly one principal.
+func TestCandidatesAreGroupedByOwnerBeforeSummarising(t *testing.T) {
+	t.Parallel()
+	cands := []scoredRecord{
+		{record: &lobslawv1.EpisodicRecord{Owner: "user:bob"}},
+		{record: &lobslawv1.EpisodicRecord{Owner: "user:alice"}},
+		{record: &lobslawv1.EpisodicRecord{Owner: "user:bob"}},
+	}
+	groups := groupByOwner(cands)
+	if len(groups) != 2 {
+		t.Fatalf("got %d groups, want one per owner", len(groups))
+	}
+	for _, g := range groups {
+		owner := g[0].record.GetOwner()
+		for _, c := range g {
+			if c.record.GetOwner() != owner {
+				t.Errorf("a group mixes %q and %q", owner, c.record.GetOwner())
+			}
+		}
+	}
+	// Deterministic: dream runs on every node and two orderings are
+	// two different records.
+	if groups[0][0].record.GetOwner() != "user:alice" {
+		t.Errorf("groups are not in a stable order: first is %q", groups[0][0].record.GetOwner())
+	}
+}

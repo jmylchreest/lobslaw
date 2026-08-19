@@ -100,10 +100,11 @@ func memoryShowLive(args []string) error {
 	var node liveNode
 	node.bind(fs)
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		return errors.New("exactly one record id required")
 	}
 
@@ -115,7 +116,7 @@ func memoryShowLive(args []string) error {
 
 	ctx, cancel := node.ctx()
 	defer cancel()
-	res, err := client.GetRecord(ctx, &lobslawv1.GetRecordRequest{Id: fs.Arg(0)})
+	res, err := client.GetRecord(ctx, &lobslawv1.GetRecordRequest{Id: positional[0]})
 	if err != nil {
 		return err
 	}

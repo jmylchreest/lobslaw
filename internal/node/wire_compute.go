@@ -145,6 +145,13 @@ func (n *Node) wireCompute() error {
 		// because it needs the agent to drive the research loop and
 		// the agent isn't constructed until this stage.
 		n.registerResearchHandler()
+		// Dream's summarizer likewise: it resolves the summariser
+		// ROLE, and the role map is built in this stage. Attaching it
+		// from wireScheduler — where the dream handler is registered
+		// — would find a nil map and silently leave consolidation
+		// switched off, which is indistinguishable from the state it
+		// has been in since it was written.
+		n.attachDreamSummarizer()
 	}
 
 	n.log.Info("compute stack wired",
@@ -427,6 +434,44 @@ const DreamHandlerRef = "memory:dream"
 // scheduler races to claim the task; the pruner itself soft-skips
 // on non-leaders so duplicate claims are safe.
 const SessionPruneHandlerRef = "memory:session-prune"
+
+// attachDreamSummarizer gives Dream the thing that lets it
+// consolidate, on the SUMMARISER role.
+//
+// Without it Dream scored, pruned and digested and never once
+// consolidated — the step is gated on a Summarizer and nothing
+// outside tests ever set one. On a cluster with 157 episodic records
+// that produced "candidates=10 consolidated=0" every night, which
+// reads as a working pass finding nothing worth merging.
+//
+// Left nil when there is no role map, which is a compute-less node:
+// Dream keeps scoring and pruning, as it always did.
+func (n *Node) attachDreamSummarizer() {
+	if n.roleMap == nil || n.memorySvc == nil {
+		return
+	}
+	runner := n.memorySvc.DreamRunner()
+	if runner == nil {
+		return
+	}
+	label := n.cfg.Compute.Roles.Summariser
+	if label == "" {
+		label = n.primaryProviderLabel()
+	}
+	var model string
+	for _, p := range n.cfg.Compute.Providers {
+		if p.Label == label {
+			model = p.Model
+			break
+		}
+	}
+	s := compute.NewDreamSummarizer(n.roleMap.For(compute.RoleSummariser), model, n.log)
+	if s == nil {
+		return
+	}
+	runner.SetSummarizer(s)
+	n.log.Info("dream: consolidation enabled", "provider", label, "model", model)
+}
 
 // registerDreamHandler wires DreamRunner into the scheduler so an
 // operator's `handler = "memory:dream"` ScheduledTask actually fires

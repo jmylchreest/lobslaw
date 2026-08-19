@@ -110,13 +110,14 @@ func sessionShow(args []string) error {
 	opts.bind(fs)
 	trunc := fs.Int("truncate", 0, "cap each message at N characters (0 = full text)")
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		return errors.New("exactly one session id required (as printed by `lobslaw session list`)")
 	}
-	id := fs.Arg(0)
+	id := positional[0]
 
 	store, path, err := opts.open()
 	if err != nil {

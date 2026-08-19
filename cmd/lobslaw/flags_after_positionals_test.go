@@ -45,7 +45,16 @@ func TestNoCommandReadsPositionalsFromFsArgs(t *testing.T) {
 		}
 		for i, line := range strings.Split(string(src), "\n") {
 			trimmed := strings.TrimSpace(line)
-			if !strings.Contains(line, "fs.Args()") || strings.HasPrefix(trimmed, "//") {
+			// All three accessors read what fs.Parse left behind, and
+			// fs.Parse stops at the first positional. fs.Args() was
+			// the only one this test knew about, so ten sites using
+			// NArg/Arg survived the first sweep — including `memory
+			// show <id> --context full`, which answered "exactly one
+			// record id required" while holding exactly one.
+			reads := strings.Contains(line, "fs.Args()") ||
+				strings.Contains(line, "fs.NArg()") ||
+				strings.Contains(line, "fs.Arg(")
+			if !reads || strings.HasPrefix(trimmed, "//") {
 				continue
 			}
 			// parseFlagsAndPositionals is the fix, and it necessarily
@@ -58,7 +67,7 @@ func TestNoCommandReadsPositionalsFromFsArgs(t *testing.T) {
 		}
 	}
 	if len(offenders) > 0 {
-		t.Errorf("these read positionals from fs.Args(), so a flag after a positional "+
+		t.Errorf("these read positionals from the flag set, so a flag after a positional "+
 			"is silently taken as one — use parseFlagsAndPositionals:\n  %s",
 			strings.Join(offenders, "\n  "))
 	}
