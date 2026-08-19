@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // The materialiser is the one-way bridge between the store (authority)
@@ -435,5 +437,40 @@ handler: handler.py
 	}
 	if winner.ManifestDir != opDir {
 		t.Errorf("winner = %q; the agent's 0.0.99 beat the operator's 0.0.1", winner.ManifestDir)
+	}
+}
+
+// skill_view's level-1 disclosure reads the manifest's body. Writing
+// SKILL.md and listing it only under references made it answer "this
+// skill ships no instructions" for a skill whose instructions were in
+// the directory it had just read — reachable, but only by asking for
+// the file by name, which requires already knowing it is there.
+func TestTheManifestNamesTheBodyItJustWrote(t *testing.T) {
+	t.Parallel()
+	raw, err := renderManifest(Artefact{
+		Name:        "Prepare Release Notes",
+		Description: "write release notes",
+		Body:        "1. search 2. write 3. summarise",
+	}, "0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m Manifest
+	if err := yaml.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Body != BodyFile {
+		t.Errorf("manifest body = %q, want %q — skill_view will report no instructions", m.Body, BodyFile)
+	}
+	// Still a reference too: a skill whose body is not among its
+	// files reads as a skill with no content.
+	var listed bool
+	for _, r := range m.References {
+		if r.Path == BodyFile {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Error("the body is no longer listed among the references")
 	}
 }

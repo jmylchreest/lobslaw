@@ -308,7 +308,15 @@ func renderManifest(a Artefact, version string) ([]byte, error) {
 		Version:     version,
 		Description: indexDescription(a.Description),
 		Runtime:     RuntimeProse,
-		References:  refs,
+		// Body as well as a reference. Listing it only under
+		// references made skill_view answer "this skill ships no
+		// instructions; its description in the index is all there is"
+		// for a skill whose instructions were sitting in the very
+		// directory it had just read — the body was reachable, but
+		// only by asking for the file by name, which requires already
+		// knowing it is there.
+		Body:       BodyFile,
+		References: refs,
 	})
 }
 

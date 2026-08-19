@@ -97,3 +97,35 @@ func TestAnAbsoluteDataDirIsUnchanged(t *testing.T) {
 		t.Errorf("root = %q, want %q", root, want)
 	}
 }
+
+// The agent scanner must point at the agent SUBTREE.
+//
+// It was given the cache root, which contains agent/ and imported/.
+// The scan found two directories with no manifest between them,
+// registered nothing, and every skill the agent taught itself
+// materialised to disk and stayed invisible: `skills list` said "no
+// skills installed" and skill_view never registered, on a node whose
+// cache held the skill.
+//
+// AgentRoot exists so a caller never reconstructs the path — passing
+// its PARENT was the one way left to get it wrong, and it looks
+// entirely plausible on the line.
+func TestTheAgentScanPointsAtTheAgentSubtree(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "skills-cache")
+	m, err := skills.NewMaterialiser(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.AgentRoot() == m.Root() {
+		t.Fatal("AgentRoot is the cache root; the subtrees are not separated")
+	}
+	if filepath.Base(m.AgentRoot()) != skills.AgentSubtree {
+		t.Errorf("AgentRoot = %q, want it to end in %q", m.AgentRoot(), skills.AgentSubtree)
+	}
+	// The imported subtree is a sibling, so a scan pointed at the
+	// parent would sweep both and honour neither's provenance.
+	if filepath.Dir(m.ImportedRoot()) != m.Root() {
+		t.Errorf("ImportedRoot %q is not a sibling under %q", m.ImportedRoot(), m.Root())
+	}
+}

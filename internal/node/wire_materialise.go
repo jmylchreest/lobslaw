@@ -148,7 +148,13 @@ func (n *Node) materialiseOnce() error {
 		n.log.Warn("skills: a self-taught artefact could not be materialised",
 			"artefact", name, "reason", why)
 	}
-	for _, err := range n.skillRegistry.ScanAgent(n.materialiser.Root()) {
+	// AgentRoot, not Root. Root is the cache directory that CONTAINS
+	// agent/ and imported/, so scanning it found two directories with
+	// no manifest between them and registered nothing — every skill
+	// the agent taught itself materialised to disk and stayed
+	// invisible. AgentRoot exists so a caller never reconstructs this
+	// path; passing the parent was the one way left to get it wrong.
+	for _, err := range n.skillRegistry.ScanAgent(n.materialiser.AgentRoot()) {
 		n.log.Warn("skills: agent-authored skill failed to register", "err", err)
 	}
 	n.reportShadowed(active)
