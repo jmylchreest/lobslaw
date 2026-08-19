@@ -3,12 +3,16 @@ package memory
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 type fakeApplier struct {
@@ -117,5 +121,48 @@ func TestEpisodicIngestSurfacesRaftError(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("raft error should propagate")
+	}
+}
+
+// A Telegram paste with em dashes was cut at byte 140, the cut landed
+// inside a character, and protobuf refused the record — so the turn
+// answered and nothing was remembered about it. Silent by
+// construction: the ingest runs in a background goroutine whose error
+// is logged and dropped, because a memory write must not fail
+// somebody's answer.
+func TestATurnWithMultiByteTextIsStillRemembered(t *testing.T) {
+	t.Parallel()
+	// The cut must land INSIDE a character, not merely somewhere in a
+	// string that contains some. A first version of this test padded
+	// with a repeating phrase and byte 140 happened to fall on an
+	// ASCII letter, so it passed against the very bug it was written
+	// for.
+	//
+	// An em dash is three bytes. Putting it at bytes 139-141 means a
+	// 140-byte slice keeps its first byte and nothing else.
+	for _, pad := range []int{138, 139, 140} {
+		msg := strings.Repeat("a", pad) + "—" + strings.Repeat("z", 200)
+
+		event := turnEventSummary(msg)
+		if !utf8.ValidString(event) {
+			t.Fatalf("pad=%d: the event summary is not valid UTF-8; protobuf will refuse the record", pad)
+		}
+		rec := &lobslawv1.EpisodicRecord{Id: "x", Event: event, Timestamp: timestamppb.Now()}
+		if _, err := proto.Marshal(rec); err != nil {
+			t.Fatalf("pad=%d: the record does not marshal, so the memory is lost: %v", pad, err)
+		}
+	}
+}
+
+// Text this process did not cut can still arrive invalid, from a
+// provider or a channel.
+func TestInvalidTextFromElsewhereStillMarshals(t *testing.T) {
+	t.Parallel()
+	broken := "hello " + string([]byte{0xff}) + " world"
+	rec := &lobslawv1.EpisodicRecord{
+		Id: "x", Event: textutil.Sanitise(turnEventSummary(broken)), Timestamp: timestamppb.Now(),
+	}
+	if _, err := proto.Marshal(rec); err != nil {
+		t.Fatalf("a record built from invalid input does not marshal: %v", err)
 	}
 }

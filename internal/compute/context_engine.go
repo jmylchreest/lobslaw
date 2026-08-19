@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -229,5 +231,5 @@ func truncateContext(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	return textutil.Truncate(s, "…", max)
 }

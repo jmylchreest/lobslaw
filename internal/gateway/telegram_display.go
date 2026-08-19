@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 )
 
@@ -69,7 +71,7 @@ func primaryArgDisplay(rawJSON string) string {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawJSON), &args); err != nil {
 		if len(rawJSON) > 60 {
-			rawJSON = rawJSON[:57] + "..."
+			rawJSON = textutil.Truncate(rawJSON, "...", 57)
 		}
 		return rawJSON
 	}
@@ -98,7 +100,7 @@ func primaryArgDisplay(rawJSON string) string {
 	}
 	joined := strings.Join(parts, ", ")
 	if len(joined) > 80 {
-		joined = joined[:77] + "..."
+		joined = textutil.Truncate(joined, "...", 77)
 	}
 	return joined
 }
@@ -124,7 +126,7 @@ func (h *TelegramHandler) notifyPolicyDenials(chatID int64, calls []compute.Tool
 func compactValue(v any) string {
 	s := fmt.Sprint(v)
 	if len(s) > 60 {
-		s = s[:57] + "..."
+		s = textutil.Truncate(s, "...", 57)
 	}
 	return s
 }

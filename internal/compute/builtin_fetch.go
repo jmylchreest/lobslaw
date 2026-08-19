@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
+
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -267,7 +269,7 @@ func extractAnchors(html, pageURL string) []fetchLink {
 			text = resolved
 		}
 		if len(text) > 200 {
-			text = text[:200] + "…"
+			text = textutil.Truncate(text, "…", 200)
 		}
 		key := resolved + "|" + text
 		if seen[key] {

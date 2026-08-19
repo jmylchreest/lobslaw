@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -523,7 +525,7 @@ func truncatePrompt(prompt string, max int) string {
 		p = strings.TrimSpace(p[idx+len("Your task: "):])
 	}
 	if max > 0 && len(p) > max {
-		p = p[:max] + "…"
+		p = textutil.Truncate(p, "…", max)
 	}
 	return p
 }

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -117,11 +119,16 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 			"id", id, "detector", f.Detector, "detail", f.Detail, "owner", turn.Owner)
 	}
 
-	event := turnEventSummary(turn.UserMessage)
+	// Sanitised as well as truncated: this process cutting a character
+	// in half was one source of invalid UTF-8, and a provider or a
+	// channel handing us some is another. Either way the marshal
+	// fails three layers from the cause and the memory is lost with a
+	// warning nobody reads.
+	event := textutil.Sanitise(turnEventSummary(turn.UserMessage))
 	rec := &lobslawv1.EpisodicRecord{
 		Id:         id,
 		Event:      event,
-		Context:    stored,
+		Context:    textutil.Sanitise(stored),
 		Importance: 5,
 		Timestamp:  timestamppb.New(turn.CompletedAt),
 		Tags:       tags,
@@ -211,11 +218,12 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 // better LLM-backed summary when it consolidates; this is just
 // enough context for substring search to find the record.
 func turnEventSummary(userMsg string) string {
-	const maxLen = 140
-	if len(userMsg) <= maxLen {
-		return userMsg
-	}
-	return userMsg[:maxLen] + "…"
+	// Runes, not bytes. userMsg[:140] cut a Telegram paste inside an
+	// em dash, protobuf refused the record, and the turn answered
+	// with nothing remembered about it — silently, because the ingest
+	// is a background goroutine whose error is logged and dropped.
+	const maxRunes = 140
+	return textutil.Truncate(userMsg, "…", maxRunes)
 }
 
 // ownedVisibility picks the default visibility for a newly written
