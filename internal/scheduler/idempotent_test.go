@@ -108,7 +108,14 @@ func TestRetryAfterRearmsInsteadOfCompleting(t *testing.T) {
 		DueAt: timestamppb.New(time.Now().Add(-time.Second)),
 	})
 
-	runSchedulerBriefly(t, s)
+	// Waits for the RE-ARM to land, not merely for the handler to have
+	// been called: the apply is a separate raft round-trip, and reading
+	// between the two shows the original DueAt and an unreleased claim.
+	runSchedulerUntil(t, s, func() bool {
+		c := loadCommitment(t, node, "c1")
+		return c != nil && c.ClaimedBy == "" && c.DueAt != nil &&
+			c.DueAt.AsTime().After(time.Now().Add(30*time.Minute))
+	})
 
 	if calls.Load() == 0 {
 		t.Fatal("handler never ran")
