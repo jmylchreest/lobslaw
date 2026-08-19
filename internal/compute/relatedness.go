@@ -97,10 +97,16 @@ func (j *RelatednessJudge) Related(ctx context.Context, pending []string, incomi
 // related messages costs nothing, and splitting one thought answers
 // half of it.
 func parseRelatedness(content string) bool {
-	switch {
-	case strings.Contains(strings.ToUpper(content), "NEW"):
-		return false
-	default:
+	// The FIRST word, not a substring search. "not NEW" and "NEW? no,
+	// SAME" both contain NEW and mean the opposite of it — unlikely
+	// from an instructed model with a four-token cap, but a
+	// misclassification here silently splits a question in half and
+	// nothing downstream can tell it happened.
+	fields := strings.Fields(strings.ToUpper(content))
+	if len(fields) == 0 {
 		return true
 	}
+	// Trimmed because a model may answer "NEW." or "**NEW**".
+	first := strings.Trim(fields[0], ".,:;*_`\"'")
+	return first != "NEW"
 }
