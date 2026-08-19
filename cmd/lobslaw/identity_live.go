@@ -36,7 +36,11 @@ func identityRebindLive(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	req, err := rebindRequest(fs.Args(), *apply)
+	positional, perr := parseFlagsAndPositionals(fs, args)
+	if perr != nil {
+		return perr
+	}
+	req, err := rebindRequest(positional, *apply)
 	if err != nil {
 		return err
 	}

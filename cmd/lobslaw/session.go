@@ -153,13 +153,18 @@ func sessionSearch(args []string) error {
 	limit := fs.Int("limit", 0, "cap conversations returned (0 = service default)")
 	snippets := fs.Int("snippets", 0, "cap matching messages shown per conversation (0 = service default)")
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	words, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() == 0 {
+	if len(words) == 0 {
 		return errors.New("search text required")
 	}
-	query := strings.Join(fs.Args(), " ")
+	// Parsed rather than joined from fs.Args(): a flag written after
+	// the search text became PART OF THE QUERY, so `session search
+	// lobster --context prod` searched for "lobster --context prod"
+	// and found nothing, on a cluster it never contacted.
+	query := strings.Join(words, " ")
 
 	store, path, err := opts.open()
 	if err != nil {

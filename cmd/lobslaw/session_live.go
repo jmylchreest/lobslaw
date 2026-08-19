@@ -163,15 +163,16 @@ func sessionSearchLive(args []string) error {
 	limit := fs.Int("limit", 0, "cap conversations returned (0 = service default)")
 	snippets := fs.Int("snippets", 0, "cap matching messages shown per conversation (0 = service default)")
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() == 0 {
+	if len(positional) == 0 {
 		// Enumeration is `session list`. An empty search matching every
 		// conversation would read as "they all mention it".
 		return errors.New("search text required")
 	}
-	query := strings.Join(fs.Args(), " ")
+	query := strings.Join(positional, " ")
 
 	client, closeConn, err := sessionClient(&node)
 	if err != nil {

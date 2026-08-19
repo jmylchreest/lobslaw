@@ -110,10 +110,10 @@ func liveApprove(args []string) error {
 	var node liveNode
 	node.bind(fs)
 	as := fs.String("as", "", "principal recorded as the approver; defaults to the OS user")
-	if err := fs.Parse(args); err != nil {
+	ids, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	ids := fs.Args()
 	if len(ids) == 0 {
 		return fmt.Errorf("approve: at least one artefact id is required\n\n%s", learnedLiveUsage)
 	}
@@ -162,10 +162,10 @@ func liveDecide(args []string, accept bool) error {
 	var node liveNode
 	node.bind(fs)
 	as := fs.String("as", "", "principal recorded as the approver; defaults to the OS user")
-	if err := fs.Parse(args); err != nil {
+	ids, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	ids := fs.Args()
 	if len(ids) == 0 {
 		return fmt.Errorf("%s: at least one artefact id is required\n\n%s", name, learnedLiveUsage)
 	}
@@ -213,10 +213,10 @@ func liveShelve(args []string) error {
 	fs := flag.NewFlagSet("learned archive", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	rest := fs.Args()
 	if len(rest) < 2 {
 		return fmt.Errorf("archive: need an id and a reason\n\n%s", learnedLiveUsage)
 	}
@@ -243,10 +243,10 @@ func liveRestore(args []string) error {
 	fs := flag.NewFlagSet("learned restore", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
-	if err := fs.Parse(args); err != nil {
+	ids, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	ids := fs.Args()
 	if len(ids) == 0 {
 		return fmt.Errorf("restore: at least one artefact id is required\n\n%s", learnedLiveUsage)
 	}

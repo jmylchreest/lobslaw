@@ -86,10 +86,11 @@ func identityRebind(args []string) error {
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually rewrite (default is a dry run)")
 	asJSON := fs.Bool("json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	from, to, err := rebindArgs(fs.Args())
+	from, to, err := rebindArgs(positional)
 	if err != nil {
 		return err
 	}

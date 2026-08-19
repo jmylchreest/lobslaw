@@ -316,7 +316,8 @@ func mutateLearned(name string, args []string, fn func(*memory.OfflineSelfTaught
 	var store offlineStore
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually write (default is a dry run)")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
 
@@ -327,7 +328,7 @@ func mutateLearned(name string, args []string, fn func(*memory.OfflineSelfTaught
 	defer func() { _ = s.Close() }()
 
 	fmt.Printf("%s\n", path)
-	if err := fn(memory.NewOfflineSelfTaught(s), fs.Args(), *apply); err != nil {
+	if err := fn(memory.NewOfflineSelfTaught(s), positional, *apply); err != nil {
 		return err
 	}
 	if !*apply {

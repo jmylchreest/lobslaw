@@ -128,10 +128,10 @@ func skillsImport(args []string) error {
 	node.bind(fs)
 	tier := fs.String("tier", "operator", "operator | signed")
 	noActivate := fs.Bool("no-activate", false, "store the version without putting it in force")
-	if err := fs.Parse(args); err != nil {
+	rest, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	rest := fs.Args()
 	if len(rest) != 1 {
 		return fmt.Errorf("import: exactly one directory is required\n\n%s", skillsUsage)
 	}
@@ -200,10 +200,11 @@ func skillsExport(args []string) error {
 	fs := flag.NewFlagSet("skills export", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	rest := fs.Args()
+	rest := positional
 	if len(rest) != 3 {
 		return fmt.Errorf("export: need a name, a version and a directory\n\n%s", skillsUsage)
 	}
@@ -260,10 +261,11 @@ func skillsRemove(args []string) error {
 	fs := flag.NewFlagSet("skills remove", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	rest := fs.Args()
+	rest := positional
 	if len(rest) != 2 {
 		return fmt.Errorf("remove: need a name and a version\n\n%s", skillsUsage)
 	}
@@ -364,10 +366,11 @@ func skillsRollback(args []string) error {
 	fs := flag.NewFlagSet("skills rollback", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	rest := fs.Args()
+	rest := positional
 	if len(rest) != 2 {
 		return fmt.Errorf("rollback: need a name and a version\n\n%s", skillsUsage)
 	}

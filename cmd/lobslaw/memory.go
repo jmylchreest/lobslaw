@@ -371,10 +371,11 @@ func runVisibility(name string, args []string, to lobslawv1.Visibility) error {
 	opts.bind(fs)
 	apply := fs.Bool("apply", false, "actually write; without it this is a dry run")
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	if fs.NArg() == 0 {
+	if len(positional) == 0 {
 		return errors.New("at least one record id required")
 	}
 
@@ -384,7 +385,7 @@ func runVisibility(name string, args []string, to lobslawv1.Visibility) error {
 	}
 	defer func() { _ = store.Close() }()
 
-	changes, err := planVisibility(store, fs.Args(), to)
+	changes, err := planVisibility(store, positional, to)
 	if err != nil {
 		return err
 	}

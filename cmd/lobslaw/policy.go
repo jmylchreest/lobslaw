@@ -145,10 +145,11 @@ func policyRevokeLive(args []string) error {
 	apply := fs.Bool("apply", false, "actually delete (default is a dry run)")
 	all := fs.Bool("all", false, "revoke every approval-minted rule")
 	asJSON := fs.Bool("json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	req, err := revokeRequest(fs.Args(), *all, *apply)
+	req, err := revokeRequest(positional, *all, *apply)
 	if err != nil {
 		return err
 	}
@@ -324,10 +325,11 @@ func policyRevokeApprovals(args []string) error {
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually delete (default is a dry run)")
 	asJSON := fs.Bool("json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
 		return err
 	}
-	wanted := fs.Args()
+	wanted := positional
 
 	s, path, err := store.open()
 	if err != nil {
