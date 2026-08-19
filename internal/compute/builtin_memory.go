@@ -397,12 +397,53 @@ func runSubstringMatches(store *memory.Store, audience memory.Audience, query, t
 // phrase — "where do I live" finds "User lives in Yorkshire" on
 // the word "live" alone.
 func runSubstringSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]byte, int, error) {
-	tokens := tokeniseQuery(query)
-	type hit struct {
-		rec   *lobslawv1.EpisodicRecord
-		score int
+	hits, err := lexicalEpisodicSearch(store, audience, query, tagFilter, limit)
+	if err != nil {
+		return nil, 1, fmt.Errorf("memory_search: %w", err)
 	}
-	var hits []hit
+	results := make([]map[string]any, 0, len(hits))
+	for _, h := range hits {
+		results = append(results, episodicToMap(h.rec, 0))
+	}
+	payload, err := json.Marshal(map[string]any{
+		"query":    query,
+		"results":  results,
+		"strategy": "tokenised-substring",
+	})
+	if err != nil {
+		return nil, 1, err
+	}
+	return payload, 0, nil
+}
+
+// lexicalHit is a record and how many query tokens it matched.
+type lexicalHit struct {
+	rec   *lobslawv1.EpisodicRecord
+	score int
+}
+
+// lexicalEpisodicSearch is the ranking half of the substring search,
+// split out because the CONTEXT ENGINE needs it too.
+//
+// It used to live inside runSubstringSearch, which meant the only
+// caller that could reach it was the memory_search tool. Passive
+// recall — the path that puts memories in front of the model without
+// it having to ask — had no lexical form at all: with no embedder it
+// returned an empty assembly and every turn ran with no recall
+// whatever. A node without an [embeddings] block therefore only ever
+// saw a memory if the model itself decided to go looking.
+//
+// Deliberately does NOT filter quarantined records. runSubstringSearch
+// never did, and the two callers want different things: a model that
+// explicitly asks for a record may see a flagged one, but passive
+// recall replays it into every later prompt unasked. The context
+// engine applies that filter itself, exactly as its vector path does.
+func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]lexicalHit, error) {
+	tokens := tokeniseQuery(query)
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	var hits []lexicalHit
 	err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 		var r lobslawv1.EpisodicRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -424,11 +465,11 @@ func runSubstringSearch(store *memory.Store, audience memory.Audience, query, ta
 		if matches == 0 {
 			return nil
 		}
-		hits = append(hits, hit{rec: &r, score: matches})
+		hits = append(hits, lexicalHit{rec: &r, score: matches})
 		return nil
 	})
 	if err != nil {
-		return nil, 1, fmt.Errorf("memory_search: scan: %w", err)
+		return nil, fmt.Errorf("scan: %w", err)
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].score != hits[j].score {
@@ -442,19 +483,7 @@ func runSubstringSearch(store *memory.Store, audience memory.Audience, query, ta
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	results := make([]map[string]any, 0, len(hits))
-	for _, h := range hits {
-		results = append(results, episodicToMap(h.rec, 0))
-	}
-	payload, err := json.Marshal(map[string]any{
-		"query":    query,
-		"results":  results,
-		"strategy": "tokenised-substring",
-	})
-	if err != nil {
-		return nil, 1, err
-	}
-	return payload, 0, nil
+	return hits, nil
 }
 
 // tokeniseQuery lowercases + splits on whitespace + drops

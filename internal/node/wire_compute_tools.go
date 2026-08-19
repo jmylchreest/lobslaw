@@ -164,6 +164,14 @@ func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 // turn.
 func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 	if n.cfg.Compute.Embeddings.Endpoint == "" {
+		// Said out loud, because the consequence is invisible
+		// otherwise: recall still works, but it matches words rather
+		// than meaning, so "what do I use for config?" will not find
+		// "prefers TOML". That is a reasonable way to run a node —
+		// it is the default — but it should not be something an
+		// operator has to infer from silence.
+		n.log.Info("compute: no [embeddings] endpoint configured — " +
+			"memory recall is lexical, not semantic")
 		return nil, nil
 	}
 	embKey, err := n.resolveAPIKey(n.cfg.Compute.Embeddings.APIKeyRef)

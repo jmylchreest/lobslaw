@@ -110,20 +110,10 @@ func (a ContextAssembly) Rendered() string {
 // turn that crashes on recall is useless.
 func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) ContextAssembly {
 	userMessage = strings.TrimSpace(userMessage)
-	if userMessage == "" || e.store == nil || e.embedder == nil {
+	if userMessage == "" || e.store == nil {
 		return ContextAssembly{}
 	}
 
-	vec, err := e.embedder.Embed(ctx, userMessage)
-	if err != nil {
-		// WARN — an embedding outage drops every turn's
-		// passive recall. Operators need to see this to
-		// diagnose (wrong API key, provider blocklist, dim
-		// mismatch, etc.).
-		e.log.Warn("context-engine: embed failed; skipping passive recall",
-			"err", err)
-		return ContextAssembly{}
-	}
 	// Scoped to the turn's caller. This path is the reason Audience is a
 	// required argument: passive recall runs on every turn with no tool
 	// call in front of it, so an unscoped search here puts one user's
@@ -136,62 +126,12 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	// holds role:operator.
 	turn, _ := TurnIdentityFrom(ctx)
 	audience := readAudience(ctx, turn, e.crossOwner)
-	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2,
-		audience, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
-	if err != nil {
-		e.log.Warn("context-engine: vector search failed",
-			"err", err)
-		return ContextAssembly{}
-	}
 
-	seen := map[string]bool{}
-	type recallEntry struct {
-		rec   *lobslawv1.EpisodicRecord
-		score float32
-	}
-	entries := make([]recallEntry, 0, e.maxRecall)
-	for _, h := range hits {
-		for _, sid := range h.Record().SourceIds {
-			if seen[sid] {
-				continue
-			}
-			seen[sid] = true
-			raw, err := e.store.Get(memory.BucketEpisodicRecords, sid)
-			if err != nil {
-				continue
-			}
-			var epi lobslawv1.EpisodicRecord
-			if err := proto.Unmarshal(raw, &epi); err != nil {
-				continue
-			}
-			// Re-checked rather than inherited from the vector that
-			// pointed here: a legacy or shared vector can carry
-			// SourceIds into a private episodic record, and this is
-			// the path that puts recalled text into the system prompt.
-			if !audience.AllowsEpisodic(&epi) {
-				continue
-			}
-			// Quarantined at ingest. The record is kept — it is usually
-			// the evidence — but recall is the path that replays it into
-			// a prompt on every later turn, which is the whole reason it
-			// was flagged.
-			if promptguard.IsQuarantined(epi.Tags) {
-				e.log.Warn("context engine: skipping quarantined record in recall",
-					"id", epi.Id, "tags", epi.Tags)
-				continue
-			}
-			entries = append(entries, recallEntry{rec: &epi, score: h.Score()})
-			if len(entries) >= e.maxRecall {
-				break
-			}
-		}
-		if len(entries) >= e.maxRecall {
-			break
-		}
-	}
+	entries, strategy := e.recall(ctx, audience, userMessage)
 	if len(entries) == 0 {
 		return ContextAssembly{}
 	}
+	e.log.Debug("context-engine: recall", "strategy", strategy, "hits", len(entries))
 
 	// Deterministic render order: higher score first, then
 	// higher importance, then newer.
@@ -225,6 +165,149 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	}
 
 	return ContextAssembly{Blocks: blocks, RecallIDs: ids}
+}
+
+// recallEntry is one memory chosen for the prompt, with the score
+// that chose it. The score's SCALE depends on the strategy — cosine
+// for semantic, matched-token fraction for lexical — which is
+// harmless because a turn uses exactly one strategy, and both are
+// 0..1 so the rendered attribute stays readable either way.
+type recallEntry struct {
+	rec   *lobslawv1.EpisodicRecord
+	score float32
+}
+
+// recall picks a strategy and returns what it found, plus the name of
+// the strategy for the log.
+//
+// EVERY embedding-shaped failure lands on lexical. Passive recall used
+// to return an empty assembly whenever the embedder was absent, failed
+// to embed, or the vector search errored — and it did so silently, on
+// every turn. A node with no [embeddings] block ran permanently with
+// no passive recall at all and said nothing about it; an embedding
+// outage did the same thing temporarily. Lexical recall is worse than
+// semantic — it cannot match a paraphrase — but it is a great deal
+// better than nothing, and memory_search has had exactly this fallback
+// all along.
+func (e *ContextEngine) recall(ctx context.Context, audience memory.Audience, userMessage string) ([]recallEntry, string) {
+	if e.embedder == nil {
+		return e.lexicalRecall(audience, userMessage), "lexical (no embedder configured)"
+	}
+	vec, err := e.embedder.Embed(ctx, userMessage)
+	if err != nil {
+		// WARN rather than Debug: an embedding outage silently
+		// downgrades every turn's recall, and the operator needs to
+		// see it to diagnose (wrong API key, provider blocklist, dim
+		// mismatch, etc.).
+		e.log.Warn("context-engine: embed failed; falling back to lexical recall", "err", err)
+		return e.lexicalRecall(audience, userMessage), "lexical (embed failed)"
+	}
+	entries, err := e.vectorRecall(audience, vec)
+	if err != nil {
+		e.log.Warn("context-engine: vector search failed; falling back to lexical recall", "err", err)
+		return e.lexicalRecall(audience, userMessage), "lexical (vector search failed)"
+	}
+	return entries, "semantic"
+}
+
+// vectorRecall is the semantic path: search the vector store, then
+// dereference each hit to the episodic records it summarises.
+func (e *ContextEngine) vectorRecall(audience memory.Audience, vec []float32) ([]recallEntry, error) {
+	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2,
+		audience, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	entries := make([]recallEntry, 0, e.maxRecall)
+	for _, h := range hits {
+		for _, sid := range h.Record().SourceIds {
+			if seen[sid] {
+				continue
+			}
+			seen[sid] = true
+			raw, err := e.store.Get(memory.BucketEpisodicRecords, sid)
+			if err != nil {
+				continue
+			}
+			var epi lobslawv1.EpisodicRecord
+			if err := proto.Unmarshal(raw, &epi); err != nil {
+				continue
+			}
+			// Re-checked rather than inherited from the vector that
+			// pointed here: a legacy or shared vector can carry
+			// SourceIds into a private episodic record, and this is
+			// the path that puts recalled text into the system prompt.
+			if !audience.AllowsEpisodic(&epi) {
+				continue
+			}
+			if e.quarantined(&epi) {
+				continue
+			}
+			entries = append(entries, recallEntry{rec: &epi, score: h.Score()})
+			if len(entries) >= e.maxRecall {
+				break
+			}
+		}
+		if len(entries) >= e.maxRecall {
+			break
+		}
+	}
+	return entries, nil
+}
+
+// lexicalRecall is the fallback path: token overlap against the
+// episodic records directly, with no vector store in the way.
+//
+// It reaches episodic records WITHOUT the SourceIds dereference the
+// vector path needs, because it matches their text in the first
+// place. That also means it can find records written before any
+// embedder existed, which the semantic path cannot.
+func (e *ContextEngine) lexicalRecall(audience memory.Audience, userMessage string) []recallEntry {
+	// Over-fetch for the same reason the vector path does: the
+	// quarantine filter below can empty out an otherwise full page.
+	hits, err := lexicalEpisodicSearch(e.store, audience, userMessage, "", e.maxRecall*2)
+	if err != nil {
+		e.log.Warn("context-engine: lexical recall failed", "err", err)
+		return nil
+	}
+	tokens := len(tokeniseQuery(userMessage))
+	if tokens == 0 {
+		return nil
+	}
+	entries := make([]recallEntry, 0, e.maxRecall)
+	for _, h := range hits {
+		if e.quarantined(h.rec) {
+			continue
+		}
+		// Normalised to 0..1 so the rendered score= attribute means
+		// the same kind of thing it does on the semantic path.
+		entries = append(entries, recallEntry{
+			rec:   h.rec,
+			score: float32(h.score) / float32(tokens),
+		})
+		if len(entries) >= e.maxRecall {
+			break
+		}
+	}
+	return entries
+}
+
+// quarantined reports whether a record was flagged at ingest.
+//
+// The record is KEPT — it is usually the evidence — but recall is the
+// path that replays it into a prompt on every later turn, which is the
+// whole reason it was flagged. Both recall strategies check it; the
+// memory_search tool deliberately does not, because there the model
+// asked for it by name.
+func (e *ContextEngine) quarantined(rec *lobslawv1.EpisodicRecord) bool {
+	if !promptguard.IsQuarantined(rec.Tags) {
+		return false
+	}
+	e.log.Warn("context engine: skipping quarantined record in recall",
+		"id", rec.Id, "tags", rec.Tags)
+	return true
 }
 
 func truncateContext(s string, max int) string {
