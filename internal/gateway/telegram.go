@@ -42,6 +42,11 @@ type TelegramConfig struct {
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
 
+	// RelatednessJudge is consulted by queue_mode = "smart" to decide
+	// whether an arriving message continues the one being collected.
+	// Nil makes smart behave as debounce.
+	RelatednessJudge RelatednessJudge
+
 	// IncomingDir is where inbound attachments are written. Empty →
 	// DefaultIncomingDownloadDir. The vision/audio/pdf builtins read
 	// from the SAME value, so a file landing somewhere the agent may
@@ -381,7 +386,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		log:          logger,
 		client:       client,
 		base:         base,
-		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0),
+		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge),
 		pendingScope: make(map[string]scopedOperation),
 		seenUpdate:   make(map[int64]time.Time),
 		conv:         newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),

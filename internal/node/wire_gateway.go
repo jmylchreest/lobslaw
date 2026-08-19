@@ -108,30 +108,31 @@ func (n *Node) wireGateway() error {
 	}
 
 	cfg := gateway.RESTConfig{
-		Notices:         n.notices,
-		QueueMode:       gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
-		QueueDebounce:   n.cfg.Gateway.QueueDebounce,
-		Leaser:          n.newSessionLeaser(),
-		Addr:            addr,
-		TypingInterval:  n.cfg.Gateway.TypingInterval,
-		InterimTimeout:  n.cfg.Gateway.InterimTimeout,
-		HardTimeout:     n.cfg.Gateway.HardTimeout,
-		Soul:            n.soulProvider,
-		TLSCert:         tlsCert,
-		TLSKey:          tlsKey,
-		DefaultScope:    n.cfg.Gateway.UnknownUserScope,
-		DefaultBudget:   compute.FromComputeConfig(n.cfg.Compute),
-		JWTValidator:    n.jwtValidator,
-		RequireAuth:     n.cfg.Auth.RequireAuth,
-		Telegram:        tg,
-		Webhooks:        webhooks,
-		Prompts:         n.promptRegistry,
-		ConfirmationTTL: n.cfg.Gateway.ConfirmationTimeout,
-		Plan:            planServiceOrNil(n.planSvc),
-		Sessions:        n.newSessionStore(),
-		Compactor:       n.newSessionCompactor(),
-		Conversation:    n.conversationConfig(),
-		Logger:          n.log,
+		Notices:          n.notices,
+		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
+		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
+		RelatednessJudge: n.newRelatednessJudge(),
+		Leaser:           n.newSessionLeaser(),
+		Addr:             addr,
+		TypingInterval:   n.cfg.Gateway.TypingInterval,
+		InterimTimeout:   n.cfg.Gateway.InterimTimeout,
+		HardTimeout:      n.cfg.Gateway.HardTimeout,
+		Soul:             n.soulProvider,
+		TLSCert:          tlsCert,
+		TLSKey:           tlsKey,
+		DefaultScope:     n.cfg.Gateway.UnknownUserScope,
+		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
+		JWTValidator:     n.jwtValidator,
+		RequireAuth:      n.cfg.Auth.RequireAuth,
+		Telegram:         tg,
+		Webhooks:         webhooks,
+		Prompts:          n.promptRegistry,
+		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
+		Plan:             planServiceOrNil(n.planSvc),
+		Sessions:         n.newSessionStore(),
+		Compactor:        n.newSessionCompactor(),
+		Conversation:     n.conversationConfig(),
+		Logger:           n.log,
 	}
 
 	n.gatewaySrv = gateway.NewServer(cfg, n.agent)
@@ -194,19 +195,20 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		channelState = memory.NewChannelStateService(n.raft, n.store)
 	}
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
-		IncomingDir:    n.incomingDir(),
-		Notices:        n.notices,
-		QueueMode:      gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
-		QueueDebounce:  n.cfg.Gateway.QueueDebounce,
-		Approvals:      n.approvals,
-		ApprovalRules:  n.approvalRules,
-		Identity:       n.identityResolver(),
-		Leaser:         n.newSessionLeaser(),
-		ArtifactOpener: n.artifactOpener(),
-		BotToken:       botToken,
-		Mode:           mode,
-		WebhookSecret:  webhookSecret,
-		UserIDScopes:   userScopes,
+		IncomingDir:      n.incomingDir(),
+		Notices:          n.notices,
+		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
+		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
+		RelatednessJudge: n.newRelatednessJudge(),
+		Approvals:        n.approvals,
+		ApprovalRules:    n.approvalRules,
+		Identity:         n.identityResolver(),
+		Leaser:           n.newSessionLeaser(),
+		ArtifactOpener:   n.artifactOpener(),
+		BotToken:         botToken,
+		Mode:             mode,
+		WebhookSecret:    webhookSecret,
+		UserIDScopes:     userScopes,
 		// Nil when enrolment is not wired, which disables channel
 		// approval and leaves the CLI path working.
 		Enrolments:       n.enrolmentDecider(),
@@ -326,4 +328,38 @@ func (n *Node) startMCPFromConfig(ctx context.Context) error {
 		}
 	}
 	return n.mcpLoader.StartDirect(ctx, servers)
+}
+
+// newRelatednessJudge builds the classifier queue_mode = "smart"
+// consults, on the PREFLIGHT role.
+//
+// The same role the routing judge uses, and for the same reason: a
+// small fast model doing classification ahead of the main turn. Nil
+// when no role map exists, which the gate reads as "no judge" and
+// falls back to folding — so smart on a node without compute is
+// debounce rather than an error.
+//
+// Deliberately NOT gated on [[compute.chains]]. The routing judge is,
+// because a route with no chains to pick between decides nothing;
+// this one decides something on every message regardless.
+func (n *Node) newRelatednessJudge() gateway.RelatednessJudge {
+	if n.roleMap == nil {
+		return nil
+	}
+	label := n.cfg.Compute.Roles.Preflight
+	if label == "" {
+		label = n.primaryProviderLabel()
+	}
+	var model string
+	for _, p := range n.cfg.Compute.Providers {
+		if p.Label == label {
+			model = p.Model
+			break
+		}
+	}
+	j := compute.NewRelatednessJudge(n.roleMap.For(compute.RolePreflight), model, n.log)
+	if j == nil {
+		return nil
+	}
+	return j
 }

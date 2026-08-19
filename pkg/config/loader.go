@@ -161,12 +161,17 @@ func validateTrustTiers(providers []ProviderConfig) error {
 //
 // The names are duplicated here rather than imported: pkg/config is
 // below internal/gateway and must not depend on it.
+//
+// internal/gateway CAN see this package, so the agreement between the
+// two lists is asserted from there rather than hoped for — a mode
+// added to one and not the other fails at boot on a config the
+// documentation says is valid, which is how "smart" first behaved.
 func validateQueueMode(mode string) error {
 	switch mode {
-	case "", "serial", "latest", "debounce", "off":
+	case "", "serial", "latest", "debounce", "off", "smart":
 		return nil
 	default:
-		return fmt.Errorf("%w: gateway.queue_mode = %q; want one of serial, latest, debounce, off",
+		return fmt.Errorf("%w: gateway.queue_mode = %q; want one of serial, latest, debounce, off, smart",
 			types.ErrInvalidConfig, mode)
 	}
 }

@@ -48,6 +48,20 @@ const (
 	// QueueOff drops messages that arrive mid-turn. The caller is
 	// expected to tell the user something is still running.
 	QueueOff QueueMode = "off"
+
+	// QueueSmart is debounce with the decision made by reading the
+	// messages instead of watching a clock.
+	//
+	// "what about rain? wind?" then "sunset? sunrise?" is one question
+	// typed in two bursts. "what about rain? wind?" then "also cancel
+	// the 3pm meeting" is two, and debounce folds both because four
+	// seconds cannot tell them apart — losing the second in the
+	// direction that matters.
+	//
+	// Falls back to folding when the judge is absent, errors or times
+	// out. Debounce is the behaviour this mode is a refinement of, so
+	// a classification outage costs precision, never a message.
+	QueueSmart QueueMode = "smart"
 )
 
 // DefaultDebounce is the fold window when debounce mode is on and the
@@ -61,6 +75,8 @@ func ParseQueueMode(s string) QueueMode {
 	switch QueueMode(strings.ToLower(strings.TrimSpace(s))) {
 	case QueueLatest:
 		return QueueLatest
+	case QueueSmart:
+		return QueueSmart
 	case QueueDebounce:
 		return QueueDebounce
 	case QueueOff:
@@ -74,7 +90,7 @@ func ParseQueueMode(s string) QueueMode {
 // this so a typo fails at boot rather than silently becoming serial.
 func (m QueueMode) IsValid() bool {
 	switch m {
-	case QueueSerial, QueueLatest, QueueDebounce, QueueOff:
+	case QueueSerial, QueueLatest, QueueDebounce, QueueOff, QueueSmart:
 		return true
 	}
 	return false
@@ -172,8 +188,22 @@ type TurnGate struct {
 	// that reasonably concluded this node had died.
 	heartbeat time.Duration
 
+	// judge decides whether an arriving message continues the one
+	// being collected. Only consulted in QueueSmart; nil there falls
+	// back to folding, which is debounce.
+	judge RelatednessJudge
+
 	mu       sync.Mutex
 	sessions map[string]*gateState
+}
+
+// WithJudge attaches the relatedness judge QueueSmart consults.
+//
+// Optional and chainable like WithLeaser, so a gate without one still
+// works — as debounce, which is the mode smart refines.
+func (g *TurnGate) WithJudge(j RelatednessJudge) *TurnGate {
+	g.judge = j
+	return g
 }
 
 type gateState struct {
@@ -208,7 +238,7 @@ func NewTurnGate(mode QueueMode, debounce time.Duration, log *slog.Logger) *Turn
 	if !mode.IsValid() {
 		mode = QueueSerial
 	}
-	if mode == QueueDebounce && debounce <= 0 {
+	if (mode == QueueDebounce || mode == QueueSmart) && debounce <= 0 {
 		debounce = DefaultDebounce
 	}
 	if log == nil {
@@ -252,7 +282,7 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 		// Debounce applies to an idle session too, or the first
 		// fragment of a burst always starts its own turn and only the
 		// rest fold — which is the case the mode exists to prevent.
-		if g.mode == QueueDebounce {
+		if g.mode == QueueDebounce || g.mode == QueueSmart {
 			return g.foldWindow(ctx, key, turnID, text), Admitted
 		}
 		return g.mint(ctx, key, turnID, []string{text}, 0)
@@ -271,6 +301,43 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 			w.batch = append(w.batch, text)
 			g.mu.Unlock()
 			return nil, Folded
+		}
+
+	case QueueSmart:
+		// Same shape as debounce, with the decision read from the
+		// messages. The judge runs OUTSIDE the lock: it makes a
+		// network call, and holding the gate across one would stall
+		// every other conversation on this node.
+		if len(st.waiters) > 0 {
+			pending := append([]string(nil), st.waiters[0].batch...)
+			g.mu.Unlock()
+			if g.foldsWith(ctx, pending, text) {
+				g.mu.Lock()
+				// Re-checked after the unlock: the waiter may have
+				// been admitted or dropped while the judge thought.
+				// Folding into a batch that has already run would
+				// answer nobody.
+				if st := g.sessions[key]; st != nil && len(st.waiters) > 0 {
+					st.waiters[0].batch = append(st.waiters[0].batch, text)
+					g.mu.Unlock()
+					return nil, Folded
+				}
+				g.mu.Unlock()
+			}
+			// Unrelated, or the fold raced: queue it as its own turn.
+			// NEVER dropped — hermes-agent's adapter takes the same
+			// position, appending to queued_prompts when a redirect
+			// does not land rather than discarding the message.
+			g.mu.Lock()
+			st = g.sessions[key]
+			if st == nil {
+				st = &gateState{running: true}
+				g.sessions[key] = st
+			}
+			w := &waiter{ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}}
+			st.waiters = append(st.waiters, w)
+			g.mu.Unlock()
+			return g.wait(ctx, key, w)
 		}
 
 	case QueueLatest:
@@ -357,15 +424,41 @@ func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string) *Le
 		// it. The caller sees a cancelled ctx and can abandon.
 	}
 
-	// Absorb anything that queued during the window.
+	// Absorb what queued during the window.
+	//
+	// debounce takes everything; smart takes what belongs. Whatever
+	// smart leaves stays queued and runs as its own turn, so a change
+	// of subject typed during the window is answered separately
+	// instead of being appended to an unrelated question.
 	g.mu.Lock()
 	batch := []string{text}
-	if st := g.sessions[key]; st != nil {
-		for _, w := range st.waiters {
+	var keep []*waiter
+	st := g.sessions[key]
+	if st != nil {
+		waiters := st.waiters
+		st.waiters = nil
+		g.mu.Unlock()
+
+		// Judged outside the lock — each call is a round trip, and
+		// the gate is shared by every conversation on this node.
+		for _, w := range waiters {
+			joined := strings.Join(w.batch, "\n")
+			if g.mode == QueueSmart && !g.foldsWith(ctx, batch, joined) {
+				keep = append(keep, w)
+				continue
+			}
 			batch = append(batch, w.batch...)
 			w.ready <- Folded
 		}
-		st.waiters = nil
+
+		g.mu.Lock()
+		if st = g.sessions[key]; st != nil {
+			// Prepended: anything that arrived while the judge was
+			// thinking queued behind these, and answering in arrival
+			// order is what serial promises and smart does not
+			// contradict.
+			st.waiters = append(keep, st.waiters...)
+		}
 	}
 	g.mu.Unlock()
 	l, _ := g.mint(ctx, key, turnID, batch, 0)

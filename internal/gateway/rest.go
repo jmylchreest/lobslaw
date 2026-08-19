@@ -42,6 +42,11 @@ type RESTConfig struct {
 	// queue. Nil is correct for a single node.
 	Leaser SessionLeaser
 
+	// RelatednessJudge is consulted by queue_mode = "smart" to decide
+	// whether an arriving message continues the one being collected.
+	// Nil makes smart behave as debounce.
+	RelatednessJudge RelatednessJudge
+
 	// Responsiveness timers, shared with Telegram. HardTimeout is the
 	// one that matters even for a client that cannot stream: REST had
 	// no cap at all, so a stalled provider hung the request until the
@@ -183,7 +188,7 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg:   cfg,
 		agent: agent,
 		log:   cfg.Logger,
-		gate:  NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0),
+		gate:  NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge),
 		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 	}
 }
