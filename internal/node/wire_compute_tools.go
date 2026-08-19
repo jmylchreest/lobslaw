@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/memory"
+
 	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/gemini"
@@ -194,6 +196,13 @@ func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("embedding client: %w", err)
+	}
+	// Checked at BOOT, for the same reason the driver factory is: a
+	// store whose vectors were written by another model is not a
+	// first-recall problem, it is a wrong-answers-forever problem, and
+	// the only moment anybody is watching is start-up.
+	if err := memory.CheckEmbeddingModel(n.store, n.cfg.Compute.Embeddings.Model); err != nil {
+		return nil, err
 	}
 	n.embedder = ec
 	n.log.Debug("compute: embedding client wired",

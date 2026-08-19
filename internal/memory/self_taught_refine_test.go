@@ -383,3 +383,6 @@ type brokenEmbedder struct{}
 func (brokenEmbedder) Embed(context.Context, string) ([]float32, error) {
 	return nil, errors.New("embedder unavailable")
 }
+
+func (fakeEmbedder) Model() string   { return "test-embedder-v1" }
+func (brokenEmbedder) Model() string { return "test-embedder-v1" }

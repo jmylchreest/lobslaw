@@ -45,6 +45,10 @@ type EpisodicTurn struct {
 // implementation without internal/memory depending on it.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+	// Model is stamped onto every vector this ingester writes, so a
+	// later model swap is detectable rather than silently corrupting
+	// every subsequent search.
+	Model() string
 }
 
 // EpisodicIngester writes per-turn records into the Raft-
@@ -189,6 +193,11 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 				Visibility: rec.Visibility,
 				CreatedAt:  rec.Timestamp,
 				SourceIds:  []string{rec.Id},
+				// Stamped here rather than in the FSM, where Norm is
+				// derived: the model is NODE CONFIG, and two replicas
+				// could legitimately hold different values, so an FSM
+				// that stamped it would not be deterministic.
+				EmbeddingModel: i.embedder.Model(),
 			}
 			ventry := &lobslawv1.LogEntry{
 				Op: lobslawv1.LogOp_LOG_OP_PUT,

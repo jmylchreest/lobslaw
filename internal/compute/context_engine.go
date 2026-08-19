@@ -207,6 +207,24 @@ func (e *ContextEngine) recall(ctx context.Context, audience memory.Audience, us
 		e.log.Warn("context-engine: vector search failed; falling back to lexical recall", "err", err)
 		return e.lexicalRecall(audience, userMessage), "lexical (vector search failed)"
 	}
+	// ZERO HITS IS A SUCCESS, and that is the trap.
+	//
+	// vectorSearch skips records whose embedding width differs from the
+	// query's — deliberately, with a warning — and returns no error. So
+	// the two moments a corpus is most likely to be unsearchable both
+	// arrive here as a clean empty result: the day embeddings are first
+	// enabled and every existing record has no vector at all, and the
+	// day the model changes width and every old vector is skipped.
+	//
+	// Falling back costs one bucket scan on a genuine miss. Not falling
+	// back costs every memory the node holds, silently, until somebody
+	// notices recall has stopped working.
+	if len(entries) == 0 {
+		if lex := e.lexicalRecall(audience, userMessage); len(lex) > 0 {
+			return lex, "lexical (no vector hits)"
+		}
+		return nil, "semantic (no hits)"
+	}
 	return entries, "semantic"
 }
 

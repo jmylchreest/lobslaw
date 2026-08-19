@@ -390,6 +390,22 @@ message VectorRecord {
   // recomputing it per record per query was measurably wasteful on the
   // recall hot path.
   float norm = 11;
+  // embedding_model names what produced `embedding` — the model
+  // string exactly as configured, e.g. "qwen3-embedding-8b".
+  //
+  // Cosine between vectors from two different models is meaningless
+  // even at identical width, and identical width is the COMMON case:
+  // swap one 1536-dim model for another and every search silently
+  // returns plausible, confidently-ranked nonsense. Mismatched WIDTHS
+  // were already caught — vectorSearch skips and warns — so this
+  // exists for the failure that had no signal at all.
+  //
+  // NOT proof of an identical vector space on its own: the same open
+  // weights served by two hosts can differ in quantisation and
+  // pooling. It catches the deliberate swap, which is the one that
+  // actually happens. Empty means a record written before this field
+  // existed, which readers treat as "unknown", never as "matches".
+  string embedding_model = 12;
 }
 
 // VectorScanEntry is a narrow VIEW over VectorRecord's wire format: the

@@ -660,6 +660,32 @@ type PDFConfig = ModalityOverride
 // Auto-detect is deliberately NOT supported: a probe-on-first-
 // call pattern wastes tokens and fails silently when credentials
 // are wrong. Operators declare the format explicitly.
+//
+// CHOOSING A MODEL. Vectors outlive the config that made them, so
+// this is close to a one-way door: cosine between two models'
+// vectors is meaningless, and changing Model is therefore refused
+// at boot (see memory.CheckEmbeddingModel) until the corpus is
+// re-embedded with `backfill-embeddings --force`.
+//
+// Prefer an OPEN-WEIGHT model over a vendor-proprietary one. The
+// reason is portability of the corpus rather than licence
+// principle: a proprietary model reachable from exactly one vendor
+// means that vendor's deprecation schedule decides when you
+// re-embed everything. Open weights mean the worst case is
+// self-hosting, and the vectors stay valid.
+//
+// By the models.dev catalog this node already caches, the widest
+// availability by some distance is Qwen3-Embedding — 11 providers
+// carry some size of it, against 5 for OpenAI's text-embedding-3
+// and 5 for Gemini's. qwen3-embedding-8b alone is on 7.
+//
+// That catalog under-reports embeddings, though — it is primarily a
+// chat-model registry, and it lists none for MiniMax even though
+// embo-01 is named below. So treat it as a floor on availability,
+// not a census. Two consequences worth knowing: OpenRouter serves
+// no embeddings at all (352 chat models, zero embedding), so an
+// openrouter role cannot cover this; and a provider's absence from
+// the catalog is not evidence it lacks an endpoint.
 type EmbeddingsConfig struct {
 	Endpoint  string `koanf:"endpoint,omitempty"`
 	Model     string `koanf:"model,omitempty"`

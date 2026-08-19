@@ -27,6 +27,9 @@ type EmbeddingProvider interface {
 	// capability.
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 	Dimensions() int
+	// Model is the configured model string, stamped onto every record
+	// written from these vectors so a later swap is detectable.
+	Model() string
 }
 
 // EmbeddingClientConfig configures the client.
@@ -275,3 +278,6 @@ func embeddingCredential(apiKey string) Credential {
 	}
 	return NewBearerCredential(apiKey)
 }
+
+// Model returns the configured embedding model string.
+func (c *EmbeddingClient) Model() string { return c.model }

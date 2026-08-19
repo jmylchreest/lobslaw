@@ -43,6 +43,7 @@ func main() {
 		cfgPath string
 		rpm     int
 	)
+	var force bool
 	flag.StringVar(&cfgPath, "config", "", "path to lobslaw config.toml")
 	// 10 RPM = 6s gap. MiniMax's published docs don't state the
 	// embo-01 rate limit; empirically the Token Plan trips 1002
@@ -50,6 +51,11 @@ func main() {
 	// bump via --rpm if your tier allows more. Retry-on-1002 saves
 	// us if we undershoot.
 	flag.IntVar(&rpm, "rpm", 10, "embedding requests per minute (respect provider rate limit)")
+	flag.BoolVar(&force, "force", false,
+		"re-embed records that ALREADY have a vector, deleting the old one. "+
+			"Required after changing the embedding model: vectors from two "+
+			"models are not comparable, and the default gap-filling mode "+
+			"skips every record precisely because it already has one.")
 	flag.Parse()
 	if cfgPath == "" {
 		fmt.Fprintln(os.Stderr, "--config required")
@@ -114,6 +120,10 @@ func main() {
 		text string
 	}
 	var todo []pending
+	// Stale vectors are deleted only AFTER their replacements are
+	// written, so an interrupted --force run leaves a record with an
+	// old vector rather than none at all.
+	var replacing []string
 	err = store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 		total++
 		var rec lobslawv1.EpisodicRecord
@@ -121,9 +131,12 @@ func main() {
 			failed++
 			return nil
 		}
-		if indexed[rec.Id] {
-			alreadyHas++
-			return nil
+		if stale, has := indexed[rec.Id]; has {
+			if !force {
+				alreadyHas++
+				return nil
+			}
+			replacing = append(replacing, stale)
 		}
 		text := rec.Context
 		if text == "" {
@@ -191,6 +204,20 @@ func main() {
 				Retention: p.rec.Retention,
 				CreatedAt: p.rec.Timestamp,
 				SourceIds: []string{p.rec.Id},
+				// OWNERSHIP WAS MISSING ENTIRELY, and the effect was
+				// silent: Audience.allows admits a record only when it
+				// is SHARED or owned by the caller, so every vector
+				// this tool wrote was unreadable by any scoped search.
+				// It reported "Backfilled: N" and produced N rows that
+				// neither memory_search nor passive recall could ever
+				// return. The ingest path has always copied these two
+				// fields, with the comment that an unowned vector over
+				// owned text is the leak wearing a different hat.
+				Owner:      p.rec.Owner,
+				Visibility: p.rec.Visibility,
+				// Stamped so a later model change is refused at boot
+				// rather than silently scoring across two vector spaces.
+				EmbeddingModel: cfg.Compute.Embeddings.Model,
 			}
 			vraw, err := proto.Marshal(vrec)
 			if err != nil {
@@ -219,6 +246,18 @@ func main() {
 	fmt.Println()
 	fmt.Printf("Scanned:     %d episodic records\n", total)
 	fmt.Printf("Had vector:  %d (skipped)\n", alreadyHas)
+	// Ordered after the writes for a reason: if the process dies
+	// mid-run, a record with a superseded vector still returns
+	// something, whereas one with no vector returns nothing at all.
+	var removed int
+	for _, id := range replacing {
+		if err := store.Delete(memory.BucketVectorRecords, id); err == nil {
+			removed++
+		}
+	}
+	if removed > 0 {
+		fmt.Printf("Replaced:    %d stale vector(s)\n", removed)
+	}
 	fmt.Printf("Backfilled:  %d\n", backfilled)
 	fmt.Printf("Failed:      %d\n", failed)
 }
@@ -277,15 +316,20 @@ func indexOf(s, sub string) int {
 
 // loadVectorIndex returns a set of episodic IDs that already have
 // at least one VectorRecord pointing at them via source_ids.
-func loadVectorIndex(store *memory.Store) map[string]bool {
-	out := map[string]bool{}
-	_ = store.ForEach(memory.BucketVectorRecords, func(_ string, raw []byte) error {
+// loadVectorIndex maps each embedded episodic id to the vector record
+// that embeds it. The VECTOR ID is kept, not just a bool, because
+// --force has to delete the stale vector rather than leave two rows
+// pointing at one record — the second of which would be scored against
+// a query it shares no vector space with.
+func loadVectorIndex(store *memory.Store) map[string]string {
+	out := map[string]string{}
+	_ = store.ForEach(memory.BucketVectorRecords, func(key string, raw []byte) error {
 		var v lobslawv1.VectorRecord
 		if err := proto.Unmarshal(raw, &v); err != nil {
 			return nil
 		}
 		for _, sid := range v.SourceIds {
-			out[sid] = true
+			out[sid] = key
 		}
 		return nil
 	})

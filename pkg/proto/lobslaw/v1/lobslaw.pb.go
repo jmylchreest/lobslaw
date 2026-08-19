@@ -2765,9 +2765,25 @@ type VectorRecord struct {
 	// computed" and readers fall back to computing it. Exists because
 	// recomputing it per record per query was measurably wasteful on the
 	// recall hot path.
-	Norm          float32 `protobuf:"fixed32,11,opt,name=norm,proto3" json:"norm,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Norm float32 `protobuf:"fixed32,11,opt,name=norm,proto3" json:"norm,omitempty"`
+	// embedding_model names what produced `embedding` — the model
+	// string exactly as configured, e.g. "qwen3-embedding-8b".
+	//
+	// Cosine between vectors from two different models is meaningless
+	// even at identical width, and identical width is the COMMON case:
+	// swap one 1536-dim model for another and every search silently
+	// returns plausible, confidently-ranked nonsense. Mismatched WIDTHS
+	// were already caught — vectorSearch skips and warns — so this
+	// exists for the failure that had no signal at all.
+	//
+	// NOT proof of an identical vector space on its own: the same open
+	// weights served by two hosts can differ in quantisation and
+	// pooling. It catches the deliberate swap, which is the one that
+	// actually happens. Empty means a record written before this field
+	// existed, which readers treat as "unknown", never as "matches".
+	EmbeddingModel string `protobuf:"bytes,12,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *VectorRecord) Reset() {
@@ -2875,6 +2891,13 @@ func (x *VectorRecord) GetNorm() float32 {
 		return x.Norm
 	}
 	return 0
+}
+
+func (x *VectorRecord) GetEmbeddingModel() string {
+	if x != nil {
+		return x.EmbeddingModel
+	}
+	return ""
 }
 
 // VectorScanEntry is a narrow VIEW over VectorRecord's wire format: the
@@ -11914,7 +11937,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x11GetRecordResponse\x120\n" +
 	"\x06vector\x18\x01 \x01(\v2\x18.lobslaw.v1.VectorRecordR\x06vector\x126\n" +
 	"\bepisodic\x18\x02 \x01(\v2\x1a.lobslaw.v1.EpisodicRecordR\bepisodic\x12#\n" +
-	"\rreferenced_by\x18\x03 \x03(\tR\freferencedBy\"\xd8\x03\n" +
+	"\rreferenced_by\x18\x03 \x03(\tR\freferencedBy\"\x81\x04\n" +
 	"\fVectorRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\tembedding\x18\x02 \x03(\x02R\tembedding\x12\x12\n" +
@@ -11931,7 +11954,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"visibility\x18\n" +
 	" \x01(\x0e2\x16.lobslaw.v1.VisibilityR\n" +
 	"visibility\x12\x12\n" +
-	"\x04norm\x18\v \x01(\x02R\x04norm\x1a;\n" +
+	"\x04norm\x18\v \x01(\x02R\x04norm\x12'\n" +
+	"\x0fembedding_model\x18\f \x01(\tR\x0eembeddingModel\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdc\x01\n" +

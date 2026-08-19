@@ -310,3 +310,5 @@ func (r *recordingForgetter) Forget(_ context.Context, req *lobslawv1.ForgetRequ
 	r.last = req
 	return &lobslawv1.ForgetResponse{}, nil
 }
+
+func (fixedEmbedder) Model() string { return "test-embedder-v1" }

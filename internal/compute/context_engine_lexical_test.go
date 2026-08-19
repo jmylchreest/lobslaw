@@ -134,3 +134,49 @@ func TestTheLexicalPathStillScopesToTheCaller(t *testing.T) {
 		t.Errorf("the caller's own record was not recalled:\n%s", got)
 	}
 }
+
+func (brokenEmbedder) Model() string { return "test-embedder-v1" }
+
+// ZERO VECTOR HITS IS A SUCCESS, and that is the trap. vectorSearch
+// skips records whose embedding width differs from the query's —
+// deliberately, with a warning — and returns no error. So the two
+// moments a corpus is most likely to be unsearchable both arrive as a
+// clean empty result: the day embeddings are first enabled and nothing
+// has a vector yet, and the day the model changes width.
+func TestAWorkingEmbedderWithNoVectorsStillRecalls(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStoreForTest(t)
+	// Episodic content, but no vector rows — a node that has just
+	// turned embeddings on and not yet backfilled.
+	seedEpisodicOnly(t, store, "e1", "the sourdough starter is fed on tuesdays", nil)
+
+	e := NewContextEngine(ContextEngineConfig{Store: store, Embedder: fixedEmbedder{}})
+	got := e.Assemble(operatorTurn(context.Background()), "when is the sourdough fed").Rendered()
+
+	if !strings.Contains(got, "sourdough") {
+		t.Errorf("a working embedder over an unembedded corpus recalled nothing:\n%q", got)
+	}
+}
+
+// The same, via the path that actually happens on a model change: the
+// vector exists but at a width the query cannot be compared against,
+// so vectorSearch skips it and reports success with no hits.
+func TestAWidthMismatchFallsBackRatherThanReturningNothing(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStoreForTest(t)
+	seedEpisodicOnly(t, store, "e1", "the sourdough starter is fed on tuesdays", nil)
+	// fixedEmbedder is 2-dim; this row is 3-dim, as if written by the
+	// previous model.
+	seedVector(t, store, &lobslawv1.VectorRecord{
+		Id: "vec-e1", Embedding: []float32{1, 0, 0},
+		SourceIds: []string{"e1"},
+		Owner:     "user:alice", Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE,
+	})
+
+	e := NewContextEngine(ContextEngineConfig{Store: store, Embedder: fixedEmbedder{}})
+	got := e.Assemble(operatorTurn(context.Background()), "when is the sourdough fed").Rendered()
+
+	if !strings.Contains(got, "sourdough") {
+		t.Errorf("a width mismatch dropped recall entirely:\n%q", got)
+	}
+}
