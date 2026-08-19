@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -652,5 +653,88 @@ func TestCommitmentDigestsAreNotSharedBetweenPeople(t *testing.T) {
 			t.Errorf("%s's digest contains %s's commitment text:\n%s",
 				dg.GetOwner(), other, dg.GetContext())
 		}
+	}
+}
+
+// FAIRNESS, not privacy — the grouping already prevents the leak.
+//
+// Taking the top N across everybody let one busy person's records
+// fill the whole budget, and a quieter person's night would
+// consolidate nothing. Whoever talked most silently became the only
+// one whose memories got organised.
+func TestABusyPersonCannotCrowdOutAQuietOne(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	now := time.Now()
+
+	// Alice has been talking all day; Bob said one thing, and older.
+	for i := 0; i < 20; i++ {
+		putEpisodicOwned(t, svc, fmt.Sprintf("a%d", i), "user:alice", now.Add(-time.Minute))
+	}
+	putEpisodicOwned(t, svc, "b1", "user:bob", now.Add(-6*time.Hour))
+
+	sum := &countingSummarizer{}
+	d := NewDreamRunner(svc.raft, svc.store, sum, DreamConfig{
+		MaxCandidates: 5, // smaller than Alice's pile
+		HalfLife:      14 * 24 * time.Hour,
+		Now:           func() time.Time { return now },
+	}, nil)
+
+	if _, err := d.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.owners) != 2 {
+		t.Fatalf("consolidated for %d owners (%v), want both", len(sum.owners), sum.owners)
+	}
+	// And the cap is per person, not shared out between them.
+	for owner, n := range sum.counts {
+		if n > 5 {
+			t.Errorf("%s got %d sources, above the per-owner cap of 5", owner, n)
+		}
+	}
+}
+
+// countingSummarizer records who each consolidation was for.
+type countingSummarizer struct {
+	owners map[string]bool
+	counts map[string]int
+	seen   [][]string
+}
+
+func (c *countingSummarizer) Summarize(_ context.Context, events []string) (string, []float32, error) {
+	if c.owners == nil {
+		c.owners = map[string]bool{}
+		c.counts = map[string]int{}
+	}
+	// The owner is not passed in, so it is read from the events —
+	// which the fixture stamps into the text for exactly this.
+	owner := "unknown"
+	for _, e := range events {
+		if strings.Contains(e, "user:alice") {
+			owner = "user:alice"
+		} else if strings.Contains(e, "user:bob") {
+			owner = "user:bob"
+		}
+	}
+	c.owners[owner] = true
+	c.counts[owner] = len(events)
+	c.seen = append(c.seen, events)
+	return "summary for " + owner, nil, nil
+}
+
+func putEpisodicOwned(t *testing.T, svc *Service, id, owner string, at time.Time) {
+	t.Helper()
+	rec := &lobslawv1.EpisodicRecord{
+		Id:         id,
+		Owner:      owner,
+		Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE,
+		Event:      "something happened for " + owner,
+		Importance: 5,
+		Timestamp:  timestamppb.New(at),
+		Retention:  lobslawv1.Retention_RETENTION_EPISODIC,
+	}
+	if _, err := svc.EpisodicAdd(context.Background(),
+		&lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
+		t.Fatal(err)
 	}
 }

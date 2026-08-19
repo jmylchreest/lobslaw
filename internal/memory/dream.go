@@ -157,23 +157,41 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		return nil, fmt.Errorf("score: %w", err)
 	}
 
-	candidates := d.selectTopN(scored, d.cfg.MaxCandidates)
+	// Grouped by OWNER FIRST, then each owner's own top-N.
+	//
+	// Two reasons, and they are different reasons.
+	//
+	// The grouping is PRIVACY. A single pass produced one record with
+	// no owner, and ownedVisibility reads an empty owner as
+	// UNSPECIFIED — readable by all. Every source was PRIVATE, so
+	// consolidating them laundered private memories into a public
+	// summary of what they said. Stamping one owner on a mixed
+	// summary does not fix that; the text still holds the others'
+	// content.
+	//
+	// Selecting per owner is FAIRNESS. Taking the top N across
+	// everybody let one busy person's records fill the whole budget,
+	// and a quieter person's night would consolidate nothing — no
+	// leak, but a silent decision that whoever talked most is the
+	// only one whose memories get organised.
+	//
+	// MaxCandidates therefore bounds ONE PERSON's consolidation, not
+	// the pass. On a single-user node the two readings are identical,
+	// which is why the old one survived this long.
+	var candidates []scoredRecord
+	groups := make([][]scoredRecord, 0, 4)
+	for _, owned := range groupByOwner(scored) {
+		top := d.selectTopN(owned, d.cfg.MaxCandidates)
+		if len(top) == 0 {
+			continue
+		}
+		groups = append(groups, top)
+		candidates = append(candidates, top...)
+	}
 
 	consolidated := 0
-	if d.summarizer != nil && len(candidates) > 0 {
-		// Grouped by OWNER, and one summary each.
-		//
-		// A single pass over everybody's candidates produced one
-		// record with no owner, and ownedVisibility reads an empty
-		// owner as UNSPECIFIED — readable by all. Every source here
-		// was PRIVATE, so consolidating them laundered private
-		// memories into a public summary of what they said.
-		//
-		// Consolidating ACROSS owners cannot be made safe by stamping
-		// one of them on the result either: the summary would still
-		// contain the others' content. So the grouping is the fix,
-		// not the labelling.
-		for _, group := range groupByOwner(candidates) {
+	if d.summarizer != nil {
+		for _, group := range groups {
 			if err := d.consolidate(ctx, group, now); err != nil {
 				return nil, fmt.Errorf("consolidate: %w", err)
 			}
