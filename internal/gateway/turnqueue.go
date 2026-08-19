@@ -188,6 +188,12 @@ type TurnGate struct {
 	// that reasonably concluded this node had died.
 	heartbeat time.Duration
 
+	// burstWindow is what a detected burst sets, and burstReset is how
+	// long a conversation must go without one before the learned
+	// window decays. Both take their defaults when zero.
+	burstWindow time.Duration
+	burstReset  time.Duration
+
 	// judge decides whether an arriving message continues the one
 	// being collected. Only consulted in QueueSmart; nil there falls
 	// back to folding, which is debounce.
@@ -195,6 +201,25 @@ type TurnGate struct {
 
 	mu       sync.Mutex
 	sessions map[string]*gateState
+}
+
+// WithBurst tunes the learned window.
+//
+// A NEGATIVE window disables the learning outright, leaving the
+// configured debounce as the only one — expressible because "never
+// learn" and "learn the default" are different intentions and zero
+// already means the latter.
+func (g *TurnGate) WithBurst(window, reset time.Duration) *TurnGate {
+	switch {
+	case window < 0:
+		g.burstWindow = 0
+	case window > 0:
+		g.burstWindow = window
+	}
+	if reset > 0 {
+		g.burstReset = reset
+	}
+	return g
 }
 
 // WithJudge attaches the relatedness judge QueueSmart consults.
@@ -212,6 +237,13 @@ type gateState struct {
 	// keeps them all; latest keeps at most one; debounce folds into
 	// the head rather than appending.
 	waiters []*waiter
+
+	// burstWindow is the window this conversation EARNED by having a
+	// message arrive while it was busy. Zero means instant, which is
+	// where every session starts.
+	burstWindow time.Duration
+	// lastBurst is when that last happened, so the memory can decay.
+	lastBurst time.Time
 }
 
 type waiter struct {
@@ -238,18 +270,26 @@ func NewTurnGate(mode QueueMode, debounce time.Duration, log *slog.Logger) *Turn
 	if !mode.IsValid() {
 		mode = QueueSerial
 	}
-	if (mode == QueueDebounce || mode == QueueSmart) && debounce <= 0 {
+	// debounce without a window is not debounce, so it keeps its
+	// default. smart starts INSTANT and learns a window only from a
+	// conversation that shows it bursts — the window is the whole
+	// latency cost, and lone messages are the common case.
+	if mode == QueueDebounce && debounce <= 0 {
 		debounce = DefaultDebounce
 	}
 	if log == nil {
 		log = slog.Default()
 	}
 	return &TurnGate{
-		mode:      mode,
-		debounce:  debounce,
-		log:       log,
-		heartbeat: DefaultHeartbeat,
-		sessions:  make(map[string]*gateState),
+		mode:        mode,
+		debounce:    debounce,
+		log:         log,
+		heartbeat:   DefaultHeartbeat,
+		burstWindow: DefaultBurstWindow,
+		burstReset:  DefaultBurstReset,
+		// Overridable via WithBurst; the defaults are what a gate
+		// built by an older caller gets.
+		sessions: make(map[string]*gateState),
 	}
 }
 
@@ -278,14 +318,28 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 
 	if !st.running {
 		st.running = true
+		// Read under the lock, before it is dropped: the window is
+		// per-session state and decays on read.
+		window := g.windowFor(st, time.Now())
 		g.mu.Unlock()
-		// Debounce applies to an idle session too, or the first
+		// A window applies to an idle session too, or the first
 		// fragment of a burst always starts its own turn and only the
 		// rest fold — which is the case the mode exists to prevent.
-		if g.mode == QueueDebounce || g.mode == QueueSmart {
-			return g.foldWindow(ctx, key, turnID, text), Admitted
+		//
+		// Zero means start now. That is smart's default: the window
+		// is the entire latency cost of these modes, and a session
+		// that has never bursted should not pay it.
+		if (g.mode == QueueDebounce || g.mode == QueueSmart) && window > 0 {
+			return g.foldWindow(ctx, key, turnID, text, window), Admitted
 		}
 		return g.mint(ctx, key, turnID, []string{text}, 0)
+	}
+
+	// Past here the session is BUSY, so this message is the evidence a
+	// window would have helped. Recorded for every mode that could use
+	// one; the modes that cannot simply never read it.
+	if g.mode == QueueSmart {
+		g.noteBurst(st, time.Now())
 	}
 
 	switch g.mode {
@@ -414,8 +468,8 @@ func (g *TurnGate) wait(ctx context.Context, key string, w *waiter) (*Lease, Dis
 
 // foldWindow holds an idle-session turn open for the debounce window
 // so fragments typed straight after the first join the same turn.
-func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string) *Lease {
-	timer := time.NewTimer(g.debounce)
+func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string, window time.Duration) *Lease {
+	timer := time.NewTimer(window)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
@@ -475,8 +529,15 @@ func (g *TurnGate) release(key string) {
 		return
 	}
 	if len(st.waiters) == 0 {
-		// Drop the entry so a long-lived process does not accumulate
-		// one map slot per conversation it has ever seen.
+		// Kept only while it remembers a burst — that memory is the
+		// point, and everything else here is reconstructable from the
+		// next message. Otherwise dropped, so a long-lived process
+		// does not accumulate one map slot per conversation it has
+		// ever seen.
+		if g.worthKeeping(st, time.Now()) {
+			st.running = false
+			return
+		}
 		delete(g.sessions, key)
 		return
 	}

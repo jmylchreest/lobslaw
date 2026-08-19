@@ -42,6 +42,11 @@ type TelegramConfig struct {
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
 
+	// QueueBurstWindow / QueueBurstReset tune the window a bursting
+	// conversation earns under smart. Zero takes the defaults.
+	QueueBurstWindow time.Duration
+	QueueBurstReset  time.Duration
+
 	// RelatednessJudge is consulted by queue_mode = "smart" to decide
 	// whether an arriving message continues the one being collected.
 	// Nil makes smart behave as debounce.
@@ -386,7 +391,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		log:          logger,
 		client:       client,
 		base:         base,
-		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge),
+		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
 		pendingScope: make(map[string]scopedOperation),
 		seenUpdate:   make(map[int64]time.Time),
 		conv:         newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),

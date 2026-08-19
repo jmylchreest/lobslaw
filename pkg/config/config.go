@@ -915,6 +915,25 @@ type GatewayConfig struct {
 	// modes.
 	QueueDebounce time.Duration `koanf:"queue_debounce,omitempty"`
 
+	// QueueBurstWindow is the window a conversation EARNS by having a
+	// message arrive while it was busy, under queue_mode = "smart".
+	//
+	// smart starts instant, because the window is the entire latency
+	// cost of these modes: measured on one cluster a lone message took
+	// 1.5s with no window and 7.4s at five seconds, and lone messages
+	// are the common case. A window is opened only for people who have
+	// shown they type in bursts.
+	//
+	// Zero takes the default (the same as queue_debounce's); negative
+	// disables the learning, leaving queue_debounce as the only
+	// window.
+	QueueBurstWindow time.Duration `koanf:"queue_burst_window,omitempty"`
+
+	// QueueBurstReset is how long a conversation must go without
+	// bursting before the earned window decays back to instant.
+	// Zero takes the default of five minutes.
+	QueueBurstReset time.Duration `koanf:"queue_burst_reset,omitempty"`
+
 	// Responsiveness timers. Zero on any = disabled. Operators can
 	// tune per deployment; sensible defaults land in Load().
 	TypingInterval time.Duration `koanf:"typing_interval"` // refresh typing indicator (Telegram clears at ~5s)

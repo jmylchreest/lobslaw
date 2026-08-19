@@ -46,6 +46,50 @@ func smartGate(t *testing.T, j RelatednessJudge) *TurnGate {
 		slog.New(slog.DiscardHandler)).WithJudge(j)
 }
 
+// waitForWaiter blocks until a message is queued on the session.
+//
+// Deterministic where a sleep is not: the burst is only recorded if
+// the second message reaches the gate while the first turn still
+// holds it, so a test that releases too early exercises the opposite
+// case while appearing to test this one.
+func waitForWaiter(t *testing.T, g *TurnGate, key string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		g.mu.Lock()
+		st := g.sessions[key]
+		queued := st != nil && len(st.waiters) > 0
+		g.mu.Unlock()
+		if queued {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("no message queued on %q", key)
+}
+
+// waitIdle blocks until the session has no turn running.
+//
+// The gate's Release happens inside the caller's goroutine, so a test
+// that starts its next round immediately races it — and the symptom
+// is indistinguishable from the feature under test not working, which
+// cost a debugging pass to establish.
+func waitIdle(t *testing.T, g *TurnGate, key string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		g.mu.Lock()
+		st := g.sessions[key]
+		idle := st == nil || !st.running
+		g.mu.Unlock()
+		if idle {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("session %q never went idle", key)
+}
+
 // mustReceive reads a disposition or fails.
 //
 // Bounded because the interesting failure is a message that QUEUES
@@ -274,5 +318,173 @@ func TestTheJudgeBudgetFollowsTheFoldWindow(t *testing.T) {
 	g = NewTurnGate(QueueSmart, 0, slog.New(slog.DiscardHandler))
 	if got := g.judgeTimeout(); got != DefaultDebounce {
 		t.Errorf("judge budget = %v, want the default window", got)
+	}
+}
+
+// THE WINDOW IS THE COST. Measured on this cluster: a lone message
+// took 1.5s with no window, 2.6s at one second and 7.4s at five. Lone
+// messages are the common case, so a fixed window taxes the many to
+// serve the few — smart therefore starts INSTANT.
+func TestSmartStartsInstantAndDebounceDoesNot(t *testing.T) {
+	t.Parallel()
+	smart := NewTurnGate(QueueSmart, 0, slog.New(slog.DiscardHandler))
+	if got := smart.windowFor(&gateState{}, time.Now()); got != 0 {
+		t.Errorf("smart opened a %v window on a session that has never bursted", got)
+	}
+	// debounce without a window is not debounce, so it keeps its
+	// default.
+	deb := NewTurnGate(QueueDebounce, 0, slog.New(slog.DiscardHandler))
+	if got := deb.windowFor(&gateState{}, time.Now()); got != DefaultDebounce {
+		t.Errorf("debounce window = %v, want the default", got)
+	}
+}
+
+// A message arriving while the session is busy is the evidence a
+// window would have helped. The NEXT turn gets one.
+func TestABurstEarnsAWindowForNextTime(t *testing.T) {
+	t.Parallel()
+	g := NewTurnGate(QueueSmart, 0, slog.New(slog.DiscardHandler))
+	st := &gateState{}
+	now := time.Now()
+
+	if got := g.windowFor(st, now); got != 0 {
+		t.Fatalf("started at %v, want instant", got)
+	}
+	g.noteBurst(st, now)
+	if got := g.windowFor(st, now); got != DefaultBurstWindow {
+		t.Errorf("after a burst the window is %v, want %v", got, DefaultBurstWindow)
+	}
+}
+
+// Stop bursting and it decays. A conversation that has moved on
+// should not keep paying for a habit it no longer has.
+func TestTheLearnedWindowDecays(t *testing.T) {
+	t.Parallel()
+	g := NewTurnGate(QueueSmart, 0, slog.New(slog.DiscardHandler))
+	st := &gateState{}
+	start := time.Now()
+	g.noteBurst(st, start)
+
+	// Just inside the reset: still earned.
+	if got := g.windowFor(st, start.Add(DefaultBurstReset-time.Second)); got != DefaultBurstWindow {
+		t.Errorf("window decayed early: %v", got)
+	}
+	// Past it: back to instant, and the memory is cleared rather than
+	// re-tested on every message thereafter.
+	if got := g.windowFor(st, start.Add(DefaultBurstReset+time.Second)); got != 0 {
+		t.Errorf("window = %v after the reset period, want instant", got)
+	}
+	if st.burstWindow != 0 {
+		t.Error("the decayed memory was not cleared")
+	}
+}
+
+// The configured window is a FLOOR, not an override: an operator who
+// asked for two seconds gets at least two, and a bursting session can
+// still earn more.
+func TestAConfiguredWindowIsAFloor(t *testing.T) {
+	t.Parallel()
+	g := NewTurnGate(QueueSmart, 2*time.Second, slog.New(slog.DiscardHandler))
+	st := &gateState{}
+	if got := g.windowFor(st, time.Now()); got != 2*time.Second {
+		t.Errorf("window = %v, want the configured floor", got)
+	}
+	g.noteBurst(st, time.Now())
+	if got := g.windowFor(st, time.Now()); got != DefaultBurstWindow {
+		t.Errorf("window = %v, want the larger earned window", got)
+	}
+}
+
+// A burst memory must outlive the turn that created it, or it is
+// forgotten before it can be used — and everything WITHOUT one must
+// still be dropped, so a long-lived process does not accumulate a map
+// slot per conversation it has ever seen.
+func TestOnlyALiveBurstMemorySurvivesRelease(t *testing.T) {
+	t.Parallel()
+	g := NewTurnGate(QueueSmart, 0, slog.New(slog.DiscardHandler))
+	now := time.Now()
+
+	if g.worthKeeping(&gateState{}, now) {
+		t.Error("a session that never bursted was kept")
+	}
+	if !g.worthKeeping(&gateState{burstWindow: time.Second, lastBurst: now}, now) {
+		t.Error("a live burst memory was dropped")
+	}
+	stale := &gateState{burstWindow: time.Second, lastBurst: now.Add(-DefaultBurstReset - time.Minute)}
+	if g.worthKeeping(stale, now) {
+		t.Error("a stale burst memory was kept")
+	}
+}
+
+// END TO END: instant when calm, a window once it has seen a burst.
+//
+// The first pair cannot fold — nothing was waiting when the turn
+// started, which is the price of not taxing lone messages. The second
+// pair does, because the first taught the session that this person
+// types in bursts.
+func TestASessionLearnsToWaitAfterItBursts(t *testing.T) {
+	t.Parallel()
+	// A short learned window so the test is not racing the default
+	// three seconds; the behaviour under test is that one is earned
+	// at all, not how long it is.
+	g := NewTurnGate(QueueSmart, 0, slog.New(slog.DiscardHandler)).
+		WithJudge(&scriptedJudge{}).WithBurst(150*time.Millisecond, 0)
+
+	// Round one: idle, so it starts at once and nothing folds.
+	first := make(chan *Lease, 1)
+	go func() {
+		l, _ := g.Acquire(context.Background(), "burst-1", "t1", "what's the weather?")
+		first <- l
+	}()
+	l1 := <-first
+	if len(l1.Batch) != 1 {
+		t.Fatalf("batch = %v; an idle session waited when it should have started", l1.Batch)
+	}
+	// A message arriving now is the burst — but only if it reaches
+	// the gate before the turn finishes. Releasing first lets the
+	// session go idle and be dropped, and the second message then
+	// arrives at a fresh session and never bursts at all. That is
+	// correct behaviour (a burst IS a timing phenomenon) and a race
+	// in a test that means to exercise the other case.
+	second := send(g, "burst-1", "t2", "and the wind?")
+	waitForWaiter(t, g, "burst-1")
+	l1.Release()
+	if d := mustReceive(t, second, "burst message"); d != Admitted {
+		t.Fatalf("the second message got %v", d)
+	}
+	// The burst turn's own Release happens in its goroutine; round two
+	// must not start racing it, or it finds the session still running
+	// and queues behind it instead of opening the earned window.
+	waitIdle(t, g, "burst-1")
+	// Round two: the session has earned a window, so a follow-up
+	// typed during it folds.
+	third := make(chan *Lease, 1)
+	go func() {
+		l, _ := g.Acquire(context.Background(), "burst-1", "t3", "what about tomorrow?")
+		third <- l
+	}()
+	time.Sleep(30 * time.Millisecond)
+	fourth := send(g, "burst-1", "t4", "and the day after?")
+
+	if d := mustReceive(t, fourth, "post-burst follow-up"); d != Folded {
+		t.Errorf("after a burst the follow-up got %v, want Folded — the session did not learn", d)
+	}
+	l3 := <-third
+	defer l3.Release()
+	if len(l3.Batch) != 2 {
+		t.Errorf("batch = %v, want both messages folded", l3.Batch)
+	}
+}
+
+// Negative disables the learning outright, because "never learn" and
+// "learn the default" are different intentions and zero already means
+// the second.
+func TestANegativeBurstWindowDisablesLearning(t *testing.T) {
+	t.Parallel()
+	g := NewTurnGate(QueueSmart, 0, slog.New(slog.DiscardHandler)).WithBurst(-1, 0)
+	st := &gateState{}
+	g.noteBurst(st, time.Now())
+	if got := g.windowFor(st, time.Now()); got != 0 {
+		t.Errorf("window = %v with learning disabled, want instant", got)
 	}
 }

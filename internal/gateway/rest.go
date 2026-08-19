@@ -37,6 +37,10 @@ type RESTConfig struct {
 	// serialisation. Zero value is QueueSerial.
 	QueueMode     QueueMode
 	QueueDebounce time.Duration
+	// QueueBurstWindow / QueueBurstReset tune the window a bursting
+	// conversation earns under smart. Zero takes the defaults.
+	QueueBurstWindow time.Duration
+	QueueBurstReset  time.Duration
 
 	// Leaser adds cluster-wide turn ownership on top of the in-process
 	// queue. Nil is correct for a single node.
@@ -188,7 +192,7 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg:   cfg,
 		agent: agent,
 		log:   cfg.Logger,
-		gate:  NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge),
+		gate:  NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
 		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 	}
 }

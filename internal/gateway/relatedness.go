@@ -49,8 +49,17 @@ type RelatednessJudge interface {
 // their people type slowly gives the judge the same room, without
 // discovering a second knob.
 func (g *TurnGate) judgeTimeout() time.Duration {
-	if g.debounce > 0 {
-		return g.debounce
+	// The LARGEST window this gate can open, which is the configured
+	// floor or the one a bursting session can earn. Not the window
+	// currently in force: the judge also runs on the mid-turn path,
+	// where no window is open at all and a budget of zero would mean
+	// every classification timed out instantly.
+	budget := g.debounce
+	if g.burstWindow > budget {
+		budget = g.burstWindow
+	}
+	if budget > 0 {
+		return budget
 	}
 	return DefaultDebounce
 }
