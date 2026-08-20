@@ -89,7 +89,7 @@ Measured on 20 paraphrase queries against 20 stored memories — the shape of th
 | `multilingual-e5-small` | 471 MB | 100+ | 15/20 | 18/20 | +0.018 |
 | `multilingual-e5-base` | 1.1 GB | 100+ | 15/20 | 19/20 | +0.019 |
 | `intfloat/multilingual-e5-large` | 2.2 GB | 100+ | untested | | |
-| `Shitao/bge-m3` | 2.3 GB | 100+, 8k ctx | untested | | |
+| `Shitao/bge-m3` | 2.3 GB | 100+, 8k ctx | **tested** | best separation, ~7x slower | |
 
 Twenty queries is a small sample, so read these as directional. Two things are clear anyway:
 
