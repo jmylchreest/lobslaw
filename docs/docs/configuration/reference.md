@@ -163,10 +163,41 @@ model      = "mock-main"
 trust_tier = "local"
 
 [compute.embeddings]
+# type selects where embeddings come from:
+#   "remote"  (default) an HTTP endpoint
+#   "builtin"           a model this node runs in-process
+type        = "remote"
 endpoint    = "https://openrouter.ai/api/v1/embeddings"
 api_key_ref = "env:OPENROUTER_API_KEY"
 model       = "openai/text-embedding-3-small"
 dims        = 1536
+
+# The builtin form instead. No endpoint, no API key, and no egress at
+# query time: memory content never leaves the node. Note that
+# embeddings are computed for EVERY record, including private ones, so
+# a remote embedder is a standing disclosure of the whole corpus.
+#
+# model is a directory name under <data_dir>/models, and is also the
+# identity stamped on every vector — changing it is refused at boot
+# until the corpus is re-embedded.
+#
+# download_url is the base of an HTTP directory holding config.json,
+# model.safetensors and tokenizer.json. For a HuggingFace repo that is
+#   https://huggingface.co/<org>/<repo>/resolve/main
+#
+# There is NO DEFAULT. Empty means nothing is fetched and a missing
+# model is an error at boot, which is what an air-gapped node needs;
+# downloading has to be asked for. The host is also granted egress
+# under the "embedding-model" role only when this is set.
+#
+# dims is optional here and CHECKED against the checkpoint rather than
+# trusted — a mismatch fails at boot instead of writing a corpus at the
+# wrong width.
+#
+# [compute.embeddings]
+# type         = "builtin"
+# model        = "multilingual-e5-base"
+# download_url = "https://huggingface.co/intfloat/multilingual-e5-base/resolve/main"
 
 [compute.roles]
 # main, preflight, reranker, summariser. There is no "worker" or

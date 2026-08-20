@@ -145,6 +145,10 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		}
 	}
 	in.ModelsDevURL = modelsdev.DefaultURL
+	// Only when a download is actually configured.
+	if n.cfg.Compute.Embeddings.Builtin() {
+		in.EmbeddingModelURL = n.cfg.Compute.Embeddings.DownloadURL
+	}
 
 	in.MCPServerNetworks = map[string][]string{}
 	in.SkillNetworks = map[string][]string{}

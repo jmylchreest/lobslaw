@@ -48,6 +48,11 @@ type ACLInputs struct {
 	// the allowance instead of the public host.
 	ModelsDevURL string
 
+	// EmbeddingModelURL is where a builtin embedding model is fetched
+	// from, when one is configured with a download_url. Empty means
+	// nothing is fetched and no allowance is granted.
+	EmbeddingModelURL string
+
 	// ClawhubBaseURL is the API endpoint for clawhub.ai. Empty when
 	// the operator hasn't enabled clawhub installation.
 	ClawhubBaseURL string
@@ -159,6 +164,21 @@ func Build(in ACLInputs) Rules {
 	// never fetches the catalog carries no allowance for it.
 	if in.WantsModelDiscovery {
 		rules.Roles["modelsdev"] = []string{hostOfOrSelf(in.ModelsDevURL)}
+	}
+
+	// A builtin embedding model is DOWNLOADED, which is egress, and a
+	// distinct kind from calling an embedding API: the existing
+	// "embedding" role carries the LLM provider hosts, which is the
+	// wrong allowance entirely — a model comes from a mirror, not from
+	// the vendor you send prompts to.
+	//
+	// Same shape as modelsdev above, and for the same reason it is
+	// commented there: the feature can be wired end to end and still
+	// fail on the one line that lets it out of the box. This one was.
+	// Granted only when a download_url is set, so a node that ships
+	// its model on disk carries no allowance for fetching one.
+	if in.EmbeddingModelURL != "" {
+		rules.Roles["embedding-model"] = []string{hostOfOrSelf(in.EmbeddingModelURL)}
 	}
 
 	// Clawhub installer — hardcoded host set (clawhub API + the

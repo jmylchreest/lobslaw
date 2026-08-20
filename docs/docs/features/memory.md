@@ -38,23 +38,51 @@ The agent's per-turn prompt includes recent episodic records by default — typi
 
 ## Semantic
 
-For "find similar to X" queries, episodic records are also embedded and indexed. The embedder is configured under `[compute.embeddings]`:
+For "find similar to X" queries, episodic records are also embedded and indexed. Without an embedder this degrades to lexical matching rather than failing — which works, but cannot match a paraphrase: *"what do I use for config?"* will not find *"prefers TOML"*.
+
+There are two ways to provide one.
+
+### Built-in (no API key, no egress)
+
+A model this node runs in-process. Embeddings are computed for **every** record, including private ones, so a remote embedder is a standing disclosure of the whole corpus to a third party — this avoids that entirely.
 
 ```toml
 [compute.embeddings]
-endpoint    = "https://openrouter.ai/api/v1/embeddings"
-api_key_ref = "env:OPENROUTER_API_KEY"
-model       = "openai/text-embedding-3-small"
-dimensions  = 1536
+type         = "builtin"
+model        = "multilingual-e5-base"
+download_url = "https://huggingface.co/intfloat/multilingual-e5-base/resolve/main"
 ```
 
-Query via the `memory_recall` builtin:
+The model is cached under `<data_dir>/models/<model>/` and downloaded on first boot if absent. **There is no default URL**: leave `download_url` empty and nothing is fetched — a missing model becomes an error at boot, which is what an air-gapped node wants. The host is granted egress under the `embedding-model` role only when the URL is set.
+
+Supported checkpoints are BERT / RoBERTa / XLM-RoBERTa in `safetensors` format. `multilingual-e5-base` (1.1 GB) handles 100+ languages, so a memory recorded in one language is retrievable by a question asked in another. `bge-m3` is the same architecture with an 8k context.
+
+`model` is also the identity stamped on every vector, so changing it is refused at boot until the corpus is re-embedded — see below.
+
+### Remote
+
+```toml
+[compute.embeddings]
+type        = "remote"   # the default
+endpoint    = "https://api.openai.com/v1/embeddings"
+api_key_ref = "env:OPENAI_API_KEY"
+model       = "text-embedding-3-small"
+dims        = 1536
+```
+
+`dims` must match the model's actual output width. Note that **OpenRouter serves no embeddings** — it proxies chat models only.
+
+### Changing the embedding model
+
+Vectors from two different models are not comparable, and at the same width nothing detects it: cosine still returns a number, the number still sorts, and every search is confidently wrong. So each vector records which model wrote it, and a node whose configured model disagrees with its corpus **refuses to start**, naming both and the way out:
 
 ```
-memory_recall(query="when did we talk about deploying to railway?", k=5)
+go run ./cmd/backfill-embeddings --force
 ```
 
-Returns the top-k episodic records by cosine similarity. Useful for "find that thing you said about X" — where exact-match search would fail.
+### Querying
+
+Via the `memory_search` builtin, which prefers semantic search when an embedder is configured and falls back to lexical when one is not — including when a configured embedder fails, so an outage degrades rather than breaks.
 
 ## Soul
 

@@ -26,7 +26,12 @@ func (n *Node) wireBuiltinEmbedder() (compute.EmbeddingProvider, error) {
 	// node's policy rather than around it. A node whose policy forbids
 	// the host fails here, loudly, instead of quietly reaching the
 	// internet from a code path nobody associated with network access.
-	client := egress.For("embeddings")
+	//
+	// "embedding-model", NOT "embedding": the latter is the allowance
+	// for calling an embedding API and carries the LLM provider hosts.
+	// A model is fetched from a mirror, which is a different host and a
+	// different decision.
+	client := egress.For("embedding-model")
 
 	// Bounded: a stalled mirror must not hold start-up open forever.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
