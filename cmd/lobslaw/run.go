@@ -106,5 +106,6 @@ var commandSummaries = map[string]string{
 	"nodeid":       "print this machine's node id",
 	"context":      "named clusters this CLI can reach",
 	"doctor":       "check a node's configuration and reachability",
+	"embed-eval":   "measure an embedding model against this node's own memories",
 	"sandbox-exec": "internal reexec helper; not typed by hand",
 }

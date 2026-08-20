@@ -12,6 +12,7 @@ The `lobslaw` binary is multi-mode — the same binary handles run, init, doctor
 lobslaw                    # run the node (with --config)
 lobslaw init               # interactive config scaffold
 lobslaw doctor             # config + connectivity checks
+lobslaw embed-eval         # score an embedding model on this node's memories
 lobslaw context            # the clusters this machine can reach
   context list             # show the configured contexts
 lobslaw enrol              # ask a cluster for an operator credential
