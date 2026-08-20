@@ -2,16 +2,23 @@
 
 package embedder
 
-// prepareWeight packs into the tile layout the vector kernel needs.
-//
-// The unpacked copy is DROPPED afterwards. Holding both would double
-// the resident weights — 1.1 GB becomes 2.2 GB on multilingual-e5-base
-// and 4.4 GB on bge-m3 — to keep a layout nothing on this build reads.
-func prepareWeight(w *weight) {
-	w.packed = packWeight(w.bt, w.k, w.n)
-	w.bt = nil
+// weight for the vector kernel: packed into the tile layout at load.
+// See weight_nosimd.go for why the two builds differ and for the
+// measurements behind it.
+type weight struct {
+	packed *packedWeight
 }
 
-func applyWeight(w *weight, a, c []float32, m int) {
+// newWeight packs bt and DROPS the unpacked copy.
+//
+// Holding both would double the resident weights — multilingual-e5-base
+// from 1.1 GB to 2.2 GB, bge-m3 from 2.2 GB to 4.4 GB — to keep a
+// layout nothing on this build reads.
+func newWeight(bt []float32, k, n int) *weight {
+	return &weight{packed: packWeight(bt, k, n)}
+}
+
+// apply computes c[m,n] = a[m,k] * w^T.
+func (w *weight) apply(a, c []float32, m int) {
 	matmulPacked(a, w.packed, c, m)
 }

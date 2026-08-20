@@ -1,3 +1,5 @@
+//go:build goexperiment.simd && amd64
+
 package embedder
 
 // Weight packing: the layout change that makes a real GEMM kernel
@@ -24,7 +26,9 @@ package embedder
 // so packing them would cost more than it saves — and they are only
 // 1.4% of the arithmetic.
 
-// mr and nr — the tile shape — are chosen PER BUILD, in the kernel
+// mr and nr — the tile shape.
+//
+// These were chosen PER BUILD, in the kernel
 // files, because the right answer differs by an order of magnitude
 // between them. With vectors, 4x16 is eight accumulator registers.
 // Without, 4x16 is sixty-four floats that spill to stack and turn
@@ -40,6 +44,12 @@ package embedder
 // Columns past n in the final panel are zero-padded rather than
 // special-cased, so the kernel has no tail branch. The padding
 // contributes zero to the accumulators and is dropped on write-back.
+const (
+	mr = 4
+	nr = 16
+)
+
+// packedWeight is defined below.
 type packedWeight struct {
 	data   []float32
 	k, n   int
@@ -70,6 +80,3 @@ func packWeight(bt []float32, k, n int) *packedWeight {
 	}
 	return w
 }
-
-// rows returns n, the number of output columns this weight produces.
-func (w *packedWeight) rows() int { return w.n }

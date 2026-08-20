@@ -1,3 +1,5 @@
+//go:build goexperiment.simd && amd64
+
 package embedder
 
 // gemmTile computes an mr x nr tile of c, portably.
