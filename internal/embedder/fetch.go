@@ -104,7 +104,7 @@ func Ensure(ctx context.Context, client *http.Client, dataDir, model, base strin
 			// An optional file that is genuinely absent upstream is
 			// not a failure; a required one is.
 			if required(name) {
-				return "", err
+				return "", explainMissing(name, base, err)
 			}
 			markAbsent(dir, name)
 		}
@@ -206,4 +206,24 @@ func markAbsent(dir, name string) {
 		return
 	}
 	_ = os.WriteFile(p, nil, 0o644)
+}
+
+// explainMissing turns a bare 404 into the reason it happened.
+//
+// Plenty of HuggingFace repositories — especially older ones — ship
+// only pytorch_model.bin. That file is a PYTHON PICKLE, which is
+// arbitrary code execution on load, so this package will not read one
+// at any price. The bare error said "fetch model.safetensors: HTTP
+// 404", which reads as a broken URL and sends an operator to check
+// their typing rather than their repository.
+func explainMissing(name, base string, err error) error {
+	if name != "model.safetensors" {
+		return err
+	}
+	return fmt.Errorf("%w\n"+
+		"  %s has no model.safetensors. Many older repositories ship only\n"+
+		"  pytorch_model.bin, which is a Python pickle — loading one executes\n"+
+		"  arbitrary code, so it is refused rather than supported.\n"+
+		"  Pick a repository that publishes safetensors, or convert it yourself",
+		err, strings.TrimSuffix(base, "/"))
 }
