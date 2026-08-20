@@ -1,6 +1,9 @@
 package embedder
 
-import "math"
+import (
+	"math"
+	"sync"
+)
 
 // The forward pass. Post-LayerNorm transformer encoder:
 //
@@ -105,11 +108,14 @@ func (m *Model) hiddenStates(ids []int32) ([]float32, int) {
 	ctx := make([]float32, L*D)
 	out := make([]float32, L*D)
 	inter := make([]float32, L*c.Intermediate)
-	qh := make([]float32, L*headDim)
-	kh := make([]float32, L*headDim)
-	vht := make([]float32, headDim*L)
-	ctxHead := make([]float32, L*headDim)
-	scores := make([]float32, L*L)
+	// PER-HEAD scratch, one allocation each rather than one shared
+	// buffer, because the head loop now runs in parallel and each head
+	// must write somewhere no other head touches.
+	qh := make([]float32, c.Heads*L*headDim)
+	kh := make([]float32, c.Heads*L*headDim)
+	vht := make([]float32, c.Heads*headDim*L)
+	ctxHead := make([]float32, c.Heads*L*headDim)
+	scores := make([]float32, c.Heads*L*L)
 
 	for li := range m.layers {
 		l := &m.layers[li]
@@ -156,26 +162,59 @@ func (m *Model) hiddenStates(ids []int32) ([]float32, int) {
 // without a second transpose.
 func (m *Model) attention(q, k, v, ctx, qh, kh, vht, ctxHead, scores []float32, heads, headDim, dim, seq int) {
 	scale := float32(1 / math.Sqrt(float64(headDim)))
+
+	// PARALLEL OVER HEADS, serial inside each one.
+	//
+	// It used to be the other way round: the head loop was serial and
+	// each of its two matmuls spawned workers. At twelve heads and
+	// twelve layers that is 288 matmul calls per encode, every one of
+	// them paying goroutine setup for a problem too small to need it —
+	// which is most of the ~4,400 allocations an encode makes, and why
+	// raising the parallel threshold made things SLOWER rather than
+	// faster: it removed the parallelism without removing the calls.
+	//
+	// Heads are the natural unit. They are independent by definition,
+	// there are exactly as many as a machine can usefully run, and
+	// each one is large enough to be worth a goroutine at any sequence
+	// length that matters.
+	var wg sync.WaitGroup
 	for head := range heads {
-		for i := range seq {
-			src := i*dim + head*headDim
-			copy(qh[i*headDim:(i+1)*headDim], q[src:src+headDim])
-			copy(kh[i*headDim:(i+1)*headDim], k[src:src+headDim])
-			for d := range headDim {
-				vht[d*seq+i] = v[src+d]
+		wg.Add(1)
+		go func(head int) {
+			defer wg.Done()
+			// Each head's own slice of the scratch. Disjoint by
+			// construction, so no synchronisation is needed and the
+			// result does not depend on scheduling.
+			qhH := qh[head*seq*headDim : (head+1)*seq*headDim]
+			khH := kh[head*seq*headDim : (head+1)*seq*headDim]
+			vhtH := vht[head*headDim*seq : (head+1)*headDim*seq]
+			ctxH := ctxHead[head*seq*headDim : (head+1)*seq*headDim]
+			scH := scores[head*seq*seq : (head+1)*seq*seq]
+
+			for i := range seq {
+				src := i*dim + head*headDim
+				copy(qhH[i*headDim:(i+1)*headDim], q[src:src+headDim])
+				copy(khH[i*headDim:(i+1)*headDim], k[src:src+headDim])
+				for d := range headDim {
+					vhtH[d*seq+i] = v[src+d]
+				}
 			}
-		}
-		matmulBT(qh, kh, scores, seq, headDim, seq)
-		for i := range scores[:seq*seq] {
-			scores[i] *= scale
-		}
-		softmaxRows(scores, seq, seq)
-		matmulBT(scores, vht, ctxHead, seq, seq, headDim)
-		for i := range seq {
-			dst := i*dim + head*headDim
-			copy(ctx[dst:dst+headDim], ctxHead[i*headDim:(i+1)*headDim])
-		}
+			// matmulRange, not matmulBT: the outer parallelism is the
+			// head loop, and nesting a second level would oversubscribe
+			// exactly as before.
+			matmulRange(qhH, khH, scH, headDim, seq, 0, seq)
+			for i := range scH {
+				scH[i] *= scale
+			}
+			softmaxRows(scH, seq, seq)
+			matmulRange(scH, vhtH, ctxH, seq, headDim, 0, seq)
+			for i := range seq {
+				dst := i*dim + head*headDim
+				copy(ctx[dst:dst+headDim], ctxH[i*headDim:(i+1)*headDim])
+			}
+		}(head)
 	}
+	wg.Wait()
 }
 
 // clampID keeps an out-of-range token id inside the vocabulary.

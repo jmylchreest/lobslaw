@@ -223,19 +223,25 @@ Backfill throughput is linear with a flat heap — 10,000 records is roughly 15 
 
 ---
 
-### Attention still uses the dot kernel
+### Attention: parallel over heads, still on the dot kernel
 
-Only the six weight matmuls per layer go through the packed GEMM. Attention's Q·K and scores·V operands are computed per call, so packing them costs more than it saves at short lengths — but the gap widens with sequence length, and the 819-char row above (1.9x, against 1.3x at 204) is that showing up.
+The head loop was serial and each of its two matmuls spawned workers — 288 matmul calls per encode, every one paying goroutine setup for a problem too small to need it. Now the HEADS run in parallel and the matmuls inside them are serial, which is the natural unit: heads are independent by definition, there are about as many as a machine can use, and each is big enough to be worth a goroutine.
 
-**Trigger to revisit:** long-document embedding, or bge-m3's 8k context in anger.
+At 256 tokens, AVX2: 176 ms to 141 ms, and allocations from 4,466 to 991. The portable path gained too (340 ms to 293 ms).
+
+Still on the dot kernel rather than the packed GEMM, because attention's operands are computed per call. Packing them is worth it at length — at 256 tokens packing K costs 16K writes against 4.2M MACs — but it needs its own scratch and has not been done.
+
+**Trigger to revisit:** long-document embedding, where attention's share grows quadratically.
 
 ---
 
 ### Allocations per encode
 
-2,800–4,500, from goroutines in the matmuls and per-call scratch in `hiddenStates`. Not a scaling problem — the heap is flat across 1,600 encodes — so this is a constant factor, not a leak.
+508 at 16 tokens, 991 at 256 — down from ~2,800 and ~4,466, almost entirely by removing the per-matmul goroutines above.
 
-The obvious fix is forbidden: hoisting scratch onto `Model` is exactly what `TestConcurrentEmbedIsSafeAndDeterministic` catches. It must be a per-call arena or a `sync.Pool`. Raising the parallel threshold was measured and made things 14% **slower**, so this is not the easy win it looks.
+The remaining ones are the per-call scratch in `hiddenStates`, which cannot become a `Model` field: `TestConcurrentEmbedIsSafeAndDeterministic` catches exactly that. A `sync.Pool` would work.
+
+Note the trade already taken: per-head scratch raised bytes-per-op at 256 tokens from 4.6 MB to 8.7 MB, because each head needs its own L x L score buffer. Worth it for 4.5x fewer allocations and 20% less time, but it is a real cost at long sequence lengths.
 
 ---
 
