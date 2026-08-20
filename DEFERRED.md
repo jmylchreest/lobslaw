@@ -245,11 +245,20 @@ Note the trade already taken: per-head scratch raised bytes-per-op at 256 tokens
 
 ---
 
-### Portable kernel is 2.4–3.7x slower than the vector one
+### Portable kernel — as far as Go goes without assembly
 
-arm64, and any amd64 build without `GOEXPERIMENT=simd`, gets the portable path. Remaining portable-friendly work is k-blocking for L2 residency.
+arm64, and amd64 without `GOEXPERIMENT=simd`, take this path. Now 2.2x behind the vector one at 16 tokens and 2.0x at 256, from 2.4–3.7x.
 
-**Trigger to revisit:** first arm64 deployment.
+Everything available in plain Go has been tried and measured:
+
+- **8 accumulators instead of 4** — worth ~7%, kept. The count is bounded by how many partial sums the compiler keeps in registers.
+- **Blocked tiles**, 4x4 through 4x32 — all SLOWER than the dot loop. Without vector types Go spills tile accumulators to stack and every FMA becomes two memory operations.
+- **Row blocking to keep B in L1** — no measurable change.
+- **Parallel over heads** — helped here too (340 ms to 278 ms at 256 tokens).
+
+What remains is a Go assembly microkernel: NEON for arm64, AVX2 for amd64 without the experiment, with the portable loop as the fallback. That is real work and needs a fallback anyway, so the gap is a floor rather than an oversight.
+
+**Trigger to revisit:** first arm64 deployment where embedding latency actually matters.
 
 ---
 
