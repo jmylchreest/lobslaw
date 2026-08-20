@@ -57,65 +57,68 @@ The model is cached under `<data_dir>/models/<model>/` and downloaded on first b
 
 #### What a model must be
 
-Three requirements, each a refusal rather than a preference:
-
 | requirement | why |
 |---|---|
-| **SentencePiece Unigram** tokenizer | The only tokenizer implemented. In practice this means the **XLM-RoBERTa** family. |
-| **`safetensors`, F32 weights** | A `pytorch_model.bin` is a Python pickle — loading one executes arbitrary code, and a model arrives over the network from a host named in config. F16/BF16 are simply not read yet. |
+| **WordPiece** or **SentencePiece Unigram** tokenizer | The two that are implemented — BERT family and XLM-RoBERTa family respectively. |
+| **`safetensors`, F32 weights** | A `pytorch_model.bin` is a Python pickle: loading one executes arbitrary code, and a model arrives over the network from a host named in config. F16/BF16 are not read yet. |
 | **`gelu`** activation, absolute positions | The exact erf form, as `hidden_act = "gelu"` means in HuggingFace. RoPE-based architectures are a different forward pass. |
 
 A checkpoint failing any of these is rejected at boot with the reason, not at first recall.
 
 #### Which model to pick
 
-**Start with `intfloat/multilingual-e5-small`.** It is the smallest thing that works, and for most people it is enough.
+**The question is whether you need more than one language.**
 
-| model | download | context | licence | status |
-|---|---|---|---|---|
-| `intfloat/multilingual-e5-small` | **471 MB** | 512 | MIT | tested, used by CI |
-| `intfloat/multilingual-e5-base` | 1.1 GB | 512 | MIT | tested |
-| `intfloat/multilingual-e5-large` | 2.2 GB | 512 | MIT | compatible, untested |
-| `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 471 MB | 512 | Apache-2.0 | compatible, untested |
-| `Shitao/bge-m3` | 2.3 GB | **8192** | undeclared | compatible, untested |
+```toml
+# English only — the default choice, and the best one for English
+model        = "all-MiniLM-L6-v2"
+download_url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main"
 
-All are multilingual — a memory recorded in English is retrievable by a question asked in Spanish.
+# Multilingual
+model        = "multilingual-e5-small"
+download_url = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main"
+```
 
-The 512-token context is less limiting than it looks: longer text is **chunked automatically** and combined by a length-weighted mean, so `bge-m3`'s 8k window mainly saves you the chunking, not the content.
+Measured on 20 paraphrase queries against 20 stored memories — the shape of the actual workload:
 
-#### Is the small one enough?
+| model | download | languages | recall@1 | recall@3 | margin |
+|---|---|---|---|---|---|
+| `all-MiniLM-L6-v2` | **91 MB** | English | **16/20** | **20/20** | **+0.193** |
+| `multilingual-e5-small` | 471 MB | 100+ | 15/20 | 18/20 | +0.018 |
+| `multilingual-e5-base` | 1.1 GB | 100+ | 15/20 | 19/20 | +0.019 |
+| `intfloat/multilingual-e5-large` | 2.2 GB | 100+ | untested | | |
+| `Shitao/bge-m3` | 2.3 GB | 100+, 8k ctx | untested | | |
 
-For memory recall, yes. Measured on 20 paraphrase queries against 20 stored memories — the shape of the actual workload:
+Twenty queries is a small sample, so read these as directional. Two things are clear anyway:
 
-| model | download | recall@1 | recall@3 |
-|---|---|---|---|
-| `multilingual-e5-small` | 471 MB | 15/20 | 18/20 |
-| `multilingual-e5-base` | 1.1 GB | 15/20 | 19/20 |
+**On English, the 91 MB model wins.** Perfect recall@3 at a fifth the size. Multilingual capability is not free — it costs both download and accuracy in any single language.
 
-Identical top-1, one extra hit in the top 3, for 2.4x the download. Treat that as "no meaningful difference" rather than a precise result — 20 queries is a small sample — but the direction is clear enough that the larger model is hard to justify for this.
+**The margin column matters more than it looks.** e5 compresses everything into 0.79–0.90, so a similarity threshold sits in noise and has to be tuned against real data. MiniLM separates properly, which makes thresholds mean something.
 
-That is what you would expect from the task: a few thousand short records, queries that are paraphrases of them, and the top few going into a prompt. It is an easy retrieval problem, and recall@3 is what matters because the context engine takes several.
+Going multilingual buys retrieval across languages, and that is real: with e5, a memory recorded in English is found by a question asked in Spanish. MiniLM cannot do that — a French query scores 0.11 against an English memory, below unrelated English records at 0.14, so it would simply never be retrieved.
 
-#### Why 471 MB is the floor
+#### Why the multilingual models are so much larger
 
-Because the vocabulary is the cost of being multilingual, not the model:
+The vocabulary, not the model:
 
 ```
 multilingual-e5-small       471 MB total
   embedding table           384 MB   (250,037 tokens x 384 dims x 4 bytes)  = 82%
   the actual transformer     87 MB
+
+all-MiniLM-L6-v2             91 MB total
+  embedding table            47 MB   (30,522 tokens x 384 dims x 4 bytes)
+  the actual transformer     44 MB
 ```
 
-Twelve layers of transformer are under 90 MB. The other 82% is one row per token for a vocabulary covering 100+ languages. Nothing in the XLM-RoBERTa family escapes that, so there is no meaningfully smaller multilingual option.
+Both are 384-dimensional. The difference is one row per token for a vocabulary covering 100+ languages.
 
-An English-only embedder would be ~90–130 MB, five times smaller — but every one of them (`bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `e5-base-v2`) is **WordPiece**, which the tokenizer does not read.
+The 512-token context is less limiting than it looks: longer text is **chunked automatically** and combined by a length-weighted mean, so `bge-m3`'s 8k window mainly saves you the chunking.
 
 #### What does not work
 
-- **WordPiece models** — the forward pass would run them; the tokenizer is Unigram-only.
-- **`BAAI/bge-m3` itself** ships only `pytorch_model.bin`, no safetensors, so it is refused. `Shitao/bge-m3` — the author's own repository — has safetensors and is otherwise identical, but its licence is undeclared where BAAI's original is MIT. Check before relying on it.
+- **`BAAI/bge-m3` itself** ships only `pytorch_model.bin`, no safetensors, so it is refused. `Shitao/bge-m3` — the author's own repository — has safetensors and is otherwise identical, but its licence is undeclared where BAAI's original is MIT.
 - **`gte-multilingual-base`** is a different architecture (`NewModel`, RoPE) and ships F16.
-- **`distiluse-base-multilingual-cased-v2`** is DistilBERT with a WordPiece tokenizer.
 
 ### Remote
 

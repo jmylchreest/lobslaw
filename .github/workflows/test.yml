@@ -78,34 +78,48 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # multilingual-e5-small: 466 MB, MIT, and XLM-RoBERTa — so it
-      # exercises the SentencePiece Unigram tokenizer and the same
-      # forward path as the larger checkpoints, rather than being a
-      # stand-in that proves less. Cached, so a normal run fetches
-      # nothing.
+      # TWO checkpoints, because they exercise different halves.
+      #
+      #   all-MiniLM-L6-v2        91 MB   WordPiece + BertNormalizer
+      #   multilingual-e5-small  471 MB   SentencePiece Unigram + charsmap
+      #
+      # One would leave a whole tokenizer untested, and the two disagree
+      # on more than the tokenizer: MiniLM is a plain BERT with position
+      # offset 0 and a 30k vocabulary, e5-small is XLM-RoBERTa with
+      # offset 2 and 250k. Each has its own committed fixtures.
+      #
+      # Cached, so a normal run fetches nothing.
       - name: cache embedding model
         id: model-cache
         uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
-          path: ${{ runner.temp }}/models/multilingual-e5-small
-          key: e5-small-v1
+          path: ${{ runner.temp }}/models
+          key: embed-models-v2
 
       - name: fetch embedding model
         if: steps.model-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          base=https://huggingface.co/intfloat/multilingual-e5-small/resolve/main
-          dir="${{ runner.temp }}/models/multilingual-e5-small"
-          mkdir -p "$dir/1_Pooling"
-          for f in config.json model.safetensors tokenizer.json tokenizer_config.json; do
-            curl -fsSL --retry 3 -o "$dir/$f" "$base/$f"
-          done
-          curl -fsSL --retry 3 -o "$dir/1_Pooling/config.json" "$base/1_Pooling/config.json"
+          fetch() {
+            base="$1"; dir="${{ runner.temp }}/models/$2"
+            mkdir -p "$dir/1_Pooling"
+            for f in config.json model.safetensors tokenizer.json tokenizer_config.json; do
+              curl -fsSL --retry 3 -o "$dir/$f" "$base/$f"
+            done
+            curl -fsSL --retry 3 -o "$dir/1_Pooling/config.json" "$base/1_Pooling/config.json"
+          }
+          fetch https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main all-MiniLM-L6-v2
+          fetch https://huggingface.co/intfloat/multilingual-e5-small/resolve/main multilingual-e5-small
 
-      - name: embedder tests
+      - name: embedder tests (WordPiece / BERT)
         env:
           # Absolute: a tilde in a YAML env: value is a literal tilde,
           # not $HOME, so Go would be handed a path that cannot exist.
+          LOBSLAW_EMBEDDER_MODEL: ${{ runner.temp }}/models/all-MiniLM-L6-v2
+        run: go test -timeout 20m -count=1 ./internal/embedder/...
+
+      - name: embedder tests (Unigram / XLM-RoBERTa)
+        env:
           LOBSLAW_EMBEDDER_MODEL: ${{ runner.temp }}/models/multilingual-e5-small
         run: go test -timeout 20m -count=1 ./internal/embedder/...
 
