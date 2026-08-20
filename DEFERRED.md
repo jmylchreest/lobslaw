@@ -205,105 +205,81 @@ Landed: forward pass gated on measured tolerance; packed-GEMM kernel for AVX2; m
 
 What follows is refinement, not completion.
 
+### Measured, on the default model
+
+Numbers below are `all-MiniLM-L6-v2`, which is what the docs now recommend. Earlier entries here quoted `multilingual-e5-base` from before the packed GEMM and mmap landed, and were badly out of date.
+
+Head to head against the reference implementation, identical text, end to end:
+
+| text | reference | ours (AVX2) | ours (portable) |
+|---|---|---|---|
+| 40 chars | 5.7 ms | 8.1 ms (1.4x) | 13.7 ms (2.4x) |
+| 204 chars | 23.6 ms | 30.8 ms (1.3x) | 63.9 ms (2.7x) |
+| 819 chars | 70.5 ms | 133.3 ms (1.9x) | 260.6 ms (3.7x) |
+
+So the vector kernel is within 1.3–1.9x of the reference, not the ~5x an earlier entry claimed. Allocations are 2,800–4,500 per encode, not the ~7,900 measured on the larger model.
+
+Backfill throughput is linear with a flat heap — 10,000 records is roughly 15 minutes on the vector build. `TestBackfillScaling` re-measures it.
+
+---
+
 ### Attention still uses the dot kernel
 
-Only the six weight matmuls per layer go through the packed GEMM. Attention's Q·K and scores·V operands are computed per call, so packing them costs more than it saves — and they are ~1.4% of the arithmetic at 64 tokens. That share **grows with sequence length** (attention is quadratic, projections linear), so it stops being negligible on long inputs.
+Only the six weight matmuls per layer go through the packed GEMM. Attention's Q·K and scores·V operands are computed per call, so packing them costs more than it saves at short lengths — but the gap widens with sequence length, and the 819-char row above (1.9x, against 1.3x at 204) is that showing up.
 
-**Trigger to revisit:** if `EmbedLong` on real memories shows attention dominating, or when bge-m3's 8k context is used in anger.
-
----
-
-### Throughput, measured
-
-Linear, with a flat heap. multilingual-e5-base, 32-token records, AVX2:
-
-| records | per record | records/s | heap |
-|---|---|---|---|
-| 100 | 94.4 ms | 10.6 | 324.6 MB |
-| 400 | 90.3 ms | 11.1 | 324.6 MB |
-| 1600 | 91.3 ms | 11.0 | 324.7 MB |
-
-So a 10,000-record backfill is about **15 minutes** on the vector build and roughly **40 minutes** on the portable one. `EmbedBatch` costs the same per record as calling `Embed` in a loop, which is what it is.
-
-The heap not moving across 1600 encodes is the useful part: the ~7,900 allocations per encode are all short-lived, so the collector keeps up and nothing accumulates. That closes off the two ways a backfill could have degraded non-linearly.
-
-`TestBackfillScaling` re-measures it; set `LOBSLAW_EMBEDDER_SCALING=1`.
+**Trigger to revisit:** long-document embedding, or bge-m3's 8k context in anger.
 
 ---
 
-### ~7,900 allocations per encode
+### Allocations per encode
 
-Every `matmulBT`/`matmulPacked` spawns goroutines, and `hiddenStates` allocates all scratch per call. Measured as NOT a scaling problem (see above) — the heap is flat across 1600 encodes — so this is a constant-factor cost, not a leak. The obvious fix — hoisting scratch onto the `Model` — is exactly what `TestConcurrentEmbedIsSafeAndDeterministic` forbids: it makes concurrent `Embed` a data race. Any fix must be per-call-arena or `sync.Pool`, not a `Model` field.
+2,800–4,500, from goroutines in the matmuls and per-call scratch in `hiddenStates`. Not a scaling problem — the heap is flat across 1,600 encodes — so this is a constant factor, not a leak.
 
-Raising the parallel threshold to reduce goroutine churn was measured and made things **14% slower**, so this is not the easy win it looks like.
-
----
-
-### Portable kernel is ~2.8x slower than the vector one
-
-520 ms vs 184 ms at 64 tokens; arm64 and any non-experiment amd64 build gets the portable path. Remaining portable-friendly work: k-blocking for L2 residency, and a better inner loop that does not spill.
-
-**Trigger to revisit:** first arm64 deployment, or any node without `GOEXPERIMENT=simd`.
+The obvious fix is forbidden: hoisting scratch onto `Model` is exactly what `TestConcurrentEmbedIsSafeAndDeterministic` catches. It must be a per-call arena or a `sync.Pool`. Raising the parallel threshold was measured and made things 14% **slower**, so this is not the easy win it looks.
 
 ---
 
-### Still ~5x slower than the reference implementation
+### Portable kernel is 2.4–3.7x slower than the vector one
 
-184 ms at 64 tokens against ~36 ms for the same model. The gap is attention, allocations, and no cache blocking — all listed above.
+arm64, and any amd64 build without `GOEXPERIMENT=simd`, gets the portable path. Remaining portable-friendly work is k-blocking for L2 residency.
+
+**Trigger to revisit:** first arm64 deployment.
 
 ---
 
 ### e5 asymmetric prefixes are not applied
 
-e5 models are trained with `query: ` on the question and `passage: ` on the stored text. lobslaw applies neither, because `EmbeddingProvider.Embed` takes one string and has no idea which it is being handed.
+e5 models are trained with `query: ` on the question and `passage: ` on the stored text. Neither is applied, because `EmbeddingProvider.Embed` takes one string and cannot tell which it has.
 
-Measured on 20 paraphrase queries against 20 memories:
+Measured: one hit at recall@1 and one at recall@3 on 20 queries. Small but free — the callers all know which side they are on. It needs the interface to say so, which the remote embedder shares.
 
-| | recall@1 | recall@3 |
-|---|---|---|
-| with prefixes | 15/20 | 18/20 |
-| without (today) | 14/20 | 17/20 |
-
-One hit at each, on `e5-small`. Small but free — the callers all know which side they are on: the episodic ingester embeds passages, the context engine and `memory_search` embed queries. It needs the interface to say so, which is a wider change than it looks because the remote embedder shares it.
-
-**Trigger to revisit:** any work touching `EmbeddingProvider`, or a complaint about recall quality.
+**Note:** this only affects e5 models. `all-MiniLM-L6-v2`, the default, is symmetric and wants no prefix.
 
 ---
 
-### Smaller than 471 MB would need quantisation or vocabulary pruning
+### Smaller than 91 MB
 
-82% of the download is the token embedding table at F32. Two ways down, neither implemented:
+Only relevant to the multilingual models now: `all-MiniLM-L6-v2` is already 91 MB. `multilingual-e5-small` is 471 MB, 82% of which is a 250k-token embedding table.
 
-- **int8 the embedding table.** It is a pure lookup — no arithmetic depends on its precision beyond the first add — so per-row int8 with a scale would cut 384 MB to ~96 MB, taking the total to roughly 180 MB. The forward pass is unaffected.
-- **Prune the vocabulary.** XLM-R carries 250k tokens for 100+ languages. A node whose users write English and French needs a fraction of that; dropping unused rows and remapping ids is a known technique and would cut deeper than quantisation.
+Two routes, neither implemented: int8 the table (a pure lookup, so ~96 MB instead of 384 MB), or prune the vocabulary to the languages a node actually sees.
 
-**Trigger to revisit:** a deployment where 471 MB is genuinely the blocker — otherwise this is effort spent on a one-off download.
+**Trigger to revisit:** a multilingual deployment where 471 MB is the blocker.
 
 ---
 
 ### Only MiniLM is mirrored
 
-`all-MiniLM-L6-v2` (91 MB, Apache-2.0) is mirrored in this project's releases, so the default English configuration fetches nothing from a third party.
+The default English configuration fetches from this project's releases. The multilingual models do not: `multilingual-e5-small` is 471 MB, and `-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright — those need splitting with a reassembly step, or another host. All three are MIT, so it is plumbing rather than permission.
 
-The multilingual models are not: `multilingual-e5-small` is 471 MB, and `multilingual-e5-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright — those would need splitting across assets with a reassembly step, or a different host. All three are MIT, so redistribution is permitted; it is the plumbing that is missing.
-
-**Trigger to revisit:** a multilingual deployment that cannot reach HuggingFace, or CI failing on the e5-small download rather than on the code.
+**Trigger to revisit:** a multilingual deployment that cannot reach HuggingFace.
 
 ---
 
 ### bge-m3 is untested
 
-**`BAAI/bge-m3` cannot load at all** — it ships only `pytorch_model.bin`, no safetensors, and a pickle is arbitrary code execution so it is refused. `Shitao/bge-m3` (the author's own repository) has safetensors, is `xlm-roberta`/gelu/F32/24x1024/8194, and should load unchanged — but nothing has run it, and its licence is undeclared where BAAI's original is MIT. At 24 layers x 1024 hidden it is ~3.5x the arithmetic of e5-base, which makes every performance item above proportionally worse. It also needs its own golden fixture set — the committed one is e5-base only.
+`BAAI/bge-m3` cannot load at all — it ships only `pytorch_model.bin`, and a pickle is arbitrary code execution so it is refused. `Shitao/bge-m3` (the author's own repository) has safetensors and is `xlm-roberta`/gelu/F32/24x1024/8194, so it should load unchanged — but nothing has run it, its licence is undeclared where BAAI's is MIT, and at 24x1024 every performance item above is ~3.5x worse.
 
-**Trigger to revisit:** when multilingual + 8k context is actually wanted; wants mmap and the kernel work first.
-
----
-
-### No integrity verification on downloaded models
-
-`Ensure` records a SHA-256 of what it fetched but has nothing to compare against, so a compromised or truncated mirror is detected only by the load failing. safetensors cannot execute code, which is why this is a deferral rather than a hole, but a `checksum = "sha256:..."` config key would close it.
-
-**Trigger to revisit:** before recommending any download URL that is not a first-party mirror.
+**Trigger to revisit:** when multilingual plus 8k context is actually wanted.
 
 ---
 
