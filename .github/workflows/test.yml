@@ -36,3 +36,18 @@ jobs:
 
       - name: coverage summary
         run: go tool cover -func=coverage.out | tail -1
+
+      # The AVX2 embedding kernel lives behind `goexperiment.simd &&
+      # amd64`, so the job above compiles NONE of it — not the kernel,
+      # not the packed GEMM, not the tests asserting it agrees with the
+      # portable path. Passing locally is not the same as being covered,
+      # and a build nobody runs is a build that rots.
+      #
+      # Scoped to the one package that has a second kernel: the rest of
+      # the module is identical under either build, so running the whole
+      # suite twice would double CI time to re-prove the same thing.
+      - name: test simd kernel
+        run: GOEXPERIMENT=simd go test -race -count=1 ./internal/embedder/... ./internal/compute/...
+
+      - name: vet simd kernel
+        run: GOEXPERIMENT=simd go vet ./internal/embedder/...

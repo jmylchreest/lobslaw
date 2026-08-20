@@ -199,17 +199,11 @@ The user's OpenRouter API key is accessed via the zsh alias `get-key OPENROUTER_
 
 A pure-Go XLM-RoBERTa encoder so a node can embed its own memories with no API key, no endpoint and no egress at query time. Loads BERT / RoBERTa / XLM-RoBERTa, which is one code path for bge-small (English), multilingual-e5-base and bge-m3.
 
-Landed: the forward pass, gated on measured tolerance; a packed-GEMM kernel for AVX2; `EmbedBatch`; chunked long input; tested goroutine safety; `[compute.embeddings] type = "builtin"` with workspace caching, prepared at boot.
+**The feature is complete end to end.** A node with `type = "builtin"` does semantic recall with no API key, no endpoint and nothing leaving the machine: the SentencePiece Unigram tokenizer matches the reference on 119/119 cases, and a memory recorded in English is retrieved by the same question asked in French, German, Chinese or Japanese.
 
-### The tokenizer — BLOCKING
+Landed: forward pass gated on measured tolerance; packed-GEMM kernel for AVX2; mmap'd weights (1.1 GB of heap becomes 0); `EmbedBatch`; chunked long input; tested goroutine safety; the tokenizer; `EmbeddingProvider` wired at boot.
 
-Nothing converts text to token ids, so `Embed` takes ids and `wireBuiltinEmbedder` deliberately registers no provider. Until this lands, a `type = "builtin"` node downloads and validates its model at boot and then does lexical recall.
-
-Needs SentencePiece **Unigram** (Viterbi over the lattice), NFKC normalisation, and XLM-R's `precompiled_charsmap` — a SentencePiece-specific binary blob and the genuinely hard part. The golden fixtures already pin the expected ids as exact integers, including an NFC/NFD pair that must tokenise identically.
-
-**Trigger to revisit:** it is the only thing between the encoder and being usable. Next.
-
----
+What follows is refinement, not completion.
 
 ### Attention still uses the dot kernel
 
@@ -275,14 +269,8 @@ The architecture is identical (`XLMRobertaModel`, absolute positions), so it sho
 
 ---
 
-### CI does not build the SIMD path
-
-`GOEXPERIMENT=simd` is never set in the workflows, so `kernel_simd_amd64.go`, `gemm_simd_amd64.go` and their tests are compiled by nobody on CI. They pass locally; that is not the same as being covered.
-
-**Trigger to revisit:** immediately — this is a one-line matrix addition and the code is already written.
-
----
-
 ### aikit scaffold not yet removable
 
-`tools/genfixtures` is a separate module so `aikit` stays out of `go.mod` and out of the binary. It can be deleted once our own tokenizer reproduces the fixture ids — until then it is the only way to regenerate them.
+`tools/genfixtures` is a separate module so `aikit` stays out of `go.mod` and out of the binary. Our tokenizer now reproduces the ids exactly, but the scaffold stays: it is the only INDEPENDENT source of fixtures, and regenerating them with our own implementation would make the gate self-referential — it would prove only that we still agree with ourselves.
+
+**Trigger to revisit:** never, unless a second independent reference appears. It costs nothing: separate module, absent from `go.mod`, absent from the binary.
