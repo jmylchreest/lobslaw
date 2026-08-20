@@ -16,13 +16,25 @@ import (
 // ships no real implementation — wiring waits for Phase 5". This is
 // that implementation.
 //
-// NO EMBEDDER. Dream's candidate selection is recency times
-// importance and touches no vector; the embedding is metadata on the
-// OUTPUT record, so a summary can later be found by vector search.
-// Returning none leaves the summary findable lexically, which is what
-// memory_search already falls back to on a node with no embedder —
-// and a consolidation nobody can vector-search is worth incomparably
-// more than the nothing that exists today.
+// THE EMBEDDER IS OPTIONAL, AND USED WHEN PRESENT.
+//
+// Dream's candidate selection is recency times importance and touches
+// no vector. The embedding is metadata on the OUTPUT record, so the
+// summary can later be found by vector search.
+//
+// This originally returned none on the reasoning that a summary
+// findable lexically beats the nothing that existed before, which was
+// true while every embedder needed an API key. It stopped being true
+// when the built-in one landed: the node now has an embedder in the
+// ordinary case, and a consolidation written without a vector is one
+// that vector search must SKIP for the rest of its life, logging
+// "skipped records with mismatched embedding width" on every query.
+//
+// Found on the rig with a repaired store: two fresh consolidations,
+// ten sources each, both unreachable the moment dream wrote them.
+//
+// A nil embedder still yields a nil embedding — a node without one is
+// exactly the case the original note described, and it still works.
 
 // dreamSummaryPrompt asks for the consolidation.
 //
@@ -61,19 +73,23 @@ type DreamSummarizer struct {
 	provider LLMProvider
 	model    string
 	log      *slog.Logger
+	embedder EmbeddingProvider
 }
 
 // NewDreamSummarizer builds one. A nil provider returns nil, which
 // Dream reads as "no summarizer" and goes on scoring and pruning
 // without consolidating — the behaviour it has had all along.
-func NewDreamSummarizer(p LLMProvider, model string, log *slog.Logger) *DreamSummarizer {
+// The embedder is a constructor parameter rather than a setter so
+// that adding one cannot be forgotten at a call site: every caller has
+// to say what it is passing, even if that is nil.
+func NewDreamSummarizer(p LLMProvider, model string, log *slog.Logger, embedder EmbeddingProvider) *DreamSummarizer {
 	if p == nil {
 		return nil
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &DreamSummarizer{provider: p, model: model, log: log}
+	return &DreamSummarizer{provider: p, model: model, log: log, embedder: embedder}
 }
 
 // Summarize implements memory.Summarizer.
@@ -122,8 +138,23 @@ func (s *DreamSummarizer) Summarize(ctx context.Context, events []string) (strin
 		s.log.Debug("dream: the episodes amounted to nothing worth keeping", "events", len(kept))
 		return "", nil, nil
 	}
-	// No embedding: see the note at the head of this file.
-	return summary, nil, nil
+	if s.embedder == nil {
+		return summary, nil, nil
+	}
+	// Embed, not EmbedQuery: this is a stored document, not a question.
+	//
+	// A failure here is NOT fatal. The summary is the expensive part
+	// and it is already written; losing it because the embedder had a
+	// bad minute would throw away an LLM call to avoid a degradation
+	// that memory_search already handles by falling back to lexical
+	// matching. `lobslaw memory reembed` repairs it later.
+	vec, err := s.embedder.Embed(ctx, summary)
+	if err != nil {
+		s.log.Warn("dream: the consolidation was written without a vector",
+			"err", err, "events", len(kept))
+		return summary, nil, nil
+	}
+	return summary, vec, nil
 }
 
 // isNothingWorthKeeping reads the refusal.

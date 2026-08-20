@@ -510,7 +510,7 @@ func (n *Node) attachDreamSummarizer() {
 			break
 		}
 	}
-	s := compute.NewDreamSummarizer(n.roleMap.For(compute.RoleSummariser), model, n.log)
+	s := compute.NewDreamSummarizer(n.roleMap.For(compute.RoleSummariser), model, n.log, n.embedder)
 	if s == nil {
 		return
 	}
