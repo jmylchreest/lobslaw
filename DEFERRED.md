@@ -274,21 +274,17 @@ Empty by default is also *correct* for the recommended model — `all-MiniLM-L6-
 
 ---
 
-### Smaller than 91 MB
+### Model size and mirroring — decided against, documented instead
 
-Only relevant to the multilingual models now: `all-MiniLM-L6-v2` is already 91 MB. `multilingual-e5-small` is 471 MB, 82% of which is a 250k-token embedding table.
+Two related items closed by decision rather than by work.
 
-Two routes, neither implemented: int8 the table (a pure lookup, so ~96 MB instead of 384 MB), or prune the vocabulary to the languages a node actually sees.
+**int8 quantisation of the embedding table** would take a multilingual model from 471 MB to roughly 180 MB, since 82% of it is one row per token for a 250k vocabulary. Not done: shrinking the *download* means producing and hosting a quantised artefact, which is a build pipeline and a hosting commitment rather than a code change. The recommended default is 91 MB, so this only ever mattered to multilingual deployments.
 
-**Trigger to revisit:** a multilingual deployment where 471 MB is the blocker.
+**Mirroring the multilingual models** is likewise not done. `multilingual-e5-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright and would need splitting with a reassembly step; `multilingual-e5-small` (471 MB) would fit. All are MIT, so it is permitted — it is the plumbing and the hosting nobody has signed up for.
 
----
+Instead, `docs/docs/features/memory.md` lists a verified `download_url` for every supported model, and the release describes the mirror layout for anyone who wants to host their own. That is the part that actually blocked people: not the absence of a mirror, but having to work out the URL shape.
 
-### Only MiniLM is mirrored
-
-The default English configuration fetches from this project's releases. The multilingual models do not: `multilingual-e5-small` is 471 MB, and `-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright — those need splitting with a reassembly step, or another host. All three are MIT, so it is plumbing rather than permission.
-
-**Trigger to revisit:** a multilingual deployment that cannot reach HuggingFace.
+**Trigger to revisit:** a deployment that must be multilingual AND cannot reach HuggingFace.
 
 ---
 

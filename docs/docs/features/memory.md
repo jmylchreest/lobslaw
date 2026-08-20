@@ -139,15 +139,42 @@ No question set is needed. Each record carries an `event` (a short summary) and 
 
 `recall@3` is the number to weigh most — the context engine puts several records in front of the model, not one. `margin` is how far ahead the right answer sits: good recall with a thin margin means any similarity threshold you set is a coin toss.
 
-#### Mirrored models
+#### Where to fetch each model
 
-`all-MiniLM-L6-v2` is mirrored in this project's [releases](https://github.com/jmylchreest/lobslaw/releases/tag/models-all-MiniLM-L6-v2), which takes a third party out of the boot path: the bytes are pinned to a tag, cannot be changed or withdrawn under a running deployment, and a node with a narrow egress policy needs one host allowed rather than two.
+Copy the `download_url` for the model you want. Every URL below was checked: all of them serve `config.json`, `model.safetensors`, `tokenizer.json` and `1_Pooling/config.json`.
 
-Unmodified and verifiable — `config.json`, `model.safetensors` and `tokenizer.json` are byte-identical to upstream, with `SHA256SUMS` alongside. Apache-2.0, with `LICENSE` and `NOTICE` in the release.
+**`all-MiniLM-L6-v2`** — English, 91 MB, the default. Mirrored here, so nothing is fetched from a third party:
 
-One file is renamed: `1_Pooling/config.json` becomes `1_Pooling.config.json`, because a GitHub release asset filename cannot contain `/`. The fetcher restores the nested path, so what lands on disk is an ordinary snapshot. Without that, the pooling declaration would simply be absent and the loader would fall back to a default — which happens to be correct for this model, and would not be for a CLS-pooled one.
+```toml
+model        = "all-MiniLM-L6-v2"
+download_url = "https://github.com/jmylchreest/lobslaw/releases/download/models-all-MiniLM-L6-v2"
+```
 
-The multilingual models are not mirrored: `multilingual-e5-small` is 471 MB and the larger ones exceed a release asset's 2 GB limit outright.
+**Multilingual** — from HuggingFace, which is where they live:
+
+```toml
+model        = "multilingual-e5-small"    # 471 MB
+download_url = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main"
+
+model        = "multilingual-e5-base"     # 1.1 GB
+download_url = "https://huggingface.co/intfloat/multilingual-e5-base/resolve/main"
+
+model        = "multilingual-e5-large"    # 2.2 GB
+download_url = "https://huggingface.co/intfloat/multilingual-e5-large/resolve/main"
+
+model        = "bge-m3"                   # 2.3 GB, 8k context
+download_url = "https://huggingface.co/Shitao/bge-m3/resolve/main"
+```
+
+The pattern for any other XLM-RoBERTa or BERT checkpoint is `https://huggingface.co/<org>/<repo>/resolve/main`. `model` is a directory name under `<data_dir>/models` and need not match the repository.
+
+Only MiniLM is mirrored. `multilingual-e5-large` and `bge-m3` exceed a GitHub release asset's 2 GB per-file limit, so mirroring them would need splitting and reassembly; `e5-small` would fit but has not been done. All are MIT, so anyone can mirror them — see the release for the layout, which is an ordinary snapshot plus `SHA256SUMS` and one rename (`1_Pooling/config.json` becomes `1_Pooling.config.json`, because an asset filename cannot contain `/`).
+
+#### Verification
+
+A mirror that publishes `SHA256SUMS` is checked against it, and a mismatch is fatal — the file is deleted so the next boot re-downloads rather than loading bytes already known to be wrong. HuggingFace publishes no such manifest, so upstream downloads are unverified; that is the trade for being able to use them at all.
+
+To pin a model completely, mirror it yourself and publish a manifest alongside.
 
 #### What does not work
 
