@@ -55,7 +55,26 @@ download_url = "https://huggingface.co/intfloat/multilingual-e5-base/resolve/mai
 
 The model is cached under `<data_dir>/models/<model>/` and downloaded on first boot if absent. **There is no default URL**: leave `download_url` empty and nothing is fetched — a missing model becomes an error at boot, which is what an air-gapped node wants. The host is granted egress under the `embedding-model` role only when the URL is set.
 
-Supported checkpoints are BERT / RoBERTa / XLM-RoBERTa in `safetensors` format. `multilingual-e5-base` (1.1 GB) handles 100+ languages, so a memory recorded in one language is retrievable by a question asked in another. `bge-m3` is the same architecture with an 8k context.
+#### Which models work
+
+A checkpoint must be **XLM-RoBERTa family** (SentencePiece **Unigram** tokenizer), `gelu` activation, and **`safetensors` with F32 weights**. Verified:
+
+| model | size | context | licence |
+|---|---|---|---|
+| `intfloat/multilingual-e5-small` | 466 MB | 512 | MIT |
+| `intfloat/multilingual-e5-base` | 1.1 GB | 512 | MIT |
+| `intfloat/multilingual-e5-large` | 2.2 GB | 512 | MIT |
+| `Shitao/bge-m3` | 2.3 GB | **8192** | see note |
+
+All are multilingual, so a memory recorded in one language is retrievable by a question asked in another.
+
+**What does not work, and why:**
+
+- **WordPiece models** — `bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `e5-base-v2`, `LaBSE`. The forward pass would run them; the tokenizer is Unigram-only.
+- **`BAAI/bge-m3` itself** ships only `pytorch_model.bin`, with no safetensors. A pickle is arbitrary code execution on load, so it is refused. `Shitao/bge-m3` — the author's own repository — has safetensors and is otherwise identical. Its licence is not declared on the repo, unlike BAAI's MIT original, so check before relying on it.
+- **`gte-multilingual-base`** is a different architecture (`NewModel`, RoPE-based) and ships F16 weights.
+
+Start with `multilingual-e5-base` unless you need more than 512 tokens per memory in one piece — longer text is chunked automatically, so the 8k context matters less than it looks.
 
 `model` is also the identity stamped on every vector, so changing it is refused at boot until the corpus is re-embedded — see below.
 

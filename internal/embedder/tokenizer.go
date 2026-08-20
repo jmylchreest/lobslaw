@@ -114,7 +114,13 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 		return nil, fmt.Errorf("embedder: parse tokenizer.json: %w", err)
 	}
 	if meta.Model.Type != "Unigram" {
-		return nil, fmt.Errorf("embedder: tokenizer model %q unsupported (Unigram only)", meta.Model.Type)
+		// Named explicitly, because WordPiece is the common case and
+		// "unsupported" alone sends people looking for a bug. Most
+		// English BERT embedders — bge-small-en, all-MiniLM, e5-base-v2
+		// — are WordPiece and will land here. The forward pass would
+		// run them; the tokenizer is what does not.
+		return nil, fmt.Errorf("embedder: tokenizer model %q unsupported — this reads SentencePiece Unigram "+
+			"(XLM-RoBERTa family: multilingual-e5-*, bge-m3), not WordPiece", meta.Model.Type)
 	}
 	charsmap, replaces, err := flattenNormalizer(meta.Normalizer)
 	if err != nil {

@@ -257,7 +257,7 @@ Raising the parallel threshold to reduce goroutine churn was measured and made t
 
 CI fetches `multilingual-e5-small` (466 MB, MIT) from HuggingFace, cached on a fixed key so a normal run downloads nothing. That is a third party in the CI path.
 
-All the candidates are redistributable — `multilingual-e5-small`, `multilingual-e5-base` and `bge-m3` are MIT — and a GitHub release asset caps at 2 GB per file, so any of them could be mirrored. Worth doing if HuggingFace proves flaky or rate-limits the runners; not worth doing pre-emptively, since the cache means it is fetched rarely.
+All the candidates are redistributable — `multilingual-e5-small`, `multilingual-e5-base` and `bge-m3` are MIT — and a GitHub release asset caps at 2 GB per file — which `multilingual-e5-small` (466 MB) and `-base` (1.1 GB) fit and `-large` (2.2 GB) and `bge-m3` (2.3 GB) do NOT, so those would need splitting or a different host. Worth doing if HuggingFace proves flaky or rate-limits the runners; not worth doing pre-emptively, since the cache means it is fetched rarely.
 
 **Trigger to revisit:** the first CI failure caused by the download rather than the code.
 
@@ -265,7 +265,7 @@ All the candidates are redistributable — `multilingual-e5-small`, `multilingua
 
 ### bge-m3 is untested
 
-The architecture is identical (`XLMRobertaModel`, absolute positions), so it should load unchanged, but nothing has run it. At 24 layers x 1024 hidden it is ~3.5x the arithmetic of e5-base, which makes every performance item above proportionally worse. It also needs its own golden fixture set — the committed one is e5-base only.
+**`BAAI/bge-m3` cannot load at all** — it ships only `pytorch_model.bin`, no safetensors, and a pickle is arbitrary code execution so it is refused. `Shitao/bge-m3` (the author's own repository) has safetensors, is `xlm-roberta`/gelu/F32/24x1024/8194, and should load unchanged — but nothing has run it, and its licence is undeclared where BAAI's original is MIT. At 24 layers x 1024 hidden it is ~3.5x the arithmetic of e5-base, which makes every performance item above proportionally worse. It also needs its own golden fixture set — the committed one is e5-base only.
 
 **Trigger to revisit:** when multilingual + 8k context is actually wanted; wants mmap and the kernel work first.
 
