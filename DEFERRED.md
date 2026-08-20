@@ -285,8 +285,8 @@ The default English configuration fetches from this project's releases. The mult
 
 ---
 
-### aikit scaffold not yet removable
+### aikit scaffold removed
 
-`tools/genfixtures` is a separate module so `aikit` stays out of `go.mod` and out of the binary. Our tokenizer now reproduces the ids exactly, but the scaffold stays: it is the only INDEPENDENT source of fixtures, and regenerating them with our own implementation would make the gate self-referential — it would prove only that we still agree with ourselves.
+The fixtures it produced are committed and are what the gate reads, so nothing in the build or test path referenced it — the suite passes with the directory deleted. It was also carrying a 4 MB compiled binary into git, committed by accident.
 
-**Trigger to revisit:** never, unless a second independent reference appears. It costs nothing: separate module, absent from `go.mod`, absent from the binary.
+Regenerating for a new checkpoint means restoring two files from history;  names the commit. It was always a separate module, so restoring it adds no dependency to this one.

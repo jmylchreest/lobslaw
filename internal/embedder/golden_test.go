@@ -19,7 +19,7 @@ import (
 //
 // So correctness here is not a judgement call. These vectors come from
 // an independent implementation that is itself parity-gated against
-// the reference (see tools/genfixtures), and this test is the only
+// the reference (see doc.go for how to regenerate), and this test is the only
 // thing standing between "it compiles and returns plausible floats"
 // and "it is right".
 
