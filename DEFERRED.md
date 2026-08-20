@@ -292,6 +292,29 @@ The default English configuration fetches from this project's releases. The mult
 
 ---
 
+### bge-m3 — tested and gated
+
+`Shitao/bge-m3` (the author's own repository; `BAAI/bge-m3` ships only a pickle and is refused) loads and passes:
+
+- 1024 dims, 8192 context, 250,002 vocab; loads in 876 ms
+- Golden parity on **both** kernels, 119/119 tokenizer cases exact
+- Cross-lingual separation far better than e5-small: an English memory against its French translation scores 0.87 and its Chinese 0.76, with an unrelated English record at **0.40** — where e5-small puts unrelated text at 0.79, leaving almost no room for a threshold
+- ~241 ms per encode against MiniLM's ~35 ms, which is the 24x1024 shape
+
+Its own fixture set is committed (`d1024-l24-v250002`), so this is now covered rather than assumed — and it was worth doing: it caught the fixture generator hardcoding `pooling: "mean"`, which was invisible while every checkpoint it had seen was mean-pooled.
+
+**Remaining caveat:** the mirror's licence is undeclared where BAAI's original is MIT. Check before depending on it.
+
+---
+
+### Only MiniLM is mirrored
+
+The default English configuration fetches from this project's releases. The multilingual models do not: `multilingual-e5-small` is 471 MB, and `-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright — those need splitting with a reassembly step, or another host. All three are MIT, so it is plumbing rather than permission.
+
+**Trigger to revisit:** a multilingual deployment that cannot reach HuggingFace.
+
+---
+
 ### bge-m3 is untested
 
 `BAAI/bge-m3` cannot load at all — it ships only `pytorch_model.bin`, and a pickle is arbitrary code execution so it is refused. `Shitao/bge-m3` (the author's own repository) has safetensors and is `xlm-roberta`/gelu/F32/24x1024/8194, so it should load unchanged — but nothing has run it, its licence is undeclared where BAAI's is MIT, and at 24x1024 every performance item above is ~3.5x worse.

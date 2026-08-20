@@ -43,8 +43,25 @@
 // package reproduces them exactly. Regenerating — for a new checkpoint,
 // or a wider corpus — means restoring it:
 //
-//	git show 7c0da91:tools/genfixtures/main.go
-//	git show 7c0da91:tools/genfixtures/tokens.go
+//	git show 2aec0fa:tools/genfixtures/main.go
+//	git show 2aec0fa:tools/genfixtures/tokens.go
+//	git show 2aec0fa:tools/genfixtures/go.mod
+//
+// If that hash is ever unreachable — a rebase, a squash — find it with
+//
+//	git log --diff-filter=D -- tools/genfixtures/main.go
+//
+// and take the parent of the commit that deleted it. The first version
+// of this note named a hash that a history rewrite had already
+// orphaned: it still resolved locally, as an unreachable object, and
+// would not have existed in a fresh clone.
+//
+// ONE KNOWN BUG in the archived version: it records `pooling` as
+// "mean" unconditionally, rather than reading 1_Pooling/config.json.
+// That was invisible while every checkpoint it had seen was
+// mean-pooled, and produced a fixture set whose vectors were right and
+// whose label was wrong the first time it met a CLS-pooled model. Fix
+// that before regenerating for anything but the models already here.
 //
 // It was a separate Go module and never appeared in this one, so
 // restoring it adds no dependency here either.
