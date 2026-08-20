@@ -687,11 +687,62 @@ type PDFConfig = ModalityOverride
 // openrouter role cannot cover this; and a provider's absence from
 // the catalog is not evidence it lacks an endpoint.
 type EmbeddingsConfig struct {
+	// Type selects where embeddings come from.
+	//
+	//	""        — same as "remote"; every existing config keeps working
+	//	"remote"  — an HTTP endpoint, using Endpoint/APIKeyRef/Format
+	//	"builtin" — a model file this node runs itself, in-process
+	//
+	// "builtin" is the option with no API key, no endpoint, and no
+	// egress at query time: memory content never leaves the node. That
+	// matters more here than it would elsewhere, because embeddings are
+	// computed for EVERY record — including PRIVATE ones — so a remote
+	// embedder is a standing disclosure of the whole corpus to a third
+	// party, not an occasional one.
+	Type string `koanf:"type,omitempty"`
+
+	// Endpoint and APIKeyRef are for Type "remote" only.
 	Endpoint  string `koanf:"endpoint,omitempty"`
-	Model     string `koanf:"model,omitempty"`
 	APIKeyRef string `koanf:"api_key_ref,omitempty"`
-	Dims      int    `koanf:"dims,omitempty"`
 	Format    string `koanf:"format,omitempty"`
+
+	// Model names the embedding model.
+	//
+	// For "remote" it is the vendor's model string. For "builtin" it is
+	// a directory name under <data_dir>/models, and also the identity
+	// stamped on every vector — see memory.CheckEmbeddingModel, which
+	// refuses to start when it disagrees with the corpus.
+	Model string `koanf:"model,omitempty"`
+
+	// DownloadURL is where a "builtin" model is fetched from when it is
+	// not already cached: the base of an HTTP directory holding
+	// config.json, model.safetensors and tokenizer.json.
+	//
+	// Empty means the model must already be present on disk. That is
+	// the stricter setting and the right one for an air-gapped node —
+	// nothing is fetched, and a missing model is an error at boot
+	// rather than a download at first use.
+	DownloadURL string `koanf:"download_url,omitempty"`
+
+	// Dims is the model's output width.
+	//
+	// Required for "remote", where nothing can verify it until the
+	// first call fails. Optional for "builtin": the width is read from
+	// the checkpoint, and a value given here is CHECKED against it
+	// rather than trusted.
+	Dims int `koanf:"dims,omitempty"`
+}
+
+// Builtin reports whether embeddings are computed in-process.
+func (e EmbeddingsConfig) Builtin() bool { return e.Type == "builtin" }
+
+// Configured reports whether any embedder is set up at all.
+//
+// Absence is a supported configuration, not a broken one: recall falls
+// back to lexical matching, which is what a node with no [embeddings]
+// block has always done.
+func (e EmbeddingsConfig) Configured() bool {
+	return e.Builtin() || e.Endpoint != ""
 }
 
 // ProviderConfig describes one LLM endpoint. Format is the wire
