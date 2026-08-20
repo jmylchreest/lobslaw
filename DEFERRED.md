@@ -253,6 +253,18 @@ Raising the parallel threshold to reduce goroutine churn was measured and made t
 
 ---
 
+### No WordPiece tokenizer, so no small English-only option
+
+The tokenizer reads SentencePiece Unigram, which means the XLM-RoBERTa family, which means a 250k multilingual vocabulary. That vocabulary is **82% of the download**: `multilingual-e5-small` is 471 MB of which 384 MB is one embedding row per token, and only 87 MB is the transformer.
+
+Every small English embedder — `bge-small-en-v1.5` (133 MB), `all-MiniLM-L6-v2` (91 MB) — is WordPiece. The forward pass already runs them; only the tokenizer is missing. WordPiece is also considerably simpler than Unigram: greedy longest-match with `##` continuation, no Viterbi and no lattice.
+
+So this would unlock a **five times smaller** option for anyone who only needs English, for less work than the Unigram tokenizer took.
+
+**Trigger to revisit:** anybody objecting to a 471 MB download, or a deployment that is English-only and size-constrained.
+
+---
+
 ### Vendoring models to GitHub releases
 
 CI fetches `multilingual-e5-small` (466 MB, MIT) from HuggingFace, cached on a fixed key so a normal run downloads nothing. That is a third party in the CI path.

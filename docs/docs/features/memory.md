@@ -55,28 +55,54 @@ download_url = "https://huggingface.co/intfloat/multilingual-e5-base/resolve/mai
 
 The model is cached under `<data_dir>/models/<model>/` and downloaded on first boot if absent. **There is no default URL**: leave `download_url` empty and nothing is fetched — a missing model becomes an error at boot, which is what an air-gapped node wants. The host is granted egress under the `embedding-model` role only when the URL is set.
 
-#### Which models work
+#### What a model must be
 
-A checkpoint must be **XLM-RoBERTa family** (SentencePiece **Unigram** tokenizer), `gelu` activation, and **`safetensors` with F32 weights**. Verified:
+Three requirements, each a refusal rather than a preference:
 
-| model | size | context | licence |
-|---|---|---|---|
-| `intfloat/multilingual-e5-small` | 466 MB | 512 | MIT |
-| `intfloat/multilingual-e5-base` | 1.1 GB | 512 | MIT |
-| `intfloat/multilingual-e5-large` | 2.2 GB | 512 | MIT |
-| `Shitao/bge-m3` | 2.3 GB | **8192** | see note |
+| requirement | why |
+|---|---|
+| **SentencePiece Unigram** tokenizer | The only tokenizer implemented. In practice this means the **XLM-RoBERTa** family. |
+| **`safetensors`, F32 weights** | A `pytorch_model.bin` is a Python pickle — loading one executes arbitrary code, and a model arrives over the network from a host named in config. F16/BF16 are simply not read yet. |
+| **`gelu`** activation, absolute positions | The exact erf form, as `hidden_act = "gelu"` means in HuggingFace. RoPE-based architectures are a different forward pass. |
 
-All are multilingual, so a memory recorded in one language is retrievable by a question asked in another.
+A checkpoint failing any of these is rejected at boot with the reason, not at first recall.
 
-**What does not work, and why:**
+#### Which model to pick
 
-- **WordPiece models** — `bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `e5-base-v2`, `LaBSE`. The forward pass would run them; the tokenizer is Unigram-only.
-- **`BAAI/bge-m3` itself** ships only `pytorch_model.bin`, with no safetensors. A pickle is arbitrary code execution on load, so it is refused. `Shitao/bge-m3` — the author's own repository — has safetensors and is otherwise identical. Its licence is not declared on the repo, unlike BAAI's MIT original, so check before relying on it.
-- **`gte-multilingual-base`** is a different architecture (`NewModel`, RoPE-based) and ships F16 weights.
+**Start with `intfloat/multilingual-e5-small`.** It is the smallest thing that works, and for most people it is enough.
 
-Start with `multilingual-e5-base` unless you need more than 512 tokens per memory in one piece — longer text is chunked automatically, so the 8k context matters less than it looks.
+| model | download | context | licence | status |
+|---|---|---|---|---|
+| `intfloat/multilingual-e5-small` | **471 MB** | 512 | MIT | tested, used by CI |
+| `intfloat/multilingual-e5-base` | 1.1 GB | 512 | MIT | tested |
+| `intfloat/multilingual-e5-large` | 2.2 GB | 512 | MIT | compatible, untested |
+| `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 471 MB | 512 | Apache-2.0 | compatible, untested |
+| `Shitao/bge-m3` | 2.3 GB | **8192** | undeclared | compatible, untested |
 
-`model` is also the identity stamped on every vector, so changing it is refused at boot until the corpus is re-embedded — see below.
+All are multilingual — a memory recorded in English is retrievable by a question asked in Spanish.
+
+The 512-token context is less limiting than it looks: longer text is **chunked automatically** and combined by a length-weighted mean, so `bge-m3`'s 8k window mainly saves you the chunking, not the content.
+
+#### Why 471 MB is the floor
+
+Because the vocabulary is the cost of being multilingual, not the model:
+
+```
+multilingual-e5-small       471 MB total
+  embedding table           384 MB   (250,037 tokens x 384 dims x 4 bytes)  = 82%
+  the actual transformer     87 MB
+```
+
+Twelve layers of transformer are under 90 MB. The other 82% is one row per token for a vocabulary covering 100+ languages. Nothing in the XLM-RoBERTa family escapes that, so there is no meaningfully smaller multilingual option.
+
+An English-only embedder would be ~90–130 MB, five times smaller — but every one of them (`bge-small-en-v1.5`, `all-MiniLM-L6-v2`, `e5-base-v2`) is **WordPiece**, which the tokenizer does not read.
+
+#### What does not work
+
+- **WordPiece models** — the forward pass would run them; the tokenizer is Unigram-only.
+- **`BAAI/bge-m3` itself** ships only `pytorch_model.bin`, no safetensors, so it is refused. `Shitao/bge-m3` — the author's own repository — has safetensors and is otherwise identical, but its licence is undeclared where BAAI's original is MIT. Check before relying on it.
+- **`gte-multilingual-base`** is a different architecture (`NewModel`, RoPE) and ships F16.
+- **`distiluse-base-multilingual-cased-v2`** is DistilBERT with a WordPiece tokenizer.
 
 ### Remote
 
