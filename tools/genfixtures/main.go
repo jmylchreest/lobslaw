@@ -145,4 +145,9 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("wrote %s: %d fixtures, hidden_dim=%d\n", path, len(g.Fixtures), g.HiddenDim)
+
+	if err := genTokens(tok, *out); err != nil {
+		fmt.Fprintf(os.Stderr, "token fixtures: %v\n", err)
+		os.Exit(1)
+	}
 }
