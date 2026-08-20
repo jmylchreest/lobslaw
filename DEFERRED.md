@@ -303,22 +303,6 @@ Its own fixture set is committed (`d1024-l24-v250002`), so this is now covered r
 
 ---
 
-### Only MiniLM is mirrored
-
-The default English configuration fetches from this project's releases. The multilingual models do not: `multilingual-e5-small` is 471 MB, and `-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright — those need splitting with a reassembly step, or another host. All three are MIT, so it is plumbing rather than permission.
-
-**Trigger to revisit:** a multilingual deployment that cannot reach HuggingFace.
-
----
-
-### bge-m3 is untested
-
-`BAAI/bge-m3` cannot load at all — it ships only `pytorch_model.bin`, and a pickle is arbitrary code execution so it is refused. `Shitao/bge-m3` (the author's own repository) has safetensors and is `xlm-roberta`/gelu/F32/24x1024/8194, so it should load unchanged — but nothing has run it, its licence is undeclared where BAAI's is MIT, and at 24x1024 every performance item above is ~3.5x worse.
-
-**Trigger to revisit:** when multilingual plus 8k context is actually wanted.
-
----
-
 ### aikit scaffold removed
 
 The fixtures it produced are committed and are what the gate reads, so nothing in the build or test path referenced it — the suite passes with the directory deleted. It was also carrying a 4 MB compiled binary into git, committed by accident.
