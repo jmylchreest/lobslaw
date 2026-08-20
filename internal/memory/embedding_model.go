@@ -1,7 +1,10 @@
 package memory
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -35,10 +38,31 @@ func StoredEmbeddingModel(store *Store) (string, error) {
 		return nil
 	})
 	if err != nil {
+		// A RECORD WE CANNOT DECRYPT IS UNKNOWN, NOT FATAL.
+		//
+		// This guard's job is to read a model stamp, not to validate
+		// the whole store. Aborting turned any single undecryptable
+		// vector — one written under a rotated key, one corrupt page —
+		// into a node that will not boot, reporting a decryption error
+		// where the operator expected a model check. Nothing else at
+		// start-up walks this bucket, so the guard was the only thing
+		// making it fatal, and it made it fatal for every future boot.
+		//
+		// Unknown is the same answer an unstamped legacy record gets:
+		// it never counts as a match, so a genuine model change is
+		// still caught by any record that DOES decrypt.
+		if strings.Contains(err.Error(), "decrypt") {
+			return found, errUndecryptable
+		}
 		return "", fmt.Errorf("scan vector records: %w", err)
 	}
 	return found, nil
 }
+
+// errUndecryptable reports that the scan stopped early because a record
+// could not be decrypted. The stamp found before that point, if any, is
+// still returned and still usable.
+var errUndecryptable = errors.New("some vector records could not be decrypted")
 
 // ErrEmbeddingModelChanged is returned when the configured embedding
 // model disagrees with what wrote the vectors already in the store.
@@ -75,7 +99,15 @@ func CheckEmbeddingModel(store *Store, configured string) error {
 	}
 	stored, err := StoredEmbeddingModel(store)
 	if err != nil {
-		return err
+		if !errors.Is(err, errUndecryptable) {
+			return err
+		}
+		// Logged rather than swallowed: a store with records this node
+		// cannot read is worth knowing about, and it means the check
+		// below saw only part of the corpus.
+		slog.Default().Warn("memory: some vector records could not be decrypted; "+
+			"the embedding-model check saw only the records that could",
+			"checked_model", configured)
 	}
 	if stored == "" || stored == configured {
 		return nil

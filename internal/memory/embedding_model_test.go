@@ -2,8 +2,11 @@ package memory
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/pkg/crypto"
 
 	"google.golang.org/protobuf/proto"
 
@@ -85,5 +88,55 @@ func TestUnstampedLegacyVectorsDoNotBlockBoot(t *testing.T) {
 
 	if err := CheckEmbeddingModel(store, "qwen3-embedding-8b"); err != nil {
 		t.Errorf("legacy vectors blocked boot: %v", err)
+	}
+}
+
+// A record this node cannot decrypt must not stop it booting.
+//
+// The guard walks vector records looking for a model stamp, and
+// aborting on a decrypt failure turned an unreadable record — one
+// written under a rotated key, or a corrupt page — into a node that
+// never starts again, reporting a decryption error where the operator
+// was expecting a model check. Nothing else at start-up walks that
+// bucket, so this guard was the only thing making it fatal, and it
+// made it fatal for every future boot.
+//
+// Simulates the real case rather than a synthetic one: records written
+// under one key, then opened under another.
+func TestAnUndecryptableRecordDoesNotBlockBoot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.db")
+
+	var keyA, keyB crypto.Key
+	keyA[0], keyB[0] = 1, 2
+
+	written, err := OpenStore(path, keyA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := proto.Marshal(&lobslawv1.VectorRecord{
+		Id: "v1", Embedding: []float32{1, 0}, EmbeddingModel: "qwen3-embedding-8b",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := written.Put(BucketVectorRecords, "v1", raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := written.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopened under a DIFFERENT key: nothing in it can be read.
+	rotated, err := OpenStore(path, keyB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rotated.Close() }()
+
+	// Unknown, not fatal — the node must still start.
+	if err := CheckEmbeddingModel(rotated, "all-MiniLM-L6-v2"); err != nil {
+		t.Errorf("an unreadable store blocked boot: %v", err)
 	}
 }
