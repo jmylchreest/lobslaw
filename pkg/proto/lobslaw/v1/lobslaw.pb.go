@@ -3861,9 +3861,15 @@ type ReembedResponse struct {
 	// generation; those records will never be recalled.
 	Unreadable int32 `protobuf:"varint,4,opt,name=unreadable,proto3" json:"unreadable,omitempty"`
 	// model is the identity stamped on every vector written.
-	Model         string `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Model string `protobuf:"bytes,5,opt,name=model,proto3" json:"model,omitempty"`
+	// consolidations is how many of dream's summaries were re-embedded.
+	// Their text is dream's and is carried through untouched; only the
+	// vector is rewritten. Non-zero on the first run after an embedder
+	// is configured, because dream writes a summary with a NIL embedding
+	// when there is none — searchable by nothing until this repairs it.
+	Consolidations int32 `protobuf:"varint,6,opt,name=consolidations,proto3" json:"consolidations,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ReembedResponse) Reset() {
@@ -3929,6 +3935,13 @@ func (x *ReembedResponse) GetModel() string {
 		return x.Model
 	}
 	return ""
+}
+
+func (x *ReembedResponse) GetConsolidations() int32 {
+	if x != nil {
+		return x.Consolidations
+	}
+	return 0
 }
 
 type FindClustersRequest struct {
@@ -12159,7 +12172,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x05swept\x18\x04 \x03(\tR\x05swept\x12\x18\n" +
 	"\amissing\x18\x05 \x03(\tR\amissing\"&\n" +
 	"\x0eReembedRequest\x12\x14\n" +
-	"\x05limit\x18\x01 \x01(\x05R\x05limit\"\x9d\x01\n" +
+	"\x05limit\x18\x01 \x01(\x05R\x05limit\"\xc5\x01\n" +
 	"\x0fReembedResponse\x12\x1e\n" +
 	"\n" +
 	"reembedded\x18\x01 \x01(\x05R\n" +
@@ -12169,7 +12182,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"unreadable\x18\x04 \x01(\x05R\n" +
 	"unreadable\x12\x14\n" +
-	"\x05model\x18\x05 \x01(\tR\x05model\"\xb6\x02\n" +
+	"\x05model\x18\x05 \x01(\tR\x05model\x12&\n" +
+	"\x0econsolidations\x18\x06 \x01(\x05R\x0econsolidations\"\xb6\x02\n" +
 	"\x13FindClustersRequest\x12\x1c\n" +
 	"\tthreshold\x18\x01 \x01(\x02R\tthreshold\x12(\n" +
 	"\x10min_cluster_size\x18\x02 \x01(\x05R\x0eminClusterSize\x12(\n" +

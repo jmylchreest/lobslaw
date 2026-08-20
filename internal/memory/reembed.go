@@ -62,6 +62,7 @@ func (s *Service) Reembed(ctx context.Context, req *lobslawv1.ReembedRequest) (*
 	// Which vector currently embeds which record. Built first so a
 	// record's old vector can be deleted once its replacement is in.
 	existing := map[string][]string{}
+	var consolidations []*lobslawv1.VectorRecord
 	if _, err := s.store.ForEachDecryptable(BucketVectorRecords, func(k string, raw []byte) error {
 		var v lobslawv1.VectorRecord
 		if err := proto.Unmarshal(raw, &v); err != nil {
@@ -81,6 +82,23 @@ func (s *Service) Reembed(ctx context.Context, req *lobslawv1.ReembedRequest) (*
 		// dream will rewrite it on its next pass.
 		if len(v.SourceIds) == 1 {
 			existing[v.SourceIds[0]] = append(existing[v.SourceIds[0]], k)
+			return nil
+		}
+		// A consolidation is RE-EMBEDDED, not regenerated.
+		//
+		// The line above used to be the end of it, on the reasoning
+		// that dream owns the summary. That is true of the text and
+		// false of the vector: the summary is right there on the
+		// record, and embedding text we already hold asks nothing of
+		// dream.
+		//
+		// The gap it left was not theoretical. Summarize returns a nil
+		// embedding when no embedder is configured, so every
+		// consolidation written before one was set up had a summary and
+		// no vector — unreachable by search, and skipped over by the
+		// one command whose job is to make vectors current.
+		if v.Text != "" {
+			consolidations = append(consolidations, proto.Clone(&v).(*lobslawv1.VectorRecord))
 		}
 		return nil
 	}); err != nil {
@@ -116,10 +134,19 @@ func (s *Service) Reembed(ctx context.Context, req *lobslawv1.ReembedRequest) (*
 	}
 
 	resp := &lobslawv1.ReembedResponse{Model: model, Unreadable: int32(unreadable)} //nolint:gosec // counts, not attacker-controlled
+
+	// The width this model actually produces, learned from the first
+	// vector rather than declared. Nothing on the embedder interface
+	// reports dimensions, and a second source of that number is a
+	// second thing to get out of step with the first.
+	width := 0
 	for _, j := range todo {
 		vec, eerr := s.embedder.Embed(ctx, j.text)
 		if eerr != nil {
 			return resp, status.Errorf(codes.Internal, "embed %s: %v", j.rec.Id, eerr)
+		}
+		if width == 0 {
+			width = len(vec)
 		}
 		if err := s.putVector(j.rec, j.text, vec, model); err != nil {
 			return resp, err
@@ -135,13 +162,42 @@ func (s *Service) Reembed(ctx context.Context, req *lobslawv1.ReembedRequest) (*
 		}
 	}
 
-	orphans, err := s.sweepOrphanVectors(model)
+	// Only those that are not already current: re-embedding a correct
+	// vector costs a raft write and changes nothing.
+	for _, v := range consolidations {
+		if v.EmbeddingModel == model && width > 0 && len(v.Embedding) == width {
+			continue
+		}
+		vec, eerr := s.embedder.Embed(ctx, v.Text)
+		if eerr != nil {
+			return resp, status.Errorf(codes.Internal, "embed consolidation %s: %v", v.Id, eerr)
+		}
+		if width == 0 {
+			width = len(vec)
+		}
+		// Everything else is carried through untouched — the summary,
+		// its sources, and above all its owner and visibility. A
+		// consolidation over private records is as private as they are.
+		v.Embedding = vec
+		v.EmbeddingModel = model
+		if err := s.apply(&lobslawv1.LogEntry{
+			Op:      lobslawv1.LogOp_LOG_OP_PUT,
+			Id:      v.Id,
+			Payload: &lobslawv1.LogEntry_VectorRecord{VectorRecord: v},
+		}); err != nil {
+			return resp, err
+		}
+		resp.Consolidations++
+	}
+
+	orphans, err := s.sweepOrphanVectors(model, width)
 	if err != nil {
 		return resp, err
 	}
 	resp.Orphans = int32(orphans) //nolint:gosec // a count
 	s.logger.Info("memory: re-embedded corpus", "model", model,
 		"reembedded", resp.Reembedded, "replaced", resp.Replaced,
+		"consolidations", resp.Consolidations,
 		"orphans", resp.Orphans, "unreadable", resp.Unreadable)
 	return resp, nil
 }
@@ -189,7 +245,7 @@ func (s *Service) deleteVector(id string) error {
 // model is current, and an unstamped vector predates the field —
 // destroying that on a guess would lose something nothing said was
 // wrong.
-func (s *Service) sweepOrphanVectors(model string) (int, error) {
+func (s *Service) sweepOrphanVectors(model string, width int) (int, error) {
 	var stale []string
 	if _, err := s.store.ForEachDecryptable(BucketVectorRecords, func(k string, raw []byte) error {
 		var v lobslawv1.VectorRecord
@@ -197,6 +253,27 @@ func (s *Service) sweepOrphanVectors(model string) (int, error) {
 			return nil
 		}
 		if v.EmbeddingModel != "" && v.EmbeddingModel != model {
+			stale = append(stale, k)
+			return nil
+		}
+		// A WIDTH that disagrees is not a guess.
+		//
+		// vectorSearch cannot score a vector of another width against
+		// this model's — the dot product is undefined — so it skips it
+		// and logs a count. An unstamped one was spared here on the
+		// reasoning above, which left it in neither place: no record
+		// claimed it, no stamp disagreed, and search refused it anyway.
+		//
+		// The case that reached a real store was a consolidation. A
+		// single-source vector is deleted as its record's superseded
+		// one, so the ones that accumulated were dream's, and every
+		// search kept paying for them while the repair reported
+		// success. Dream rewrites its consolidations on the next pass.
+		//
+		// Only when a width is KNOWN, and only against a vector that
+		// has one: an empty embedding is a different question, and
+		// answering it here on a guess is the mistake this avoids.
+		if width > 0 && len(v.Embedding) > 0 && len(v.Embedding) != width {
 			stale = append(stale, k)
 		}
 		return nil

@@ -85,6 +85,14 @@ func memoryReembedLive(args []string) error {
 	fmt.Printf("model:       %s\n", res.GetModel())
 	fmt.Printf("re-embedded: %d record(s)\n", res.GetReembedded())
 	fmt.Printf("replaced:    %d superseded vector(s)\n", res.GetReplaced())
+	if res.GetConsolidations() > 0 {
+		// Worth its own line because it is the number that explains a
+		// search which was quietly missing summaries: dream writes a
+		// consolidation with no vector at all when no embedder is
+		// configured, and nothing else ever goes back for them.
+		fmt.Printf("summaries:   %d consolidation(s) re-embedded (dream's text kept)\n",
+			res.GetConsolidations())
+	}
 	if res.GetOrphans() > 0 {
 		fmt.Printf("orphans:     %d vector(s) removed (stamped with a previous model)\n", res.GetOrphans())
 	}

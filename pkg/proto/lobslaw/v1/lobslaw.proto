@@ -578,6 +578,12 @@ message ReembedResponse {
   int32 unreadable = 4;
   // model is the identity stamped on every vector written.
   string model = 5;
+  // consolidations is how many of dream's summaries were re-embedded.
+  // Their text is dream's and is carried through untouched; only the
+  // vector is rewritten. Non-zero on the first run after an embedder
+  // is configured, because dream writes a summary with a NIL embedding
+  // when there is none — searchable by nothing until this repairs it.
+  int32 consolidations = 6;
 }
 
 message FindClustersRequest {
