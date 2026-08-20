@@ -101,6 +101,24 @@ func (o *offlineStore) resolveStatePath() (string, error) {
 	return filepath.Join(cfg.Cluster.DataDir, "state.db"), nil
 }
 
+// modelsDir is where builtin embedding models are cached, resolved the
+// same way state.db is so `embed-eval` looks in the directory the node
+// would use rather than somewhere of its own.
+func (o *offlineStore) modelsDir() (string, error) {
+	if o.dataDir != "" {
+		return o.dataDir, nil
+	}
+	cfg, err := o.loadConfig()
+	if err != nil {
+		return "", err
+	}
+	if cfg == nil || cfg.Cluster.DataDir == "" {
+		return "", errors.New("cannot locate the models directory: pass --data-dir, " +
+			"or --config pointing at a config.toml with [cluster] data_dir set")
+	}
+	return cfg.Cluster.DataDir, nil
+}
+
 func (o *offlineStore) resolveKey() (crypto.Key, error) {
 	var zero crypto.Key
 

@@ -145,6 +145,7 @@ func topLevelDispatchers() []topLevelCommand {
 		{name: "nodeid", dispatch: dispatchNodeID},
 		{name: "context", dispatch: dispatchContext},
 		{name: "doctor", dispatch: dispatchDoctor},
+		{name: "embed-eval", dispatch: dispatchEmbedEval},
 		// Documented despite being a reexec helper nobody types: it
 		// shows up in process lists, and a line explaining why beats
 		// somebody discovering an undocumented subcommand.

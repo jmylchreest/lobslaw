@@ -117,6 +117,28 @@ Both are 384-dimensional. The difference is one row per token for a vocabulary c
 
 The 512-token context is less limiting than it looks: longer text is **chunked automatically** and combined by a length-weighted mean, so `bge-m3`'s 8k window mainly saves you the chunking.
 
+#### Choosing between models
+
+Changing the model is close to a one-way door — the node refuses to boot until the whole corpus is re-embedded — so measure first, against your own memories rather than a published benchmark:
+
+```
+lobslaw embed-eval --config config.toml all-MiniLM-L6-v2 multilingual-e5-small
+```
+
+```
+30 records from data/state.db (27 skipped: no distinct event/context, or unreadable)
+
+model                                dims  recall@1  recall@3    margin    per doc
+all-MiniLM-L6-v2                      384       70%       87%   +0.0893      77.2ms
+multilingual-e5-small                 384       67%       87%   +0.0176     136.1ms
+```
+
+The node must be **stopped** — bbolt takes an exclusive lock.
+
+No question set is needed. Each record carries an `event` (a short summary) and a `context` (the fuller text); the event becomes the query and the context the document, so a model that understands the record ranks that record's own context first. The ground truth is the pairing already in the store. Records whose event and context are identical are skipped, since retrieving those is free for any model.
+
+`recall@3` is the number to weigh most — the context engine puts several records in front of the model, not one. `margin` is how far ahead the right answer sits: good recall with a thin margin means any similarity threshold you set is a coin toss.
+
 #### Mirrored models
 
 `all-MiniLM-L6-v2` is mirrored in this project's [releases](https://github.com/jmylchreest/lobslaw/releases/tag/models-all-MiniLM-L6-v2), which takes a third party out of the boot path: the bytes are pinned to a tag, cannot be changed or withdrawn under a running deployment, and a node with a narrow egress policy needs one host allowed rather than two.
