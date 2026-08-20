@@ -192,3 +192,79 @@ Required checks + PR workflow. Solo-work today; direct-to-main is fine.
 ### `get-key` alias
 
 The user's OpenRouter API key is accessed via the zsh alias `get-key OPENROUTER_API_KEY_LOBSLAW`. Local-dev convenience, not a lobslaw concern — lobslaw reads `env:OPENROUTER_API_KEY_LOBSLAW` at runtime. Workflow: `OPENROUTER_API_KEY_LOBSLAW=$(get-key OPENROUTER_API_KEY_LOBSLAW) ./lobslaw ...`.
+
+---
+
+## Built-in embedder (`internal/embedder`)
+
+A pure-Go XLM-RoBERTa encoder so a node can embed its own memories with no API key, no endpoint and no egress at query time. Loads BERT / RoBERTa / XLM-RoBERTa, which is one code path for bge-small (English), multilingual-e5-base and bge-m3.
+
+Landed: the forward pass, gated on measured tolerance; a packed-GEMM kernel for AVX2; `EmbedBatch`; chunked long input; tested goroutine safety; `[compute.embeddings] type = "builtin"` with workspace caching, prepared at boot.
+
+### The tokenizer — BLOCKING
+
+Nothing converts text to token ids, so `Embed` takes ids and `wireBuiltinEmbedder` deliberately registers no provider. Until this lands, a `type = "builtin"` node downloads and validates its model at boot and then does lexical recall.
+
+Needs SentencePiece **Unigram** (Viterbi over the lattice), NFKC normalisation, and XLM-R's `precompiled_charsmap` — a SentencePiece-specific binary blob and the genuinely hard part. The golden fixtures already pin the expected ids as exact integers, including an NFC/NFD pair that must tokenise identically.
+
+**Trigger to revisit:** it is the only thing between the encoder and being usable. Next.
+
+---
+
+### Attention still uses the dot kernel
+
+Only the six weight matmuls per layer go through the packed GEMM. Attention's Q·K and scores·V operands are computed per call, so packing them costs more than it saves — and they are ~1.4% of the arithmetic at 64 tokens. That share **grows with sequence length** (attention is quadratic, projections linear), so it stops being negligible on long inputs.
+
+**Trigger to revisit:** if `EmbedLong` on real memories shows attention dominating, or when bge-m3's 8k context is used in anger.
+
+---
+
+### ~7,900 allocations per encode
+
+Every `matmulBT`/`matmulPacked` spawns goroutines, and `hiddenStates` allocates all scratch per call. The obvious fix — hoisting scratch onto the `Model` — is exactly what `TestConcurrentEmbedIsSafeAndDeterministic` forbids: it makes concurrent `Embed` a data race. Any fix must be per-call-arena or `sync.Pool`, not a `Model` field.
+
+Raising the parallel threshold to reduce goroutine churn was measured and made things **14% slower**, so this is not the easy win it looks like.
+
+---
+
+### Portable kernel is ~2.8x slower than the vector one
+
+520 ms vs 184 ms at 64 tokens; arm64 and any non-experiment amd64 build gets the portable path. Remaining portable-friendly work: k-blocking for L2 residency, and a better inner loop that does not spill.
+
+**Trigger to revisit:** first arm64 deployment, or any node without `GOEXPERIMENT=simd`.
+
+---
+
+### Still ~5x slower than the reference implementation
+
+184 ms at 64 tokens against ~36 ms for the same model. The gap is attention, allocations, and no cache blocking — all listed above.
+
+---
+
+### bge-m3 is untested
+
+The architecture is identical (`XLMRobertaModel`, absolute positions), so it should load unchanged, but nothing has run it. At 24 layers x 1024 hidden it is ~3.5x the arithmetic of e5-base, which makes every performance item above proportionally worse. It also needs its own golden fixture set — the committed one is e5-base only.
+
+**Trigger to revisit:** when multilingual + 8k context is actually wanted; wants mmap and the kernel work first.
+
+---
+
+### No integrity verification on downloaded models
+
+`Ensure` records a SHA-256 of what it fetched but has nothing to compare against, so a compromised or truncated mirror is detected only by the load failing. safetensors cannot execute code, which is why this is a deferral rather than a hole, but a `checksum = "sha256:..."` config key would close it.
+
+**Trigger to revisit:** before recommending any download URL that is not a first-party mirror.
+
+---
+
+### CI does not build the SIMD path
+
+`GOEXPERIMENT=simd` is never set in the workflows, so `kernel_simd_amd64.go`, `gemm_simd_amd64.go` and their tests are compiled by nobody on CI. They pass locally; that is not the same as being covered.
+
+**Trigger to revisit:** immediately — this is a one-line matrix addition and the code is already written.
+
+---
+
+### aikit scaffold not yet removable
+
+`tools/genfixtures` is a separate module so `aikit` stays out of `go.mod` and out of the binary. It can be deleted once our own tokenizer reproduces the fixture ids — until then it is the only way to regenerate them.
