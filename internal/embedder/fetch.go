@@ -28,12 +28,21 @@ import (
 var modelFiles = []struct {
 	name     string
 	required bool
+	// alt is a FLATTENED name tried when name 404s.
+	//
+	// GitHub release assets cannot contain "/" in their filename, so a
+	// mirrored model has nowhere to put 1_Pooling/config.json. Without
+	// this the file is simply absent and pooling falls back to the
+	// family default — which happens to be right for all-MiniLM and is
+	// exactly the kind of accident that holds until it does not. The
+	// declaration is the checkpoint's, not ours to guess.
+	alt string
 }{
-	{"config.json", true},
-	{"model.safetensors", true},
-	{"tokenizer.json", true},
-	{"tokenizer_config.json", false},
-	{"1_Pooling/config.json", false},
+	{name: "config.json", required: true},
+	{name: "model.safetensors", required: true},
+	{name: "tokenizer.json", required: true},
+	{name: "tokenizer_config.json"},
+	{name: "1_Pooling/config.json", alt: "1_Pooling.config.json"},
 }
 
 // maxModelBytes bounds any single downloaded file.
@@ -101,6 +110,14 @@ func Ensure(ctx context.Context, client *http.Client, dataDir, model, base strin
 
 	for _, name := range missing {
 		if err := fetchOne(ctx, client, base, dir, name); err != nil {
+			// A mirror may carry the flattened name instead; written
+			// to the nested path either way, so what lands on disk is
+			// a normal HuggingFace snapshot.
+			if a := altOf(name); a != "" {
+				if err2 := fetchAs(ctx, client, base, dir, a, name); err2 == nil {
+					continue
+				}
+			}
 			// An optional file that is genuinely absent upstream is
 			// not a failure; a required one is.
 			if required(name) {
@@ -129,8 +146,23 @@ func required(name string) bool {
 	return false
 }
 
+func altOf(name string) string {
+	for _, f := range modelFiles {
+		if f.name == name {
+			return f.alt
+		}
+	}
+	return ""
+}
+
 func fetchOne(ctx context.Context, client *http.Client, base, dir, name string) error {
-	url := strings.TrimSuffix(base, "/") + "/" + name
+	return fetchAs(ctx, client, base, dir, name, name)
+}
+
+// fetchAs downloads remote and stores it at local.
+func fetchAs(ctx context.Context, client *http.Client, base, dir, remote, local string) error {
+	name := local
+	url := strings.TrimSuffix(base, "/") + "/" + remote
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

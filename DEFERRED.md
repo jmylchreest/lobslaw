@@ -281,13 +281,13 @@ One hit at each, on `e5-small`. Small but free — the callers all know which si
 
 ---
 
-### Vendoring models to GitHub releases
+### Only MiniLM is mirrored
 
-CI fetches `multilingual-e5-small` (466 MB, MIT) from HuggingFace, cached on a fixed key so a normal run downloads nothing. That is a third party in the CI path.
+`all-MiniLM-L6-v2` (91 MB, Apache-2.0) is mirrored in this project's releases, so the default English configuration fetches nothing from a third party.
 
-All the candidates are redistributable — `multilingual-e5-small`, `multilingual-e5-base` and `bge-m3` are MIT — and a GitHub release asset caps at 2 GB per file — which `multilingual-e5-small` (466 MB) and `-base` (1.1 GB) fit and `-large` (2.2 GB) and `bge-m3` (2.3 GB) do NOT, so those would need splitting or a different host. Worth doing if HuggingFace proves flaky or rate-limits the runners; not worth doing pre-emptively, since the cache means it is fetched rarely.
+The multilingual models are not: `multilingual-e5-small` is 471 MB, and `multilingual-e5-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright — those would need splitting across assets with a reassembly step, or a different host. All three are MIT, so redistribution is permitted; it is the plumbing that is missing.
 
-**Trigger to revisit:** the first CI failure caused by the download rather than the code.
+**Trigger to revisit:** a multilingual deployment that cannot reach HuggingFace, or CI failing on the e5-small download rather than on the code.
 
 ---
 

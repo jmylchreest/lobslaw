@@ -70,11 +70,13 @@ A checkpoint failing any of these is rejected at boot with the reason, not at fi
 **The question is whether you need more than one language.**
 
 ```toml
-# English only — the default choice, and the best one for English
+# English only — the default choice, and the best one for English.
+# Mirrored in this project's releases, so nothing is fetched from a
+# third party and the bytes are pinned to a tag.
 model        = "all-MiniLM-L6-v2"
-download_url = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main"
+download_url = "https://github.com/jmylchreest/lobslaw/releases/download/models-all-MiniLM-L6-v2"
 
-# Multilingual
+# Multilingual — from HuggingFace, as it is too large to mirror.
 model        = "multilingual-e5-small"
 download_url = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main"
 ```
@@ -114,6 +116,16 @@ all-MiniLM-L6-v2             91 MB total
 Both are 384-dimensional. The difference is one row per token for a vocabulary covering 100+ languages.
 
 The 512-token context is less limiting than it looks: longer text is **chunked automatically** and combined by a length-weighted mean, so `bge-m3`'s 8k window mainly saves you the chunking.
+
+#### Mirrored models
+
+`all-MiniLM-L6-v2` is mirrored in this project's [releases](https://github.com/jmylchreest/lobslaw/releases/tag/models-all-MiniLM-L6-v2), which takes a third party out of the boot path: the bytes are pinned to a tag, cannot be changed or withdrawn under a running deployment, and a node with a narrow egress policy needs one host allowed rather than two.
+
+Unmodified and verifiable — `config.json`, `model.safetensors` and `tokenizer.json` are byte-identical to upstream, with `SHA256SUMS` alongside. Apache-2.0, with `LICENSE` and `NOTICE` in the release.
+
+One file is renamed: `1_Pooling/config.json` becomes `1_Pooling.config.json`, because a GitHub release asset filename cannot contain `/`. The fetcher restores the nested path, so what lands on disk is an ordinary snapshot. Without that, the pooling declaration would simply be absent and the loader would fall back to a default — which happens to be correct for this model, and would not be for a CLS-pooled one.
+
+The multilingual models are not mirrored: `multilingual-e5-small` is 471 MB and the larger ones exceed a release asset's 2 GB limit outright.
 
 #### What does not work
 

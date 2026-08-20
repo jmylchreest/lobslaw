@@ -145,3 +145,40 @@ func TestEnsureRequiresAModelName(t *testing.T) {
 		t.Error("an empty model name was accepted")
 	}
 }
+
+// A mirror that cannot express "1_Pooling/config.json" — GitHub release
+// assets may not contain "/" — must still deliver the pooling
+// declaration under a flattened name, and it must land on disk at the
+// nested path so what results is an ordinary snapshot.
+//
+// Without this the file is merely absent and pooling silently falls
+// back to the family default. That default happens to be right for
+// all-MiniLM, which is precisely why it needed a test: a mirror of some
+// future CLS-pooled model would load, run, and be quietly wrong.
+func TestAFlattenedPoolingFileIsAccepted(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"config.json":           `{"model_type":"bert","hidden_size":8}`,
+		"model.safetensors":     "x",
+		"tokenizer.json":        `{}`,
+		"1_Pooling.config.json": `{"pooling_mode_cls_token":true}`,
+	}
+	srv := fakeHub(t, files)
+	dir := t.TempDir()
+
+	got, err := Ensure(context.Background(), srv.Client(), dir, "m", srv.URL)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(got, "1_Pooling", "config.json"))
+	if err != nil {
+		t.Fatalf("the flattened pooling file was not stored at the nested path: %v", err)
+	}
+	if !strings.Contains(string(raw), "pooling_mode_cls_token") {
+		t.Errorf("wrong content: %s", raw)
+	}
+	// And the loader must now read CLS from it rather than defaulting.
+	if p := poolingConfig(got, PoolMean); p != PoolCLS {
+		t.Errorf("pooling = %q, want cls — the declaration was not honoured", p)
+	}
+}
