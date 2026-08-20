@@ -79,6 +79,15 @@ func (n *Node) wireCompute() error {
 	if err != nil {
 		return err
 	}
+	// Assigned HERE, once, rather than inside whichever branch built
+	// it. The remote path used to set n.embedder itself, so when the
+	// builtin path was added it returned a perfectly good provider and
+	// left n.embedder nil — memory_search got it (that reads the return
+	// value) while the episodic ingester and the context engine did not
+	// (they read the field). The node logged "builtin embedding model
+	// ready" and then wrote no vectors at all, which is a failure with
+	// no error in it anywhere.
+	n.embedder = embedder
 
 	// binariesProvider comes back out of tool registration so the Agent
 	// (constructed below) can advertise the operator's [[binary]]

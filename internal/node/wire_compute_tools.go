@@ -216,7 +216,6 @@ func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 	if err := memory.CheckEmbeddingModel(n.store, n.cfg.Compute.Embeddings.Model); err != nil {
 		return nil, err
 	}
-	n.embedder = ec
 	n.log.Debug("compute: embedding client wired",
 		"model", n.cfg.Compute.Embeddings.Model,
 		"dims", n.cfg.Compute.Embeddings.Dims)
