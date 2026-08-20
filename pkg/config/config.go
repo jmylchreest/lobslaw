@@ -731,6 +731,23 @@ type EmbeddingsConfig struct {
 	// the checkpoint, and a value given here is CHECKED against it
 	// rather than trusted.
 	Dims int `koanf:"dims,omitempty"`
+
+	// QueryPrefix and PassagePrefix are prepended to text before
+	// embedding, for models trained ASYMMETRICALLY.
+	//
+	// The e5 family is trained with "query: " on the question and
+	// "passage: " on the stored text, and applying neither costs
+	// measurable recall — one hit at both recall@1 and recall@3 on a
+	// twenty-query set.
+	//
+	// Empty by default, and CORRECTLY empty for the recommended
+	// model: all-MiniLM-L6-v2 is symmetric and prefixing it would make
+	// things worse. There is nothing in a checkpoint that declares
+	// which it is, so this is configuration rather than detection —
+	// guessing from the model name would be wrong the first time
+	// somebody renamed a directory.
+	QueryPrefix   string `koanf:"query_prefix,omitempty"`
+	PassagePrefix string `koanf:"passage_prefix,omitempty"`
 }
 
 // Builtin reports whether embeddings are computed in-process.

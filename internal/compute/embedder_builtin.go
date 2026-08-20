@@ -18,11 +18,20 @@ import (
 type BuiltinEmbedder struct {
 	enc   *embedder.Encoder
 	model string
+	// Prefixes for asymmetrically-trained models; empty for the
+	// symmetric default, where prefixing would make things worse.
+	queryPrefix, passagePrefix string
 }
 
 // NewBuiltinEmbedder wraps a loaded encoder.
 func NewBuiltinEmbedder(enc *embedder.Encoder, model string) *BuiltinEmbedder {
 	return &BuiltinEmbedder{enc: enc, model: model}
+}
+
+// WithPrefixes sets the asymmetric query/passage prefixes.
+func (b *BuiltinEmbedder) WithPrefixes(query, passage string) *BuiltinEmbedder {
+	b.queryPrefix, b.passagePrefix = query, passage
+	return b
 }
 
 // Embed returns the vector for text.
@@ -38,9 +47,24 @@ func (b *BuiltinEmbedder) Embed(ctx context.Context, text string) ([]float32, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	vec := b.enc.Encode(text)
+	return b.encode(b.passagePrefix+text, text)
+}
+
+// EmbedQuery embeds a question rather than a stored document.
+func (b *BuiltinEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return b.encode(b.queryPrefix+text, text)
+}
+
+// encode runs the model and reports the ORIGINAL text in any error,
+// not the prefixed form — an operator reading "query: what do I..."
+// would reasonably think the prefix was part of their data.
+func (b *BuiltinEmbedder) encode(prefixed, original string) ([]float32, error) {
+	vec := b.enc.Encode(prefixed)
 	if len(vec) == 0 {
-		return nil, fmt.Errorf("embedder: %q produced no tokens", truncateForError(text))
+		return nil, fmt.Errorf("embedder: %q produced no tokens", truncateForError(original))
 	}
 	return vec, nil
 }
@@ -56,7 +80,7 @@ func (b *BuiltinEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	}
 	out := make([][]float32, len(texts))
 	for i, t := range texts {
-		vec := b.enc.Encode(t)
+		vec := b.enc.Encode(b.passagePrefix + t)
 		if len(vec) == 0 {
 			return nil, fmt.Errorf("embedder: input %d (%q) produced no tokens", i, truncateForError(t))
 		}

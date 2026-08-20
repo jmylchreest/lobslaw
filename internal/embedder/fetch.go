@@ -43,6 +43,8 @@ var modelFiles = []struct {
 	{name: "tokenizer.json", required: true},
 	{name: "tokenizer_config.json"},
 	{name: "1_Pooling/config.json", alt: "1_Pooling.config.json"},
+	// Optional, and checked when present — see verifyChecksums.
+	{name: "SHA256SUMS"},
 }
 
 // maxModelBytes bounds any single downloaded file.
@@ -134,7 +136,62 @@ func Ensure(ctx context.Context, client *http.Client, dataDir, model, base strin
 			return "", fmt.Errorf("embedder: %s still missing after download: %w", f.name, err)
 		}
 	}
+	if err := verifyChecksums(dir); err != nil {
+		return "", err
+	}
 	return dir, nil
+}
+
+// verifyChecksums checks the model against a SHA256SUMS file, when the
+// mirror provides one.
+//
+// OPPORTUNISTIC, and that is a deliberate compromise rather than an
+// oversight. HuggingFace publishes no such file, so requiring one would
+// mean refusing every upstream repository — and a model that cannot be
+// fetched is not more secure, it is just unusable. This project's own
+// mirror ships SHA256SUMS, so the configuration the docs recommend is
+// verified, and anyone pointing at a mirror they control can add one.
+//
+// A file listed and WRONG is fatal, and the file is removed so the next
+// boot re-downloads rather than loading bytes already known to be
+// wrong. A file listed but absent is fine: SHA256SUMS covers what the
+// mirror chose to publish, and optional files legitimately vary.
+func verifyChecksums(dir string) error {
+	raw, err := os.ReadFile(filepath.Join(dir, "SHA256SUMS"))
+	if err != nil {
+		return nil // no manifest; nothing to check against
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		want, name := fields[0], strings.TrimPrefix(fields[1], "*")
+		// The manifest names a file; it must not name a PATH. A
+		// mirror is a host on the internet, and "../../etc/x" in a
+		// text file it controls would otherwise decide what gets read.
+		if name != filepath.Base(name) {
+			return fmt.Errorf("embedder: SHA256SUMS names a path (%q), not a filename", name)
+		}
+		path := filepath.Join(dir, name)
+		f, err := os.Open(path)
+		if err != nil {
+			continue // listed but not fetched
+		}
+		sum := sha256.New()
+		_, cerr := io.Copy(sum, f)
+		_ = f.Close()
+		if cerr != nil {
+			return fmt.Errorf("embedder: read %s for verification: %w", name, cerr)
+		}
+		if got := hex.EncodeToString(sum.Sum(nil)); got != want {
+			_ = os.Remove(path)
+			return fmt.Errorf("embedder: %s failed its SHA256SUMS check (got %s, want %s) — "+
+				"the file has been removed; the mirror served something other than what it published",
+				name, got[:16], want[:16])
+		}
+	}
+	return nil
 }
 
 func required(name string) bool {

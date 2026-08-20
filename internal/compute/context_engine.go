@@ -193,7 +193,10 @@ func (e *ContextEngine) recall(ctx context.Context, audience memory.Audience, us
 	if e.embedder == nil {
 		return e.lexicalRecall(audience, userMessage), "lexical (no embedder configured)"
 	}
-	vec, err := e.embedder.Embed(ctx, userMessage)
+	// EmbedQuery, not Embed: this is the user's question, and an
+	// asymmetric model wants the query prefix on it rather than the
+	// passage one.
+	vec, err := e.embedder.EmbedQuery(ctx, userMessage)
 	if err != nil {
 		// WARN rather than Debug: an embedding outage silently
 		// downgrades every turn's recall, and the operator needs to

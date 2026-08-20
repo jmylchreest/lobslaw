@@ -252,7 +252,7 @@ func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider, cro
 // no vector row yet. Returns fallback-substring on embedder
 // failure.
 func runSemanticSearch(ctx context.Context, store *memory.Store, embedder EmbeddingProvider, audience memory.Audience, query, tagFilter string, limit int) ([]byte, int, error) {
-	vec, err := embedder.Embed(ctx, query)
+	vec, err := embedder.EmbedQuery(ctx, query)
 	if err != nil {
 		payload, _, serr := runSubstringSearch(store, audience, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr

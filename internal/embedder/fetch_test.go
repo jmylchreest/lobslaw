@@ -2,6 +2,8 @@ package embedder
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -181,4 +183,81 @@ func TestAFlattenedPoolingFileIsAccepted(t *testing.T) {
 	if p := poolingConfig(got, PoolMean); p != PoolCLS {
 		t.Errorf("pooling = %q, want cls — the declaration was not honoured", p)
 	}
+}
+
+// A mirror that publishes SHA256SUMS gets checked against it.
+//
+// Opportunistic by design: HuggingFace publishes no such file, so
+// requiring one would refuse every upstream repository — and a model
+// that cannot be fetched is not more secure, just unusable. This
+// project's own mirror ships one, so the recommended configuration is
+// verified.
+func TestAGoodChecksumPasses(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"config.json":       `{"model_type":"bert","hidden_size":8}`,
+		"model.safetensors": "the-real-bytes",
+		"tokenizer.json":    `{}`,
+	}
+	files["SHA256SUMS"] = sha256Of(files["model.safetensors"]) + "  model.safetensors\n"
+	srv := fakeHub(t, files)
+	if _, err := Ensure(context.Background(), srv.Client(), t.TempDir(), "m", srv.URL); err != nil {
+		t.Fatalf("a correct checksum was rejected: %v", err)
+	}
+}
+
+// A file that does not match what the mirror published is fatal, and
+// the file is REMOVED so the next boot re-downloads rather than
+// loading bytes already known to be wrong.
+func TestATamperedFileIsRejectedAndDeleted(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"config.json":       `{"model_type":"bert","hidden_size":8}`,
+		"model.safetensors": "not-what-was-published",
+		"tokenizer.json":    `{}`,
+		"SHA256SUMS":        sha256Of("the-real-bytes") + "  model.safetensors\n",
+	}
+	srv := fakeHub(t, files)
+	dir := t.TempDir()
+
+	_, err := Ensure(context.Background(), srv.Client(), dir, "m", srv.URL)
+	if err == nil {
+		t.Fatal("a file that did not match SHA256SUMS was accepted")
+	}
+	if !strings.Contains(err.Error(), "SHA256SUMS") {
+		t.Errorf("the error does not say what failed: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(ModelPath(dir, "m"), "model.safetensors")); statErr == nil {
+		t.Error("the mismatched file was left on disk; the next boot would load it")
+	}
+}
+
+// A manifest is text a MIRROR controls. It may name a file; it must not
+// name a path, or "../../etc/x" would decide what gets read.
+func TestAChecksumManifestCannotNameAPath(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"config.json":       `{"model_type":"bert","hidden_size":8}`,
+		"model.safetensors": "x",
+		"tokenizer.json":    `{}`,
+		"SHA256SUMS":        sha256Of("x") + "  ../../escape\n",
+	}
+	srv := fakeHub(t, files)
+	if _, err := Ensure(context.Background(), srv.Client(), t.TempDir(), "m", srv.URL); err == nil {
+		t.Fatal("a manifest naming a path outside the model directory was accepted")
+	}
+}
+
+// No manifest is not an error: upstream repositories do not publish one.
+func TestNoChecksumManifestIsFine(t *testing.T) {
+	t.Parallel()
+	srv := fakeHub(t, minimalModel)
+	if _, err := Ensure(context.Background(), srv.Client(), t.TempDir(), "m", srv.URL); err != nil {
+		t.Errorf("a mirror with no SHA256SUMS was rejected: %v", err)
+	}
+}
+
+func sha256Of(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

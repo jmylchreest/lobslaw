@@ -180,3 +180,7 @@ func TestAWidthMismatchFallsBackRatherThanReturningNothing(t *testing.T) {
 		t.Errorf("a width mismatch dropped recall entirely:\n%q", got)
 	}
 }
+
+func (b brokenEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	return b.Embed(ctx, text)
+}

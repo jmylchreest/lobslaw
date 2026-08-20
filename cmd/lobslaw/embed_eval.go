@@ -81,6 +81,12 @@ func runEmbedEval(args []string) error {
 	store.bind(fs)
 	downloadURL := fs.String("download-url", "", "where to fetch a model that is not already present")
 	limit := fs.Int("limit", 200, "evaluate at most this many records")
+	// Default from config so this measures what the NODE does. An
+	// evaluation that skipped the prefixes would score an e5 model as
+	// the node never runs it, and the whole point is deciding whether
+	// to switch to it.
+	queryPrefix := fs.String("query-prefix", "", "override [compute.embeddings] query_prefix")
+	passagePrefix := fs.String("passage-prefix", "", "override [compute.embeddings] passage_prefix")
 
 	models, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {
@@ -110,6 +116,18 @@ func runEmbedEval(args []string) error {
 	if err != nil {
 		return err
 	}
+	qp, pp := *queryPrefix, *passagePrefix
+	if cfg, cerr := store.loadConfig(); cerr == nil && cfg != nil {
+		if qp == "" {
+			qp = cfg.Compute.Embeddings.QueryPrefix
+		}
+		if pp == "" {
+			pp = cfg.Compute.Embeddings.PassagePrefix
+		}
+	}
+	if qp != "" || pp != "" {
+		fmt.Printf("prefixes: query=%q passage=%q\n", qp, pp)
+	}
 	fmt.Printf("%d records from %s", len(pairs), path)
 	if skipped > 0 {
 		fmt.Printf(" (%d skipped: no distinct event/context, or unreadable)", skipped)
@@ -118,7 +136,7 @@ func runEmbedEval(args []string) error {
 		"model", "dims", "recall@1", "recall@3", "margin", "per doc")
 
 	for _, name := range models {
-		r, err := evalModel(name, *downloadURL, modelsDir, pairs)
+		r, err := evalModel(name, *downloadURL, modelsDir, pairs, qp, pp)
 		if err != nil {
 			fmt.Printf("%-34s  %v\n", name, err)
 			continue
@@ -173,7 +191,7 @@ type evalResult struct {
 	msPerDoc   float64
 }
 
-func evalModel(name, downloadURL, dataDir string, pairs []evalPair) (evalResult, error) {
+func evalModel(name, downloadURL, dataDir string, pairs []evalPair, queryPrefix, passagePrefix string) (evalResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -190,14 +208,14 @@ func evalModel(name, downloadURL, dataDir string, pairs []evalPair) (evalResult,
 	start := time.Now()
 	docs := make([][]float32, len(pairs))
 	for i, p := range pairs {
-		docs[i] = enc.Encode(p.doc)
+		docs[i] = enc.Encode(passagePrefix + p.doc)
 	}
 	msPerDoc := float64(time.Since(start).Milliseconds()) / float64(len(pairs))
 
 	r := evalResult{dims: enc.Dim(), msPerDoc: msPerDoc}
 	var marginSum float64
 	for i, p := range pairs {
-		q := enc.Encode(p.query)
+		q := enc.Encode(queryPrefix + p.query)
 		scores := make([]float64, len(docs))
 		for j := range docs {
 			scores[j] = cosineSim(q, docs[j])

@@ -25,6 +25,15 @@ type EmbeddingProvider interface {
 	// Providers without native batch fall back to sequential
 	// Embed calls, so callers can always batch without checking
 	// capability.
+	// EmbedQuery embeds a QUESTION, where Embed embeds a stored
+	// document.
+	//
+	// The distinction exists for asymmetrically-trained models: e5
+	// wants "query: " on one side and "passage: " on the other, and
+	// only the caller knows which side it is on. Symmetric models —
+	// including the recommended default — treat the two identically,
+	// so implementations may simply forward.
+	EmbedQuery(ctx context.Context, text string) ([]float32, error)
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 	Dimensions() int
 	// Model is the configured model string, stamped onto every record
@@ -73,13 +82,14 @@ type EmbeddingClientConfig struct {
 // same client supports OpenAI-style and MiniMax-style providers
 // with identical Embed() semantics.
 type EmbeddingClient struct {
-	endpoint   string
-	apiKey     string
-	model      string
-	dims       int
-	driver     EmbeddingDriver
-	httpClient *http.Client
-	log        *slog.Logger
+	endpoint                   string
+	apiKey                     string
+	model                      string
+	queryPrefix, passagePrefix string
+	dims                       int
+	driver                     EmbeddingDriver
+	httpClient                 *http.Client
+	log                        *slog.Logger
 }
 
 // NewEmbeddingClient constructs a client, normalising the endpoint
@@ -204,14 +214,41 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	return out, nil
 }
 
+// WithPrefixes sets the asymmetric query and passage prefixes, and
+// returns the client so it can be chained onto a constructor.
+func (c *EmbeddingClient) WithPrefixes(query, passage string) *EmbeddingClient {
+	c.queryPrefix, c.passagePrefix = query, passage
+	return c
+}
+
+// EmbedQuery embeds a question rather than a stored document. See the
+// interface for why the two are distinguished.
+func (c *EmbeddingClient) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	return c.embedPrefixed(ctx, c.queryPrefix, text)
+}
+
 // Embed returns the vector for text. Empty text returns an error
 // rather than a zero vector because downstream similarity math
 // falls apart on zero-norm inputs.
 func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float32, error) {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	return c.embedPrefixed(ctx, c.passagePrefix, text)
+}
+
+// embedPrefixed is the single implementation both entry points use.
+//
+// EmbedQuery used to call Embed, which meant the passage prefix was
+// applied on top of the query one — "passage: query: where do I live"
+// — and every query would have been embedded as neither. One place
+// that prepends, so the two cannot disagree.
+func (c *EmbeddingClient) embedPrefixed(ctx context.Context, prefix, text string) ([]float32, error) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		// Checked BEFORE the prefix: "passage: " alone is not empty,
+		// so prefixing first would send the prefix on its own to the
+		// provider and store a vector of nothing.
 		return nil, errors.New("Embed: input text is empty")
 	}
+	text = prefix + trimmed
 
 	start := time.Now()
 	vec, err := c.driver.Embed(ctx, text)

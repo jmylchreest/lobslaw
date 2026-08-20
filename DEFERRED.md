@@ -247,13 +247,15 @@ arm64, and any amd64 build without `GOEXPERIMENT=simd`, gets the portable path. 
 
 ---
 
-### e5 asymmetric prefixes are not applied
+### e5 asymmetric prefixes — implemented, benefit unproven
 
-e5 models are trained with `query: ` on the question and `passage: ` on the stored text. Neither is applied, because `EmbeddingProvider.Embed` takes one string and cannot tell which it has.
+`query_prefix` and `passage_prefix` are now configurable and applied on the right sides: `EmbeddingProvider` gained `EmbedQuery`, and the two query call sites (context engine, `memory_search`) use it while everything else embeds documents.
 
-Measured: one hit at recall@1 and one at recall@3 on 20 queries. Small but free — the callers all know which side they are on. It needs the interface to say so, which the remote embedder shares.
+**The measured benefit did not survive contact with a real corpus.** A synthetic twenty-query set showed one extra hit at both recall@1 and recall@3. Re-measured with `embed-eval` on 30 real records, `multilingual-e5-small` scores 68% / 87% with the prefixes and 68% / 87% without — and the margin is slightly *narrower* with them (+0.0145 against +0.0169).
 
-**Note:** this only affects e5 models. `all-MiniLM-L6-v2`, the default, is symmetric and wants no prefix.
+So it is available for anyone who wants it, correctly wired, and off by default. Do not expect it to help; the earlier claim that it was worth a hit at each rank was measured on a set small and curated enough to be noise.
+
+Empty by default is also *correct* for the recommended model — `all-MiniLM-L6-v2` is symmetric, and prefixing it makes retrieval worse.
 
 ---
 

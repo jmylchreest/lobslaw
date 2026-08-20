@@ -210,7 +210,8 @@ func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 	n.log.Debug("compute: embedding client wired",
 		"model", n.cfg.Compute.Embeddings.Model,
 		"dims", n.cfg.Compute.Embeddings.Dims)
-	return ec, nil
+	return ec.WithPrefixes(n.cfg.Compute.Embeddings.QueryPrefix,
+		n.cfg.Compute.Embeddings.PassagePrefix), nil
 }
 
 // wireMemoryTools registers memory_search / memory_write and friends,

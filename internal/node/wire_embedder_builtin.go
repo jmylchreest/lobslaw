@@ -65,5 +65,6 @@ func (n *Node) wireBuiltinEmbedder() (compute.EmbeddingProvider, error) {
 	// also what memory.CheckEmbeddingModel compares against the corpus
 	// already on disk: swapping models without re-embedding is refused
 	// at boot rather than silently scoring across two vector spaces.
-	return compute.NewBuiltinEmbedder(enc, cfg.Model), nil
+	return compute.NewBuiltinEmbedder(enc, cfg.Model).
+		WithPrefixes(cfg.QueryPrefix, cfg.PassagePrefix), nil
 }

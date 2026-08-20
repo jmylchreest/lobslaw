@@ -312,3 +312,7 @@ func (r *recordingForgetter) Forget(_ context.Context, req *lobslawv1.ForgetRequ
 }
 
 func (fixedEmbedder) Model() string { return "test-embedder-v1" }
+
+func (f fixedEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	return f.Embed(ctx, text)
+}
