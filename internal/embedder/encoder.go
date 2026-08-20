@@ -39,6 +39,13 @@ func (e *Encoder) Close() error { return e.model.Close() }
 // Dim is the embedding width.
 func (e *Encoder) Dim() int { return e.model.Dim() }
 
+// VocabSize is how many tokens the model knows.
+//
+// Worth exposing because it is the clearest signal of whether a
+// checkpoint is multilingual — ~30k is one language, 250k covers
+// 100+ — and that difference is most of the download.
+func (e *Encoder) VocabSize() int { return e.model.VocabSize() }
+
 // MaxSeq is the model's context limit in tokens.
 func (e *Encoder) MaxSeq() int { return e.model.MaxSeq() }
 

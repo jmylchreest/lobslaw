@@ -58,7 +58,7 @@ func (n *Node) wireBuiltinEmbedder() (compute.EmbeddingProvider, error) {
 	}
 
 	n.log.Info("compute: builtin embedding model ready",
-		"model", cfg.Model, "dims", enc.Dim(), "max_seq", enc.MaxSeq(),
+		"model", cfg.Model, "dims", enc.Dim(), "max_seq", enc.MaxSeq(), "vocab", enc.VocabSize(),
 		"kernel", embedder.Kernel())
 
 	// The model name is what gets stamped on every vector, so it is

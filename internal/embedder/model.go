@@ -276,6 +276,13 @@ func (m *Model) Fingerprint() string {
 	return fmt.Sprintf("d%d-l%d-v%d", m.cfg.Hidden, m.cfg.Layers, len(m.wordEmb)/m.cfg.Hidden)
 }
 
+// VocabSize is how many tokens the embedding table holds.
+//
+// The clearest signal of whether a checkpoint is multilingual: ~30k is
+// one language, 250k covers 100+. That difference IS the download —
+// 82% of a multilingual model is one row per token.
+func (m *Model) VocabSize() int { return len(m.wordEmb) / m.cfg.Hidden }
+
 // Dim is the embedding width.
 func (m *Model) Dim() int { return m.cfg.Hidden }
 

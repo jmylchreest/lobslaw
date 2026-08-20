@@ -41,6 +41,17 @@ const metaspace = "▁"
 // Immutable after Load and safe for concurrent use: every field is
 // read-only and the Viterbi allocates its own working state per call.
 type Tokenizer struct {
+	// wp is set for WordPiece checkpoints; everything below it is the
+	// Unigram path. Exactly one is live.
+	//
+	// Two tokenizers rather than one general one, because they share
+	// almost nothing: WordPiece is greedy longest-match over a
+	// lowercased, accent-stripped string; Unigram is a Viterbi over a
+	// lattice with a SentencePiece charsmap. Forcing them through a
+	// common abstraction would mean a lot of branches and no shared
+	// code underneath them.
+	wp *wordPiece
+
 	norm     *precompiled
 	replaces []replaceRule
 	// whitespaceSplit is whether the pre-tokenizer splits on
@@ -113,14 +124,12 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 	if err := json.Unmarshal(raw, &meta); err != nil {
 		return nil, fmt.Errorf("embedder: parse tokenizer.json: %w", err)
 	}
+	if meta.Model.Type == "WordPiece" {
+		return loadWordPiece(raw, meta)
+	}
 	if meta.Model.Type != "Unigram" {
-		// Named explicitly, because WordPiece is the common case and
-		// "unsupported" alone sends people looking for a bug. Most
-		// English BERT embedders — bge-small-en, all-MiniLM, e5-base-v2
-		// — are WordPiece and will land here. The forward pass would
-		// run them; the tokenizer is what does not.
-		return nil, fmt.Errorf("embedder: tokenizer model %q unsupported — this reads SentencePiece Unigram "+
-			"(XLM-RoBERTa family: multilingual-e5-*, bge-m3), not WordPiece", meta.Model.Type)
+		return nil, fmt.Errorf("embedder: tokenizer model %q unsupported "+
+			"(SentencePiece Unigram or WordPiece)", meta.Model.Type)
 	}
 	charsmap, replaces, err := flattenNormalizer(meta.Normalizer)
 	if err != nil {
@@ -203,12 +212,89 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 	return t, nil
 }
 
+// loadWordPiece builds the BERT-family tokenizer.
+func loadWordPiece(raw []byte, meta tokenizerJSON) (*Tokenizer, error) {
+	var doc struct {
+		Normalizer struct {
+			CleanText          *bool `json:"clean_text"`
+			HandleChineseChars *bool `json:"handle_chinese_chars"`
+			StripAccents       *bool `json:"strip_accents"`
+			Lowercase          *bool `json:"lowercase"`
+		} `json:"normalizer"`
+		Model struct {
+			Vocab        map[string]int32 `json:"vocab"`
+			UnkToken     string           `json:"unk_token"`
+			Prefix       string           `json:"continuing_subword_prefix"`
+			MaxWordChars *int             `json:"max_input_chars_per_word"`
+		} `json:"model"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("embedder: parse WordPiece tokenizer: %w", err)
+	}
+	if len(doc.Model.Vocab) == 0 {
+		return nil, fmt.Errorf("embedder: WordPiece vocabulary is empty")
+	}
+
+	boolOr := func(p *bool, def bool) bool {
+		if p == nil {
+			return def
+		}
+		return *p
+	}
+	lower := boolOr(doc.Normalizer.Lowercase, true)
+	wp := &wordPiece{
+		vocab:      doc.Model.Vocab,
+		prefix:     doc.Model.Prefix,
+		maxWordLen: 100,
+		norm: bertNormalizer{
+			cleanText:          boolOr(doc.Normalizer.CleanText, true),
+			handleChineseChars: boolOr(doc.Normalizer.HandleChineseChars, true),
+			lowercase:          lower,
+			// strip_accents is usually null, and null does NOT mean
+			// false: the reference defaults it to whatever lowercase
+			// is. Reading it as false leaves "café" unmatched against
+			// a vocabulary that only has "cafe".
+			stripAccents: boolOr(doc.Normalizer.StripAccents, lower),
+		},
+	}
+	if doc.Model.MaxWordChars != nil {
+		wp.maxWordLen = *doc.Model.MaxWordChars
+	}
+	if wp.prefix == "" {
+		wp.prefix = "##"
+	}
+	unk := doc.Model.UnkToken
+	if unk == "" {
+		unk = "[UNK]"
+	}
+	id, ok := wp.vocab[unk]
+	if !ok {
+		return nil, fmt.Errorf("embedder: WordPiece vocabulary has no unknown token %q", unk)
+	}
+	wp.unkID = id
+	wp.clsID, wp.sepID = -1, -1
+	if v, ok := wp.vocab["[CLS]"]; ok {
+		wp.clsID = v
+	}
+	if v, ok := wp.vocab["[SEP]"]; ok {
+		wp.sepID = v
+	}
+	return &Tokenizer{wp: wp, unkID: wp.unkID, bosID: wp.clsID, eosID: wp.sepID}, nil
+}
+
 // BOS and EOS are the boundary ids, for callers that chunk long input.
 func (t *Tokenizer) BOS() int32 { return t.bosID }
 func (t *Tokenizer) EOS() int32 { return t.eosID }
 
 // Encode returns the token ids for text, WITHOUT special tokens.
 func (t *Tokenizer) Encode(text string) []int32 {
+	if t.wp != nil {
+		var out []int32
+		for _, word := range bertPreTokenize(t.wp.norm.normalize(text)) {
+			out = append(out, t.wp.encodeWord(word)...)
+		}
+		return out
+	}
 	normalized := t.norm.normalize(text)
 	for _, r := range t.replaces {
 		normalized = r.re.ReplaceAllString(normalized, r.content)
