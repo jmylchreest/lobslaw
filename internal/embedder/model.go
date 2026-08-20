@@ -29,12 +29,21 @@ type config struct {
 	HiddenAct     string  `json:"hidden_act"`
 }
 
+// layer holds one transformer block. The six projection matrices are
+// PACKED at load (see pack.go): they are static for the life of the
+// process, so the layout the GEMM kernel wants is paid for once here
+// rather than fought on every encode.
 type layer struct {
-	Wq, Bq, Wk, Bk, Wv, Bv []float32
-	Wo, Bo                 []float32
-	AttnLNW, AttnLNB       []float32
-	Wi, Bi, Wd, Bd         []float32
-	OutLNW, OutLNB         []float32
+	Wq, Wk, Wv       *weight
+	Bq, Bk, Bv       []float32
+	Wo               *weight
+	Bo               []float32
+	AttnLNW, AttnLNB []float32
+	Wi               *weight
+	Bi               []float32
+	Wd               *weight
+	Bd               []float32
+	OutLNW, OutLNB   []float32
 }
 
 // Model is a loaded BERT / RoBERTa / XLM-RoBERTa encoder.
@@ -195,14 +204,15 @@ func Load(dir string) (*Model, error) {
 	for i := range m.layers {
 		p := fmt.Sprintf("encoder.layer.%d.", i)
 		l := &m.layers[i]
-		l.Wq, l.Bq = get(p+"attention.self.query.weight"), get(p+"attention.self.query.bias")
-		l.Wk, l.Bk = get(p+"attention.self.key.weight"), get(p+"attention.self.key.bias")
-		l.Wv, l.Bv = get(p+"attention.self.value.weight"), get(p+"attention.self.value.bias")
-		l.Wo, l.Bo = get(p+"attention.output.dense.weight"), get(p+"attention.output.dense.bias")
+		D, I := cfg.Hidden, cfg.Intermediate
+		l.Wq, l.Bq = newWeight(get(p+"attention.self.query.weight"), D, D), get(p+"attention.self.query.bias")
+		l.Wk, l.Bk = newWeight(get(p+"attention.self.key.weight"), D, D), get(p+"attention.self.key.bias")
+		l.Wv, l.Bv = newWeight(get(p+"attention.self.value.weight"), D, D), get(p+"attention.self.value.bias")
+		l.Wo, l.Bo = newWeight(get(p+"attention.output.dense.weight"), D, D), get(p+"attention.output.dense.bias")
 		l.AttnLNW = get(p + "attention.output.LayerNorm.weight")
 		l.AttnLNB = get(p + "attention.output.LayerNorm.bias")
-		l.Wi, l.Bi = get(p+"intermediate.dense.weight"), get(p+"intermediate.dense.bias")
-		l.Wd, l.Bd = get(p+"output.dense.weight"), get(p+"output.dense.bias")
+		l.Wi, l.Bi = newWeight(get(p+"intermediate.dense.weight"), D, I), get(p+"intermediate.dense.bias")
+		l.Wd, l.Bd = newWeight(get(p+"output.dense.weight"), I, D), get(p+"output.dense.bias")
 		l.OutLNW = get(p + "output.LayerNorm.weight")
 		l.OutLNB = get(p + "output.LayerNorm.bias")
 		if err != nil {

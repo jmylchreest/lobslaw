@@ -18,7 +18,14 @@ import "simd/archsimd"
 // AVX2, and executing these instructions there would fault rather
 // than degrade.
 
-const kernelName = "simd-avx2"
+const (
+	kernelName = "simd-avx2"
+
+	// Four rows by two 8-wide vectors: eight accumulator registers,
+	// leaving AVX2 headroom for the b loads and the a broadcast.
+	mr = 4
+	nr = 16
+)
 
 // useSIMD is resolved once at start-up rather than per call.
 var useSIMD = archsimd.X86.AVX2()

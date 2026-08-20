@@ -96,26 +96,26 @@ func (m *Model) hiddenStates(ids []int32) ([]float32, int) {
 	for li := range m.layers {
 		l := &m.layers[li]
 
-		matmulBT(h, l.Wq, q, L, D, D)
-		matmulBT(h, l.Wk, k, L, D, D)
-		matmulBT(h, l.Wv, v, L, D, D)
+		l.Wq.apply(h, q, L)
+		l.Wk.apply(h, k, L)
+		l.Wv.apply(h, v, L)
 		addBias(q, l.Bq, L, D)
 		addBias(k, l.Bk, L, D)
 		addBias(v, l.Bv, L, D)
 
 		m.attention(q, k, v, ctx, qh, kh, vht, ctxHead, scores, c.Heads, headDim, D, L)
 
-		matmulBT(ctx, l.Wo, out, L, D, D)
+		l.Wo.apply(ctx, out, L)
 		addBias(out, l.Bo, L, D)
 		for i := range h {
 			h[i] += out[i]
 		}
 		layerNorm(h, l.AttnLNW, l.AttnLNB, L, D, c.LNEps)
 
-		matmulBT(h, l.Wi, inter, L, D, c.Intermediate)
+		l.Wi.apply(h, inter, L)
 		addBias(inter, l.Bi, L, c.Intermediate)
 		gelu(inter)
-		matmulBT(inter, l.Wd, out, L, c.Intermediate, D)
+		l.Wd.apply(inter, out, L)
 		addBias(out, l.Bd, L, D)
 		for i := range h {
 			h[i] += out[i]
