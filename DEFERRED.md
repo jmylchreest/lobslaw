@@ -253,6 +253,16 @@ Raising the parallel threshold to reduce goroutine churn was measured and made t
 
 ---
 
+### Vendoring models to GitHub releases
+
+CI fetches `multilingual-e5-small` (466 MB, MIT) from HuggingFace, cached on a fixed key so a normal run downloads nothing. That is a third party in the CI path.
+
+All the candidates are redistributable — `multilingual-e5-small`, `multilingual-e5-base` and `bge-m3` are MIT — and a GitHub release asset caps at 2 GB per file, so any of them could be mirrored. Worth doing if HuggingFace proves flaky or rate-limits the runners; not worth doing pre-emptively, since the cache means it is fetched rarely.
+
+**Trigger to revisit:** the first CI failure caused by the download rather than the code.
+
+---
+
 ### bge-m3 is untested
 
 The architecture is identical (`XLMRobertaModel`, absolute positions), so it should load unchanged, but nothing has run it. At 24 layers x 1024 hidden it is ~3.5x the arithmetic of e5-base, which makes every performance item above proportionally worse. It also needs its own golden fixture set — the committed one is e5-base only.

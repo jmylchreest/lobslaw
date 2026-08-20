@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -41,22 +42,61 @@ const metaspace = "▁"
 // read-only and the Viterbi allocates its own working state per call.
 type Tokenizer struct {
 	norm     *precompiled
-	piece2id map[string]int32
-	scores   []float64
-	maxBytes int
-	minScore float64
-	unkID    int32
-	bosID    int32
-	eosID    int32
+	replaces []replaceRule
+	// whitespaceSplit is whether the pre-tokenizer splits on
+	// whitespace BEFORE applying Metaspace.
+	//
+	// The two checkpoints in the fixture set disagree, which is why
+	// this is read from the file rather than assumed:
+	//
+	//	e5-base   Sequence[WhitespaceSplit, Metaspace]
+	//	e5-small  Metaspace
+	//
+	// It is not cosmetic. With the split, each word is a separate
+	// Viterbi over "▁word". Without it, the whole normalised string
+	// becomes one "▁hello▁world" and the lattice runs across the lot,
+	// so a piece may span what used to be a word boundary. Assuming
+	// either one produces valid-looking ids for the other model.
+	whitespaceSplit bool
+	addPrefixSpace  bool
+	piece2id        map[string]int32
+	scores          []float64
+	maxBytes        int
+	minScore        float64
+	unkID           int32
+	bosID           int32
+	eosID           int32
 }
 
 // tokenizerJSON is the subset of tokenizer.json this needs.
+// replaceRule is a normalizer Replace step: a regex and what it
+// becomes. e5-small collapses runs of spaces this way.
+type replaceRule struct {
+	re      *regexp.Regexp
+	content string
+}
+
+type normalizerJSON struct {
+	Type                string           `json:"type"`
+	PrecompiledCharsmap string           `json:"precompiled_charsmap"`
+	Normalizers         []normalizerJSON `json:"normalizers"`
+	Pattern             struct {
+		Regex  string `json:"Regex"`
+		String string `json:"String"`
+	} `json:"pattern"`
+	Content string `json:"content"`
+}
+
+type preTokenizerJSON struct {
+	Type           string             `json:"type"`
+	PreTokenizers  []preTokenizerJSON `json:"pretokenizers"`
+	AddPrefixSpace *bool              `json:"add_prefix_space"`
+}
+
 type tokenizerJSON struct {
-	Normalizer struct {
-		Type                string `json:"type"`
-		PrecompiledCharsmap string `json:"precompiled_charsmap"`
-	} `json:"normalizer"`
-	Model struct {
+	Normalizer   normalizerJSON   `json:"normalizer"`
+	PreTokenizer preTokenizerJSON `json:"pre_tokenizer"`
+	Model        struct {
 		Type  string          `json:"type"`
 		UnkID *int            `json:"unk_id"`
 		Vocab [][]json.Number `json:"-"`
@@ -76,8 +116,13 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 	if meta.Model.Type != "Unigram" {
 		return nil, fmt.Errorf("embedder: tokenizer model %q unsupported (Unigram only)", meta.Model.Type)
 	}
-	if meta.Normalizer.Type != "Precompiled" {
-		return nil, fmt.Errorf("embedder: normalizer %q unsupported (Precompiled only)", meta.Normalizer.Type)
+	charsmap, replaces, err := flattenNormalizer(meta.Normalizer)
+	if err != nil {
+		return nil, fmt.Errorf("embedder: %w", err)
+	}
+	whitespaceSplit, addPrefixSpace, err := readPreTokenizer(meta.PreTokenizer)
+	if err != nil {
+		return nil, fmt.Errorf("embedder: %w", err)
 	}
 
 	// The vocabulary is [["piece", logprob], ...] with mixed types, so
@@ -95,19 +140,22 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 		return nil, fmt.Errorf("embedder: tokenizer.json has an empty vocabulary")
 	}
 
-	norm, err := newPrecompiled(meta.Normalizer.PrecompiledCharsmap)
+	norm, err := newPrecompiled(charsmap)
 	if err != nil {
 		return nil, fmt.Errorf("embedder: %w", err)
 	}
 
 	t := &Tokenizer{
-		norm:     norm,
-		piece2id: make(map[string]int32, len(entries)),
-		scores:   make([]float64, len(entries)),
-		minScore: math.Inf(1),
-		unkID:    3,
-		bosID:    -1,
-		eosID:    -1,
+		norm:            norm,
+		replaces:        replaces,
+		whitespaceSplit: whitespaceSplit,
+		addPrefixSpace:  addPrefixSpace,
+		piece2id:        make(map[string]int32, len(entries)),
+		scores:          make([]float64, len(entries)),
+		minScore:        math.Inf(1),
+		unkID:           3,
+		bosID:           -1,
+		eosID:           -1,
 	}
 	if meta.Model.UnkID != nil {
 		t.unkID = int32(*meta.Model.UnkID)
@@ -156,15 +204,109 @@ func (t *Tokenizer) EOS() int32 { return t.eosID }
 // Encode returns the token ids for text, WITHOUT special tokens.
 func (t *Tokenizer) Encode(text string) []int32 {
 	normalized := t.norm.normalize(text)
-	var out []int32
-	// WhitespaceSplit then Metaspace: each whitespace-delimited word is
-	// tokenised independently with a leading U+2581. Running Viterbi
-	// over the whole string at once would let a piece span a word
-	// boundary, which the vocabulary was not built for.
-	for _, word := range strings.Fields(normalized) {
-		out = append(out, t.viterbi(metaspace+word)...)
+	for _, r := range t.replaces {
+		normalized = r.re.ReplaceAllString(normalized, r.content)
 	}
-	return out
+
+	if t.whitespaceSplit {
+		// Each whitespace-delimited word tokenised independently with a
+		// leading U+2581, so no piece can span a word boundary.
+		var out []int32
+		for _, word := range strings.Fields(normalized) {
+			out = append(out, t.viterbi(metaspace+word)...)
+		}
+		return out
+	}
+
+	// Bare Metaspace: spaces BECOME the marker and the whole string is
+	// one lattice.
+	//
+	// NOT trimmed. An earlier version trimmed first, reasoning that a
+	// trailing space would produce a lone "▁" piece — and the
+	// reference emits exactly that piece. "  leading and trailing  "
+	// ends in id 6, the bare marker. Trimming dropped it and made this
+	// the only failing case out of 119.
+	if normalized == "" {
+		return nil
+	}
+	replaced := strings.ReplaceAll(normalized, " ", metaspace)
+	if t.addPrefixSpace && !strings.HasPrefix(replaced, metaspace) {
+		replaced = metaspace + replaced
+	}
+	return t.viterbi(replaced)
+}
+
+// flattenNormalizer accepts a bare Precompiled or a Sequence containing
+// one, returning the charsmap and any Replace steps that follow it.
+func flattenNormalizer(n normalizerJSON) (string, []replaceRule, error) {
+	switch n.Type {
+	case "Precompiled":
+		return n.PrecompiledCharsmap, nil, nil
+	case "Sequence":
+		var charsmap string
+		var rules []replaceRule
+		for _, sub := range n.Normalizers {
+			switch sub.Type {
+			case "Precompiled":
+				charsmap = sub.PrecompiledCharsmap
+			case "Replace":
+				pattern := sub.Pattern.Regex
+				if pattern == "" {
+					// A literal String pattern, quoted so its
+					// punctuation is not read as a regex.
+					pattern = regexp.QuoteMeta(sub.Pattern.String)
+				}
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					return "", nil, fmt.Errorf("normalizer Replace pattern %q: %w", pattern, err)
+				}
+				rules = append(rules, replaceRule{re: re, content: sub.Content})
+			default:
+				// Refused rather than skipped. A normalizer step this
+				// package silently ignored would produce ids that look
+				// right and are not, which is the one failure mode a
+				// tokenizer must never have.
+				return "", nil, fmt.Errorf("normalizer step %q unsupported", sub.Type)
+			}
+		}
+		if charsmap == "" {
+			return "", nil, fmt.Errorf("normalizer Sequence contains no Precompiled step")
+		}
+		return charsmap, rules, nil
+	default:
+		return "", nil, fmt.Errorf("normalizer %q unsupported (Precompiled, or a Sequence containing one)", n.Type)
+	}
+}
+
+// readPreTokenizer reports whether whitespace is split before Metaspace,
+// and whether Metaspace adds its leading marker.
+func readPreTokenizer(p preTokenizerJSON) (whitespaceSplit, addPrefixSpace bool, err error) {
+	addPrefixSpace = true
+	apply := func(sub preTokenizerJSON) error {
+		switch sub.Type {
+		case "WhitespaceSplit":
+			whitespaceSplit = true
+		case "Metaspace":
+			if sub.AddPrefixSpace != nil {
+				addPrefixSpace = *sub.AddPrefixSpace
+			}
+		default:
+			return fmt.Errorf("pre-tokenizer step %q unsupported", sub.Type)
+		}
+		return nil
+	}
+	if p.Type == "Sequence" {
+		for _, sub := range p.PreTokenizers {
+			if err := apply(sub); err != nil {
+				return false, false, err
+			}
+		}
+		return whitespaceSplit, addPrefixSpace, nil
+	}
+	if err := apply(p); err != nil {
+		return false, false, err
+	}
+	return whitespaceSplit, addPrefixSpace, nil
 }
 
 // EncodeWithSpecials returns ids wrapped as the model expects and

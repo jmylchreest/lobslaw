@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -36,9 +37,21 @@ type goldenFile struct {
 	Fixtures  []goldenFixture `json:"fixtures"`
 }
 
+// fixtureDir is the fixture set for whichever checkpoint the tests
+// were pointed at.
+//
+// Keyed on the model directory's name, because fixtures are
+// checkpoint-specific: the vectors are that model's and nobody else's.
+// Running the small model's gate against the base model would fail on
+// every case and look like a broken forward pass.
+func fixtureDir(t *testing.T) string {
+	t.Helper()
+	return filepath.Join("testdata", "golden", filepath.Base(modelDir(t)))
+}
+
 func loadGolden(t *testing.T) goldenFile {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/golden/golden.json")
+	raw, err := os.ReadFile(filepath.Join(fixtureDir(t), "golden.json"))
 	if err != nil {
 		t.Fatalf("read golden fixtures: %v", err)
 	}

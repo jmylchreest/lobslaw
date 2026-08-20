@@ -127,11 +127,17 @@ func main() {
 		})
 	}
 
-	if err := os.MkdirAll(*out, 0o755); err != nil {
+	// Per MODEL. Fixtures are checkpoint-specific — the vectors are
+	// this model's and nobody else's — so one shared file meant only
+	// one model could ever have a committed gate. CI runs the small
+	// multilingual checkpoint; a larger one can be verified locally
+	// against its own set.
+	outDir := filepath.Join(*out, filepath.Base(*model))
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	path := filepath.Join(*out, "golden.json")
+	path := filepath.Join(outDir, "golden.json")
 	f, err := os.Create(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -146,7 +152,7 @@ func main() {
 	}
 	fmt.Printf("wrote %s: %d fixtures, hidden_dim=%d\n", path, len(g.Fixtures), g.HiddenDim)
 
-	if err := genTokens(tok, *out); err != nil {
+	if err := genTokens(tok, outDir); err != nil {
 		fmt.Fprintf(os.Stderr, "token fixtures: %v\n", err)
 		os.Exit(1)
 	}

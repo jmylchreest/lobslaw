@@ -103,7 +103,7 @@ func TestNFCAndNFDTokeniseIdentically(t *testing.T) {
 // broken forward pass and thin for a tokenizer: a Viterbi wrong only on
 // digit runs or mixed-script words would pass them comfortably.
 func TestTokenizerMatchesTheReferenceAcrossAWideCorpus(t *testing.T) {
-	raw, err := os.ReadFile("testdata/golden/tokens.json")
+	raw, err := os.ReadFile(filepath.Join(fixtureDir(t), "tokens.json"))
 	if err != nil {
 		t.Fatalf("read token fixtures: %v", err)
 	}
