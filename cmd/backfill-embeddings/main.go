@@ -15,6 +15,11 @@
 // WARNING: runs OUTSIDE the live cluster — writes state.db directly.
 // Stop the node first; bbolt file-locks prevent concurrent writers.
 //
+// PREFER `lobslaw memory reembed`, which does this through raft on a
+// RUNNING node and is durable. This tool remains for a cluster that
+// will not start at all — the one case where an offline path is the
+// only path.
+//
 // DELETIONS DO NOT SURVIVE A NODE RESTART. Writing straight to the
 // store bypasses raft, and the node rebuilds state from its log on
 // boot — so a PUT still in the log re-applies and resurrects any key

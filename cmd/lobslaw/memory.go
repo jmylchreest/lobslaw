@@ -34,6 +34,7 @@ subcommands:
   share <id>...    make owned records readable cluster-wide (offline)
   unshare <id>...  return shared records to their owner only (offline)
   consolidations   what Dream merged, superseded or left alone (offline)
+  reembed          rewrite every vector with the current model (live)
 
 forget, share and unshare are DRY RUN unless --apply is given.
 
@@ -54,6 +55,16 @@ var memoryForms = map[string]struct{ live, offline func([]string) error }{
 	"show":   {live: memoryShowLive, offline: memoryShow},
 	"list":   {live: memoryListLive, offline: memoryList},
 	"forget": {live: memoryForgetLive, offline: memoryForget},
+}
+
+// memoryLiveOnly are the subcommands that REQUIRE a running node.
+//
+// The inverse of memoryOfflineOnly, and reembed is the first: its whole
+// purpose is proposing mutations through raft, which only the node can
+// do. An offline form would be backfill-embeddings, whose deletions do
+// not survive a restart — precisely the bug this exists to avoid.
+var memoryLiveOnly = map[string]func([]string) error{
+	"reembed": memoryReembedLive,
 }
 
 // memoryOfflineOnly are the subcommands with no live form yet.
@@ -78,6 +89,17 @@ func memoryRoute(sub string, offline bool) (fn func([]string) error, liveMissing
 	}
 	if fn, ok := memoryOfflineOnly[sub]; ok {
 		return fn, !offline
+	}
+	if fn, ok := memoryLiveOnly[sub]; ok {
+		if offline {
+			// Refused rather than silently ignoring --offline: an
+			// operator who asked for offline and got a live call would
+			// be surprised by the node needing to be up.
+			fmt.Fprintf(os.Stderr,
+				"lobslaw: memory %s has no offline form — it writes through raft, which needs a running node\n", sub)
+			os.Exit(2)
+		}
+		return fn, false
 	}
 	return nil, false
 }

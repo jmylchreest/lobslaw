@@ -303,6 +303,18 @@ service MemoryService {
   // Dream-time consolidation merge flow. Pure math (pairwise cosine
   // + union-find); no LLM. See docs/MEMORY.md for the composition
   // pattern with the Adjudicator LLM interface.
+  // Reembed rewrites every episodic record's vector using the model
+  // this node currently has loaded.
+  //
+  // ON THE NODE, THROUGH RAFT, deliberately. The offline
+  // backfill-embeddings tool writes state.db directly, and the node
+  // rebuilds state from its log on boot — so a PUT still in the log
+  // re-applies and resurrects anything that tool deleted. Its writes
+  // survived and its deletions did not, which meant a model change
+  // could never fully land. Proposing the same mutations through raft
+  // makes them durable, and costs nothing extra: the node already has
+  // the embedder loaded and the log open.
+  rpc Reembed(ReembedRequest) returns (ReembedResponse);
   rpc FindClusters(FindClustersRequest) returns (FindClustersResponse);
   // ListRecords browses the record buckets with the same filters
   // `lobslaw memory list` has always had. Read-only.
@@ -543,6 +555,31 @@ message ForgetResponse {
 // Adjudicator (LLM layer) takes the clusters and decides what to
 // do with each. Scope and retention filters keep ephemeral session
 // records out of the long-term merge path.
+message ReembedRequest {
+  // limit caps how many records are processed, for a trial run on a
+  // large corpus. Zero means all of them.
+  int32 limit = 1;
+}
+
+message ReembedResponse {
+  // reembedded is how many episodic records now have a current vector.
+  int32 reembedded = 1;
+  // replaced is how many superseded vectors were deleted.
+  int32 replaced = 2;
+  // orphans is how many vectors carrying a DIFFERENT model's stamp
+  // were removed. Those belong to no episodic record — a consolidation
+  // whose sources were pruned, or a row from an interrupted run — so
+  // nothing else would ever revisit them, and one is enough to make
+  // the boot guard refuse.
+  int32 orphans = 3;
+  // unreadable is how many records could not be decrypted and were
+  // skipped. Non-zero means the store holds more than one key
+  // generation; those records will never be recalled.
+  int32 unreadable = 4;
+  // model is the identity stamped on every vector written.
+  string model = 5;
+}
+
 message FindClustersRequest {
   float threshold = 1; // minimum pairwise cosine, e.g. 0.88
   int32 min_cluster_size = 2; // default 2 (skip singletons)

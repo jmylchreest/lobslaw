@@ -151,6 +151,14 @@ type Config struct {
 	Creds     *mtls.NodeCreds
 	MemoryKey crypto.Key // 32-byte key for state.db value encryption
 
+	// AllowEmbeddingModelChange starts the node even though its corpus
+	// was embedded by a different model. Set only by
+	// --allow-embedding-model-change, for one boot, so
+	// `lobslaw memory reembed` can be run — that repair needs a
+	// RUNNING node, and refusing unconditionally made the supported
+	// migration impossible.
+	AllowEmbeddingModelChange bool
+
 	// MTLS carries the certificate PATHS, which Creds does not expose.
 	// Enrolment needs them: it reads the cluster CA to hand back to a
 	// laptop, and it creates the operator CA beside it.

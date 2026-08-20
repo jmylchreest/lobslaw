@@ -36,6 +36,7 @@ type Service struct {
 	logger        *slog.Logger
 	dreamRunner   *DreamRunner
 	sessionPruner *SessionPruner
+	embedder      ReembedEmbedder
 }
 
 // NewService wires a MemoryService against an existing Raft stack.

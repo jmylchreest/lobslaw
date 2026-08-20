@@ -172,8 +172,14 @@ dims        = 1536
 Vectors from two different models are not comparable, and at the same width nothing detects it: cosine still returns a number, the number still sorts, and every search is confidently wrong. So each vector records which model wrote it, and a node whose configured model disagrees with its corpus **refuses to start**, naming both and the way out:
 
 ```
-go run ./cmd/backfill-embeddings --force
+lobslaw run --allow-embedding-model-change     # once, to get the node up
+lobslaw memory reembed                          # repair
+lobslaw run                                     # normally from here
 ```
+
+The escape hatch is needed because the guard refuses at **boot** and the repair needs a **running** node. It is a command-line flag rather than a config key so nobody can leave it on by accident, and it logs a warning for as long as it applies: recall is genuinely wrong until the re-embed finishes, since queries are scored against another model's vectors.
+
+`reembed` runs on the **live** node and proposes every write through raft, so the change survives a restart. It leaves dream's consolidations alone — those embed several records at once and dream rewrites them on its own schedule. The offline `backfill-embeddings` tool writes `state.db` directly and the node rebuilds from its log on boot — its writes survive, its deletions do not, so a model change never fully lands. Use it only for a cluster that will not start at all.
 
 ### Querying
 

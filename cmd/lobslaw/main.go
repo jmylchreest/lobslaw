@@ -54,12 +54,27 @@ type flags struct {
 	// the rest — but must not overrule someone who passed
 	// --log-level=debug to debug this very boot.
 	logSetOnWire map[string]bool
-	all          bool
-	memory       bool
-	policy       bool
-	compute      bool
-	gateway      bool
-	storage      bool
+	// allowEmbeddingModelChange lets a node start with a corpus its
+	// configured model did not write.
+	//
+	// The guard that refuses this is deliberate — searching across two
+	// vector spaces returns confident nonsense. But the repair,
+	// `lobslaw memory reembed`, needs a RUNNING node, so refusing
+	// unconditionally made the supported migration path impossible:
+	// refused at boot, and the only fix required the thing that would
+	// not boot.
+	//
+	// One boot, typed explicitly, loudly logged. Recall is wrong until
+	// the re-embed finishes, which is the cost of the escape hatch and
+	// the reason it is not a config key: nobody should be able to
+	// leave it on by accident.
+	allowEmbeddingModelChange bool
+	all                       bool
+	memory                    bool
+	policy                    bool
+	compute                   bool
+	gateway                   bool
+	storage                   bool
 }
 
 func parseFlags(args []string, out *flags) error {
@@ -79,6 +94,8 @@ func parseFlags(args []string, out *flags) error {
 			out.policyDirs = append(out.policyDirs, v)
 			return nil
 		})
+	fs.BoolVar(&out.allowEmbeddingModelChange, "allow-embedding-model-change", false,
+		"start even though the corpus was embedded by a different model; run `lobslaw memory reembed` immediately after")
 	fs.StringVar(&out.logLevel, "log-level", envOr("LOBSLAW_LOG_LEVEL", "info"), "log level: debug|info|warn|error (env: LOBSLAW_LOG_LEVEL)")
 	fs.StringVar(&out.logFormat, "log-format", envOr("LOBSLAW_LOG_FORMAT", "auto"), "log format: auto|json|text (env: LOBSLAW_LOG_FORMAT)")
 	fs.BoolVar(&out.all, "all", false, "enable all node functions")
@@ -309,6 +326,10 @@ func main() {
 		logger.Error("node config", "error", err)
 		os.Exit(1)
 	}
+	// Set here rather than inside buildNodeConfig, which takes the
+	// parsed config file and not the command line: this is a one-boot
+	// operator decision, never a persisted setting.
+	nodeCfg.AllowEmbeddingModelChange = f.allowEmbeddingModelChange
 
 	n, err := node.New(nodeCfg)
 	if err != nil {

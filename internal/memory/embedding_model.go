@@ -72,8 +72,8 @@ func (e *ErrEmbeddingModelChanged) Error() string {
 	return fmt.Sprintf(
 		"embedding model changed: this store's vectors were written by %q but [compute.embeddings] model is %q. "+
 			"Vectors from different models are not comparable, so every search would return confidently wrong "+
-			"results. Either restore model = %q, or stop the node and re-embed with "+
-			"`go run ./cmd/backfill-embeddings --force`",
+			"results. Either restore model = %q, or start once with "+
+			"--allow-embedding-model-change and run `lobslaw memory reembed`",
 		e.Stored, e.Configured, e.Stored)
 }
 

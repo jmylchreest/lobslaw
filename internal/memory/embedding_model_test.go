@@ -51,7 +51,13 @@ func TestADifferentModelAtTheSameWidthIsRefused(t *testing.T) {
 	}
 	// The message has to name both models and the way out, or the
 	// operator's only option is to guess which one was right.
-	for _, want := range []string{"qwen3-embedding-8b", "text-embedding-3-small", "--force"} {
+	// The message must name both models AND the route out. The route
+	// changed once — from an offline tool whose deletions did not
+	// survive a restart, to the live command that proposes through
+	// raft — and a stale instruction here would send an operator down
+	// the path that does not work.
+	for _, want := range []string{"qwen3-embedding-8b", "text-embedding-3-small",
+		"--allow-embedding-model-change", "memory reembed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %q: %v", want, err)
 		}

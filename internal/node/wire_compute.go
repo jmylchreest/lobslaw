@@ -88,6 +88,13 @@ func (n *Node) wireCompute() error {
 	// ready" and then wrote no vectors at all, which is a failure with
 	// no error in it anywhere.
 	n.embedder = embedder
+	// The memory service re-embeds through raft (see memory.Reembed),
+	// so it needs the same embedder the ingester uses. Attached here
+	// rather than at construction because the service is wired before
+	// the embedder exists.
+	if n.memorySvc != nil && embedder != nil {
+		n.memorySvc.SetEmbedder(embedder)
+	}
 
 	// Checked HERE, once, for exactly the reason the assignment above
 	// is: this lived inside wireEmbedder's REMOTE branch, so when the
@@ -105,7 +112,16 @@ func (n *Node) wireCompute() error {
 	// that is what actually gets stamped on the vectors it writes.
 	if embedder != nil {
 		if err := memory.CheckEmbeddingModel(n.store, embedder.Model()); err != nil {
-			return err
+			if !n.cfg.AllowEmbeddingModelChange {
+				return err
+			}
+			// Loud, because recall is WRONG until the re-embed
+			// finishes: queries are scored against vectors from
+			// another model, which returns confident nonsense rather
+			// than nothing.
+			n.log.Warn("compute: starting with a corpus embedded by a different model — "+
+				"recall will be wrong until `lobslaw memory reembed` completes",
+				"err", err.Error())
 		}
 	}
 

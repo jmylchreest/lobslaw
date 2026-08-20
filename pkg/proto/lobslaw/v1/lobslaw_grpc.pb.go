@@ -959,6 +959,7 @@ const (
 	MemoryService_EpisodicAdd_FullMethodName  = "/lobslaw.v1.MemoryService/EpisodicAdd"
 	MemoryService_Dream_FullMethodName        = "/lobslaw.v1.MemoryService/Dream"
 	MemoryService_Forget_FullMethodName       = "/lobslaw.v1.MemoryService/Forget"
+	MemoryService_Reembed_FullMethodName      = "/lobslaw.v1.MemoryService/Reembed"
 	MemoryService_FindClusters_FullMethodName = "/lobslaw.v1.MemoryService/FindClusters"
 	MemoryService_ListRecords_FullMethodName  = "/lobslaw.v1.MemoryService/ListRecords"
 	MemoryService_GetRecord_FullMethodName    = "/lobslaw.v1.MemoryService/GetRecord"
@@ -978,6 +979,18 @@ type MemoryServiceClient interface {
 	// Dream-time consolidation merge flow. Pure math (pairwise cosine
 	// + union-find); no LLM. See docs/MEMORY.md for the composition
 	// pattern with the Adjudicator LLM interface.
+	// Reembed rewrites every episodic record's vector using the model
+	// this node currently has loaded.
+	//
+	// ON THE NODE, THROUGH RAFT, deliberately. The offline
+	// backfill-embeddings tool writes state.db directly, and the node
+	// rebuilds state from its log on boot — so a PUT still in the log
+	// re-applies and resurrects anything that tool deleted. Its writes
+	// survived and its deletions did not, which meant a model change
+	// could never fully land. Proposing the same mutations through raft
+	// makes them durable, and costs nothing extra: the node already has
+	// the embedder loaded and the log open.
+	Reembed(ctx context.Context, in *ReembedRequest, opts ...grpc.CallOption) (*ReembedResponse, error)
 	FindClusters(ctx context.Context, in *FindClustersRequest, opts ...grpc.CallOption) (*FindClustersResponse, error)
 	// ListRecords browses the record buckets with the same filters
 	// `lobslaw memory list` has always had. Read-only.
@@ -1062,6 +1075,16 @@ func (c *memoryServiceClient) Forget(ctx context.Context, in *ForgetRequest, opt
 	return out, nil
 }
 
+func (c *memoryServiceClient) Reembed(ctx context.Context, in *ReembedRequest, opts ...grpc.CallOption) (*ReembedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReembedResponse)
+	err := c.cc.Invoke(ctx, MemoryService_Reembed_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *memoryServiceClient) FindClusters(ctx context.Context, in *FindClustersRequest, opts ...grpc.CallOption) (*FindClustersResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FindClustersResponse)
@@ -1106,6 +1129,18 @@ type MemoryServiceServer interface {
 	// Dream-time consolidation merge flow. Pure math (pairwise cosine
 	// + union-find); no LLM. See docs/MEMORY.md for the composition
 	// pattern with the Adjudicator LLM interface.
+	// Reembed rewrites every episodic record's vector using the model
+	// this node currently has loaded.
+	//
+	// ON THE NODE, THROUGH RAFT, deliberately. The offline
+	// backfill-embeddings tool writes state.db directly, and the node
+	// rebuilds state from its log on boot — so a PUT still in the log
+	// re-applies and resurrects anything that tool deleted. Its writes
+	// survived and its deletions did not, which meant a model change
+	// could never fully land. Proposing the same mutations through raft
+	// makes them durable, and costs nothing extra: the node already has
+	// the embedder loaded and the log open.
+	Reembed(context.Context, *ReembedRequest) (*ReembedResponse, error)
 	FindClusters(context.Context, *FindClustersRequest) (*FindClustersResponse, error)
 	// ListRecords browses the record buckets with the same filters
 	// `lobslaw memory list` has always had. Read-only.
@@ -1146,6 +1181,9 @@ func (UnimplementedMemoryServiceServer) Dream(context.Context, *DreamRequest) (*
 }
 func (UnimplementedMemoryServiceServer) Forget(context.Context, *ForgetRequest) (*ForgetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Forget not implemented")
+}
+func (UnimplementedMemoryServiceServer) Reembed(context.Context, *ReembedRequest) (*ReembedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Reembed not implemented")
 }
 func (UnimplementedMemoryServiceServer) FindClusters(context.Context, *FindClustersRequest) (*FindClustersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FindClusters not implemented")
@@ -1284,6 +1322,24 @@ func _MemoryService_Forget_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MemoryService_Reembed_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReembedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).Reembed(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_Reembed_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).Reembed(ctx, req.(*ReembedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MemoryService_FindClusters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(FindClustersRequest)
 	if err := dec(in); err != nil {
@@ -1368,6 +1424,10 @@ var MemoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Forget",
 			Handler:    _MemoryService_Forget_Handler,
+		},
+		{
+			MethodName: "Reembed",
+			Handler:    _MemoryService_Reembed_Handler,
 		},
 		{
 			MethodName: "FindClusters",
