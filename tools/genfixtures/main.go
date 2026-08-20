@@ -132,7 +132,7 @@ func main() {
 	// one model could ever have a committed gate. CI runs the small
 	// multilingual checkpoint; a larger one can be verified locally
 	// against its own set.
-	outDir := filepath.Join(*out, filepath.Base(*model))
+	outDir := filepath.Join(*out, fingerprint(*model))
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -156,4 +156,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "token fixtures: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// fingerprint mirrors embedder.Model.Fingerprint, read straight from
+// config.json so the generator needs no loaded model.
+//
+// Keyed on the CHECKPOINT rather than on its directory name: an earlier
+// version used the folder, which made the fixtures' identity depend on
+// what somebody called it.
+func fingerprint(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read config.json: %v\n", err)
+		os.Exit(1)
+	}
+	var cfg struct {
+		Hidden int `json:"hidden_size"`
+		Layers int `json:"num_hidden_layers"`
+		Vocab  int `json:"vocab_size"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "parse config.json: %v\n", err)
+		os.Exit(1)
+	}
+	return fmt.Sprintf("d%d-l%d-v%d", cfg.Hidden, cfg.Layers, cfg.Vocab)
 }

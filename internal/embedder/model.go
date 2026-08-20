@@ -262,6 +262,20 @@ func (m *Model) Close() error {
 	return m.st.Close()
 }
 
+// Fingerprint identifies the CHECKPOINT, from its own shape.
+//
+// Fixtures are checkpoint-specific, and an earlier version keyed them
+// on the model DIRECTORY's name — which made the contract depend on
+// what somebody called a folder. It worked locally, where the
+// directories happened to be "small" and "base", and broke the moment
+// CI unpacked the same model into "multilingual-e5-small".
+//
+// Width, depth and vocabulary come from the checkpoint itself, so the
+// key travels with the model rather than with its packaging.
+func (m *Model) Fingerprint() string {
+	return fmt.Sprintf("d%d-l%d-v%d", m.cfg.Hidden, m.cfg.Layers, len(m.wordEmb)/m.cfg.Hidden)
+}
+
 // Dim is the embedding width.
 func (m *Model) Dim() int { return m.cfg.Hidden }
 

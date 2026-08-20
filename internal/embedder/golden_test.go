@@ -46,7 +46,12 @@ type goldenFile struct {
 // every case and look like a broken forward pass.
 func fixtureDir(t *testing.T) string {
 	t.Helper()
-	return filepath.Join("testdata", "golden", filepath.Base(modelDir(t)))
+	m, err := Load(modelDir(t))
+	if err != nil {
+		t.Fatalf("load model to identify its fixtures: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	return filepath.Join("testdata", "golden", m.Fingerprint())
 }
 
 func loadGolden(t *testing.T) goldenFile {

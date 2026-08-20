@@ -47,7 +47,7 @@ jobs:
         id: model-cache
         uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
         with:
-          path: ~/models/multilingual-e5-small
+          path: ${{ runner.temp }}/models/multilingual-e5-small
           key: e5-small-v1
 
       - name: fetch embedding model
@@ -55,16 +55,18 @@ jobs:
         run: |
           set -euo pipefail
           base=https://huggingface.co/intfloat/multilingual-e5-small/resolve/main
-          mkdir -p ~/models/multilingual-e5-small/1_Pooling
+          dir="${{ runner.temp }}/models/multilingual-e5-small"
+          mkdir -p "$dir/1_Pooling"
           for f in config.json model.safetensors tokenizer.json tokenizer_config.json; do
-            curl -fsSL --retry 3 -o ~/models/multilingual-e5-small/"$f" "$base/$f"
+            curl -fsSL --retry 3 -o "$dir/$f" "$base/$f"
           done
-          curl -fsSL --retry 3 -o ~/models/multilingual-e5-small/1_Pooling/config.json \
-            "$base/1_Pooling/config.json"
+          curl -fsSL --retry 3 -o "$dir/1_Pooling/config.json" "$base/1_Pooling/config.json"
 
       - name: test
         env:
-          LOBSLAW_EMBEDDER_MODEL: ~/models/multilingual-e5-small
+          # Absolute: a tilde in a YAML env: value is a literal tilde,
+          # not $HOME, so Go was handed a path that does not exist.
+          LOBSLAW_EMBEDDER_MODEL: ${{ runner.temp }}/models/multilingual-e5-small
         run: go test -race -cover -coverprofile=coverage.out ./...
 
       - name: coverage summary
@@ -81,7 +83,9 @@ jobs:
       # suite twice would double CI time to re-prove the same thing.
       - name: test simd kernel
         env:
-          LOBSLAW_EMBEDDER_MODEL: ~/models/multilingual-e5-small
+          # Absolute: a tilde in a YAML env: value is a literal tilde,
+          # not $HOME, so Go was handed a path that does not exist.
+          LOBSLAW_EMBEDDER_MODEL: ${{ runner.temp }}/models/multilingual-e5-small
         run: GOEXPERIMENT=simd go test -race -count=1 ./internal/embedder/... ./internal/compute/...
 
       - name: vet simd kernel
