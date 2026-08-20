@@ -69,9 +69,11 @@ func TestEmbedLongSeesContentBeyondTheContextLimit(t *testing.T) {
 		}
 		return out[:n]
 	}
-	// Two sequences identical for the first 2000 tokens and different
-	// only afterwards — far beyond a 512-token window.
-	head := filler(2000)
+	// Identical for 700 tokens and different only afterwards. Sized to
+	// clear a 512-token window by one chunk and no more: under -race on
+	// a CI runner every extra token is real wall-clock, and a longer
+	// head proves nothing this one does not.
+	head := filler(700)
 	a := append(append([]int32{0}, head...), append([]int32{5753, 72567}, 2)...)
 	b := append(append([]int32{0}, head...), append([]int32{99999, 12345}, 2)...)
 

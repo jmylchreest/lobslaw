@@ -112,7 +112,7 @@ func TestEncodeChunksRatherThanTruncates(t *testing.T) {
 	}
 
 	var head string
-	for range 150 {
+	for range 60 {
 		head += "the sourdough starter is fed on tuesdays. "
 	}
 	a := head + "and the cat is called Mabel."

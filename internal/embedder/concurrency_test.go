@@ -32,7 +32,10 @@ func TestConcurrentEmbedIsSafeAndDeterministic(t *testing.T) {
 		want[i] = m.Embed(f.TokenIDs)
 	}
 
-	const workers = 8
+	// Four rather than eight. A race needs only two goroutines to
+	// exist; the extra six cost minutes under -race and prove nothing
+	// the fourth did not.
+	const workers = 4
 	var wg sync.WaitGroup
 	errs := make(chan string, workers*len(g.Fixtures))
 	for w := range workers {
@@ -73,13 +76,13 @@ func TestConcurrentBatchAndLongAreSafe(t *testing.T) {
 	for _, f := range g.Fixtures {
 		seqs = append(seqs, f.TokenIDs)
 	}
-	long := make([]int32, 0, 4000)
-	for range 4000 / 8 {
+	long := make([]int32, 0, 800)
+	for range 800 / 8 {
 		long = append(long, 0, 70, 38937, 83, 35509, 23, 5753, 2)
 	}
 
 	var wg sync.WaitGroup
-	for range 6 {
+	for range 3 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

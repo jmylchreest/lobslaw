@@ -31,18 +31,58 @@ jobs:
           go mod download
           go mod verify
 
-      # WITHOUT A MODEL, 17 OF THE EMBEDDER'S 42 TESTS SKIP — and they
-      # are the ones that matter: the golden parity gate, the entire
-      # tokenizer suite, semantic recall, cross-lingual retrieval,
-      # concurrency and chunking. Everything else can pass while the
-      # encoder is quietly wrong.
+      - name: test
+        run: go test -race -cover -coverprofile=coverage.out ./...
+
+      - name: coverage summary
+        run: go tool cover -func=coverage.out | tail -1
+
+      # The AVX2 embedding kernel lives behind `goexperiment.simd &&
+      # amd64`, so the job above compiles NONE of it — not the kernel,
+      # not the packed GEMM, not the tests asserting it agrees with the
+      # portable path. Passing locally is not the same as being covered,
+      # and a build nobody runs is a build that rots.
       #
-      # multilingual-e5-small is 466 MB and MIT-licensed, and it is
-      # XLM-RoBERTa — so it exercises the SentencePiece Unigram
-      # tokenizer and the same forward path as the larger checkpoints,
-      # rather than being a stand-in that proves less.
-      #
-      # Cached on the revision so a normal run downloads nothing.
+      # Scoped to the one package that has a second kernel: the rest of
+      # the module is identical under either build, so running the whole
+      # suite twice would double CI time to re-prove the same thing.
+      - name: test simd kernel
+        run: GOEXPERIMENT=simd go test -race -count=1 ./internal/embedder/... ./internal/compute/...
+
+      - name: vet simd kernel
+        run: GOEXPERIMENT=simd go vet ./internal/embedder/...
+
+  # THE EMBEDDER'S REAL TESTS, which need a checkpoint.
+  #
+  # Without one, 17 of its 42 tests SKIP — the golden parity gate, the
+  # whole tokenizer suite, semantic recall, cross-lingual retrieval,
+  # concurrency and chunking. Everything else can pass while the
+  # encoder is quietly wrong.
+  #
+  # A SEPARATE JOB because it does not fit in the main one. Under -race
+  # the suite takes ~5 minutes on twelve cores and far longer on a
+  # runner, so folding it in would have made every PR wait on it. Here
+  # it runs alongside, and only the concurrency test — the one whose
+  # entire purpose is detecting a race — pays for the detector.
+  embedder:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: setup go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # multilingual-e5-small: 466 MB, MIT, and XLM-RoBERTa — so it
+      # exercises the SentencePiece Unigram tokenizer and the same
+      # forward path as the larger checkpoints, rather than being a
+      # stand-in that proves less. Cached, so a normal run fetches
+      # nothing.
       - name: cache embedding model
         id: model-cache
         uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
@@ -62,31 +102,20 @@ jobs:
           done
           curl -fsSL --retry 3 -o "$dir/1_Pooling/config.json" "$base/1_Pooling/config.json"
 
-      - name: test
+      - name: embedder tests
         env:
           # Absolute: a tilde in a YAML env: value is a literal tilde,
-          # not $HOME, so Go was handed a path that does not exist.
+          # not $HOME, so Go would be handed a path that cannot exist.
           LOBSLAW_EMBEDDER_MODEL: ${{ runner.temp }}/models/multilingual-e5-small
-        run: go test -race -cover -coverprofile=coverage.out ./...
+        run: go test -timeout 20m -count=1 ./internal/embedder/...
 
-      - name: coverage summary
-        run: go tool cover -func=coverage.out | tail -1
-
-      # The AVX2 embedding kernel lives behind `goexperiment.simd &&
-      # amd64`, so the job above compiles NONE of it — not the kernel,
-      # not the packed GEMM, not the tests asserting it agrees with the
-      # portable path. Passing locally is not the same as being covered,
-      # and a build nobody runs is a build that rots.
-      #
-      # Scoped to the one package that has a second kernel: the rest of
-      # the module is identical under either build, so running the whole
-      # suite twice would double CI time to re-prove the same thing.
-      - name: test simd kernel
+      - name: embedder tests, AVX2 kernel
         env:
-          # Absolute: a tilde in a YAML env: value is a literal tilde,
-          # not $HOME, so Go was handed a path that does not exist.
           LOBSLAW_EMBEDDER_MODEL: ${{ runner.temp }}/models/multilingual-e5-small
-        run: GOEXPERIMENT=simd go test -race -count=1 ./internal/embedder/... ./internal/compute/...
+        run: GOEXPERIMENT=simd go test -timeout 20m -count=1 ./internal/embedder/...
 
-      - name: vet simd kernel
-        run: GOEXPERIMENT=simd go vet ./internal/embedder/...
+      # Only the test that exists to find races pays for the detector.
+      - name: concurrency under -race
+        env:
+          LOBSLAW_EMBEDDER_MODEL: ${{ runner.temp }}/models/multilingual-e5-small
+        run: go test -race -timeout 20m -count=1 -run 'TestConcurrent|TestCloseIsSafe' ./internal/embedder/...
