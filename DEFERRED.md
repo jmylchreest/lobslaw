@@ -219,9 +219,27 @@ Only the six weight matmuls per layer go through the packed GEMM. Attention's Q�
 
 ---
 
+### Throughput, measured
+
+Linear, with a flat heap. multilingual-e5-base, 32-token records, AVX2:
+
+| records | per record | records/s | heap |
+|---|---|---|---|
+| 100 | 94.4 ms | 10.6 | 324.6 MB |
+| 400 | 90.3 ms | 11.1 | 324.6 MB |
+| 1600 | 91.3 ms | 11.0 | 324.7 MB |
+
+So a 10,000-record backfill is about **15 minutes** on the vector build and roughly **40 minutes** on the portable one. `EmbedBatch` costs the same per record as calling `Embed` in a loop, which is what it is.
+
+The heap not moving across 1600 encodes is the useful part: the ~7,900 allocations per encode are all short-lived, so the collector keeps up and nothing accumulates. That closes off the two ways a backfill could have degraded non-linearly.
+
+`TestBackfillScaling` re-measures it; set `LOBSLAW_EMBEDDER_SCALING=1`.
+
+---
+
 ### ~7,900 allocations per encode
 
-Every `matmulBT`/`matmulPacked` spawns goroutines, and `hiddenStates` allocates all scratch per call. The obvious fix — hoisting scratch onto the `Model` — is exactly what `TestConcurrentEmbedIsSafeAndDeterministic` forbids: it makes concurrent `Embed` a data race. Any fix must be per-call-arena or `sync.Pool`, not a `Model` field.
+Every `matmulBT`/`matmulPacked` spawns goroutines, and `hiddenStates` allocates all scratch per call. Measured as NOT a scaling problem (see above) — the heap is flat across 1600 encodes — so this is a constant-factor cost, not a leak. The obvious fix — hoisting scratch onto the `Model` — is exactly what `TestConcurrentEmbedIsSafeAndDeterministic` forbids: it makes concurrent `Embed` a data race. Any fix must be per-call-arena or `sync.Pool`, not a `Model` field.
 
 Raising the parallel threshold to reduce goroutine churn was measured and made things **14% slower**, so this is not the easy win it looks like.
 

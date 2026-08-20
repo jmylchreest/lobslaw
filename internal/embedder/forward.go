@@ -25,7 +25,19 @@ import "math"
 //
 // Ids are expected to already carry the model's special tokens.
 func (m *Model) Embed(ids []int32) []float32 {
+	// NIL, not a zero vector. hiddenStates returning nothing would
+	// otherwise pool to a 768-length run of zeros, which is far worse
+	// than an empty result: it looks exactly like a valid embedding,
+	// so it would be written to the corpus, normalised to itself, and
+	// scored against every later query — a memory that matches nothing
+	// and reports no error. An empty slice is checkable.
+	if m.closed.Load() {
+		return nil
+	}
 	h, rows := m.hiddenStates(ids)
+	if rows == 0 {
+		return nil
+	}
 	var v []float32
 	if m.pool == PoolCLS {
 		v = clsPool(h, m.cfg.Hidden)
@@ -42,6 +54,12 @@ func (m *Model) Embed(ids []int32) []float32 {
 // truncated here: len(ids) can exceed what was processed, and pooling
 // over a length the model never saw reads past the data.
 func (m *Model) hiddenStates(ids []int32) ([]float32, int) {
+	// Refused rather than faulted: after Close the weights point at
+	// unmapped pages, and touching them would kill the process with no
+	// Go stack to explain why.
+	if m.closed.Load() {
+		return nil, 0
+	}
 	if len(ids) > m.maxSeq {
 		ids = ids[:m.maxSeq]
 	}

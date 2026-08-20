@@ -4,10 +4,22 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"os"
+	"unsafe"
 )
+
+// nativeLittleEndian reports whether f32 in memory matches the
+// little-endian layout safetensors uses on disk.
+//
+// Only when they agree can a tensor alias the mapping instead of being
+// converted. Go still targets big-endian machines (s390x, some mips),
+// where the same bytes mean different numbers — so this is checked
+// rather than assumed, and the big-endian path simply copies.
+var nativeLittleEndian = func() bool {
+	x := uint32(1)
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
 
 // The safetensors container: an 8-byte little-endian header length, a
 // JSON header mapping tensor name to dtype/shape/byte-range, then the
@@ -38,6 +50,7 @@ type tensorInfo struct {
 // rather than the file plus the weights.
 type safetensors struct {
 	f       *os.File
+	m       *mapping
 	index   map[string]tensorInfo
 	dataOff int64
 }
@@ -47,33 +60,49 @@ func openSafetensors(path string) (*safetensors, error) {
 	if err != nil {
 		return nil, err
 	}
-	var lenBuf [8]byte
-	if _, err := io.ReadFull(f, lenBuf[:]); err != nil {
+	// Mapped first, then parsed out of the mapping. Reading the length
+	// prefix through the file handle and the rest through the map
+	// would be two views of the same bytes that could disagree about
+	// where the data starts.
+	m, err := mapFile(f)
+	if err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("safetensors: read header length: %w", err)
+		return nil, err
 	}
-	n := binary.LittleEndian.Uint64(lenBuf[:])
+	fail := func(format string, args ...any) (*safetensors, error) {
+		_ = m.Close()
+		_ = f.Close()
+		return nil, fmt.Errorf(format, args...)
+	}
+	if len(m.data) < 8 {
+		return fail("safetensors: %s is too short to hold a header length", path)
+	}
+	n := binary.LittleEndian.Uint64(m.data[:8])
+	// The length prefix is the first thing in an untrusted file and
+	// decides how much is parsed as JSON. Bounded before it is used.
 	if n == 0 || n > maxHeaderLen {
-		_ = f.Close()
-		return nil, fmt.Errorf("safetensors: header length %d out of range (max %d)", n, maxHeaderLen)
+		return fail("safetensors: header length %d out of range (max %d)", n, maxHeaderLen)
 	}
-	raw := make([]byte, n)
-	if _, err := io.ReadFull(f, raw); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("safetensors: read header: %w", err)
+	if uint64(len(m.data)) < 8+n {
+		return fail("safetensors: file is shorter than its own header claims")
 	}
 	var index map[string]tensorInfo
-	if err := json.Unmarshal(raw, &index); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("safetensors: parse header: %w", err)
+	if err := json.Unmarshal(m.data[8:8+n], &index); err != nil {
+		return fail("safetensors: parse header: %w", err)
 	}
 	// __metadata__ is a free-form string map, not a tensor; leaving it
 	// in makes every "unknown tensor" error message misleading.
 	delete(index, "__metadata__")
-	return &safetensors{f: f, index: index, dataOff: int64(8 + n)}, nil
+	return &safetensors{f: f, m: m, index: index, dataOff: int64(8 + n)}, nil
 }
 
-func (s *safetensors) Close() error { return s.f.Close() }
+func (s *safetensors) Close() error {
+	err := s.m.Close()
+	if cerr := s.f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
 
 // tensor reads one F32 tensor by name.
 //
@@ -102,9 +131,23 @@ func (s *safetensors) tensor(name string) ([]float32, []int, error) {
 			name, info.Shape, want, size/4)
 	}
 
-	buf := make([]byte, size)
-	if _, err := s.f.ReadAt(buf, s.dataOff+int64(info.Offsets[0])); err != nil {
-		return nil, nil, fmt.Errorf("safetensors: read %q: %w", name, err)
+	start := s.dataOff + int64(info.Offsets[0])
+	if start < 0 || start+int64(size) > int64(len(s.m.data)) {
+		return nil, nil, fmt.Errorf("safetensors: tensor %q runs past the end of the file", name)
+	}
+	buf := s.m.data[start : start+int64(size)]
+
+	// ZERO COPY when the layout already matches: the returned slice
+	// aliases the mapping, so a 1.1 GB checkpoint costs no heap at all
+	// and the kernel keeps the pages evictable.
+	//
+	// Conditional on ALIGNMENT as well as endianness. safetensors pads
+	// its header so tensors land on 8-byte boundaries in every file
+	// seen so far, but the format does not guarantee it, and a
+	// misaligned float32 slice is undefined behaviour rather than a
+	// slow path. Checked, not assumed.
+	if nativeLittleEndian && uintptr(unsafe.Pointer(&buf[0]))%4 == 0 {
+		return unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), size/4), info.Shape, nil
 	}
 	out := make([]float32, size/4)
 	for i := range out {

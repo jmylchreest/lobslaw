@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 )
 
 // Pooling is how token states become one sentence vector.
@@ -55,6 +56,20 @@ type layer struct {
 // 8k context) differ only in size, vocabulary and the position
 // offset below — so which one a node runs is configuration, not code.
 type Model struct {
+	// st keeps the checkpoint mapped for the life of the Model.
+	//
+	// EVERY WEIGHT SLICE ALIASES IT. That is the point — a 1.1 GB
+	// model costs no heap — but it means unmapping while the Model is
+	// alive turns the next matmul into a segfault rather than a panic,
+	// with no Go stack pointing at the cause. An earlier draft closed
+	// the file at the end of Load and did exactly that.
+	//
+	// On builds that pack the weights (see weight_simd_amd64.go) the
+	// aliases are dropped and this could be released early, but it is
+	// kept either way so ownership has one rule rather than two.
+	st     *safetensors
+	closed atomic.Bool
+
 	cfg     config
 	pool    Pooling
 	posOff  int
@@ -147,7 +162,14 @@ func Load(dir string) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("embedder: %w", err)
 	}
-	defer func() { _ = st.Close() }()
+	// Closed only on the ERROR paths below. On success the Model owns
+	// it, because the weights alias the mapping.
+	ok := false
+	defer func() {
+		if !ok {
+			_ = st.Close()
+		}
+	}()
 
 	// *ForMaskedLM checkpoints nest the encoder under a prefix; plain
 	// *Model checkpoints do not. Detected rather than assumed so both
@@ -165,6 +187,7 @@ func Load(dir string) (*Model, error) {
 	}
 
 	m := &Model{
+		st:     st,
 		cfg:    cfg,
 		pool:   poolingConfig(dir, PoolMean),
 		posOff: positionOffset(cfg.ModelType, cfg.PadTokenID),
@@ -219,7 +242,24 @@ func Load(dir string) (*Model, error) {
 			return nil, fmt.Errorf("embedder: load layer %d: %w", i, err)
 		}
 	}
+	ok = true
 	return m, nil
+}
+
+// Close releases the checkpoint mapping.
+//
+// The Model must not be used afterwards. Because the weights alias the
+// mapping, a use-after-close would otherwise be a SEGFAULT — no Go
+// stack, no recoverable panic, just a dead process with an address in
+// it. The closed flag turns that into an empty result instead, which
+// is detectable and diagnosable.
+//
+// Safe to call more than once.
+func (m *Model) Close() error {
+	if m.closed.Swap(true) {
+		return nil
+	}
+	return m.st.Close()
 }
 
 // Dim is the embedding width.

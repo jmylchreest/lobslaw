@@ -89,3 +89,30 @@ func TestConcurrentBatchAndLongAreSafe(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Close must be safe to call, and safe to call twice.
+//
+// After it, the weights alias unmapped pages. Without the closed
+// guard that is a segfault — no Go stack, no recoverable panic, just a
+// dead process and an address. This asserts the guard turns it into an
+// empty result instead.
+func TestCloseIsSafeAndUseAfterCloseDoesNotFault(t *testing.T) {
+	m, err := Load(modelDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []int32{0, 70, 38937, 2}
+	if got := m.Embed(ids); len(got) != m.Dim() {
+		t.Fatalf("before Close: got %d dims, want %d", len(got), m.Dim())
+	}
+	if err := m.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Errorf("second Close: %v", err)
+	}
+	// Must not fault. An empty result is the contract.
+	if got := m.Embed(ids); len(got) != 0 {
+		t.Errorf("after Close, Embed returned %d values; want none", len(got))
+	}
+}
