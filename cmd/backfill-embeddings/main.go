@@ -12,9 +12,24 @@
 // Idempotent: skips episodic records that already have a
 // VectorRecord pointing at them (via source_ids). Safe to re-run.
 //
-// WARNING: runs OUTSIDE the live cluster — reads state.db
-// directly with ReadOnly semantics. Stop the node first; bbolt
-// file-locks prevent concurrent writers.
+// WARNING: runs OUTSIDE the live cluster — writes state.db directly.
+// Stop the node first; bbolt file-locks prevent concurrent writers.
+//
+// DELETIONS DO NOT SURVIVE A NODE RESTART. Writing straight to the
+// store bypasses raft, and the node rebuilds state from its log on
+// boot — so a PUT still in the log re-applies and resurrects any key
+// this tool deleted. New records survive (fresh ids, nothing in the
+// log contradicts them); removals come back.
+//
+// Measured on the e2e rig: two --force runs back to back converge to
+// zero orphans, and a node restart between them brings the same five
+// keys back every time.
+//
+// The consequence is narrow but real. Re-embedding works — every
+// record gets a current vector — but vectors stamped with the previous
+// model can reappear. They are unreachable by recall once their source
+// records are gone, so nothing returns them; they are simply litter
+// that a `memory forget` through raft, or a snapshot, would clear.
 package main
 
 import (
@@ -126,7 +141,11 @@ func main() {
 	// written, so an interrupted --force run leaves a record with an
 	// old vector rather than none at all.
 	var replacing []string
-	err = store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
+	// Tolerant walk: a record written under a rotated key must not
+	// block re-embedding the entire corpus. Counted, not ignored — see
+	// the report below, which distinguishes "the key is wrong" from
+	// "a few old records".
+	unreadable, err := store.ForEachDecryptable(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 		total++
 		var rec lobslawv1.EpisodicRecord
 		if err := proto.Unmarshal(raw, &rec); err != nil {
@@ -151,23 +170,9 @@ func main() {
 		return nil
 	})
 	if err != nil {
-		// A decrypt failure here is almost always the KEY, not the
-		// data, and "decrypt failed (bad key, nonce, or ciphertext)"
-		// does not say which. total counts the records walked before
-		// the abort, so the two cases are distinguishable: nothing
-		// walked means the very first record failed.
-		if strings.Contains(err.Error(), "decrypt") {
-			if total <= 1 {
-				die("cannot decrypt the store — LOBSLAW_MEMORY_KEY does not match the key this\n"+
-					"  data was written with. It must be the same value [memory.encryption]\n"+
-					"  key_ref resolves to for the node.\n\n  %v", err)
-			}
-			die("decrypted %d records then failed on one — that record predates a key\n"+
-				"  rotation, or is corrupt. Re-embedding cannot skip it without leaving\n"+
-				"  a gap it would never report.\n\n  %v", total, err)
-		}
 		die("scan episodic: %v", err)
 	}
+	reportUnreadable(unreadable, total)
 
 	if len(todo) == 0 {
 		fmt.Println("No records need backfilling.")
@@ -274,6 +279,11 @@ func main() {
 	}
 	if removed > 0 {
 		fmt.Printf("Replaced:    %d stale vector(s)\n", removed)
+	}
+	if force {
+		if n := removeOrphanVectors(store, cfg.Compute.Embeddings.Model); n > 0 {
+			fmt.Printf("Orphans:     %d vector(s) removed (stamped with the previous model)\n", n)
+		}
 	}
 	fmt.Printf("Backfilled:  %d\n", backfilled)
 	fmt.Printf("Failed:      %d\n", failed)
@@ -428,4 +438,61 @@ func newEmbedder(cfg *config.Config) (compute.EmbeddingProvider, func()) {
 		die("embed client: %v", err)
 	}
 	return ec, func() {}
+}
+
+// removeOrphanVectors deletes vectors carrying a DIFFERENT model's
+// stamp, and returns how many.
+//
+// --force replaces the vector for every episodic record it re-embeds,
+// but a vector that no episodic record points at is never visited: a
+// consolidation whose sources were pruned, or a row left by an
+// interrupted run. Those keep the old model's stamp, and one is enough
+// to make the boot guard refuse — which is exactly what happened on
+// the e2e rig: 54 records re-embedded and the node still would not
+// start, because five orphans still said multilingual-e5-base.
+//
+// Only vectors whose stamp DISAGREES are removed. One carrying the
+// configured model is current, and an unstamped one predates the field
+// — destroying that on a guess would lose a vector nothing said was
+// wrong.
+func removeOrphanVectors(store *memory.Store, model string) int {
+	var stale []string
+	if _, err := store.ForEachDecryptable(memory.BucketVectorRecords, func(k string, raw []byte) error {
+		var v lobslawv1.VectorRecord
+		if err := proto.Unmarshal(raw, &v); err != nil {
+			return nil
+		}
+		if v.EmbeddingModel != "" && v.EmbeddingModel != model {
+			stale = append(stale, k)
+		}
+		return nil
+	}); err != nil {
+		die("scan vector records: %v", err)
+	}
+	var removed int
+	for _, k := range stale {
+		if err := store.Delete(memory.BucketVectorRecords, k); err == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
+// reportUnreadable turns a skipped-record count into the right message.
+//
+// Nothing decrypting at all is the KEY, not the data, and the raw
+// "decrypt failed (bad key, nonce, or ciphertext)" on one record never
+// said so. Some decrypting means more than one key generation is
+// present, which is worth reporting because those records will never
+// be recalled and nothing else will mention them.
+func reportUnreadable(unreadable, total int) {
+	if unreadable == 0 {
+		return
+	}
+	if total == 0 {
+		die("none of the %d episodic records could be decrypted — LOBSLAW_MEMORY_KEY\n"+
+			"  does not match the key this data was written with. It must resolve to the\n"+
+			"  same value as [memory.encryption] key_ref does for the node.", unreadable)
+	}
+	fmt.Printf("Unreadable:  %d record(s) skipped — written under a different key\n", unreadable)
 }

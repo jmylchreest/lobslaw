@@ -281,6 +281,20 @@ One hit at each, on `e5-small`. Small but free — the callers all know which si
 
 ---
 
+### backfill-embeddings deletions do not survive a restart
+
+The tool writes `state.db` directly, bypassing raft. The node rebuilds state from its log on boot, so a PUT still in the log re-applies and resurrects any key the tool deleted. Writes survive — new records have fresh ids and nothing contradicts them — but removals come back.
+
+Measured: two `--force` runs back to back converge to zero orphans; a node restart between them brings the same five keys back, every time.
+
+Narrow in practice. Re-embedding works and every record ends up with a current vector; what can reappear is a vector stamped with the previous model, and once its source records are gone nothing can return it in a search. It is litter rather than a wrong answer.
+
+The fix is for the tool to propose its deletions through raft rather than writing underneath it, which means it stops being an offline tool.
+
+**Trigger to revisit:** a model migration on a node whose corpus matters, or anyone confused by stale vectors surviving a `--force`.
+
+---
+
 ### Only MiniLM is mirrored
 
 `all-MiniLM-L6-v2` (91 MB, Apache-2.0) is mirrored in this project's releases, so the default English configuration fetches nothing from a third party.

@@ -158,6 +158,43 @@ func (s *Store) ForEach(bucket string, fn func(key string, value []byte) error) 
 	})
 }
 
+// ForEachDecryptable walks a bucket, SKIPPING records it cannot
+// decrypt, and returns how many it skipped.
+//
+// ForEach aborts on the first decrypt failure, which is right for a
+// read path — a caller asking for records should not silently receive
+// a subset. It is wrong for the two callers here:
+//
+//   - the embedding-model guard, which wants one stamp and should not
+//     stop a node booting because some other record is unreadable
+//   - backfill, a MIGRATION tool, where one record written under a
+//     rotated key would otherwise block re-embedding the whole corpus
+//
+// A store can hold records from more than one key generation, and
+// neither of those callers is the one that should discover it fatally.
+// The count is returned rather than logged so the caller can decide:
+// all records skipped means the key is simply wrong, which is a very
+// different situation from a few old ones.
+func (s *Store) ForEachDecryptable(bucket string, fn func(key string, value []byte) error) (skipped int, err error) {
+	err = s.loadDB().View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		var buf []byte
+		return b.ForEach(func(k, v []byte) error {
+			plaintext, derr := s.cipher.OpenTo(buf, v)
+			if derr != nil {
+				skipped++
+				return nil
+			}
+			buf = plaintext
+			return fn(string(k), plaintext)
+		})
+	})
+	return skipped, err
+}
+
 // ForEachPrefix walks the key/value pairs in bucket whose key starts
 // with prefix, in ascending key order, calling fn with the decrypted
 // plaintext. Same retention rule as ForEach: fn may not hold the
