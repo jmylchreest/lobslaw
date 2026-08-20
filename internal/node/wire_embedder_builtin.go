@@ -37,7 +37,7 @@ func (n *Node) wireBuiltinEmbedder() (compute.EmbeddingProvider, error) {
 		return nil, fmt.Errorf("builtin embeddings: %w", err)
 	}
 
-	m, err := embedder.Load(dir)
+	enc, err := embedder.Open(dir)
 	if err != nil {
 		return nil, fmt.Errorf("builtin embeddings: load %s: %w", cfg.Model, err)
 	}
@@ -46,27 +46,19 @@ func (n *Node) wireBuiltinEmbedder() (compute.EmbeddingProvider, error) {
 	// config. For a remote embedder nothing can verify it until the
 	// first call fails; here the answer is on disk, so a mismatch is a
 	// start-up error instead of a corpus of vectors at the wrong width.
-	if cfg.Dims != 0 && cfg.Dims != m.Dim() {
+	if cfg.Dims != 0 && cfg.Dims != enc.Dim() {
+		_ = enc.Close()
 		return nil, fmt.Errorf("builtin embeddings: [compute.embeddings] dims = %d but %s produces %d",
-			cfg.Dims, cfg.Model, m.Dim())
+			cfg.Dims, cfg.Model, enc.Dim())
 	}
 
 	n.log.Info("compute: builtin embedding model ready",
-		"model", cfg.Model, "dims", m.Dim(), "max_seq", m.MaxSeq(),
-		"pooling", string(m.Pooling()), "kernel", embedder.Kernel())
+		"model", cfg.Model, "dims", enc.Dim(), "max_seq", enc.MaxSeq(),
+		"kernel", embedder.Kernel())
 
-	// NOT REGISTERED AS THE NODE'S EMBEDDER YET.
-	//
-	// EmbeddingProvider takes TEXT, and turning text into token ids
-	// needs the SentencePiece tokenizer, which is the next piece of
-	// work. Returning a provider whose Embed always failed would be
-	// worse than returning none: memory_search and the context engine
-	// fall back to lexical on an embedding error (see #165), so every
-	// single turn would take the slow path and log a warning to say so.
-	//
-	// Returning nil takes the same lexical path silently and honestly,
-	// having still proved at boot that the model downloads, loads, and
-	// is the width the operator claimed.
-	n.log.Info("compute: builtin embeddings await the tokenizer — recall stays lexical for now")
-	return nil, nil
+	// The model name is what gets stamped on every vector, so it is
+	// also what memory.CheckEmbeddingModel compares against the corpus
+	// already on disk: swapping models without re-embedding is refused
+	// at boot rather than silently scoring across two vector spaces.
+	return compute.NewBuiltinEmbedder(enc, cfg.Model), nil
 }
