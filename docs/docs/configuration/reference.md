@@ -171,6 +171,17 @@ endpoint    = "https://openrouter.ai/api/v1/embeddings"
 api_key_ref = "env:OPENROUTER_API_KEY"
 model       = "openai/text-embedding-3-small"
 dims        = 1536
+# format picks the request/response protocol: "openai" (the default,
+# and what most vendors speak) or "minimax". Auto-detection is
+# deliberately NOT supported — probing on first call wastes tokens and
+# fails silently when credentials are wrong.
+format      = "openai"
+# Prefixes for models trained ASYMMETRICALLY, prepended before
+# embedding. The e5 family wants these; leave them unset for anything
+# symmetric, including the recommended all-MiniLM-L6-v2, where
+# prefixing makes retrieval worse rather than better.
+# query_prefix   = "query: "
+# passage_prefix = "passage: "
 
 # The builtin form instead. No endpoint, no API key, and no egress at
 # query time: memory content never leaves the node. Note that

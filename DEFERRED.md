@@ -197,114 +197,36 @@ The user's OpenRouter API key is accessed via the zsh alias `get-key OPENROUTER_
 
 ## Built-in embedder (`internal/embedder`)
 
-A pure-Go XLM-RoBERTa encoder so a node can embed its own memories with no API key, no endpoint and no egress at query time. Loads BERT / RoBERTa / XLM-RoBERTa, which is one code path for bge-small (English), multilingual-e5-base and bge-m3.
+A pure-Go BERT / XLM-RoBERTa encoder so a node embeds its own memories in-process — no API key, no endpoint, and nothing leaving the machine at query time. Complete and in use; see `docs/docs/features/memory.md` for models, configuration and measurements.
 
-**The feature is complete end to end.** A node with `type = "builtin"` does semantic recall with no API key, no endpoint and nothing leaving the machine: the SentencePiece Unigram tokenizer matches the reference on 119/119 cases, and a memory recorded in English is retrieved by the same question asked in French, German, Chinese or Japanese.
+Three things are deliberately not done.
 
-Landed: forward pass gated on measured tolerance; packed-GEMM kernel for AVX2; mmap'd weights (1.1 GB of heap becomes 0); `EmbedBatch`; chunked long input; tested goroutine safety; the tokenizer; `EmbeddingProvider` wired at boot.
+### Attention still uses the dot kernel
 
-What follows is refinement, not completion.
+Only the six weight matmuls per layer go through the packed GEMM. Attention's operands are computed per call, so packing them costs more than it saves at short lengths — but its share grows with sequence length, and at 256 tokens it is already 16% of an encode.
 
-### Measured, on the default model
+Packing is worth it at length: at 256 tokens, packing K costs ~16K writes against 4.2M multiply-accumulates. It needs its own scratch buffer and has not been written.
 
-Numbers below are `all-MiniLM-L6-v2`, which is what the docs now recommend. Earlier entries here quoted `multilingual-e5-base` from before the packed GEMM and mmap landed, and were badly out of date.
-
-Head to head against the reference implementation, identical text, end to end:
-
-| text | reference | ours (AVX2) | ours (portable) |
-|---|---|---|---|
-| 40 chars | 5.7 ms | 8.1 ms (1.4x) | 13.7 ms (2.4x) |
-| 204 chars | 23.6 ms | 30.8 ms (1.3x) | 63.9 ms (2.7x) |
-| 819 chars | 70.5 ms | 133.3 ms (1.9x) | 260.6 ms (3.7x) |
-
-So the vector kernel is within 1.3–1.9x of the reference, not the ~5x an earlier entry claimed. Allocations are 2,800–4,500 per encode, not the ~7,900 measured on the larger model.
-
-Backfill throughput is linear with a flat heap — 10,000 records is roughly 15 minutes on the vector build. `TestBackfillScaling` re-measures it.
+**Trigger to revisit:** long-document embedding, or `bge-m3`'s 8k context in anger.
 
 ---
 
-### Attention: parallel over heads, still on the dot kernel
+### The portable kernel is ~2x behind the vector one
 
-The head loop was serial and each of its two matmuls spawned workers — 288 matmul calls per encode, every one paying goroutine setup for a problem too small to need it. Now the HEADS run in parallel and the matmuls inside them are serial, which is the natural unit: heads are independent by definition, there are about as many as a machine can use, and each is big enough to be worth a goroutine.
+arm64, and amd64 without `GOEXPERIMENT=simd`, take this path. Everything available in plain Go has been tried and measured: 8 accumulators (kept, ~7%), blocked tiles from 4x4 to 4x32 (all slower — Go spills tile accumulators without vector types), row blocking for L1 residency (no change), and parallel-over-heads (kept).
 
-At 256 tokens, AVX2: 176 ms to 141 ms, and allocations from 4,466 to 991. The portable path gained too (340 ms to 293 ms).
+What remains is a Go assembly microkernel — NEON for arm64, AVX2 for amd64 without the experiment — with the portable loop as its fallback. That is real work and needs the fallback regardless, so the gap is a floor rather than an oversight.
 
-Still on the dot kernel rather than the packed GEMM, because attention's operands are computed per call. Packing them is worth it at length — at 256 tokens packing K costs 16K writes against 4.2M MACs — but it needs its own scratch and has not been done.
-
-**Trigger to revisit:** long-document embedding, where attention's share grows quadratically.
+**Trigger to revisit:** an arm64 deployment where embedding latency actually matters.
 
 ---
 
-### Allocations per encode
+### Model size, and mirroring the multilingual models
 
-508 at 16 tokens, 991 at 256 — down from ~2,800 and ~4,466, almost entirely by removing the per-matmul goroutines above.
+int8 quantisation of the embedding table would take a multilingual model from 471 MB to roughly 180 MB — 82% of it is one row per token for a 250k vocabulary. Not done, because shrinking the *download* means producing and hosting a quantised artefact: a build pipeline and a hosting commitment, not a code change.
 
-The remaining ones are the per-call scratch in `hiddenStates`, which cannot become a `Model` field: `TestConcurrentEmbedIsSafeAndDeterministic` catches exactly that. A `sync.Pool` would work.
+Mirroring is likewise not done. `multilingual-e5-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit and would need splitting with reassembly; `multilingual-e5-small` (471 MB) would fit. All are MIT, so it is permitted — it is the hosting nobody has signed up for.
 
-Note the trade already taken: per-head scratch raised bytes-per-op at 256 tokens from 4.6 MB to 8.7 MB, because each head needs its own L x L score buffer. Worth it for 4.5x fewer allocations and 20% less time, but it is a real cost at long sequence lengths.
-
----
-
-### Portable kernel — as far as Go goes without assembly
-
-arm64, and amd64 without `GOEXPERIMENT=simd`, take this path. Now 2.2x behind the vector one at 16 tokens and 2.0x at 256, from 2.4–3.7x.
-
-Everything available in plain Go has been tried and measured:
-
-- **8 accumulators instead of 4** — worth ~7%, kept. The count is bounded by how many partial sums the compiler keeps in registers.
-- **Blocked tiles**, 4x4 through 4x32 — all SLOWER than the dot loop. Without vector types Go spills tile accumulators to stack and every FMA becomes two memory operations.
-- **Row blocking to keep B in L1** — no measurable change.
-- **Parallel over heads** — helped here too (340 ms to 278 ms at 256 tokens).
-
-What remains is a Go assembly microkernel: NEON for arm64, AVX2 for amd64 without the experiment, with the portable loop as the fallback. That is real work and needs a fallback anyway, so the gap is a floor rather than an oversight.
-
-**Trigger to revisit:** first arm64 deployment where embedding latency actually matters.
-
----
-
-### e5 asymmetric prefixes — implemented, benefit unproven
-
-`query_prefix` and `passage_prefix` are now configurable and applied on the right sides: `EmbeddingProvider` gained `EmbedQuery`, and the two query call sites (context engine, `memory_search`) use it while everything else embeds documents.
-
-**The measured benefit did not survive contact with a real corpus.** A synthetic twenty-query set showed one extra hit at both recall@1 and recall@3. Re-measured with `embed-eval` on 30 real records, `multilingual-e5-small` scores 68% / 87% with the prefixes and 68% / 87% without — and the margin is slightly *narrower* with them (+0.0145 against +0.0169).
-
-So it is available for anyone who wants it, correctly wired, and off by default. Do not expect it to help; the earlier claim that it was worth a hit at each rank was measured on a set small and curated enough to be noise.
-
-Empty by default is also *correct* for the recommended model — `all-MiniLM-L6-v2` is symmetric, and prefixing it makes retrieval worse.
-
----
-
-### Model size and mirroring — decided against, documented instead
-
-Two related items closed by decision rather than by work.
-
-**int8 quantisation of the embedding table** would take a multilingual model from 471 MB to roughly 180 MB, since 82% of it is one row per token for a 250k vocabulary. Not done: shrinking the *download* means producing and hosting a quantised artefact, which is a build pipeline and a hosting commitment rather than a code change. The recommended default is 91 MB, so this only ever mattered to multilingual deployments.
-
-**Mirroring the multilingual models** is likewise not done. `multilingual-e5-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit outright and would need splitting with a reassembly step; `multilingual-e5-small` (471 MB) would fit. All are MIT, so it is permitted — it is the plumbing and the hosting nobody has signed up for.
-
-Instead, `docs/docs/features/memory.md` lists a verified `download_url` for every supported model, and the release describes the mirror layout for anyone who wants to host their own. That is the part that actually blocked people: not the absence of a mirror, but having to work out the URL shape.
+The part that actually blocked people is fixed instead: every supported model has a verified `download_url` in the user documentation, and the `all-MiniLM-L6-v2` release documents the mirror layout for anyone hosting their own.
 
 **Trigger to revisit:** a deployment that must be multilingual AND cannot reach HuggingFace.
-
----
-
-### bge-m3 — tested and gated
-
-`Shitao/bge-m3` (the author's own repository; `BAAI/bge-m3` ships only a pickle and is refused) loads and passes:
-
-- 1024 dims, 8192 context, 250,002 vocab; loads in 876 ms
-- Golden parity on **both** kernels, 119/119 tokenizer cases exact
-- Cross-lingual separation far better than e5-small: an English memory against its French translation scores 0.87 and its Chinese 0.76, with an unrelated English record at **0.40** — where e5-small puts unrelated text at 0.79, leaving almost no room for a threshold
-- ~241 ms per encode against MiniLM's ~35 ms, which is the 24x1024 shape
-
-Its own fixture set is committed (`d1024-l24-v250002`), so this is now covered rather than assumed — and it was worth doing: it caught the fixture generator hardcoding `pooling: "mean"`, which was invisible while every checkpoint it had seen was mean-pooled.
-
-**Remaining caveat:** the mirror's licence is undeclared where BAAI's original is MIT. Check before depending on it.
-
----
-
-### aikit scaffold removed
-
-The fixtures it produced are committed and are what the gate reads, so nothing in the build or test path referenced it — the suite passes with the directory deleted. It was also carrying a 4 MB compiled binary into git, committed by accident.
-
-Regenerating for a new checkpoint means restoring two files from history;  names the commit. It was always a separate module, so restoring it adds no dependency to this one.

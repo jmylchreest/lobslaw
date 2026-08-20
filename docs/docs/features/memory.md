@@ -49,8 +49,8 @@ A model this node runs in-process. Embeddings are computed for **every** record,
 ```toml
 [compute.embeddings]
 type         = "builtin"
-model        = "multilingual-e5-base"
-download_url = "https://huggingface.co/intfloat/multilingual-e5-base/resolve/main"
+model        = "all-MiniLM-L6-v2"
+download_url = "https://github.com/jmylchreest/lobslaw/releases/download/models-all-MiniLM-L6-v2"
 ```
 
 The model is cached under `<data_dir>/models/<model>/` and downloaded on first boot if absent. **There is no default URL**: leave `download_url` empty and nothing is fetched — a missing model becomes an error at boot, which is what an air-gapped node wants. The host is granted egress under the `embedding-model` role only when the URL is set.
@@ -81,23 +81,23 @@ model        = "multilingual-e5-small"
 download_url = "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main"
 ```
 
-Measured on 20 paraphrase queries against 20 stored memories — the shape of the actual workload:
+Measured with `lobslaw embed-eval` against a real corpus — each record's `event` used as a query, its `context` as the document:
 
-| model | download | languages | recall@1 | recall@3 | margin |
-|---|---|---|---|---|---|
-| `all-MiniLM-L6-v2` | **91 MB** | English | **16/20** | **20/20** | **+0.193** |
-| `multilingual-e5-small` | 471 MB | 100+ | 15/20 | 18/20 | +0.018 |
-| `multilingual-e5-base` | 1.1 GB | 100+ | 15/20 | 19/20 | +0.019 |
-| `intfloat/multilingual-e5-large` | 2.2 GB | 100+ | untested | | |
-| `Shitao/bge-m3` | 2.3 GB | 100+, 8k ctx | **tested** | best separation, ~7x slower | |
+| model | download | languages | recall@1 | recall@3 | margin | per doc |
+|---|---|---|---|---|---|---|
+| `all-MiniLM-L6-v2` | **91 MB** | English | 80% | 95% | **+0.165** | **61 ms** |
+| `multilingual-e5-small` | 471 MB | 100+ | 75% | 95% | +0.025 | 107 ms |
+| `bge-m3` | 2.3 GB | 100+, 8k ctx | 80% | 95% | +0.073 | 809 ms |
 
-Twenty queries is a small sample, so read these as directional. Two things are clear anyway:
+`multilingual-e5-base` (1.1 GB) and `-large` (2.2 GB) sit between the e5-small and bge-m3 rows; the base model measured no better than small on this corpus.
 
-**On English, the 91 MB model wins.** Perfect recall@3 at a fifth the size. Multilingual capability is not free — it costs both download and accuracy in any single language.
+Numbers move with the corpus — run `embed-eval` on yours rather than trusting these. Three things hold anyway:
 
-**The margin column matters more than it looks.** e5 compresses everything into 0.79–0.90, so a similarity threshold sits in noise and has to be tuned against real data. MiniLM separates properly, which makes thresholds mean something.
+**On English, the 91 MB model wins outright.** It matches bge-m3's recall at a twenty-fifth the size and a thirteenth the time. Multilingual capability is not free; it costs download, latency, and accuracy in any single language.
 
-Going multilingual buys retrieval across languages, and that is real: with e5, a memory recorded in English is found by a question asked in Spanish. MiniLM cannot do that — a French query scores 0.11 against an English memory, below unrelated English records at 0.14, so it would simply never be retrieved.
+**The margin column matters as much as recall.** All three reach 95% at three, but `e5-small` compresses everything into a narrow band, so a similarity threshold set on it sits in noise. MiniLM separates properly.
+
+**What multilingual actually buys** is retrieval *across* languages, and only that. On MiniLM a French query scores 0.11 against an English memory — below unrelated English records at 0.14 — so it would never be retrieved. On `bge-m3` the same pair scores 0.87 against an unrelated 0.40, which is the widest separation of the three.
 
 #### Why the multilingual models are so much larger
 

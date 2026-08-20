@@ -48,6 +48,7 @@ lobslaw memory             # read + edit the memory store
   memory show <id>         # one record in full
   memory list              # list vector + episodic records
   memory forget            # delete records and their consolidations
+  memory reembed           # rewrite every vector with the current model (live only)
   memory share <id>...     # make owned records readable cluster-wide (offline)
   memory unshare <id>...   # return shared records to their owner only (offline)
   memory consolidations    # what Dream merged, superseded or left alone (offline)
@@ -403,6 +404,34 @@ landed** before it stopped; "rebind failed" without a number leaves you unable
 to tell a no-op from a half-done move.
 
 ## `lobslaw memory` and `lobslaw session`
+
+### `memory reembed` needs the node UP, unlike the rest
+
+Changing `[compute.embeddings] model` is refused at boot: vectors from
+two models are not comparable, so every search would return confidently
+wrong results rather than none. The repair is `lobslaw memory reembed`,
+which proposes every write through raft so it survives a restart — and
+that needs a running node.
+
+Which leaves a loop to break, since the node will not start. Start it
+once with the escape hatch, repair, then start normally:
+
+```bash
+lobslaw --allow-embedding-model-change --config config.toml   # once
+lobslaw memory reembed
+lobslaw --config config.toml                                  # normally from here
+```
+
+(Running a node is what `lobslaw` does with no subcommand, so the flag
+goes on the bare form.)
+
+It is a flag rather than a config key so nobody leaves it on by
+accident. Recall is genuinely wrong while it applies — queries are
+scored against another model's vectors — which is why it warns.
+
+The older `cmd/backfill-embeddings` writes `state.db` directly and is
+for a cluster that will not start at all. Its deletions do not survive
+a restart, because the node rebuilds state from its log on boot.
 
 ### `memory show`, `list` and `forget` talk to a running node
 
