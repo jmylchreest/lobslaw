@@ -1,18 +1,21 @@
 {
   "model": "base",
   "hidden_dim": 768,
+  "pooling": "mean",
   "fixtures": [
     {
       "text": "the user is based in Yorkshire",
       "note": "plain ascii",
       "token_ids": [
+        0,
         70,
         38937,
         83,
         35509,
         23,
         5753,
-        72567
+        72567,
+        2
       ],
       "vector": [
         0.0036891927,
@@ -789,6 +792,7 @@
       "text": "prefers TOML over YAML for configuration",
       "note": "acronyms + casing",
       "token_ids": [
+        0,
         12601,
         7,
         9926,
@@ -797,7 +801,8 @@
         3320,
         39456,
         100,
-        180346
+        180346,
+        2
       ],
       "vector": [
         0.004082306,
@@ -1573,7 +1578,10 @@
     {
       "text": "",
       "note": "empty string — must not panic or divide by zero",
-      "token_ids": null,
+      "token_ids": [
+        0,
+        2
+      ],
       "vector": [
         0.0016018422,
         0.050129484,
@@ -2349,7 +2357,9 @@
       "text": "a",
       "note": "single character, shorter than any subword",
       "token_ids": [
-        10
+        0,
+        10,
+        2
       ],
       "vector": [
         -0.013778236,
@@ -3126,6 +3136,7 @@
       "text": "l'utilisateur est allergique aux fruits de mer",
       "note": "french: apostrophe + accents",
       "token_ids": [
+        0,
         96,
         25,
         139133,
@@ -3135,7 +3146,8 @@
         2970,
         93151,
         8,
-        1143
+        1143,
+        2
       ],
       "vector": [
         0.0062049828,
@@ -3912,6 +3924,7 @@
       "text": "der Benutzer ist allergisch gegen Meeresfrüchte",
       "note": "german: umlaut",
       "token_ids": [
+        0,
         122,
         132388,
         443,
@@ -3922,7 +3935,8 @@
         90,
         420,
         18687,
-        18529
+        18529,
+        2
       ],
       "vector": [
         -0.0028252034,
@@ -4699,13 +4713,15 @@
       "text": "用户对贝类过敏",
       "note": "chinese: no whitespace between words",
       "token_ids": [
+        0,
         6,
         10501,
         1036,
         64199,
         15478,
         3074,
-        40524
+        40524,
+        2
       ],
       "vector": [
         -0.0055079823,
@@ -5482,6 +5498,7 @@
       "text": "ユーザーは甲殻類にアレルギーがあります",
       "note": "japanese: mixed kana + kanji",
       "token_ids": [
+        0,
         6,
         57064,
         342,
@@ -5490,7 +5507,8 @@
         17539,
         327,
         206922,
-        17623
+        17623,
+        2
       ],
       "vector": [
         -0.026091395,
@@ -6267,6 +6285,7 @@
       "text": "пользователь живёт в Йоркшире",
       "note": "cyrillic",
       "token_ids": [
+        0,
         199964,
         18884,
         41269,
@@ -6274,7 +6293,8 @@
         6,
         71244,
         36833,
-        103
+        103,
+        2
       ],
       "vector": [
         -0.008905209,
@@ -7051,13 +7071,15 @@
       "text": "المستخدم يعيش في يوركشاير",
       "note": "arabic: right-to-left",
       "token_ids": [
+        0,
         93790,
         140929,
         240,
         11467,
         19809,
         16830,
-        4320
+        4320,
+        2
       ],
       "vector": [
         0.011245417,
@@ -7834,6 +7856,7 @@
       "text": "🍤 shellfish allergy 🚨",
       "note": "emoji — multi-byte outside the BMP",
       "token_ids": [
+        0,
         6,
         3,
         6,
@@ -7842,7 +7865,8 @@
         10308,
         3432,
         6,
-        246464
+        246464,
+        2
       ],
       "vector": [
         0.005561186,
@@ -8619,7 +8643,9 @@
       "text": "café",
       "note": "precomposed vs decomposed accent (NFC)",
       "token_ids": [
-        26216
+        0,
+        26216,
+        2
       ],
       "vector": [
         0.017557532,
@@ -9396,7 +9422,9 @@
       "text": "café",
       "note": "the SAME word decomposed (NFD) — must normalise identically",
       "token_ids": [
-        26216
+        0,
+        26216,
+        2
       ],
       "vector": [
         0.017557532,
@@ -10173,10 +10201,12 @@
       "text": "   leading and trailing   ",
       "note": "whitespace handling",
       "token_ids": [
+        0,
         105207,
         136,
         141037,
-        214
+        214,
+        2
       ],
       "vector": [
         0.02693867,
@@ -10953,6 +10983,7 @@
       "text": "supercalifragilisticexpialidocious",
       "note": "long OOV word — exercises subword splitting",
       "token_ids": [
+        0,
         1601,
         52777,
         6000,
@@ -10961,7 +10992,8 @@
         83613,
         15403,
         3911,
-        60744
+        60744,
+        2
       ],
       "vector": [
         -0.005218152,
@@ -11738,6 +11770,7 @@
       "text": "Ruth is getting married in June and the venue is in Harrogate",
       "note": "longer sentence",
       "token_ids": [
+        0,
         124302,
         83,
         20949,
@@ -11751,7 +11784,8 @@
         23,
         1950,
         33003,
-        67
+        67,
+        2
       ],
       "vector": [
         0.0061931564,

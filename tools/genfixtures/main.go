@@ -41,15 +41,23 @@ import (
 // broken tokenizer pass whenever the embedding happened to land close.
 // Ids are exact integers: they match or they do not.
 type Fixture struct {
-	Text     string    `json:"text"`
-	Note     string    `json:"note,omitempty"`
-	TokenIDs []int32   `json:"token_ids"`
-	Vector   []float32 `json:"vector"`
+	Text string `json:"text"`
+	Note string `json:"note,omitempty"`
+	// TokenIDs are the ids AS FED TO THE FORWARD PASS — wrapped with the
+	// model's special tokens and truncated — not the raw tokenizer
+	// output. That distinction is the whole point: it lets the forward
+	// pass be gated on ids -> vector INDEPENDENTLY of whether our own
+	// tokenizer is finished, so a numerics bug and a tokenizer bug can
+	// never be mistaken for one another.
+	TokenIDs []int32 `json:"token_ids"`
+	// Vector is Embed(TokenIDs): pooled and L2-normalised.
+	Vector []float32 `json:"vector"`
 }
 
 type Golden struct {
 	Model     string    `json:"model"`
 	HiddenDim int       `json:"hidden_dim"`
+	Pooling   string    `json:"pooling"`
 	Fixtures  []Fixture `json:"fixtures"`
 }
 
@@ -76,8 +84,10 @@ var corpus = []struct{ text, note string }{
 
 func main() {
 	model := flag.String("model", "", "path to an HF snapshot directory")
+	maxSeqFlag := flag.Int("max-seq", 512, "sequence truncation length")
 	out := flag.String("out", "", "directory to write golden.json into")
 	flag.Parse()
+	maxSeq := *maxSeqFlag
 	if *model == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "both -model and -out are required")
 		os.Exit(2)
@@ -100,20 +110,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	g := Golden{Model: filepath.Base(*model)}
+	g := Golden{Model: filepath.Base(*model), Pooling: "mean"}
 	for _, c := range corpus {
-		vec, err := m.Encode(c.text)
+		ids, err := tok.EncodeWithSpecials(c.text, maxSeq)
 		if err != nil {
-			// Recorded as a fixture with a nil vector would be a lie —
-			// better to fail loudly than to bake an error into the gate.
-			fmt.Fprintf(os.Stderr, "encode %q: %v\n", c.text, err)
+			fmt.Fprintf(os.Stderr, "tokenize %q: %v\n", c.text, err)
 			os.Exit(1)
 		}
+		// Embed rather than Encode: this is the ids -> vector contract.
+		vec := m.Embed(ids)
 		if g.HiddenDim == 0 {
 			g.HiddenDim = len(vec)
 		}
 		g.Fixtures = append(g.Fixtures, Fixture{
-			Text: c.text, Note: c.note, TokenIDs: tok.Encode(c.text), Vector: vec,
+			Text: c.text, Note: c.note, TokenIDs: ids, Vector: vec,
 		})
 	}
 
