@@ -89,6 +89,26 @@ func (n *Node) wireCompute() error {
 	// no error in it anywhere.
 	n.embedder = embedder
 
+	// Checked HERE, once, for exactly the reason the assignment above
+	// is: this lived inside wireEmbedder's REMOTE branch, so when the
+	// builtin branch was added it skipped the guard entirely — and the
+	// builtin path is the one where changing models is easy, being a
+	// line of config rather than a new API key.
+	//
+	// A store whose vectors were written by another model is not a
+	// first-recall problem, it is a wrong-answers-forever problem:
+	// cosine across two vector spaces still returns a number, the
+	// number still sorts, and nothing reports anything. Start-up is
+	// the only moment anybody is watching.
+	//
+	// The identity comes from the PROVIDER, not from config, because
+	// that is what actually gets stamped on the vectors it writes.
+	if embedder != nil {
+		if err := memory.CheckEmbeddingModel(n.store, embedder.Model()); err != nil {
+			return err
+		}
+	}
+
 	// binariesProvider comes back out of tool registration so the Agent
 	// (constructed below) can advertise the operator's [[binary]]
 	// catalogue in the system prompt every turn. Nil when no [[binary]]

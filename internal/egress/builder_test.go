@@ -236,3 +236,39 @@ func TestNoDownloadURLGrantsNoModelEgress(t *testing.T) {
 		t.Errorf("embedding-model role granted with no download_url: %v", hosts)
 	}
 }
+
+// GitHub serves release assets from a CDN on a different host, so the
+// obvious implementation — allow the configured host — grants nothing
+// usable and the fetch dies with "Request rejected by proxy" on a
+// policy that reads correctly.
+//
+// Found by pointing a node at our own release mirror and watching it
+// fail to boot.
+func TestAGitHubReleaseDownloadAllowsItsRedirectHosts(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{
+		EmbeddingModelURL: "https://github.com/jmylchreest/lobslaw/releases/download/models-all-MiniLM-L6-v2",
+	})
+	hosts := rules.Roles["embedding-model"]
+	for _, want := range []string{"github.com", "release-assets.githubusercontent.com"} {
+		found := false
+		for _, h := range hosts {
+			if h == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("embedding-model hosts %v are missing %q", hosts, want)
+		}
+	}
+}
+
+// A non-GitHub mirror gets ONLY its own host. The redirect allowance is
+// specific to a host known to redirect, not a general widening.
+func TestANonGitHubMirrorGetsOnlyItsOwnHost(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{EmbeddingModelURL: "https://models.example.org/e5"})
+	if got := rules.Roles["embedding-model"]; len(got) != 1 || got[0] != "models.example.org" {
+		t.Errorf("hosts = %v, want [models.example.org]", got)
+	}
+}

@@ -19,13 +19,15 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/embedder"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -66,20 +68,30 @@ func main() {
 	if err != nil {
 		die("load config: %v", err)
 	}
-	if cfg.Compute.Embeddings.Endpoint == "" {
-		die("compute.embeddings.endpoint is empty — nothing to backfill against")
+	if !cfg.Compute.Embeddings.Configured() {
+		die("[compute.embeddings] is not configured — nothing to backfill against")
 	}
 
 	keyRaw := os.Getenv("LOBSLAW_MEMORY_KEY")
 	if keyRaw == "" {
 		die("LOBSLAW_MEMORY_KEY env required")
 	}
-	keyBytes, err := base64.StdEncoding.DecodeString(keyRaw)
+	// crypto.ParseKey, NOT a bare base64 decode.
+	//
+	// ParseKey accepts hex OR base64, which is what the node uses. This
+	// decoded base64 only — and a 64-character hex key IS valid base64:
+	// it decodes to 48 bytes of nonsense, the first 32 become the
+	// "key", and the failure surfaces as
+	//
+	//	decrypt failed (bad key, nonce, or ciphertext)
+	//
+	// on the first record, with nothing pointing at the key parsing.
+	// Two implementations of one concept, and the wrong one failed
+	// silently.
+	key, err := crypto.ParseKey(strings.TrimSpace(keyRaw))
 	if err != nil {
-		die("decode memory key: %v", err)
+		die("parse memory key: %v", err)
 	}
-	var key crypto.Key
-	copy(key[:], keyBytes)
 
 	statePath := filepath.Join(cfg.Cluster.DataDir, "state.db")
 	store, err := memory.OpenStore(statePath, key)
@@ -90,20 +102,10 @@ func main() {
 	// this Close; it only releases the file lock and mmap at exit.
 	defer func() { _ = store.Close() }()
 
-	apiKey, err := config.ResolveSecret(cfg.Compute.Embeddings.APIKeyRef)
-	if err != nil {
-		die("resolve embedding api key: %v", err)
-	}
-	ec, err := compute.NewEmbeddingClient(compute.EmbeddingClientConfig{
-		Endpoint:      cfg.Compute.Embeddings.Endpoint,
-		APIKey:        apiKey,
-		Model:         cfg.Compute.Embeddings.Model,
-		Dims:          cfg.Compute.Embeddings.Dims,
-		DriverFactory: backfillEmbeddingFactory(cfg.Compute.Embeddings.Format),
-	})
-	if err != nil {
-		die("embed client: %v", err)
-	}
+	// Resolved through one function so main does not branch on the
+	// embedder kind; see newEmbedder for why builtin had to be added.
+	ec, closeEmbedder := newEmbedder(cfg)
+	defer closeEmbedder()
 
 	indexed := loadVectorIndex(store)
 	var (
@@ -149,6 +151,21 @@ func main() {
 		return nil
 	})
 	if err != nil {
+		// A decrypt failure here is almost always the KEY, not the
+		// data, and "decrypt failed (bad key, nonce, or ciphertext)"
+		// does not say which. total counts the records walked before
+		// the abort, so the two cases are distinguishable: nothing
+		// walked means the very first record failed.
+		if strings.Contains(err.Error(), "decrypt") {
+			if total <= 1 {
+				die("cannot decrypt the store — LOBSLAW_MEMORY_KEY does not match the key this\n"+
+					"  data was written with. It must be the same value [memory.encryption]\n"+
+					"  key_ref resolves to for the node.\n\n  %v", err)
+			}
+			die("decrypted %d records then failed on one — that record predates a key\n"+
+				"  rotation, or is corrupt. Re-embedding cannot skip it without leaving\n"+
+				"  a gap it would never report.\n\n  %v", total, err)
+		}
 		die("scan episodic: %v", err)
 	}
 
@@ -264,7 +281,11 @@ func main() {
 
 // embedBatchWithRetry is the batch analogue of embedWithRetry.
 // One HTTP round-trip per call; retry the whole batch on rate-limit.
-func embedBatchWithRetry(ec *compute.EmbeddingClient, texts []string) ([][]float32, error) {
+// Takes the INTERFACE, not the HTTP client, so a builtin model goes
+// through the same retry and batching path. The retries are inert for
+// an in-process embedder — there is nothing transient to survive — but
+// one code path is worth more than a saved branch.
+func embedBatchWithRetry(ec compute.EmbeddingProvider, texts []string) ([][]float32, error) {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -354,4 +375,57 @@ func backfillEmbeddingFactory(name string) compute.EmbeddingDriverFactory {
 		return compute.MiniMaxEmbeddingFactory
 	}
 	return compute.OpenAIEmbeddingFactory
+}
+
+// openBuiltin resolves and loads the in-process model.
+//
+// Downloads it if download_url is set and it is absent, exactly as the
+// node does at boot — so re-embedding after a model change does not
+// require the operator to have fetched it by hand first.
+func openBuiltin(cfg *config.Config) (*embedder.Encoder, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	// Through egress like the node's own fetch, not http.DefaultClient
+	// — a lint rule enforces this, and rightly: a tool that reached the
+	// internet outside the policy would be a hole the policy cannot see.
+	dir, err := embedder.Ensure(ctx, egress.For("embedding-model").HTTPClient(), cfg.Cluster.DataDir,
+		cfg.Compute.Embeddings.Model, cfg.Compute.Embeddings.DownloadURL)
+	if err != nil {
+		return nil, err
+	}
+	return embedder.Open(dir)
+}
+
+// newEmbedder builds whichever embedder the config asks for.
+//
+// BUILTIN MODELS HAVE TO WORK HERE, and did not. This tool required an
+// endpoint, so with type = "builtin" it refused to start — while
+// memory.CheckEmbeddingModel's error tells the operator to run exactly
+// this command to recover from a model change. A node running a local
+// model could therefore never change it: refused at boot, and refused
+// by the only tool offered as the way out.
+func newEmbedder(cfg *config.Config) (compute.EmbeddingProvider, func()) {
+	if cfg.Compute.Embeddings.Builtin() {
+		enc, err := openBuiltin(cfg)
+		if err != nil {
+			die("builtin embeddings: %v", err)
+		}
+		return compute.NewBuiltinEmbedder(enc, cfg.Compute.Embeddings.Model),
+			func() { _ = enc.Close() }
+	}
+	apiKey, err := config.ResolveSecret(cfg.Compute.Embeddings.APIKeyRef)
+	if err != nil {
+		die("resolve embedding api key: %v", err)
+	}
+	ec, err := compute.NewEmbeddingClient(compute.EmbeddingClientConfig{
+		Endpoint:      cfg.Compute.Embeddings.Endpoint,
+		APIKey:        apiKey,
+		Model:         cfg.Compute.Embeddings.Model,
+		Dims:          cfg.Compute.Embeddings.Dims,
+		DriverFactory: backfillEmbeddingFactory(cfg.Compute.Embeddings.Format),
+	})
+	if err != nil {
+		die("embed client: %v", err)
+	}
+	return ec, func() {}
 }

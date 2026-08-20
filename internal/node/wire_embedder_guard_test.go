@@ -24,19 +24,59 @@ import (
 //
 // One assignment means a third embedder kind cannot repeat it.
 func TestTheEmbedderIsAssignedExactlyOnce(t *testing.T) {
-	t.Parallel()
+	assertCalledOnce(t, "n.embedder assignment", func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return false
+		}
+		for _, lhs := range assign.Lhs {
+			sel, ok := lhs.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "embedder" {
+				continue
+			}
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "n" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// The model-change guard must run for EVERY embedder kind, so it is
+// called exactly once — at the call site, not inside a branch.
+//
+// It was inside wireEmbedder's remote branch. When the builtin branch
+// was added it skipped the guard entirely, and the builtin path is the
+// one where changing models is easy: a line of config rather than a new
+// API key. A node then loaded a different model over a corpus written
+// by the old one and started perfectly happily, which is the exact
+// failure the guard exists to prevent.
+func TestTheEmbeddingModelGuardRunsExactlyOnce(t *testing.T) {
+	assertCalledOnce(t, "memory.CheckEmbeddingModel call", func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "CheckEmbeddingModel" {
+			return false
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		return ok && ident.Name == "memory"
+	})
+}
+
+// assertCalledOnce parses every non-test file in the package and fails
+// unless match hits exactly once.
+func assertCalledOnce(t *testing.T, what string, match func(ast.Node) bool) {
+	t.Helper()
 	fset := token.NewFileSet()
-	// Every .go file, parsed individually rather than through
-	// parser.ParseDir. ParseDir is deprecated, but the better reason is
-	// that it does not consider build tags — and a build-tagged file
-	// assigning n.embedder is exactly as dangerous as an untagged one,
-	// so this guard must see all of them.
 	paths, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	files := make([]*ast.File, 0, len(paths))
-	names := make([]string, 0, len(paths))
+	var sites []string
+	var files int
 	for _, path := range paths {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -45,36 +85,19 @@ func TestTheEmbedderIsAssignedExactlyOnce(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
-		files = append(files, f)
-		names = append(names, path)
-	}
-	if len(files) < 5 {
-		t.Fatalf("only parsed %d files; the glob is not finding the package", len(files))
-	}
-
-	var sites []string
-	for i, file := range files {
-		ast.Inspect(file, func(n ast.Node) bool {
-			assign, ok := n.(*ast.AssignStmt)
-			if !ok {
-				return true
-			}
-			for _, lhs := range assign.Lhs {
-				sel, ok := lhs.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "embedder" {
-					continue
-				}
-				if ident, ok := sel.X.(*ast.Ident); !ok || ident.Name != "n" {
-					continue
-				}
-				sites = append(sites, names[i]+":"+fset.Position(assign.Pos()).String())
+		files++
+		ast.Inspect(f, func(n ast.Node) bool {
+			if n != nil && match(n) {
+				sites = append(sites, fset.Position(n.Pos()).String())
 			}
 			return true
 		})
 	}
-
+	if files < 5 {
+		t.Fatalf("only parsed %d files; the glob is not finding the package", files)
+	}
 	if len(sites) != 1 {
-		t.Errorf("n.embedder is assigned in %d places, want exactly 1 (the call site in wireEmbedder's caller):\n  %s",
-			len(sites), strings.Join(sites, "\n  "))
+		t.Errorf("%s appears in %d places, want exactly 1:\n  %s",
+			what, len(sites), strings.Join(sites, "\n  "))
 	}
 }
