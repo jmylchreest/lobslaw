@@ -165,6 +165,18 @@ func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 // search, and the episodic ingester writes a paired vector record per
 // turn.
 func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
+	// Switched on explicitly rather than defaulted, so a typo is a
+	// start-up error instead of a silent fall-through to the remote
+	// path — which for type = "biultin" would then complain about a
+	// missing endpoint and send the operator looking in the wrong
+	// place entirely.
+	switch t := n.cfg.Compute.Embeddings.Type; t {
+	case "", "remote":
+	case "builtin":
+		return n.wireBuiltinEmbedder()
+	default:
+		return nil, fmt.Errorf("[compute.embeddings] type = %q is not a known type (want \"remote\" or \"builtin\")", t)
+	}
 	if n.cfg.Compute.Embeddings.Endpoint == "" {
 		// Said out loud, because the consequence is invisible
 		// otherwise: recall still works, but it matches words rather
