@@ -253,6 +253,34 @@ Raising the parallel threshold to reduce goroutine churn was measured and made t
 
 ---
 
+### e5 asymmetric prefixes are not applied
+
+e5 models are trained with `query: ` on the question and `passage: ` on the stored text. lobslaw applies neither, because `EmbeddingProvider.Embed` takes one string and has no idea which it is being handed.
+
+Measured on 20 paraphrase queries against 20 memories:
+
+| | recall@1 | recall@3 |
+|---|---|---|
+| with prefixes | 15/20 | 18/20 |
+| without (today) | 14/20 | 17/20 |
+
+One hit at each, on `e5-small`. Small but free — the callers all know which side they are on: the episodic ingester embeds passages, the context engine and `memory_search` embed queries. It needs the interface to say so, which is a wider change than it looks because the remote embedder shares it.
+
+**Trigger to revisit:** any work touching `EmbeddingProvider`, or a complaint about recall quality.
+
+---
+
+### Smaller than 471 MB would need quantisation or vocabulary pruning
+
+82% of the download is the token embedding table at F32. Two ways down, neither implemented:
+
+- **int8 the embedding table.** It is a pure lookup — no arithmetic depends on its precision beyond the first add — so per-row int8 with a scale would cut 384 MB to ~96 MB, taking the total to roughly 180 MB. The forward pass is unaffected.
+- **Prune the vocabulary.** XLM-R carries 250k tokens for 100+ languages. A node whose users write English and French needs a fraction of that; dropping unused rows and remapping ids is a known technique and would cut deeper than quantisation.
+
+**Trigger to revisit:** a deployment where 471 MB is genuinely the blocker — otherwise this is effort spent on a one-off download.
+
+---
+
 ### No WordPiece tokenizer, so no small English-only option
 
 The tokenizer reads SentencePiece Unigram, which means the XLM-RoBERTa family, which means a 250k multilingual vocabulary. That vocabulary is **82% of the download**: `multilingual-e5-small` is 471 MB of which 384 MB is one embedding row per token, and only 87 MB is the transformer.

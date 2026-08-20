@@ -83,6 +83,19 @@ All are multilingual — a memory recorded in English is retrievable by a questi
 
 The 512-token context is less limiting than it looks: longer text is **chunked automatically** and combined by a length-weighted mean, so `bge-m3`'s 8k window mainly saves you the chunking, not the content.
 
+#### Is the small one enough?
+
+For memory recall, yes. Measured on 20 paraphrase queries against 20 stored memories — the shape of the actual workload:
+
+| model | download | recall@1 | recall@3 |
+|---|---|---|---|
+| `multilingual-e5-small` | 471 MB | 15/20 | 18/20 |
+| `multilingual-e5-base` | 1.1 GB | 15/20 | 19/20 |
+
+Identical top-1, one extra hit in the top 3, for 2.4x the download. Treat that as "no meaningful difference" rather than a precise result — 20 queries is a small sample — but the direction is clear enough that the larger model is hard to justify for this.
+
+That is what you would expect from the task: a few thousand short records, queries that are paraphrases of them, and the top few going into a prompt. It is an easy retrieval problem, and recall@3 is what matters because the context engine takes several.
+
 #### Why 471 MB is the floor
 
 Because the vocabulary is the cost of being multilingual, not the model:
