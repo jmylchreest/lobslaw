@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,7 +124,7 @@ func Ensure(ctx context.Context, client *http.Client, dataDir, model, base strin
 			// An optional file that is genuinely absent upstream is
 			// not a failure; a required one is.
 			if required(name) {
-				return "", explainMissing(name, base, err)
+				return "", explainFetchFailure(name, base, err)
 			}
 			markAbsent(dir, name)
 		}
@@ -230,7 +231,7 @@ func fetchAs(ctx context.Context, client *http.Client, base, dir, remote, local 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("embedder: fetch %s: HTTP %d", name, resp.StatusCode)
+		return &statusError{name: name, code: resp.StatusCode}
 	}
 
 	dst := filepath.Join(dir, name)
@@ -297,22 +298,81 @@ func markAbsent(dir, name string) {
 	_ = os.WriteFile(p, nil, 0o644)
 }
 
-// explainMissing turns a bare 404 into the reason it happened.
+// statusError is a non-200 response, carrying the code so a caller can
+// tell "the mirror does not have this file" from "the request never
+// arrived". explainFetchFailure needs that distinction; without it the
+// two produce the same advice and one of them is wrong.
+type statusError struct {
+	name string
+	code int
+}
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("embedder: fetch %s: HTTP %d", e.name, e.code)
+}
+
+// explainFetchFailure turns a bare transport or status error into the
+// reason it happened.
 //
-// Plenty of HuggingFace repositories — especially older ones — ship
-// only pytorch_model.bin. That file is a PYTHON PICKLE, which is
-// arbitrary code execution on load, so this package will not read one
-// at any price. The bare error said "fetch model.safetensors: HTTP
-// 404", which reads as a broken URL and sends an operator to check
-// their typing rather than their repository.
-func explainMissing(name, base string, err error) error {
-	if name != "model.safetensors" {
-		return err
+// Two failures dominate here and they pull in opposite directions, so
+// guessing wrong costs an operator real time:
+//
+//   - A 404 on model.safetensors usually means the repository ships
+//     only pytorch_model.bin. That file is a PYTHON PICKLE, which is
+//     arbitrary code execution on load, so this package will not read
+//     one at any price. "HTTP 404" alone reads as a broken URL and
+//     sends someone to check their typing rather than their repository.
+//
+//   - A proxy rejection means the request never reached the mirror.
+//     The node's egress allowlist covers the host in download_url and
+//     the CDNs it is known to redirect to; anything else is refused.
+//     This one used to be reported with the safetensors story above —
+//     a message that was not merely unhelpful but actively misleading,
+//     because it blamed a repository the node had never contacted.
+func explainFetchFailure(name, base string, err error) error {
+	if host, ok := proxyRejectedHost(err); ok {
+		return fmt.Errorf("%w\n"+
+			"  the egress proxy refused a connection to %s while fetching %s.\n"+
+			"  The request never reached the mirror, so this is an allowlist\n"+
+			"  problem rather than a missing file: the \"embedding-model\" role\n"+
+			"  allows the host in download_url plus the CDNs that host is known\n"+
+			"  to redirect to. A mirror redirecting anywhere else needs that\n"+
+			"  host allowed too, or the checkpoint placed on disk with\n"+
+			"  download_url left empty",
+			err, host, name)
 	}
-	return fmt.Errorf("%w\n"+
-		"  %s has no model.safetensors. Many older repositories ship only\n"+
-		"  pytorch_model.bin, which is a Python pickle — loading one executes\n"+
-		"  arbitrary code, so it is refused rather than supported.\n"+
-		"  Pick a repository that publishes safetensors, or convert it yourself",
-		err, strings.TrimSuffix(base, "/"))
+
+	var se *statusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound && name == "model.safetensors" {
+		return fmt.Errorf("%w\n"+
+			"  %s has no model.safetensors. Many older repositories ship only\n"+
+			"  pytorch_model.bin, which is a Python pickle — loading one executes\n"+
+			"  arbitrary code, so it is refused rather than supported.\n"+
+			"  Pick a repository that publishes safetensors, or convert it yourself",
+			err, strings.TrimSuffix(base, "/"))
+	}
+	return err
+}
+
+// proxyRejectedHost reports the host smokescreen refused, if this error
+// is a proxy rejection.
+//
+// Matched on the message because that is all that survives the
+// http.Client boundary: the proxy answers the CONNECT with a refusal
+// and the transport hands back a *url.Error wrapping it, with no typed
+// error to assert on. The URL is the useful part — it names the
+// REDIRECT TARGET, which is the host missing from the allowlist and
+// never the one written in download_url.
+func proxyRejectedHost(err error) (string, bool) {
+	var ue *url.Error
+	if !errors.As(err, &ue) || ue.Err == nil {
+		return "", false
+	}
+	if !strings.Contains(ue.Err.Error(), "rejected by proxy") {
+		return "", false
+	}
+	if u, perr := url.Parse(ue.URL); perr == nil && u.Host != "" {
+		return u.Host, true
+	}
+	return ue.URL, true
 }

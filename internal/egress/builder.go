@@ -306,7 +306,8 @@ func (u *uniqueHosts) add(host string) {
 func modelDownloadHosts(rawURL string) []string {
 	host := hostOfOrSelf(rawURL)
 	hosts := []string{host}
-	if host == "github.com" || strings.HasSuffix(host, ".github.com") {
+	switch {
+	case host == "github.com" || strings.HasSuffix(host, ".github.com"):
 		hosts = append(hosts,
 			// Where release assets are actually served from. Both are
 			// live: the first is current, the second still answers for
@@ -314,6 +315,41 @@ func modelDownloadHosts(rawURL string) []string {
 			"release-assets.githubusercontent.com",
 			"objects.githubusercontent.com",
 		)
+	case isHuggingFaceHost(host):
+		// HuggingFace is where public checkpoints live and what the
+		// configuration docs recommend, so this is the path a new
+		// operator takes — and until this case existed it was the one
+		// path guaranteed to fail. /resolve/main/<file> answers 302 to
+		// a signed URL on a CDN host, so the node died at boot on a
+		// download_url copied verbatim out of our own documentation.
+		//
+		// Wildcards rather than an enumeration because the CDN
+		// hostname varies by region and by storage generation:
+		// us.aws.cdn.hf.co and eu.aws.cdn.hf.co for Xet-backed repos,
+		// cdn-lfs.hf.co / cdn-lfs-us-1.hf.co for LFS ones,
+		// transfer.xethub.hf.co for the Xet bridge, and
+		// cdn-lfs.huggingface.co for repos old enough to predate the
+		// hf.co domain. A list of exact hosts would be a list that
+		// rots, and it would rot into this same boot failure.
+		//
+		// Still an allowance to ONE vendor's domains, not to wherever
+		// a redirect points. A mirror that redirects off HuggingFace
+		// is not covered, which is the intended limit.
+		hosts = append(hosts, "*.hf.co", "*.huggingface.co")
 	}
 	return hosts
+}
+
+// isHuggingFaceHost reports whether a host belongs to HuggingFace.
+//
+// Both domains are load-bearing: hf.co is the short form used in
+// redirects and by newer tooling, huggingface.co is what the docs and
+// the web UI use, and either can appear in a download_url.
+func isHuggingFaceHost(host string) bool {
+	for _, apex := range []string{"hf.co", "huggingface.co"} {
+		if host == apex || strings.HasSuffix(host, "."+apex) {
+			return true
+		}
+	}
+	return false
 }

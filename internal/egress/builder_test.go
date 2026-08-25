@@ -4,6 +4,8 @@ import (
 	"sort"
 	"testing"
 
+	smokeacl "github.com/stripe/smokescreen/pkg/smokescreen/acl/v1"
+
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -270,5 +272,87 @@ func TestANonGitHubMirrorGetsOnlyItsOwnHost(t *testing.T) {
 	rules := Build(ACLInputs{EmbeddingModelURL: "https://models.example.org/e5"})
 	if got := rules.Roles["embedding-model"]; len(got) != 1 || got[0] != "models.example.org" {
 		t.Errorf("hosts = %v, want [models.example.org]", got)
+	}
+}
+
+// HuggingFace is where public checkpoints live and what
+// docs/docs/configuration/reference.md tells a new operator to put in
+// download_url — and every /resolve/main/<file> URL answers 302 to a
+// signed CDN host. Allowing only huggingface.co therefore denied the
+// documented configuration: the node died at boot on a URL copied
+// verbatim out of our own docs, reporting a missing safetensors file
+// for a repository it had never reached.
+func TestAHuggingFaceDownloadAllowsItsCDNHosts(t *testing.T) {
+	t.Parallel()
+	for _, base := range []string{
+		"https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main",
+		"https://hf.co/intfloat/multilingual-e5-base/resolve/main",
+	} {
+		rules := Build(ACLInputs{EmbeddingModelURL: base})
+		hosts := rules.Roles["embedding-model"]
+		for _, want := range []string{"*.hf.co", "*.huggingface.co"} {
+			found := false
+			for _, h := range hosts {
+				if h == want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s: embedding-model hosts %v are missing %q", base, hosts, want)
+			}
+		}
+	}
+}
+
+// The wildcard has to actually match the hosts it was added for, which
+// is a property of smokescreen's glob semantics rather than of the
+// string we emit. us.aws.cdn.hf.co is two labels deep, so a matcher
+// that only accepted one would compile, read correctly, and still deny
+// every download.
+func TestTheHuggingFaceWildcardMatchesRealCDNHosts(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{
+		EmbeddingModelURL: "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main",
+	})
+	acl := buildSmokescreenACL(rules)
+	for _, host := range []string{
+		"us.aws.cdn.hf.co",       // Xet-backed repos, US
+		"eu.aws.cdn.hf.co",       // Xet-backed repos, EU
+		"cdn-lfs.hf.co",          // LFS-backed repos
+		"cdn-lfs-us-1.hf.co",     // LFS, regional shard
+		"transfer.xethub.hf.co",  // Xet bridge
+		"cdn-lfs.huggingface.co", // repos predating the hf.co domain
+	} {
+		decision, err := acl.Decide("embedding-model", host)
+		if err != nil {
+			t.Fatalf("Decide(%q): %v", host, err)
+		}
+		if decision.Result == smokeacl.Deny {
+			t.Errorf("%s denied: %s", host, decision.Reason)
+		}
+	}
+}
+
+// The allowance is to HuggingFace, not to wherever a redirect points.
+// A wildcard that had been written "*.co" or applied unconditionally
+// would pass the tests above and grant most of the internet.
+func TestTheHuggingFaceAllowanceDoesNotLeakToOtherHosts(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{
+		EmbeddingModelURL: "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main",
+	})
+	acl := buildSmokescreenACL(rules)
+	for _, host := range []string{
+		"evil.example.com",
+		"huggingface.co.evil.example.com",
+		"cdn.example.co",
+	} {
+		decision, err := acl.Decide("embedding-model", host)
+		if err != nil {
+			t.Fatalf("Decide(%q): %v", host, err)
+		}
+		if decision.Result != smokeacl.Deny {
+			t.Errorf("%s was allowed under the HuggingFace model allowance", host)
+		}
 	}
 }

@@ -201,6 +201,13 @@ format      = "openai"
 # downloading has to be asked for. The host is also granted egress
 # under the "embedding-model" role only when this is set.
 #
+# That role covers the host in the URL plus the CDNs it is known to
+# redirect to — HuggingFace serves weights from *.hf.co, GitHub from
+# the release-asset hosts. A mirror that redirects anywhere else is
+# refused by the egress proxy: the node fails at boot saying so, and
+# the fix is to allow that host or to place the checkpoint under
+# <data_dir>/models/<model> yourself and leave download_url empty.
+#
 # dims is optional here and CHECKED against the checkpoint rather than
 # trusted — a mismatch fails at boot instead of writing a corpus at the
 # wrong width.

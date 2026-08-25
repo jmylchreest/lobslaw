@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,4 +263,65 @@ func TestNoChecksumManifestIsFine(t *testing.T) {
 func sha256Of(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// A proxy rejection and a missing file are different failures with
+// opposite fixes, and for a while they produced the same message: a
+// node refused egress to the CDN was told its repository ships no
+// safetensors. That advice sends an operator to pick a different model
+// — which will fail identically, because the request never left the
+// box.
+func TestAProxyRejectionIsNotReportedAsAMissingFile(t *testing.T) {
+	t.Parallel()
+	// What the transport hands back when smokescreen refuses a CONNECT:
+	// a *url.Error naming the redirect target, wrapping the refusal.
+	inner := &url.Error{
+		Op:  "Get",
+		URL: "https://us.aws.cdn.hf.co/xet-bridge-us/deadbeef",
+		Err: errors.New("Request rejected by proxy"),
+	}
+	err := explainFetchFailure(
+		"model.safetensors",
+		"https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main",
+		fmt.Errorf("embedder: fetch model.safetensors: %w", inner),
+	)
+
+	msg := err.Error()
+	if strings.Contains(msg, "pytorch_model.bin") {
+		t.Errorf("proxy rejection explained as a missing safetensors file:\n%s", msg)
+	}
+	// It has to name the host that was actually refused — the redirect
+	// target, which is never the host written in download_url.
+	if !strings.Contains(msg, "us.aws.cdn.hf.co") {
+		t.Errorf("message does not name the refused host:\n%s", msg)
+	}
+	if !strings.Contains(msg, "allowlist") {
+		t.Errorf("message does not say this is an allowlist problem:\n%s", msg)
+	}
+}
+
+// The safetensors explanation is still right for the case it was
+// written for, and must survive the change that stopped it firing on
+// everything else.
+func TestA404OnSafetensorsStillExplainsThePickleRefusal(t *testing.T) {
+	t.Parallel()
+	err := explainFetchFailure(
+		"model.safetensors",
+		"https://huggingface.co/some/old-repo/resolve/main",
+		&statusError{name: "model.safetensors", code: http.StatusNotFound},
+	)
+	if !strings.Contains(err.Error(), "pytorch_model.bin") {
+		t.Errorf("404 no longer explains the pickle refusal:\n%s", err)
+	}
+}
+
+// A non-404 status is neither of the two known failures, so it is
+// passed through rather than decorated with a guess.
+func TestAnUnrelatedStatusIsNotExplainedAway(t *testing.T) {
+	t.Parallel()
+	in := &statusError{name: "model.safetensors", code: http.StatusInternalServerError}
+	err := explainFetchFailure("model.safetensors", "https://mirror.example.org/m", in)
+	if err.Error() != in.Error() {
+		t.Errorf("500 was decorated with an explanation it did not earn:\n%s", err)
+	}
 }
