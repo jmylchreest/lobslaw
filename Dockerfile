@@ -87,3 +87,14 @@ EXPOSE 8443
 EXPOSE 7445/udp
 
 ENTRYPOINT ["/usr/local/bin/lobslaw"]
+
+# Default to starting a node.
+#
+# ENTRYPOINT alone left the image running `lobslaw` with no arguments,
+# which since the CLI grew subcommands prints usage and exits 0 — so
+# `docker run lobslaw` and every compose service that did not set an
+# explicit command came up, said nothing useful, and stopped. A default
+# CMD is still overridden by any arguments passed to `docker run`, so
+# `... lobslaw cluster sign-node` and the compose init containers keep
+# working exactly as before.
+CMD ["run"]
