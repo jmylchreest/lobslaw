@@ -39,22 +39,13 @@ type  = "local"
 path  = "/var/lobslaw/data/snapshots"
 
 # ----- Read-only system surfaces -----------------------------------
-# Operator-managed extension dir at /lobslaw/usr/bin (uv/uvx live
-# here, populated by the uv-init sidecar). Mode "rx": the agent can
-# read+exec these binaries (shell_command's Landlock sandbox honours
-# this) but not modify them. Self-discovery via list/glob/read still
-# works because Read is implicit in "rx".
+# No mount is declared for the image's own /bin and /usr/bin: skill
+# subprocesses inherit the container's PATH and find them there.
 #
-# The alpine runtime image provides /bin and /usr/bin natively; we
-# don't declare a separate system-bin mount because skill subprocesses
-# inherit the container's PATH and busybox is on it.
-# may exec but not write. Operators (or the `tools` sidecar) push
-# binaries here out-of-band.
-[[storage.mounts]]
-label = "system-usr-bin"
-type  = "local"
-path  = "/lobslaw/usr/bin"
-mode  = "rx"
+# There used to be one at /lobslaw/usr/bin, seeded by a uv-init
+# sidecar. Both are gone — runtime tool installs go to
+# /lobslaw/usr/local (the "binaries" mount below) via [[binary]] and
+# the binary_install builtin.
 
 # Self-introspection mount. The agent can read its own config +
 # soul. certs/ is excluded wholesale because node-key.pem is
@@ -77,12 +68,11 @@ path  = "/workspace"
 mode  = "rw"
 
 # The binary install workspace — operator-owned territory where
-# binary_install writes. Distinct from /lobslaw/usr/bin (which
-# uv-init populates with the uv/uvx bootstrap tools and we treat
-# as read-only at runtime). Skill subprocesses get rx — they can
-# read and execute installed binaries but never write. Only the
-# lobslaw process (the installer) writes here, and the agent only
-# writes via the operator-gated binary_install builtin.
+# binary_install writes, distinct from the image-baked /usr/bin.
+# Skill subprocesses get rx — they can read and execute installed
+# binaries but never write. Only the lobslaw process (the installer)
+# writes here, and the agent only writes via the operator-gated
+# binary_install builtin.
 #
 # Persistence is the operator's choice: pair this mount with a
 # named volume in compose for persistence (recommended), or omit
@@ -137,10 +127,14 @@ clawhub_binary_hosts = [
 
 # When true, a successful clawhub_install also writes a policy rule
 # allowing the agent to call the newly-installed skill's tool
-# (resource = <skill_name>, scope:owner, allow, priority 20). Off
-# by default; on in this dev deploy so testing flows don't need a
-# manual policy edit + SIGHUP after each install.
-clawhub_auto_emit_install_rules = true
+# (resource = <skill_name>, scope:owner, allow, priority 20).
+#
+# Left off here. This file is the template every new operator copies,
+# and installing a skill should not also be the act that grants it —
+# that collapses two decisions into one and does it in the direction of
+# more access. Turn it on if hand-editing a rule after each install
+# gets tedious while you are testing.
+clawhub_auto_emit_install_rules = false
 
 # Optional override of the binary download allowlist. When unset
 # (and clawhub_base_url is set), defaults to github.com release
@@ -149,8 +143,7 @@ clawhub_auto_emit_install_rules = true
 
 # Where binary_install puts user-mode installs. Convention:
 # /lobslaw/usr/local — FHS-aligned for "operator-installed stuff",
-# distinct from /lobslaw/usr/bin (which uv-init owns) and /usr/bin
-# (image-baked baseline). Pair with a named volume in compose for
+# distinct from the image-baked /usr/bin. Pair with a named volume for
 # persistence, or skip the volume for ephemeral installs that
 # reset on container restart. System managers (apt/dnf/pacman/apk)
 # ignore this — only user-mode managers (npm, cargo, go-install,
@@ -490,7 +483,8 @@ bot_token_ref  = "env:LOBSLAW_TELEGRAM_BOT_TOKEN"
 # unknown_user_scope default. Get your ID by DMing @userinfobot or
 # from the gateway's own "telegram: unknown user" log when you message.
 [gateway.channels.user_scopes]
-"6972251926" = "owner"
+# Replace with your own numeric id before enabling the channel above.
+# "000000000" = "owner"
 
 [soul]
 path  = "/etc/lobslaw/SOUL.md"
@@ -537,32 +531,43 @@ broadcast_address = "255.255.255.255"
 # values are resolved via lobslaw's secret resolver (env:VAR /
 # file:/path) so keys never appear in plaintext in this file.
 
-# MiniMax MCP — installed at runtime by lobslaw via the `uv` binary
-# the uv-init container dropped into /lobslaw/usr/bin (static Rust,
-# runs fine under distroless). uv brings its own self-contained
-# Python interpreter (python-build-standalone) so the MCP server's
-# Python deps don't need any system libs from lobslaw's runtime.
+# No MCP servers are configured by default: each one is a subprocess
+# this node spawns at boot, so it needs its command to actually exist
+# in the image or under /lobslaw/usr/local/bin.
 #
-# All uv state — managed Pythons, the tool's venv, the download
-# cache — lives under /workspace/tools (a host bind-mount via the
-# existing $HOME/.config/lobslaw/workspace mount). Installs persist
-# across container restarts, are host-visible, and host-deletable.
+# This stack previously shipped a MiniMax MCP server run through `uvx`,
+# seeded by a uv-init sidecar. That sidecar is gone, and the entry went
+# with it rather than being left to fail at boot on a missing binary.
 #
-# `install` is the supply-chain boundary: pin a specific version or
-# uv pulls whatever PyPI's `latest` resolves to.
-[mcp.servers.minimax]
-install    = ["uv", "tool", "install", "minimax-mcp==0.0.18"]
-command    = "uvx"
-args       = ["minimax-mcp"]
-env        = { UV_TOOL_DIR = "/workspace/tools/uv-tools", UV_PYTHON_INSTALL_DIR = "/workspace/tools/uv-python", UV_CACHE_DIR = "/workspace/tools/uv-cache", MINIMAX_API_HOST = "https://api.minimaxi.chat", MINIMAX_MCP_BASE_PATH = "/workspace/minimax", MINIMAX_API_RESOURCE_MODE = "local" }
-secret_env = { MINIMAX_API_KEY = "env:LOBSLAW_MINIMAX_API_KEY" }
-# Tools exposed (see github.com/MiniMax-AI/MiniMax-MCP):
-#   text_to_audio, voice_clone, voice_design, list_voices,
-#   text_to_image, generate_video, query_video_generation,
-#   music_generation
-# Outputs land under MINIMAX_MCP_BASE_PATH (/workspace/minimax)
-# which is bind-mounted from the host workspace, so generated files
-# are immediately addressable by other tools + visible on the host.
+# To add one back, install the runtime it needs first — a [[binary]]
+# block for uv, say — and then declare the server. `install` is the
+# supply-chain boundary: pin a version or you get whatever the registry
+# resolves "latest" to today.
+#
+# [[binary]]
+# name    = "uv"
+# detect  = "uv --version"
+# version = "0.9.5"
+#
+# [[binary.install]]
+# os      = "linux"
+# arch    = "amd64"
+# manager = "gh-release"
+# package = "uv"
+# url     = "https://github.com/astral-sh/uv/releases/download/{{version}}/uv-x86_64-unknown-linux-gnu.tar.gz"
+#
+# [mcp.servers.minimax]
+# install    = ["uv", "tool", "install", "minimax-mcp==0.0.18"]
+# command    = "uvx"
+# args       = ["minimax-mcp"]
+# # Keep every byte of uv state under /workspace, which is a host bind
+# # mount: installs then persist across restarts and stay deletable
+# # from the host.
+# env        = { UV_TOOL_DIR = "/workspace/tools/uv-tools", UV_PYTHON_INSTALL_DIR = "/workspace/tools/uv-python", UV_CACHE_DIR = "/workspace/tools/uv-cache", MINIMAX_API_HOST = "https://api.minimaxi.chat", MINIMAX_MCP_BASE_PATH = "/workspace/minimax", MINIMAX_API_RESOURCE_MODE = "local" }
+# secret_env = { MINIMAX_API_KEY = "env:LOBSLAW_MINIMAX_API_KEY" }
+#
+# An MCP tool is policy-denied until an operator allows it explicitly —
+# see the commented rule in the [policy] section above.
 
 [observability]
 tracing_exporter = "stdout"

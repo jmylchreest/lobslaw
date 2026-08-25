@@ -69,7 +69,7 @@ User-mode managers write into `[security] binary_install_prefix` (default `/lobs
 | `curl-sh` | `LOBSLAW_INSTALL_PREFIX=$prefix` env (script honours or doesn't) |
 | System managers | Ignored — they write to system paths. Only meaningful when lobslaw runs as root inside a container with a durable rootfs. |
 
-The default `/lobslaw/usr/local` is FHS-aligned for "operator-installed locally," distinct from `/lobslaw/usr/bin` (which `uv-init` populates) and `/usr/bin` (image-baked baseline). Skill subprocess `PATH` becomes `/lobslaw/usr/local/bin:/lobslaw/usr/bin:/usr/bin` so newer installs win precedence.
+The default `/lobslaw/usr/local` is FHS-aligned for "operator-installed locally," distinct from `/usr/bin` (the image-baked baseline). Skill subprocess `PATH` puts `/lobslaw/usr/local/bin` first, so a runtime install wins over an image-baked tool of the same name.
 
 ## Sudo
 

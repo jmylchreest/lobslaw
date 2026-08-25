@@ -1,15 +1,15 @@
 # lobslaw docker stack
 
-Single-node compose deployment with init containers for cert
-generation and tools provisioning.
+Single-node compose deployment: a one-shot init container that signs
+this node's mTLS cert, the node itself, and a shell sidecar.
 
 ## Layout
 
 ```
 deploy/docker/
-├── docker-compose.yml      stack definition (4 services + 5 volumes)
+├── docker-compose.yml      stack definition (3 services + 5 volumes)
 ├── config.toml             host-editable lobslaw config (bind-mounted ro)
-├── SOUL.md                 host-editable soul (bind-mounted ro)
+├── SOUL.md                 host-editable soul (bind-mounted rw)
 ├── .env.example            copy to .env, fill in secrets + hostname
 ├── .gitignore              keeps .env + secrets/*.pem out of git
 └── secrets/                CA material — populate before first up
@@ -19,20 +19,28 @@ deploy/docker/
 
 ## Filesystem inside the lobslaw container
 
-| Path                | Mode | Source                         | Purpose                                        |
-| ------------------- | ---- | ------------------------------ | ---------------------------------------------- |
-| `/usr/local/bin`    | ro   | image                          | the lobslaw binary                             |
-| `/lobslaw/bin`      | ro   | tools-init → busybox:glibc     | baseline shell utilities (sh, ls, cat, …)      |
-| `/lobslaw/usr/bin`  | rw   | persistent volume              | operator/agent extras (drop binaries here)     |
-| `/etc/lobslaw/certs`| ro   | cert-init → docker secret CA   | node cert + node key + CA public cert          |
-| `/etc/lobslaw/*`    | ro   | host bind mount                | config.toml + SOUL.md                          |
-| `/var/lobslaw/data` | rw   | persistent volume              | raft.db + state.db + snapshots                 |
-| `/var/lobslaw/audit`| rw   | persistent volume              | audit.jsonl ring                               |
-| `/workspace`        | rw   | host bind mount                | `~/.config/lobslaw/workspace` from the host    |
+| Path                  | Mode | Source                       | Purpose                                     |
+| --------------------- | ---- | ---------------------------- | ------------------------------------------- |
+| `/usr/local/bin`      | ro   | image                        | the lobslaw binary                          |
+| `/bin`, `/usr/bin`    | ro   | image (debian:12-slim)       | shell + GNU userland, curl, git             |
+| `/lobslaw/usr/local`  | rw   | persistent volume            | where `binary_install` lands tools          |
+| `/etc/lobslaw/certs`  | ro   | cert-init → compose secret CA| node cert + node key + CA public cert       |
+| `/etc/lobslaw/*`      | ro   | host bind mount              | config.toml (ro) + SOUL.md (rw)             |
+| `/var/lobslaw/data`   | rw   | persistent volume            | raft.db + state.db + snapshots + models     |
+| `/var/lobslaw/audit`  | rw   | persistent volume            | audit.jsonl ring                            |
+| `/var/lobslaw/skills` | rw   | persistent volume            | skill bundles from `clawhub_install`        |
+| `/workspace`          | rw   | host bind mount              | `~/.config/lobslaw/workspace` from the host |
 
-PATH is `/usr/local/bin:/lobslaw/usr/bin:/lobslaw/bin:/usr/bin:/bin`,
-so the agent's `shell_command` builtin finds binaries in the
-operator-managed rw layer first, then the read-only baseline.
+PATH is
+`/lobslaw/usr/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin`,
+so a tool installed at runtime wins over an image-baked one of the same
+name.
+
+Earlier versions of this stack seeded a busybox baseline into
+`/lobslaw/bin` from a `tools-init` sidecar, because the runtime image
+was distroless and had no shell at all. The image is debian-slim now and
+ships a real userland, so the sidecar, the `tools-bin` and
+`tools-runtime` volumes, and `/lobslaw/usr/bin` are all gone.
 
 ## First-time setup
 
@@ -76,11 +84,9 @@ docker compose up -d
 ```
 
 First boot does:
-1. `tools-init` populates `/lobslaw/bin` from busybox:glibc and
-   chowns the rw volume for the nonroot lobslaw user.
-2. `cert-init` signs `node-cert.pem` for `$LOBSLAW_HOSTNAME` against
+1. `cert-init` signs `node-cert.pem` for `$LOBSLAW_HOSTNAME` against
    the CA in `secrets/`.
-3. `lobslaw` starts. With no seed_nodes set in `config.toml`, it
+2. `lobslaw` starts. With no seed_nodes set in `config.toml`, it
    solo-bootstraps a fresh single-voter cluster.
 
 Tail the logs:
@@ -94,17 +100,22 @@ followed by an election win.
 
 ## Adding a tool the agent can use
 
+The supported route is a `[[binary]]` block in `config.toml`, which the
+`binary_install` builtin satisfies (gh-release, brew, curl-sh, apt,
+npm/cargo/uvx/pipx). Installs land in `/lobslaw/usr/local/bin`.
+
+For a one-off, drop the binary in by hand:
+
 ```bash
-# Drop a binary into the rw extension dir. Visible to lobslaw
-# immediately — no restart needed.
 docker compose exec tools sh
-> wget -O /lobslaw/usr/bin/rg https://github.com/.../ripgrep
-> chmod +x /lobslaw/usr/bin/rg
+> wget -O /lobslaw/usr/local/bin/rg https://github.com/.../ripgrep
+> chmod +x /lobslaw/usr/local/bin/rg
 > exit
 ```
 
-Anything in `/lobslaw/usr/bin` is on PATH for `shell_command` calls
-and survives `docker compose down/up`.
+Either way it is on PATH for `shell_command` immediately — no restart —
+and survives `docker compose down/up` in the `binaries-workspace`
+volume.
 
 ## Multi-node, multi-host (production layout)
 
@@ -183,7 +194,7 @@ Verify by tailing any node's debug snapshot (every 30s):
 
 ```bash
 podman compose -f cluster.yml exec lobslaw-1 \
-  /usr/local/bin/lobslaw --log-level debug   # for one cycle
+  /usr/local/bin/lobslaw run --log-level debug   # for one cycle
 ```
 
 …or just look for the periodic `raft cluster snapshot` lines in the
@@ -330,23 +341,14 @@ docker compose run --rm cert-init \
 (Add a `data:/var/lobslaw/data` volume to cert-init's mounts first
 if you want to use the second form regularly.)
 
-## Updating the busybox baseline
-
-```bash
-docker compose pull tools-init
-docker compose up -d --force-recreate tools-init
-# tools-init re-runs and refreshes /lobslaw/bin.
-```
-
 ## What's intentionally NOT in this stack
 
-- **No npm / python / git / bun** in the lobslaw container. Those
-  live in `Dockerfile.tools` (~120MB image). If you want them
-  available to `shell_command`, either:
-  1. Build `lobslaw-tools:dev` as the main image (swap the
-     `lobslaw` service's `dockerfile:` to `Dockerfile.tools`), or
-  2. Drop them into `/lobslaw/usr/bin` at runtime via the tools
-     sidecar.
+- **No python / ruby / jq / openssh** in the lobslaw container. The
+  image has a shell, coreutils, curl and git; the heavier runtimes live
+  in `Dockerfile.tools` (~120MB). If a skill needs them, either swap the
+  `lobslaw` service's `dockerfile:` to `Dockerfile.tools`, or declare a
+  `[[binary]]` and let `binary_install` fetch it into
+  `/lobslaw/usr/local`.
 - **No raft over the public internet.** The mTLS cluster port
   (7443) is published on the host, but a real multi-node deployment
   should keep that port firewalled to the cluster's private

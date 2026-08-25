@@ -1,0 +1,500 @@
+#!/usr/bin/env bash
+#
+# lobslaw-local — one lobslaw container, one host directory.
+#
+# Everything the node persists (config, soul, mTLS material, raft
+# state, audit log, skills, workspace, installed binaries) lives under
+# a single state directory on the host, bind-mounted into the paths the
+# container expects. Wiping the node is `rm -rf` on that directory;
+# backing it up is `tar`.
+#
+#   ./lobslaw-local build     build (or rebuild) the image
+#   ./lobslaw-local up        bootstrap if needed, then start
+#   ./lobslaw-local down      stop and remove the container
+#   ./lobslaw-local restart   down + up
+#   ./lobslaw-local status    container state + health
+#   ./lobslaw-local logs      follow logs (pass -n50 etc.)
+#   ./lobslaw-local shell     bash inside the running container
+#   ./lobslaw-local exec ...  run a lobslaw subcommand against the state
+#   ./lobslaw-local ask "..." POST a message to the REST gateway
+#   ./lobslaw-local reset     wipe raft state, keep config + certs
+#   ./lobslaw-local nuke      delete the entire state directory
+#   ./lobslaw-local quadlet   emit a systemd (Quadlet) unit
+#   ./lobslaw-local path      print the state directory
+#
+# Overridable via the environment:
+#   LOBSLAW_STATE_DIR      default ~/.local/share/lobslaw-local
+#   LOBSLAW_IMAGE          default lobslaw:local
+#   LOBSLAW_CONTAINER      default lobslaw-local
+#   LOBSLAW_NODE           default lobslaw-local   (hostname -> raft ID)
+#   LOBSLAW_BIND           default 127.0.0.1       (published iface)
+#   LOBSLAW_GATEWAY_PORT   default 8443
+#   LOBSLAW_CLUSTER_PORT   default 7443
+#   LOBSLAW_MOUNT_OPTS     default empty; use ",Z" on SELinux hosts
+#   LOBSLAW_NETWORK        default empty (podman default, ports published);
+#                          set to "host" to share the host netns instead
+#   LOBSLAW_LOG_LEVEL      default info
+#   LOBSLAW_LOG_FORMAT     default text
+#   LOBSLAW_CONTAINERFILE  default ../../Dockerfile
+#   LOBSLAW_EMBED_MODEL    default all-MiniLM-L6-v2 ("" to skip the
+#                          builtin embedder and fall back to lexical recall)
+#   LOBSLAW_EMBED_MODEL_URL base of the HTTP dir the checkpoint comes from
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+
+STATE_DIR="${LOBSLAW_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/lobslaw-local}"
+IMAGE="${LOBSLAW_IMAGE:-lobslaw:local}"
+CONTAINER="${LOBSLAW_CONTAINER:-lobslaw-local}"
+NODE="${LOBSLAW_NODE:-lobslaw-local}"
+BIND="${LOBSLAW_BIND:-127.0.0.1}"
+GATEWAY_PORT="${LOBSLAW_GATEWAY_PORT:-8443}"
+CLUSTER_PORT="${LOBSLAW_CLUSTER_PORT:-7443}"
+MOUNT_OPTS="${LOBSLAW_MOUNT_OPTS:-}"
+NETWORK="${LOBSLAW_NETWORK:-}"
+LOG_LEVEL="${LOBSLAW_LOG_LEVEL:-info}"
+LOG_FORMAT="${LOBSLAW_LOG_FORMAT:-text}"
+CONTAINERFILE="${LOBSLAW_CONTAINERFILE:-$REPO_ROOT/Dockerfile}"
+EMBED_MODEL="${LOBSLAW_EMBED_MODEL-all-MiniLM-L6-v2}"
+EMBED_MODEL_URL="${LOBSLAW_EMBED_MODEL_URL:-https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main}"
+
+UID_IN_IMAGE=65532
+GID_IN_IMAGE=65532
+
+die()  { printf '%s: %s\n' "${0##*/}" "$*" >&2; exit 1; }
+info() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[33mwarn:\033[0m %s\n' "$*" >&2; }
+
+command -v podman >/dev/null || die "podman not found on PATH"
+
+# --- uid mapping ------------------------------------------------------
+#
+# Rootless: map the host user onto the image's nonroot uid, so files the
+# container creates in the bind mounts are owned by the invoking user on
+# the host — no chown dance, no root-owned droppings in $HOME.
+# Rootful: run as the image uid directly and make the state dir match.
+rootless() { [ "$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ]; }
+
+userns_args() {
+  if rootless; then
+    printf '%s\n' "--userns=keep-id:uid=${UID_IN_IMAGE},gid=${GID_IN_IMAGE}"
+  else
+    printf '%s\n%s\n' "--user" "${UID_IN_IMAGE}:${GID_IN_IMAGE}"
+  fi
+}
+
+mount_args() {
+  local o="$MOUNT_OPTS"
+  printf '%s\n' \
+    "-v" "$STATE_DIR/config:/etc/lobslaw:rw${o}" \
+    "-v" "$STATE_DIR/data:/var/lobslaw/data:rw${o}" \
+    "-v" "$STATE_DIR/audit:/var/lobslaw/audit:rw${o}" \
+    "-v" "$STATE_DIR/skills:/var/lobslaw/skills:rw${o}" \
+    "-v" "$STATE_DIR/workspace:/workspace:rw${o}" \
+    "-v" "$STATE_DIR/usr-local:/lobslaw/usr/local:rw${o}"
+}
+
+# Networking. The default publishes the two ports on $BIND via podman's
+# usual rootless path. --network=host skips the port-forwarder entirely:
+# useful when you want the node on the host netns, and the only thing
+# that works on a host whose kernel cannot open /dev/net/tun.
+network_args() {
+  if [ "$NETWORK" = host ]; then
+    printf '%s\n' "--network=host"
+  else
+    printf '%s\n' \
+      "-p" "${BIND}:${GATEWAY_PORT}:8443" \
+      "-p" "${BIND}:${CLUSTER_PORT}:7443"
+  fi
+}
+
+# Run a one-shot lobslaw subcommand against the state dir. Same mounts
+# and same uid mapping as the long-running container, so anything it
+# writes is indistinguishable from what the node itself would write.
+oneshot() {
+  # $1 is "none" for offline work (cert generation, raft surgery) or
+  # "node" to reuse whatever networking the running node uses — doctor
+  # and anything that dials a provider needs the latter.
+  local netmode="${1:-none}"; shift
+  mapfile -t _userns < <(userns_args)
+  mapfile -t _mounts < <(mount_args)
+
+  local -a net=()
+  case "$netmode" in
+    none) net=("--network=none") ;;
+    node) [ "$NETWORK" = host ] && net=("--network=host") ;;
+  esac
+
+  # The env file carries the memory key, so anything that opens state.db
+  # needs it. It stays host-side and is injected as environment only.
+  local -a envfile=()
+  [ -f "$STATE_DIR/.env" ] && envfile=("--env-file" "$STATE_DIR/.env")
+
+  podman run --rm \
+    --hostname "$NODE" \
+    "${net[@]+"${net[@]}"}" \
+    "${_userns[@]}" "${_mounts[@]}" \
+    "${envfile[@]+"${envfile[@]}"}" \
+    -e "LOBSLAW_CONFIG=/etc/lobslaw/config.toml" \
+    "$IMAGE" "$@"
+}
+
+# --- build ------------------------------------------------------------
+
+cmd_build() {
+  # The normal path. Needs overlayfs, which buildah mounts over the
+  # build context to keep it read-only.
+  if grep -qw overlay /proc/filesystems; then
+    info "building $IMAGE from $CONTAINERFILE"
+    podman build \
+      -t "$IMAGE" \
+      -f "$CONTAINERFILE" \
+      --build-arg "VERSION=local" \
+      --build-arg "COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+      "$REPO_ROOT"
+    return
+  fi
+
+  # No overlayfs in the running kernel — usually a machine that has had
+  # a kernel upgrade installed but not yet rebooted, so /lib/modules no
+  # longer matches `uname -r`. podman build cannot work at all in that
+  # state, but podman run + commit only needs the storage driver, which
+  # is fuse-overlayfs. Assemble the same image the long way.
+  warn "kernel $(uname -r) has no overlayfs; falling back to run+commit"
+  warn "(a reboot into the installed kernel restores plain \`podman build\`)"
+
+  local tmp bin ctr
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+  bin="$tmp/lobslaw"
+  ctr="${CONTAINER}-imgbuild"
+
+  command -v go >/dev/null || die "fallback build needs a host Go toolchain"
+  info "building the binary on the host"
+  ( cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath \
+      -ldflags "-s -w -X main.Version=local -X main.Commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+      -o "$bin" ./cmd/lobslaw )
+
+  podman rm -f "$ctr" >/dev/null 2>&1 || true
+  info "preparing the runtime layer"
+  # --network=host because pasta also needs a tun device this kernel
+  # cannot give us; on a healthy host the default network works too.
+  podman run --name "$ctr" --network=host --user 0:0 \
+    docker.io/library/debian:12-slim bash -c '
+      set -e
+      apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        ca-certificates tzdata curl procps file git
+      rm -rf /var/lib/apt/lists/*
+      groupadd --system --gid 65532 nonroot
+      useradd --system --uid 65532 --gid 65532 \
+        --home-dir /lobslaw --create-home --shell /usr/sbin/nologin nonroot
+      mkdir -p /lobslaw/usr/local/bin
+      chown -R 65532:65532 /lobslaw
+    ' >/dev/null
+
+  podman cp "$bin" "$ctr:/usr/local/bin/lobslaw"
+  podman commit -q \
+    --change 'USER nonroot:nonroot' \
+    --change 'WORKDIR /lobslaw' \
+    --change 'EXPOSE 7443' \
+    --change 'EXPOSE 8443' \
+    --change 'EXPOSE 7445/udp' \
+    --change 'ENTRYPOINT ["/usr/local/bin/lobslaw"]' \
+    --change 'CMD ["run"]' \
+    "$ctr" "$IMAGE" >/dev/null
+  podman rm -f "$ctr" >/dev/null
+  info "built $IMAGE"
+}
+
+# --- bootstrap --------------------------------------------------------
+
+image_exists() { podman image exists "$IMAGE"; }
+
+# Seed the builtin embedder's checkpoint from the HOST, not from the
+# node at boot.
+#
+# The node can fetch it itself via [compute.embeddings].download_url,
+# but doing it here means the running node never needs the network for
+# embeddings at all: download_url stays empty in config.toml, which is
+# also the strict setting — a missing model fails at boot instead of
+# quietly downloading later. It also puts the checkpoint somewhere
+# visible, next to everything else the node persists.
+fetch_embed_model() {
+  [ -n "$EMBED_MODEL" ] || return 0
+  local dir="$STATE_DIR/data/models/$EMBED_MODEL"
+  [ -f "$dir/model.safetensors" ] && return 0
+
+  command -v curl >/dev/null || die "seeding the embedder model needs curl"
+  info "fetching embedding model $EMBED_MODEL (~90MB, once)"
+  mkdir -p "$dir/1_Pooling"
+
+  local f
+  for f in config.json model.safetensors tokenizer.json; do
+    curl -fsSL --retry 3 -o "$dir/$f" "$EMBED_MODEL_URL/$f" \
+      || die "fetch $f from $EMBED_MODEL_URL"
+  done
+  # Optional. tokenizer_config.json and the pooling declaration are
+  # read when present; their absence falls back to family defaults.
+  curl -fsSL --retry 2 -o "$dir/tokenizer_config.json" \
+    "$EMBED_MODEL_URL/tokenizer_config.json" 2>/dev/null || true
+  curl -fsSL --retry 2 -o "$dir/1_Pooling/config.json" \
+    "$EMBED_MODEL_URL/1_Pooling/config.json" 2>/dev/null || true
+
+  info "model at $dir"
+}
+
+cmd_bootstrap() {
+  image_exists || die "image $IMAGE not found — run: ${0##*/} build"
+
+  mkdir -p \
+    "$STATE_DIR/config/certs" \
+    "$STATE_DIR/data" \
+    "$STATE_DIR/audit" \
+    "$STATE_DIR/skills" \
+    "$STATE_DIR/workspace/incoming" \
+    "$STATE_DIR/usr-local/bin"
+
+  if ! rootless; then
+    chown -R "${UID_IN_IMAGE}:${GID_IN_IMAGE}" "$STATE_DIR"
+  fi
+
+  if [ ! -f "$STATE_DIR/config/config.toml" ]; then
+    info "installing config.toml"
+    if [ -n "$EMBED_MODEL" ]; then
+      sed "s|^model = \"all-MiniLM-L6-v2\"|model = \"${EMBED_MODEL}\"|" \
+        "$SCRIPT_DIR/config.toml" > "$STATE_DIR/config/config.toml"
+    else
+      # No builtin embedder: drop the block rather than leave it
+      # pointing at a checkpoint bootstrap was told not to fetch, which
+      # is a boot error, not a fallback.
+      info "no embedding model requested — recall will be lexical"
+      awk '/^# embeddings-block-start/{skip=1} !skip; /^# embeddings-block-end/{skip=0}' \
+        "$SCRIPT_DIR/config.toml" > "$STATE_DIR/config/config.toml"
+    fi
+  fi
+
+  if [ ! -f "$STATE_DIR/config/SOUL.md" ]; then
+    info "installing SOUL.md"
+    cp "$SCRIPT_DIR/SOUL.md" "$STATE_DIR/config/SOUL.md"
+  fi
+
+  # Cluster CA. One node, so this box is its own CA; the key stays on
+  # the host and is never needed by the running container.
+  if [ ! -f "$STATE_DIR/config/certs/ca.pem" ]; then
+    info "generating cluster CA"
+    oneshot none cluster ca-init \
+      --ca-cert /etc/lobslaw/certs/ca.pem \
+      --ca-key  /etc/lobslaw/certs/ca-key.pem >/dev/null
+  fi
+
+  # Node cert. CN is the container hostname, which is what raft derives
+  # its ServerID from — change LOBSLAW_NODE and this must be reissued.
+  if [ ! -f "$STATE_DIR/config/certs/node-cert.pem" ]; then
+    info "signing node certificate for $NODE"
+    oneshot none cluster sign-node \
+      --ca-cert   /etc/lobslaw/certs/ca.pem \
+      --ca-key    /etc/lobslaw/certs/ca-key.pem \
+      --node-cert /etc/lobslaw/certs/node-cert.pem \
+      --node-key  /etc/lobslaw/certs/node-key.pem \
+      --node-id   "$NODE" \
+      --dns       "$NODE" \
+      --dns       localhost \
+      --ip        127.0.0.1 >/dev/null
+  fi
+
+  # .env stays host-side and is injected with --env-file, so the
+  # provider keys never exist as a file inside the container.
+  fetch_embed_model
+
+  if [ ! -f "$STATE_DIR/.env" ]; then
+    info "generating .env with a fresh memory key"
+    local key
+    key="$(head -c 32 /dev/urandom | base64)"
+    sed "s|^LOBSLAW_MEMORY_KEY=.*|LOBSLAW_MEMORY_KEY=${key}|" \
+      "$SCRIPT_DIR/env.example" > "$STATE_DIR/.env"
+    chmod 0600 "$STATE_DIR/.env"
+    warn "no LLM key set yet — edit $STATE_DIR/.env"
+  fi
+}
+
+# --- lifecycle --------------------------------------------------------
+
+# With --network=host the container binds the host's own 8443, so the
+# published-port mapping does not apply.
+gateway_url() {
+  if [ "$NETWORK" = host ]; then printf 'http://127.0.0.1:8443\n'
+  else printf 'http://%s:%s\n' "$BIND" "$GATEWAY_PORT"; fi
+}
+
+running()   { [ "$(podman inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "true" ]; }
+container_exists() { podman container exists "$CONTAINER"; }
+
+cmd_up() {
+  cmd_bootstrap
+  if running; then
+    info "$CONTAINER is already running"
+    return
+  fi
+  container_exists && podman rm -f "$CONTAINER" >/dev/null
+
+  mapfile -t _userns < <(userns_args)
+  mapfile -t _mounts < <(mount_args)
+  mapfile -t _net < <(network_args)
+
+  info "starting $CONTAINER"
+  podman run -d \
+    --name "$CONTAINER" \
+    --hostname "$NODE" \
+    --restart=unless-stopped \
+    --stop-timeout 30 \
+    "${_userns[@]}" "${_mounts[@]}" \
+    --env-file "$STATE_DIR/.env" \
+    -e "LOBSLAW_CONFIG=/etc/lobslaw/config.toml" \
+    -e "LOBSLAW_LOG_LEVEL=$LOG_LEVEL" \
+    -e "LOBSLAW_LOG_FORMAT=$LOG_FORMAT" \
+    -e "TZ=${TZ:-UTC}" \
+    "${_net[@]}" \
+    "$IMAGE" run --config /etc/lobslaw/config.toml >/dev/null
+
+  info "gateway  $(gateway_url)   (health: /healthz, chat: POST /v1/messages)"
+  info "state    $STATE_DIR"
+  info "logs     ${0##*/} logs"
+}
+
+cmd_down() {
+  container_exists || { info "$CONTAINER not present"; return; }
+  info "stopping $CONTAINER"
+  podman rm -f -t 30 "$CONTAINER" >/dev/null
+}
+
+cmd_restart() { cmd_down; cmd_up; }
+
+cmd_status() {
+  if ! container_exists; then
+    printf 'container : absent\n'
+  else
+    podman ps -a --filter "name=^${CONTAINER}$" \
+      --format 'container : {{.Status}}\nimage     : {{.Image}}'
+  fi
+  printf 'state     : %s\n' "$STATE_DIR"
+  printf 'gateway   : %s\n' "$(gateway_url)"
+  if running; then
+    local code
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+      "$(gateway_url)/readyz" 2>/dev/null || echo '---')"
+    printf 'readyz    : %s\n' "$code"
+  fi
+}
+
+cmd_logs()  { podman logs -f "$@" "$CONTAINER"; }
+cmd_shell() { podman exec -it "$CONTAINER" bash; }
+
+# Run a lobslaw subcommand against the persisted state. The node holds
+# an exclusive lock on raft.db, so anything touching it wants the
+# container stopped first — `reset` handles that itself.
+cmd_exec() { oneshot node "$@"; }
+
+cmd_ask() {
+  [ $# -gt 0 ] || die "usage: ${0##*/} ask \"your message\""
+  local body
+  body="$(printf '%s' "$*" | python3 -c 'import json,sys; print(json.dumps({"message": sys.stdin.read()}))' 2>/dev/null)" \
+    || die "ask needs python3 to encode the request body"
+  curl -sS -X POST \
+    -H 'Content-Type: application/json' \
+    -d "$body" \
+    "$(gateway_url)/v1/messages"
+  printf '\n'
+}
+
+cmd_reset() {
+  local was_running=no
+  running && was_running=yes
+  cmd_down
+  info "wiping raft state (config, certs, memory corpus and workspace kept)"
+  oneshot none cluster reset --data-dir=/var/lobslaw/data --yes
+  [ "$was_running" = yes ] && cmd_up
+}
+
+cmd_nuke() {
+  printf 'This deletes %s entirely — memory, workspace, certs, keys.\n' "$STATE_DIR"
+  printf 'Type the word DELETE to confirm: '
+  local answer; read -r answer
+  [ "$answer" = "DELETE" ] || die "aborted"
+  cmd_down
+  rm -rf "$STATE_DIR"
+  info "removed $STATE_DIR"
+}
+
+cmd_quadlet() {
+  local dir="${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
+  mkdir -p "$dir"
+  local unit="$dir/${CONTAINER}.container"
+  local QUADLET_NET
+  if [ "$NETWORK" = host ]; then
+    QUADLET_NET="Network=host"
+  else
+    QUADLET_NET="PublishPort=${BIND}:${GATEWAY_PORT}:8443
+PublishPort=${BIND}:${CLUSTER_PORT}:7443"
+  fi
+  local userns; userns="$(rootless && echo "UserNS=keep-id:uid=${UID_IN_IMAGE},gid=${GID_IN_IMAGE}" || echo "User=${UID_IN_IMAGE}:${GID_IN_IMAGE}")"
+  cat > "$unit" <<UNIT
+# Generated by ${0##*/} quadlet. Reload with:
+#   systemctl --user daemon-reload && systemctl --user start ${CONTAINER}
+[Unit]
+Description=lobslaw local node
+After=network-online.target
+
+[Container]
+Image=${IMAGE}
+ContainerName=${CONTAINER}
+Exec=run --config /etc/lobslaw/config.toml
+HostName=${NODE}
+${userns}
+EnvironmentFile=${STATE_DIR}/.env
+Environment=LOBSLAW_CONFIG=/etc/lobslaw/config.toml
+Environment=LOBSLAW_LOG_LEVEL=${LOG_LEVEL}
+Environment=LOBSLAW_LOG_FORMAT=json
+Volume=${STATE_DIR}/config:/etc/lobslaw:rw${MOUNT_OPTS}
+Volume=${STATE_DIR}/data:/var/lobslaw/data:rw${MOUNT_OPTS}
+Volume=${STATE_DIR}/audit:/var/lobslaw/audit:rw${MOUNT_OPTS}
+Volume=${STATE_DIR}/skills:/var/lobslaw/skills:rw${MOUNT_OPTS}
+Volume=${STATE_DIR}/workspace:/workspace:rw${MOUNT_OPTS}
+Volume=${STATE_DIR}/usr-local:/lobslaw/usr/local:rw${MOUNT_OPTS}
+${QUADLET_NET}
+
+[Service]
+Restart=always
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target
+UNIT
+  info "wrote $unit"
+  info "systemctl --user daemon-reload && systemctl --user enable --now ${CONTAINER}"
+}
+
+cmd_path() { printf '%s\n' "$STATE_DIR"; }
+
+cmd_help() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-help}" in
+  build)     shift; cmd_build "$@" ;;
+  bootstrap) shift; cmd_bootstrap "$@" ;;
+  up|start)  shift; cmd_up "$@" ;;
+  down|stop) shift; cmd_down "$@" ;;
+  restart)   shift; cmd_restart "$@" ;;
+  status)    shift; cmd_status "$@" ;;
+  logs)      shift; cmd_logs "$@" ;;
+  shell|sh)  shift; cmd_shell "$@" ;;
+  exec)      shift; cmd_exec "$@" ;;
+  ask)       shift; cmd_ask "$@" ;;
+  reset)     shift; cmd_reset "$@" ;;
+  nuke)      shift; cmd_nuke "$@" ;;
+  quadlet)   shift; cmd_quadlet "$@" ;;
+  path)      shift; cmd_path "$@" ;;
+  help|-h|--help) cmd_help ;;
+  *) die "unknown command '$1' (try: ${0##*/} help)" ;;
+esac

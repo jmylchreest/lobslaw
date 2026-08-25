@@ -1,0 +1,283 @@
+# lobslaw — single-node local container config.
+#
+# Every path here is CONTAINER-internal. On the host they all live
+# under one state directory (default ~/.local/share/lobslaw-local),
+# bind-mounted in by ./lobslaw-local:
+#
+#   <state>/config      -> /etc/lobslaw        this file, SOUL.md, certs/
+#   <state>/data        -> /var/lobslaw/data   raft.db, state.db, snapshots, models
+#   <state>/audit       -> /var/lobslaw/audit  audit.jsonl
+#   <state>/skills      -> /var/lobslaw/skills clawhub bundles
+#   <state>/workspace   -> /workspace          agent files, incoming attachments
+#   <state>/usr-local   -> /lobslaw/usr/local  binary_install prefix
+#
+# Edit this file on the host; [config] watch = true below picks the
+# change up without a restart for most keys.
+
+[cluster]
+listen_addr = "0.0.0.0:7443"
+data_dir    = "/var/lobslaw/data"
+# bootstrap defaults to true: with no reachable seed this node forms a
+# fresh single-voter cluster, which is exactly what a local box wants.
+
+[cluster.mtls]
+ca_cert   = "/etc/lobslaw/certs/ca.pem"
+node_cert = "/etc/lobslaw/certs/node-cert.pem"
+node_key  = "/etc/lobslaw/certs/node-key.pem"
+
+[discovery]
+# OFF deliberately. Broadcast discovery would let this container hear
+# — and try to join — any other lobslaw node on the LAN, including the
+# e2e test stack. A local scratch node must stay a cluster of one.
+broadcast = false
+
+[memory]
+enabled = true
+
+[memory.encryption]
+key_ref = "env:LOBSLAW_MEMORY_KEY"
+
+[memory.snapshot]
+target    = "storage:local-snapshots"
+cadence   = "1h"
+retention = "7d"
+
+[storage]
+enabled = true
+
+# Raft snapshots land on the same persistent disk as raft.db.
+[[storage.mounts]]
+label = "local-snapshots"
+type  = "local"
+path  = "/var/lobslaw/data/snapshots"
+
+# Self-introspection: the agent may read its own config and soul.
+# certs/ is excluded wholesale — node-key.pem is sensitive and the agent
+# has no legitimate use for cert material. .env is excluded as a
+# belt-and-braces measure: this deployment keeps it on the host and
+# injects it with --env-file, so it should never appear here, but a
+# stray copy must not become readable just because someone put it in the
+# obvious place.
+[[storage.mounts]]
+label    = "lobslaw-config"
+type     = "local"
+path     = "/etc/lobslaw"
+mode     = "r"
+excludes = ["certs/**", ".env"]
+
+# The agent's home for scratch files, notes, and anything write_file
+# produces. Also where gateway attachments land (/workspace/incoming).
+[[storage.mounts]]
+label = "workspace"
+type  = "local"
+path  = "/workspace"
+mode  = "rw"
+
+# Where clawhub_install lands skill bundles (manifest.yaml + SKILL.md
+# + handlers). "skill-tools" is the canonical label the installer and
+# the skills watcher both default to.
+[[storage.mounts]]
+label = "skill-tools"
+type  = "local"
+path  = "/var/lobslaw/skills"
+mode  = "rw"
+
+# binary_install prefix. rx: the lobslaw process writes here as the
+# installer, skill subprocesses may read and execute but never write.
+[[storage.mounts]]
+label = "binaries"
+type  = "local"
+path  = "/lobslaw/usr/local"
+mode  = "rx"
+
+[skills]
+storage_label  = "skill-tools"
+signing_policy = "prefer"
+
+[compute]
+enabled = true
+
+# Providers are keyed off env vars set in <state>/.env. A provider
+# whose key is empty simply fails when called — comment out the ones
+# you have no key for, or delete them.
+
+[[compute.providers]]
+label             = "minimax-m2.7"
+endpoint          = "https://api.minimax.io/v1"
+model             = "MiniMax-M2.7"
+api_key_ref       = "env:LOBSLAW_MINIMAX_API_KEY"
+trust_tier        = "private"
+capabilities      = ["chat", "function-calling"]
+priority          = 10
+auto_capabilities = true
+
+[[compute.providers]]
+label             = "openrouter"
+endpoint          = "https://openrouter.ai/api/v1"
+model             = "qwen/qwen3.6-plus"
+api_key_ref       = "env:LOBSLAW_OPENROUTER_API_KEY"
+trust_tier        = "private"
+capabilities      = ["chat", "function-calling"]
+priority          = 5
+auto_capabilities = true
+
+[compute.roles]
+main      = "minimax-m2.7"
+preflight = "minimax-m2.7"
+reranker  = "minimax-m2.7"
+
+# In-process embedder: no API key, no endpoint, and no egress at all,
+# so memory content never leaves the box. all-MiniLM-L6-v2 is symmetric
+# — query/passage prefixes are correctly absent.
+#
+# model names a directory under <data_dir>/models, seeded on the host by
+# ./lobslaw-local bootstrap and persisted in the state dir. download_url
+# is deliberately EMPTY: nothing is fetched at runtime, and a missing
+# checkpoint is a boot error rather than a silent download.
+#
+# Setting it to a HuggingFace repo also works — the egress role covers
+# the CDN hosts the weights redirect to — but fetching on the host keeps
+# boot offline and makes the checkpoint something you can see, copy and
+# delete like any other file in the state directory.
+# embeddings-block-start — ./lobslaw-local bootstrap rewrites the model
+# name here, and deletes the whole block when LOBSLAW_EMBED_MODEL is
+# empty, which leaves recall on lexical matching.
+[compute.embeddings]
+type  = "builtin"
+model = "all-MiniLM-L6-v2"
+# embeddings-block-end
+
+# Exa-backed web_search builtin. No key -> the builtin isn't registered.
+[compute.web_search]
+api_key_ref = "env:LOBSLAW_EXA_API_KEY"
+
+[compute.budgets]
+max_tool_calls_per_turn   = 30
+max_spend_usd_per_turn    = 0.50
+max_egress_bytes_per_turn = 10000000
+
+[gateway]
+enabled              = true
+http_port            = 8443
+confirmation_timeout = "5m"
+
+# Plaintext HTTP — no [gateway] TLS cert is configured and the port is
+# published on 127.0.0.1 only. Do not expose this beyond loopback
+# without terminating TLS in front of it.
+[[gateway.channels]]
+type = "rest"
+
+# Telegram long-poll. Uncomment and set LOBSLAW_TELEGRAM_BOT_TOKEN plus
+# your numeric user id. Usernames are never accepted — they change.
+# [[gateway.channels]]
+# type          = "telegram"
+# mode          = "poll"
+# bot_token_ref = "env:LOBSLAW_TELEGRAM_BOT_TOKEN"
+#
+# [gateway.channels.user_scopes]
+# "000000000" = "owner"
+
+[soul]
+path  = "/etc/lobslaw/SOUL.md"
+scope = "default"
+
+[policy]
+enabled = true
+
+# Builtins get a default-allow seed at boot. Skills and MCP tools do
+# NOT — the operator opts in per scope so a buggy or hostile upstream
+# can't widen the agent's reach silently. The sensitive owner-only
+# builtins below are likewise unseeded; these rules are the only thing
+# that lets the agent call them, and subject = "scope:owner" (which
+# MUST be kind:value — a bare "owner" is malformed and never matches)
+# keeps strangers out.
+
+[[policy.rules]]
+id       = "owner-soul-tools"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "soul_*"
+effect   = "allow"
+priority = 20
+
+[[policy.rules]]
+id       = "owner-oauth-credentials"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "oauth_*"
+effect   = "allow"
+priority = 20
+
+[[policy.rules]]
+id       = "owner-credentials-acl"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "credentials_*"
+effect   = "allow"
+priority = 20
+
+[[policy.rules]]
+id       = "owner-clawhub-install"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "clawhub_install"
+effect   = "allow"
+priority = 20
+
+[[policy.rules]]
+id       = "owner-binary-install"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "binary_*"
+effect   = "allow"
+priority = 20
+
+# One allow rule per installed skill — add as you install them:
+#
+# [[policy.rules]]
+# id       = "owner-tool-gog"
+# subject  = "scope:owner"
+# action   = "tool:exec"
+# resource = "gog"
+# effect   = "allow"
+# priority = 20
+
+[security]
+clawhub_base_url      = "https://clawhub.ai"
+binary_install_prefix = "/lobslaw/usr/local"
+
+# clawhub.ai is Cloudflare-fronted over a Convex backend; a 30x to the
+# backing deployment needs a second allowlisted CONNECT or the download
+# is blocked.
+clawhub_binary_hosts = [
+    "github.com",
+    "objects.githubusercontent.com",
+    "*.githubusercontent.com",
+    "*.convex.site",
+]
+
+# Off by default: a successful clawhub_install would otherwise write
+# its own policy allow rule. Flip to true if hand-editing a rule after
+# every install gets tedious while testing.
+clawhub_auto_emit_install_rules = false
+
+[scheduler]
+enabled       = true
+tick_interval = "1m"
+claim_lease   = "5m"
+
+[audit.local]
+enabled     = true
+path        = "/var/lobslaw/audit/audit.jsonl"
+max_size_mb = 100
+max_files   = 10
+
+[audit.raft]
+enabled = true
+
+[observability]
+tracing_exporter = "stdout"
+
+[config]
+watch       = true
+debounce_ms = 1500

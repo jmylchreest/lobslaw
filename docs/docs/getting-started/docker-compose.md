@@ -2,102 +2,177 @@
 sidebar_position: 2
 ---
 
-# Docker Compose
+# Containers
 
-The fastest way to run lobslaw — single-node by default, with multi-node as a config tweak. Built for podman 5.x; works with docker-compose with one tweak.
+Two supported ways to run lobslaw in a container. Both live in `deploy/`.
 
-If you just want one node (the common case), use `compose.yml` (or comment out `node-2`/`node-3` in the cluster file). If you want a 3-node fault-tolerant cluster on a single host for testing, use `cluster.yml`.
+| | `deploy/podman/` | `deploy/docker/` |
+|---|---|---|
+| Shape | one container, one host directory | compose stack: cert-init + node + shell sidecar |
+| State | bind mounts under a single directory | named volumes |
+| Good for | a local node you want to read, edit and wipe by hand | the deployment shape that scales to multiple hosts |
+| Cluster | single node only | `cluster.yml` runs three nodes on one host |
 
-## 1. Clone
+Everything below assumes you have cloned the repo:
 
 ```bash
 git clone https://github.com/jmylchreest/lobslaw
-cd lobslaw/deploy/docker
+cd lobslaw
 ```
 
-## 2. Bootstrap secrets
+## Option A — one container (podman)
+
+Everything the node persists lives in one directory, so you can read its
+config in an editor and wipe it with `rm -rf`.
 
 ```bash
-./bootstrap.sh
+cd deploy/podman
+./lobslaw-local build
+./lobslaw-local up
 ```
 
-This generates:
-- `secrets/ca.pem` + `secrets/ca-key.pem` — the cluster CA.
-- `secrets/node-{1,2,3}.{pem,key}` — per-node mTLS certs signed by that CA.
-- `.env` — populated with placeholders for the keys you need to fill in.
+`up` bootstraps on first run — cluster CA, node certificate,
+`config.toml`, `SOUL.md`, a memory encryption key, and the builtin
+embedding model — and does nothing on runs after that. State goes to
+`~/.local/share/lobslaw-local` by default; `./lobslaw-local path` prints
+it.
 
-## 3. Fill in `.env`
-
-Edit `.env`:
-
-```sh
-TELEGRAM_BOT_TOKEN=123456:abcdef-your-bot-token
-OPENROUTER_API_KEY=sk-or-v1-...
-
-# Optional, only if you want OAuth providers:
-GOOGLE_OAUTH_CLIENT_ID=...
-GOOGLE_OAUTH_CLIENT_SECRET=...
-GITHUB_OAUTH_CLIENT_ID=...
-GITHUB_OAUTH_CLIENT_SECRET=...
-```
-
-## 4. Bring it up
+The node starts without an LLM key. Memory, policy, storage, the
+scheduler, audit and the REST gateway all work; only the agent loop
+needs a provider:
 
 ```bash
-podman compose -f cluster.yml up -d   # or docker compose ...
+$EDITOR "$(./lobslaw-local path)/.env"     # LOBSLAW_MINIMAX_API_KEY=...
+./lobslaw-local restart
+./lobslaw-local ask "what tools do you have?"
 ```
 
-You should see:
+See `deploy/podman/README.md` for the full command list.
 
-```
-[+] Running 3/3
- ✔ Container lobslaw-node-1   Started
- ✔ Container lobslaw-node-2   Started
- ✔ Container lobslaw-node-3   Started
-```
-
-Logs:
+## Option B — compose (docker or podman)
 
 ```bash
-podman compose -f cluster.yml logs -f node-1
+cd deploy/docker
 ```
 
-Look for:
+### 1. Generate the cluster CA
+
+Once per cluster, not per node. The CA private key is mounted only into
+the one-shot `cert-init` container and never into the running node.
+
+```bash
+mkdir -p secrets
+go run ../../cmd/lobslaw cluster ca-init \
+  --ca-cert secrets/ca.pem \
+  --ca-key  secrets/ca-key.pem
+```
+
+### 2. Write `.env`
+
+```bash
+cat > .env <<EOF
+LOBSLAW_HOSTNAME=lobslaw-1
+LOBSLAW_MEMORY_KEY=$(head -c 32 /dev/urandom | base64)
+LOBSLAW_MINIMAX_API_KEY=
+LOBSLAW_OPENROUTER_API_KEY=
+LOBSLAW_TELEGRAM_BOT_TOKEN=
+LOBSLAW_EXA_API_KEY=
+EOF
+$EDITOR .env
+```
+
+`LOBSLAW_MEMORY_KEY` encrypts the memory FSM. Losing it makes the corpus
+unreadable, so keep a copy somewhere you trust.
+
+Provider key variables follow `LOBSLAW_<LABEL>_API_KEY`, where `<LABEL>`
+is a `[[compute.providers]].label` in `config.toml`. Rename them if you
+rename a provider.
+
+### 3. Create the workspace directory
+
+Bind-mounted into the node as `/workspace`.
+
+```bash
+mkdir -p ~/.config/lobslaw/workspace
+```
+
+### 4. Bring it up
+
+```bash
+docker compose up -d          # or: podman compose up -d
+docker compose logs -f lobslaw
+```
+
+`cert-init` signs this node's certificate, then `lobslaw` starts and —
+with no seeds configured — bootstraps a single-voter cluster:
 
 ```
-INFO  raft leadership changed is_leader=true
-INFO  policy: seeded default builtin rules count=...
-INFO  egress: smokescreen proxy started bind=127.0.0.1:NNNNN roles=...
-INFO  lobslaw node started node_id=node-XXX
+INFO raft: bootstrapped a new cluster as sole voter node_id=lobslaw-1
+INFO raft leadership changed is_leader=true
+INFO policy: seeded default builtin rules count=44
+INFO egress: smokescreen proxy started bind=127.0.0.1:NNNNN roles=8
+INFO rest server listening addr=[::]:8443
 ```
 
-## 5. Talk to it
+### 5. Talk to it
 
-The cluster's gateway is published on host port 8443 by default (only node-1 — followers are reachable via `compose exec` if you want to test gateway behaviour on a non-leader).
+The REST gateway is published on host port 8443:
 
-Open Telegram, find your bot, send any message. You should get a reply.
+```bash
+curl -s localhost:8443/healthz
+curl -sX POST localhost:8443/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"hello"}'
+```
 
-If you don't, see [doctor](/operating/doctor) and [Troubleshooting](#troubleshooting) below.
+It is plaintext HTTP with no authentication in front of it, so keep it
+on a trusted interface or terminate TLS ahead of it.
+
+To use Telegram instead, uncomment the telegram channel in
+`config.toml`, put your numeric user id in
+`[gateway.channels.user_scopes]`, and set `LOBSLAW_TELEGRAM_BOT_TOKEN`.
+Ids, never usernames — usernames change. Anyone not listed is dropped.
+
+## Three nodes on one host
+
+`cluster.yml` exercises the bootstrap/join flow and raft replication
+without three machines. Bring the seed up alone first, or several fresh
+nodes will hear each other with no leader among them:
+
+```bash
+podman compose -f cluster.yml up -d lobslaw-1
+# wait ~5s for it to elect itself
+podman compose -f cluster.yml up -d lobslaw-2 lobslaw-3 tools
+podman compose -f cluster.yml logs -f lobslaw-1 lobslaw-2 lobslaw-3
+```
+
+`deploy/docker/README.md` has the full walkthrough, including how to
+tell whether a follower has caught up.
 
 ## What's running
 
-For the cluster-mode case (`cluster.yml`):
+- **The node**, holding raft state in a bolt store. Every memory write
+  goes through consensus; with one member, entries commit immediately.
+- **A smokescreen forward proxy** per node, intercepting subprocess
+  egress and applying a per-role allowlist.
+- **The agent loop**, on the raft leader only. Followers wait.
 
-- **3 nodes** sharing Raft consensus over the cluster CA-signed mTLS mesh on port 7000 (raft) + 8443 (gateway).
-- **A shared bolt store** replicated via Raft — every memory write goes through consensus.
-- **A smokescreen forward proxy** per node, intercepting all subprocess egress and per-role ACL'd.
-- **An agent loop** on each node — only the Raft leader serves user-initiated turns; followers wait.
-
-For single-node, the same minus the consensus chatter — Raft is still the data path, but with a one-member peer set, every entry commits immediately.
+Ports: 7443 for the mTLS cluster mesh, 8443 for the gateway.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| Containers exit `code=1` immediately | Run `bootstrap.sh` first; missing certs |
-| `dial tcp ... no route to host` between nodes | Firewall blocking 7000/8443 inside the compose network |
-| Agent says "Request rejected by proxy" | Egress ACL doesn't allow that host — see [Egress and ACL](/security/egress-and-acl) |
-| Bot doesn't respond | `TELEGRAM_BOT_TOKEN` empty or wrong; check `node-1` logs for telegram-getUpdates errors |
+| Container prints CLI usage and exits 0 | Image predates the default `CMD ["run"]`; rebuild, or set `command: run` |
+| Exits immediately with a cert error | `cert-init` didn't run or `secrets/` is empty — generate the CA |
+| `bind: address already in use` | Another node already has 7443/8443; change `LOBSLAW_CLUSTER_PORT` / `LOBSLAW_GATEWAY_PORT` |
+| `dial tcp ... no route to host` between nodes | Firewall blocking 7443 inside the compose network |
+| "Request rejected by proxy" | The egress allowlist doesn't cover that host — see [Egress and ACL](/security/egress-and-acl) |
+| Boot fails fetching an embedding model | The mirror redirects to a host the allowlist doesn't cover; place the checkpoint under `<data_dir>/models/<model>` and leave `download_url` empty |
+| Bot doesn't respond | Token empty or wrong, or your id isn't in `user_scopes` — check the logs for `telegram: unknown user` |
+
+Run `lobslaw doctor --config /etc/lobslaw/config.toml` inside the
+container for a checklist of what's wired and what isn't.
 
 ## Next
 

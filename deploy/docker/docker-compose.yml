@@ -1,63 +1,39 @@
 # lobslaw single-node compose stack.
 #
-# Topology (per node):
-#   tools-init    one-shot — copies busybox-glibc binaries into a
-#                 shared volume that lobslaw mounts at /lobslaw/bin
-#                 (read-only). Putting tools under /lobslaw/* avoids
-#                 any risk of shadowing the base image's /bin.
+# Topology:
 #   cert-init     one-shot — runs `lobslaw cluster sign-node` against
-#                 the cluster CA (mounted as docker secrets) and
+#                 the cluster CA (mounted as compose secrets) and
 #                 writes this node's mTLS cert into a shared volume.
-#                 Re-runs each compose-up always overwrite, so a
-#                 hostname change on the next boot regenerates the
-#                 cert automatically.
-#   lobslaw       long-running agent. distroless static — small attack
-#                 surface, no shell baked in. Tools reach it via the
-#                 /lobslaw/bin (ro) and /lobslaw/usr/bin (rw) volumes,
-#                 both on PATH.
+#                 Re-runs on each compose-up and always overwrites, so
+#                 a hostname change on the next boot regenerates the
+#                 cert automatically. The CA private key is supplied as
+#                 a secret and is NEVER mounted into the main lobslaw
+#                 container — it lives only here.
+#   lobslaw       the long-running agent.
 #   tools         long-running shell sidecar — `docker compose exec
-#                 tools sh` for poking around. Shares the writable
-#                 /lobslaw/usr/bin volume so anything the operator
-#                 drops in is visible to lobslaw immediately.
+#                 tools sh` for poking around the volumes.
 #
-# Hostname → node id: lobslaw derives raft.ServerID from
-# os.Hostname() (short hostname, lowercased). hostname is set
-# explicitly here so cert-init and lobslaw agree on what to sign.
-# Override via $LOBSLAW_HOSTNAME in .env for multi-node deployments.
+# The runtime image is debian:12-slim and carries a full GNU userland
+# (sh, bash, coreutils, grep, sed, awk, tar, curl, git), so the agent's
+# shell_command builtin has a working shell without any sidecar seeding
+# tools into a shared volume. Heavier runtimes — python3, ruby, jq,
+# openssh — live in Dockerfile.tools; swap the `dockerfile:` below to
+# use it. Binaries installed at runtime by the binary_install builtin
+# land in the binaries-workspace volume.
+#
+# Hostname → node id: lobslaw derives raft.ServerID from os.Hostname()
+# (short hostname, lowercased). hostname is set explicitly here so
+# cert-init and lobslaw agree on what to sign. Override via
+# $LOBSLAW_HOSTNAME in .env.
+#
+# For a 3-node cluster on one host, see cluster.yml.
 
 services:
 
-  # ---- tools-init ---------------------------------------------------
-  # Copies busybox-glibc binaries into the tools-bin volume, with
-  # ownership set so the distroless `nonroot` user (UID 65532) can
-  # exec them. Cheap (~milliseconds); re-runs each compose-up so an
-  # operator can refresh the baseline by bumping the busybox tag.
-  tools-init:
-    image: busybox:glibc
-    user: "0:0"
-    command:
-      - sh
-      - -c
-      - |
-        set -e
-        rm -rf /out/bin/* /out/bin/.[!.]* 2>/dev/null || true
-        cp -a /bin/. /out/bin/
-        chown -R 65532:65532 /out/bin /out/usr-bin
-        chmod -R a+rX /out/bin
-        chmod 0775 /out/usr-bin
-        echo "tools-init: populated /lobslaw/bin baseline + prepared /lobslaw/usr/bin"
-    volumes:
-      - tools-bin:/out/bin
-      - tools-runtime:/out/usr-bin
-    restart: "no"
-
   # ---- cert-init ----------------------------------------------------
-  # Generates this node's mTLS cert from the cluster CA. Uses the
-  # heavier debian-slim image (Dockerfile.tools) because distroless
-  # has no shell + no chown/chmod — both needed to set up the certs
-  # volume's ownership for the nonroot lobslaw runtime user. The CA
-  # private key is supplied as a docker secret and is NEVER mounted
-  # into the main lobslaw container — it lives only here.
+  # Runs as root and with entrypoint cleared: it needs a shell, and it
+  # needs chown/chmod to hand the certs volume to the nonroot runtime
+  # user the lobslaw service runs as.
   cert-init:
     build:
       context: ../..
@@ -96,36 +72,36 @@ services:
       dockerfile: Dockerfile
     image: lobslaw:dev
     hostname: ${LOBSLAW_HOSTNAME:-lobslaw-1}
+    # No `command:` — the image defaults to `run`.
     environment:
       - LOBSLAW_CONFIG=/etc/lobslaw/config.toml
       - LOBSLAW_MEMORY_KEY=${LOBSLAW_MEMORY_KEY}
       - LOBSLAW_MINIMAX_API_KEY=${LOBSLAW_MINIMAX_API_KEY:-}
+      - LOBSLAW_OPENROUTER_API_KEY=${LOBSLAW_OPENROUTER_API_KEY:-}
       - LOBSLAW_TELEGRAM_BOT_TOKEN=${LOBSLAW_TELEGRAM_BOT_TOKEN:-}
       - LOBSLAW_EXA_API_KEY=${LOBSLAW_EXA_API_KEY:-}
-      # PATH puts /lobslaw/bin (ro baseline) and /lobslaw/usr/bin (rw
-      # extensible) ahead of the empty default, so shell_command and
-      # other os/exec callers find shipped + operator-added tools.
-      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      # binary_install's prefix goes first so a runtime-installed tool
+      # wins over an image-baked one of the same name.
+      - PATH=/lobslaw/usr/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
       - TZ=${TZ:-UTC}
       - LOBSLAW_LOG_LEVEL=${LOBSLAW_LOG_LEVEL:-info}
       - LOBSLAW_LOG_FORMAT=${LOBSLAW_LOG_FORMAT:-json}
     volumes:
-      # Read-only baseline of busybox utilities from tools-init.
-      - tools-bin:/lobslaw/bin:ro
-      # Persistent rw extension space for runtime-added tools.
-      # Survives compose down/up. Shared with the `tools` sidecar so
-      # an operator can `exec tools` and drop binaries in for the
-      # agent's shell_command builtin to find.
-      - tools-runtime:/lobslaw/usr/bin
+      # Where binary_install lands user-mode installs. Drop this entry
+      # to make them ephemeral — they'd live on the container's
+      # writable layer and reset on every restart.
+      - binaries-workspace:/lobslaw/usr/local
       # mTLS material. CA private key intentionally absent — only
-      # cert-init has access to it via docker secret.
+      # cert-init has access to it, via the compose secret.
       - certs:/etc/lobslaw/certs:ro
       # Raft + memory FSM state. Persistent across restarts.
       - data:/var/lobslaw/data
       # Audit log (local JSONL sink).
       - audit:/var/lobslaw/audit
-      # Operator-edited config + soul. Bind-mounted ro so changes on
-      # the host take effect on restart (or via the [config] watcher).
+      # Skill bundles landed by clawhub_install.
+      - skills:/var/lobslaw/skills
+      # Operator-edited config + soul. config.toml is read-only; SOUL.md
+      # is writable because the soul_* builtins edit it in place.
       - ${LOBSLAW_CONFIG_FILE:-./config.toml}:/etc/lobslaw/config.toml:ro
       - ${LOBSLAW_SOUL_FILE:-./SOUL.md}:/etc/lobslaw/SOUL.md:rw
       # Workspace storage mount — agent reads/writes user files here.
@@ -134,8 +110,6 @@ services:
       - "${LOBSLAW_CLUSTER_PORT:-7443}:7443"
       - "${LOBSLAW_GATEWAY_PORT:-8443}:8443"
     depends_on:
-      tools-init:
-        condition: service_completed_successfully
       cert-init:
         condition: service_completed_successfully
     restart: unless-stopped
@@ -146,19 +120,20 @@ services:
     stop_grace_period: 30s
 
   # ---- tools (long-running shell sidecar) ---------------------------
-  # `docker compose exec tools sh` for ad-hoc inspection. Shares the
-  # writable /lobslaw/usr/bin volume with the lobslaw service: drop
-  # a binary in here and lobslaw's shell_command finds it next call.
+  # `docker compose exec tools sh` for ad-hoc inspection of the
+  # volumes. Shares binaries-workspace with the lobslaw service, so a
+  # binary dropped in here is on the agent's PATH immediately.
   tools:
     image: busybox:glibc
     hostname: ${LOBSLAW_HOSTNAME:-lobslaw-1}-tools
     command: ["sleep", "infinity"]
     environment:
-      - PATH=/usr/local/bin:/lobslaw/usr/bin:/usr/bin:/bin
+      - PATH=/lobslaw/usr/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin
     volumes:
-      - tools-runtime:/lobslaw/usr/bin
+      - binaries-workspace:/lobslaw/usr/local
       - data:/var/lobslaw/data:ro
       - audit:/var/lobslaw/audit:ro
+      - skills:/var/lobslaw/skills:ro
       - certs:/etc/lobslaw/certs:ro
       - ${HOME}/.config/lobslaw/workspace:/workspace:rw,U
     restart: unless-stopped
@@ -170,15 +145,13 @@ secrets:
     file: ./secrets/ca-key.pem
 
 volumes:
-  # Repopulated each compose-up by tools-init; ephemeral by intent.
-  tools-bin:
-  # Persistent across compose down/up. Operator-managed extras at
-  # /lobslaw/usr/bin in both the lobslaw and tools containers.
-  tools-runtime:
+  # Operator-owned scratch where binary_install lands user-mode
+  # installs (gh-release, brew, curl-sh, npm/cargo/uvx/pipx/...).
+  binaries-workspace:
   # Persistent. Cert is regenerated each compose-up but the volume
   # holds the result so lobslaw and tools see the same cert.
   certs:
-  # Persistent raft + state. `lobslaw cluster reset` (run inside the
-  # cert-init image, or `docker volume rm`) for a clean start.
+  # Persistent raft + state. `lobslaw cluster reset` for a clean start.
   data:
   audit:
+  skills:
