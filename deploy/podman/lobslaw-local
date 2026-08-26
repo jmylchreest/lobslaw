@@ -145,33 +145,48 @@ oneshot() {
 # --- build ------------------------------------------------------------
 
 cmd_build() {
-  # The normal path. Needs overlayfs, which buildah mounts over the
-  # build context to keep it read-only.
-  if grep -qw overlay /proc/filesystems; then
-    info "building $IMAGE from $CONTAINERFILE"
-    podman build \
+  local log
+  log="$(mktemp)"
+
+  info "building $IMAGE from $CONTAINERFILE"
+  if podman build \
       -t "$IMAGE" \
       -f "$CONTAINERFILE" \
       --build-arg "VERSION=local" \
       --build-arg "COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
-      "$REPO_ROOT"
+      "$REPO_ROOT" 2>&1 | tee "$log"; then
+    rm -f "$log"
     return
   fi
 
-  # No overlayfs in the running kernel — usually a machine that has had
-  # a kernel upgrade installed but not yet rebooted, so /lib/modules no
-  # longer matches `uname -r`. podman build cannot work at all in that
-  # state, but podman run + commit only needs the storage driver, which
-  # is fuse-overlayfs. Assemble the same image the long way.
-  warn "kernel $(uname -r) has no overlayfs; falling back to run+commit"
-  warn "(a reboot into the installed kernel restores plain \`podman build\`)"
+  # Fall back ONLY for the one failure the fallback exists for. Any
+  # other build error — a bad Containerfile, a compile failure — has to
+  # surface, because the fallback assembles an image by a different
+  # route and would happily produce one that hides it.
+  #
+  # Observed rather than predicted. This used to probe /proc/filesystems
+  # for "overlay" up front, which only lists filesystems already
+  # REGISTERED: on a healthy machine that has not mounted one yet the
+  # module is present and autoloads on first use, but the probe says no
+  # and every build took the slow path for no reason. Whether the build
+  # works is a question the build answers.
+  if ! grep -q "overlay over build context" "$log"; then
+    rm -f "$log"
+    die "podman build failed — see the output above"
+  fi
+  rm -f "$log"
+
+  warn "this kernel cannot mount an overlay over the build context"
+  warn "(usually a kernel upgraded but not yet rebooted, so /lib/modules"
+  warn " no longer matches \`uname -r\`; a reboot restores podman build)"
+  warn "falling back to a host build plus run+commit"
 
   local tmp bin ctr
   tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
   bin="$tmp/lobslaw"
   ctr="${CONTAINER}-imgbuild"
 
-  command -v go >/dev/null || die "fallback build needs a host Go toolchain"
+  command -v go >/dev/null || die "the fallback build needs a host Go toolchain"
   info "building the binary on the host"
   ( cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
@@ -180,8 +195,9 @@ cmd_build() {
 
   podman rm -f "$ctr" >/dev/null 2>&1 || true
   info "preparing the runtime layer"
-  # --network=host because pasta also needs a tun device this kernel
-  # cannot give us; on a healthy host the default network works too.
+  # --network=host because the same missing-modules state usually takes
+  # /dev/net/tun with it, and pasta cannot set up a tap device without
+  # one. Harmless on a healthy host.
   podman run --name "$ctr" --network=host --user 0:0 \
     docker.io/library/debian:12-slim bash -c '
       set -e
@@ -197,6 +213,7 @@ cmd_build() {
     ' >/dev/null
 
   podman cp "$bin" "$ctr:/usr/local/bin/lobslaw"
+  # Keep these in step with the Containerfile — this path bypasses it.
   podman commit -q \
     --change 'USER nonroot:nonroot' \
     --change 'WORKDIR /lobslaw' \
