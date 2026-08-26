@@ -39,6 +39,7 @@
 #   LOBSLAW_EMBED_MODEL    default all-MiniLM-L6-v2 ("" to skip the
 #                          builtin embedder and fall back to lexical recall)
 #   LOBSLAW_EMBED_MODEL_URL base of the HTTP dir the checkpoint comes from
+#                          (default: lobslaw's own release mirror)
 
 set -euo pipefail
 
@@ -58,7 +59,7 @@ LOG_LEVEL="${LOBSLAW_LOG_LEVEL:-info}"
 LOG_FORMAT="${LOBSLAW_LOG_FORMAT:-text}"
 CONTAINERFILE="${LOBSLAW_CONTAINERFILE:-$REPO_ROOT/Dockerfile}"
 EMBED_MODEL="${LOBSLAW_EMBED_MODEL-all-MiniLM-L6-v2}"
-EMBED_MODEL_URL="${LOBSLAW_EMBED_MODEL_URL:-https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main}"
+EMBED_MODEL_URL="${LOBSLAW_EMBED_MODEL_URL:-https://github.com/jmylchreest/lobslaw/releases/download/models-all-MiniLM-L6-v2}"
 
 UID_IN_IMAGE=65532
 GID_IN_IMAGE=65532
@@ -236,12 +237,26 @@ fetch_embed_model() {
     curl -fsSL --retry 3 -o "$dir/$f" "$EMBED_MODEL_URL/$f" \
       || die "fetch $f from $EMBED_MODEL_URL"
   done
+
+  # SHA256SUMS is what makes this more than a download: the loader
+  # verifies every file it covers on load, and deletes any that fails
+  # so the next boot refetches rather than reading bytes already known
+  # to be wrong. Optional upstream, published by our mirror.
+  curl -fsSL --retry 2 -o "$dir/SHA256SUMS" \
+    "$EMBED_MODEL_URL/SHA256SUMS" 2>/dev/null || true
+
   # Optional. tokenizer_config.json and the pooling declaration are
   # read when present; their absence falls back to family defaults.
+  # The pooling file is nested upstream and flattened on mirrors that
+  # cannot express a "/" in a filename — GitHub release assets, ours
+  # included — so try both and write to the nested path either way.
   curl -fsSL --retry 2 -o "$dir/tokenizer_config.json" \
     "$EMBED_MODEL_URL/tokenizer_config.json" 2>/dev/null || true
   curl -fsSL --retry 2 -o "$dir/1_Pooling/config.json" \
-    "$EMBED_MODEL_URL/1_Pooling/config.json" 2>/dev/null || true
+    "$EMBED_MODEL_URL/1_Pooling/config.json" 2>/dev/null \
+    || curl -fsSL --retry 2 -o "$dir/1_Pooling/config.json" \
+       "$EMBED_MODEL_URL/1_Pooling.config.json" 2>/dev/null \
+    || rmdir "$dir/1_Pooling" 2>/dev/null || true
 
   info "model at $dir"
 }

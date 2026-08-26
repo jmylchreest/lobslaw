@@ -102,29 +102,54 @@ enabled = true
 # you have no key for, or delete them.
 
 [[compute.providers]]
-label             = "minimax-m2.7"
-endpoint          = "https://api.minimax.io/v1"
-model             = "MiniMax-M2.7"
-api_key_ref       = "env:LOBSLAW_MINIMAX_API_KEY"
-trust_tier        = "private"
-capabilities      = ["chat", "function-calling"]
-priority          = 10
-auto_capabilities = true
+label        = "minimax"
+driver       = "openai"
+endpoint     = "https://api.minimax.io/v1"
+model        = "MiniMax-M2"
+api_key_ref  = "env:LOBSLAW_MINIMAX_API_KEY"
+trust_tier   = "public"
+capabilities = ["chat", "function-calling"]
+priority     = 10
+backup       = "openrouter"
+[compute.providers.pricing]
+input_usd_per_1k  = 0.0003
+output_usd_per_1k = 0.0012
 
 [[compute.providers]]
-label             = "openrouter"
-endpoint          = "https://openrouter.ai/api/v1"
-model             = "qwen/qwen3.6-plus"
-api_key_ref       = "env:LOBSLAW_OPENROUTER_API_KEY"
-trust_tier        = "private"
-capabilities      = ["chat", "function-calling"]
-priority          = 5
-auto_capabilities = true
+label        = "openrouter"
+driver       = "openai"
+endpoint     = "https://openrouter.ai/api/v1"
+model        = "openai/gpt-4o-mini"
+api_key_ref  = "env:LOBSLAW_OPENROUTER_API_KEY"
+trust_tier   = "public"
+capabilities = ["chat", "function-calling"]
+priority     = 5
+# The rate card comes from models.dev rather than being retyped here,
+# so `trace` reports a cost instead of $0.0000.
+auto_pricing = true
 
+# Whichever key you actually have should be main — swap these three if
+# that is OpenRouter.
+#
+# One OpenRouter failure worth recognising, because it looks like a
+# broken model name and is not:
+#
+#   HTTP 404: No endpoints available matching your guardrail
+#   restrictions and data policy
+#
+# That is the account's privacy settings excluding every endpoint that
+# serves the model, and it is answered at
+# https://openrouter.ai/settings/privacy, not in this file. It is also
+# not a transient error, so the backup chain deliberately does NOT fire
+# for it — the turn fails and says why.
+#
+# preflight runs on EVERY turn, so pointing it at a frontier model
+# doubles the cost of a conversation to do a job a small one does as
+# well.
 [compute.roles]
-main      = "minimax-m2.7"
-preflight = "minimax-m2.7"
-reranker  = "minimax-m2.7"
+main      = "minimax"
+preflight = "minimax"
+reranker  = "minimax"
 
 # In-process embedder: no API key, no endpoint, and no egress at all,
 # so memory content never leaves the box. all-MiniLM-L6-v2 is symmetric
@@ -135,10 +160,12 @@ reranker  = "minimax-m2.7"
 # is deliberately EMPTY: nothing is fetched at runtime, and a missing
 # checkpoint is a boot error rather than a silent download.
 #
-# Setting it to a HuggingFace repo also works — the egress role covers
-# the CDN hosts the weights redirect to — but fetching on the host keeps
-# boot offline and makes the checkpoint something you can see, copy and
-# delete like any other file in the state directory.
+# bootstrap pulls it from lobslaw's own release mirror, which publishes
+# SHA256SUMS alongside the weights — so the loader verifies every file
+# on load and deletes any that fails rather than reading bytes already
+# known to be wrong. Pointing download_url at HuggingFace and letting
+# the node fetch also works, but that is unpinned bytes from a third
+# party on first boot, and it puts the network on the boot path.
 # embeddings-block-start — ./lobslaw-local bootstrap rewrites the model
 # name here, and deletes the whole block when LOBSLAW_EMBED_MODEL is
 # empty, which leaves recall on lexical matching.
