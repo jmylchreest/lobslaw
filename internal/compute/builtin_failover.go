@@ -47,11 +47,10 @@ func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, 
 	if log == nil {
 		log = slog.Default()
 	}
-	// The single-provider case no longer skips the wrapper. It used to,
-	// on the grounds that one provider deserves no chain machinery —
-	// but the floor has to be checked whether or not there is anywhere
-	// to fall through to, and "one provider" is exactly the config
-	// where an unchecked one is the only thing that runs.
+	// The single-provider case gets the wrapper too: the floor has to
+	// be checked whether or not there is anywhere to fall through to,
+	// and "one provider" is exactly the config where an unchecked one
+	// is the only thing that runs.
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		var (
 			lastOut    []byte

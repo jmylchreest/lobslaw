@@ -159,13 +159,11 @@ func (n *Node) wireCompute() error {
 	// Council registration happens HERE, after wireLLMProviders has
 	// populated the registry, and not with the other tools above.
 	//
-	// It used to sit with them, guarded on n.providerRegistry != nil —
-	// which is assigned 200 lines further down, inside
-	// wireLLMProviders. wireCompute runs once, the field starts nil,
-	// and nothing else assigns it, so the guard was never true and
-	// list_providers and council_review have never registered on any
-	// node. The guard read like a capability check and was really a
-	// read of a variable that did not exist yet.
+	// n.providerRegistry is assigned inside wireLLMProviders, 200 lines
+	// down. Guarding on it any earlier reads a field that is still nil,
+	// which looks like a capability check and is really a check that
+	// can never pass — list_providers and council_review then register
+	// on no node at all.
 	// After the self-taught stage, which runs earlier in nodeWireStages
 	// and is what sets n.selfTaught. Registering before it would find
 	// nil and skip the tool on every node that has the store.

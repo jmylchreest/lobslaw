@@ -26,8 +26,8 @@ type Route struct {
 	// Carried so an operator can see which chain fired and why rather
 	// than inferring it from which provider answered.
 	Reason string
-	// Steps is the full resolved chain. Only Steps[0] is dispatched
-	// today; the rest are what multi-step execution will consume.
+	// Steps is the full resolved chain. Steps[0] runs the tool-call
+	// loop; runChainSteps pipelines the rest over its answer.
 	Steps []ResolveStep
 	// Judgment is the signal the decision was made on.
 	Judgment Judgment

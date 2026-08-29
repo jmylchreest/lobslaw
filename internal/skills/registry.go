@@ -200,13 +200,13 @@ func (r *Registry) recomputeWinnerLocked(name string) {
 //  2. Within a tier, higher semver wins.
 //  3. Same tier and version: lexicographic ManifestDir.
 //
-// Tier first is a change from version-first, and it is the point. The
-// old order let an unsigned v2 beat a signed v1, which was defensible
-// while only an operator could write a skill and became a
-// privilege-escalation path the moment the agent could author one:
-// name your skill after a signed one, set version 99.0.0, win.
+// Tier is checked before version, and that ordering is the point.
+// Version-first would let an unsigned v2 beat a signed v1 — defensible
+// while only an operator could write a skill, and a privilege-
+// escalation path the moment the agent can author one: name your skill
+// after a signed one, set version 99.0.0, win.
 //
-// A version bump can no longer promote a skill past its provenance.
+// So a version bump cannot promote a skill past its provenance.
 //
 // The escape hatch for an operator who wants to override a signed
 // skill locally is a dev source that wins outright, NOT bumping a

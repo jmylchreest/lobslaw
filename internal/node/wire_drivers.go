@@ -65,10 +65,9 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
 		s.RegisterJob(veo.DriverName, veoJobFactory)
 
-		// Vision joins the same seam. It used to switch on a
-		// VisionFormat enum in two places with three vendors inlined in
-		// each, so `driver = "anthropic"` selected the chat wire shape
-		// and said nothing about the vision one.
+		// Vision joins the same seam: `driver` selects the wire shape
+		// per modality, so a vendor's chat and vision protocols are
+		// registered independently rather than implied by one another.
 		s.RegisterVision(compute.DriverOpenAI, compute.OpenAIVisionFactory)
 		s.RegisterVision(compute.DriverAnthropic, anthropic.VisionFactory)
 		s.RegisterVision(gemini.DriverName, gemini.VisionFactory)

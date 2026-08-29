@@ -125,9 +125,10 @@ func Build(in ACLInputs) Rules {
 	}
 	if len(llmHosts.list) > 0 {
 		rules.Roles["llm"] = llmHosts.list
-		// embedding shares the same set today — operators can
-		// ratchet down by declaring an explicit embedding endpoint
-		// in compute.embedder configuration when that lands.
+		// The embedding role gets the whole provider set rather than
+		// just [compute.embeddings].endpoint, so a remote embedder can
+		// reach any declared provider host. A node using the builtin
+		// embedder makes no embedding calls at all.
 		rules.Roles["embedding"] = llmHosts.list
 	}
 

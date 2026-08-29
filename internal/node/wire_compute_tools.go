@@ -924,9 +924,8 @@ func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
 // visionCredential picks how a vendor wants its key presented.
 //
 // Google authenticates generateContent with a URL query parameter,
-// everyone else with a header. That used to be handled by appending
-// "?key=" to the endpoint before the request was built — which worked,
-// and put one provider's auth somewhere no other provider's was.
+// everyone else with a header. Both are expressed as a Credential so
+// no provider's auth lives somewhere the others' does not.
 func visionCredential(driver, apiKey string) compute.Credential {
 	if apiKey == "" {
 		return nil

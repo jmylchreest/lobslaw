@@ -37,12 +37,10 @@ type VisionConfig struct {
 	Endpoint string
 	Model    string
 	APIKey   string
-	// Driver is the resolved wire protocol for this endpoint.
-	//
-	// This used to be a VisionFormat enum switched on in two places —
-	// once to build the request, once to decode the reply — with three
-	// vendors inlined in each. Adding a fourth meant editing both and
-	// hoping nobody had added a third switch elsewhere.
+	// Driver is the resolved wire protocol for this endpoint. A named
+	// driver rather than a format enum, so adding a vendor is one
+	// registration and not an edit to every switch that decodes a
+	// reply.
 	Driver VisionDriver
 	// AllowedRoot scopes which paths the agent can read. Empty →
 	// DefaultIncomingDir (where the channel attachment downloader

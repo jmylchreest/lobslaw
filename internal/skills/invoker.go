@@ -212,11 +212,10 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 	return inv, nil
 }
 
-// Invoke runs a skill. The sandbox policy composition (Landlock
-// rules computed from manifest.storage + runtime exec allowance,
-// seccomp, namespaces) wraps the runner internally once the
-// sandbox integration lands; today this is subprocess + stdio
-// capture with path resolution.
+// Invoke runs a skill under a per-invocation sandbox policy: Landlock
+// rules composed from manifest.storage plus the runtime exec
+// allowance, seccomp and namespaces. See buildPolicy for the
+// composition and sandbox.Apply for what enforces it.
 func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult, error) {
 	skill, err := i.reg.Get(req.SkillName)
 	if err != nil {

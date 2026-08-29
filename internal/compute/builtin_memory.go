@@ -425,13 +425,12 @@ type lexicalHit struct {
 // lexicalEpisodicSearch is the ranking half of the substring search,
 // split out because the CONTEXT ENGINE needs it too.
 //
-// It used to live inside runSubstringSearch, which meant the only
-// caller that could reach it was the memory_search tool. Passive
-// recall — the path that puts memories in front of the model without
-// it having to ask — had no lexical form at all: with no embedder it
-// returned an empty assembly and every turn ran with no recall
-// whatever. A node without an [embeddings] block therefore only ever
-// saw a memory if the model itself decided to go looking.
+// Kept reachable by both callers, not just the memory_search tool.
+// Passive recall — the path that puts memories in front of the model
+// without it having to ask — has no vector form on a node with no
+// embedder, so without a lexical form here that node runs every turn
+// with no recall at all and only ever sees a memory the model went
+// looking for.
 //
 // Deliberately does NOT filter quarantined records. runSubstringSearch
 // never did, and the two callers want different things: a model that
