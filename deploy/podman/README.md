@@ -126,6 +126,26 @@ local scratch node should stay a cluster of one.
 configured and the port is published on `127.0.0.1`. Don't move it off
 loopback without putting TLS in front.
 
+**Reaching the host needs a range, not just a name.** If anything here
+dials back to your machine — an outbound `callback` address, a locally
+hosted model — use `host.containers.internal`, and open the range it
+resolves to. Under rootless pasta that is **link-local**, which
+`egress_allow_private_ranges` does *not* cover:
+
+```console
+$ podman exec lobslaw-local getent hosts host.containers.internal
+169.254.1.2     host.containers.internal
+```
+
+```toml
+[security]
+egress_allow_ranges = ["169.254.0.0/16"]
+```
+
+Without it the proxy answers `HTTP 407` and says nothing about which
+range was refused. Resolve it yourself rather than trusting the number
+above — it differs by runtime.
+
 **Embeddings run in-process.** `type = "builtin"`, `all-MiniLM-L6-v2`,
 384 dims — no API key, no endpoint, and no egress, so memory content
 never leaves the machine. The ~90MB checkpoint is fetched **on the

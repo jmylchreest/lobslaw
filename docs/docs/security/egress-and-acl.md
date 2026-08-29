@@ -78,6 +78,32 @@ egress_allow_ranges = ["172.16.0.0/12"]   # the compose bridge, not 10/8 as well
 
 lobslaw warns at boot when a selected search provider is on a private or bare-label address and neither `egress_allow_ranges` nor `egress_allow_private_ranges` is set, because the alternative is a proxy denial that names neither the range nor the setting that fixes it.
 
+### Reaching the host from inside a container
+
+`host.containers.internal` is the portable way for a container to reach a service on its host — an outbound `callback` address, or an LLM endpoint you run locally. **Check what it resolves to before assuming `egress_allow_private_ranges` covers it.**
+
+It is not always RFC1918. Under rootless podman with **pasta** networking it resolves to a **link-local** address:
+
+```console
+$ podman exec <container> getent hosts host.containers.internal
+169.254.1.2     host.containers.internal
+```
+
+169.254.0.0/16 is RFC 3927, not RFC 1918, so `egress_allow_private_ranges = true` does **not** admit it and the request is refused with `HTTP 407` from the proxy. Name the range explicitly:
+
+```toml
+[security]
+egress_allow_ranges = ["169.254.0.0/16"]   # host.containers.internal under rootless pasta
+```
+
+Other runtimes resolve it differently — a bridge address under rootful podman or Docker Desktop, something else again under gVisor or a VM-backed runtime — so resolve it on the deployment you actually run rather than copying a range from here:
+
+```bash
+podman exec <container> getent hosts host.containers.internal
+```
+
+The same applies to any egress target reached by a name the container resolves itself. The hostname allowance and the IP filter are separate checks, and both have to pass.
+
 ## ACL hot-reload
 
 The egress builder rebuilds the ACL on every `config.toml` SIGHUP. Live connections aren't disrupted; new tunnels are evaluated against the new ACL. See `internal/egress/smokescreen.go:Reload`.
