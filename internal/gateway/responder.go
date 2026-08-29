@@ -48,7 +48,12 @@ type Responder interface {
 const (
 	defaultTypingInterval = 4 * time.Second
 	defaultInterimTimeout = 30 * time.Second
-	defaultHardTimeout    = 90 * time.Second
+
+	// DefaultHardTimeout is exported because the REST server's write
+	// deadline is derived from it: a socket that closes before the
+	// turn's own cap can never deliver the forced-summary reply.
+	DefaultHardTimeout = 90 * time.Second
+	defaultHardTimeout = DefaultHardTimeout
 
 	// directnessChattyCutoff is the EmotiveStyle.Directness score at
 	// or above which interim messages are skipped. A terse personality

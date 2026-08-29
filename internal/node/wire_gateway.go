@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
@@ -99,6 +100,9 @@ func (n *Node) wireGateway() error {
 		TypingInterval:   n.cfg.Gateway.TypingInterval,
 		InterimTimeout:   n.cfg.Gateway.InterimTimeout,
 		HardTimeout:      n.cfg.Gateway.HardTimeout,
+		ReadTimeout:      n.cfg.Gateway.ReadTimeout,
+		WriteTimeout:     restWriteTimeout(n.cfg.Gateway),
+		IdleTimeout:      n.cfg.Gateway.IdleTimeout,
 		Soul:             n.soulProvider,
 		TLSCert:          tlsCert,
 		TLSKey:           tlsKey,
@@ -474,4 +478,29 @@ func (n *Node) newRelatednessJudge() gateway.RelatednessJudge {
 		return nil
 	}
 	return j
+}
+
+// restWriteTimeout derives the REST server's write deadline from the
+// turn's own cap.
+//
+// WriteTimeout bounds the entire request-to-response window, so one
+// shorter than HardTimeout can only ever truncate a turn the agent was
+// still entitled to finish: the socket dies first and the caller gets
+// "Empty reply from server" for a turn that completed server-side and
+// wrote its artifacts. The two deadlines have to be ordered outward.
+//
+// An explicit write_timeout is honoured as given — an operator who
+// names a number means it. Otherwise this tracks HardTimeout so
+// raising one does not silently require raising the other.
+func restWriteTimeout(g config.GatewayConfig) time.Duration {
+	if g.WriteTimeout > 0 {
+		return g.WriteTimeout
+	}
+	hard := g.HardTimeout
+	if hard <= 0 {
+		hard = gateway.DefaultHardTimeout
+	}
+	// Margin so the agent's own forced-summary path is what ends a slow
+	// turn, not the socket.
+	return hard + 30*time.Second
 }

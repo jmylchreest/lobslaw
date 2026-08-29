@@ -1014,6 +1014,19 @@ type GatewayConfig struct {
 	ConfirmationTimeout time.Duration          `koanf:"confirmation_timeout"`
 	UnknownUserScope    string                 `koanf:"unknown_user_scope"`
 
+	// HTTP server timers for the REST listener. Zero takes a default.
+	//
+	// WriteTimeout is the one that bites. It bounds the whole
+	// request-to-response window, so a value below HardTimeout kills
+	// the socket before the agent's own cap can produce the
+	// forced-summary reply — the caller sees "Empty reply from server"
+	// on a turn that completed server-side and wrote its artifacts.
+	// Left unset it is derived from HardTimeout rather than fixed, so
+	// raising one does not silently require raising the other.
+	ReadTimeout  time.Duration `koanf:"read_timeout,omitempty"`
+	WriteTimeout time.Duration `koanf:"write_timeout,omitempty"`
+	IdleTimeout  time.Duration `koanf:"idle_timeout,omitempty"`
+
 	// DefaultTimezone is the cluster-wide IANA zone used when a user
 	// hasn't bound a per-user timezone via [[user]] config or the
 	// future timezone-binding builtin. Empty = "UTC". Stored UTC
