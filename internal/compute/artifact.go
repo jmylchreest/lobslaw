@@ -232,12 +232,33 @@ func safeArtifactName(name, mime string) string {
 	if base == "" {
 		base = "artifact"
 	}
-	if filepath.Ext(base) == "" {
+	if !hasFileExt(base) {
 		if ext := extForMIME(mime); ext != "" {
 			base += ext
 		}
 	}
 	return filepath.Join("generated", base)
+}
+
+// hasFileExt reports whether base already ends in something that is
+// plausibly a file extension.
+//
+// filepath.Ext alone is not enough for a name derived from a prompt.
+// It returns everything after the LAST dot, so "a triangle on a grey
+// background. Simple 3D render" has an "extension" 30 characters long
+// and the real type suffix is never appended — the file lands as
+// something nothing downstream can identify by name.
+func hasFileExt(base string) bool {
+	ext := filepath.Ext(base)
+	if len(ext) < 2 || len(ext) > 6 {
+		return false
+	}
+	for _, r := range ext[1:] {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // ArtifactFileName turns a prompt into a short slug for a generated

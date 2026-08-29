@@ -211,6 +211,9 @@ func TestSafeArtifactNameAppendsExtAfterTrailingDot(t *testing.T) {
 		{"real extension kept", "clip.webm", "video/mp4", "generated/clip.webm"},
 		{"no dot", "clip", "video/mp4", "generated/clip.mp4"},
 		{"only dots", "...", "video/mp4", "generated/artifact.mp4"},
+		{"internal dots, no real ext", "a triangle on grey. Simple 3D render", "video/mp4", "generated/a triangle on grey. Simple 3D render.mp4"},
+		{"long pseudo-ext", "clip.reallylongsuffix", "video/mp4", "generated/clip.reallylongsuffix.mp4"},
+		{"punctuation ext is not an ext", "clip.a b", "video/mp4", "generated/clip.a b.mp4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := safeArtifactName(tc.in, tc.mime); got != tc.want {
