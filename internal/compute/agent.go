@@ -1013,7 +1013,41 @@ func (a *Agent) seedMessages(req ProcessMessageRequest) []Message {
 	if userText != "" {
 		out = append(out, Message{Role: "user", Content: userText})
 	}
+
+	// A turn has to end on something the model can answer. With an
+	// empty message, no attachments and no history, everything above
+	// this point is system-role — so the last thing in the request is
+	// the system prompt, and the model replies to THAT: it agrees to
+	// its own instructions and describes its own configuration.
+	//
+	// Every channel in tree already guards this at its own door (REST
+	// rejects the request, Telegram and Slack substitute a stub for a
+	// caption-less upload). This is the backstop for the callers that
+	// are not channels — research workers, and whatever drives the
+	// agent next — because the failure is silent, reaches the user as
+	// a reply, and looks like a model defect rather than a malformed
+	// request.
+	if !hasAddressableTurn(out) {
+		a.cfg.Logger.Warn("agent: turn has no user content; the model would be answering its own system prompt",
+			"turn_id", req.TurnID, "channel", req.Channel)
+		out = append(out, Message{
+			Role:    "user",
+			Content: "(no message content was received — say briefly that nothing came through, and ask what they need)",
+		})
+	}
 	return out
+}
+
+// hasAddressableTurn reports whether the request ends on something
+// other than system-role scaffolding. Checks the LAST message rather
+// than "is there a user message anywhere": a transcript replayed after
+// a tool call legitimately ends on a tool result, and that is a turn
+// the model can continue.
+func hasAddressableTurn(msgs []Message) bool {
+	if len(msgs) == 0 {
+		return false
+	}
+	return msgs[len(msgs)-1].Role != "system"
 }
 
 // decorateWithAttachments appends an "[attached: ...]" block to the

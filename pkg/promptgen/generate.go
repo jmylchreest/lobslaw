@@ -60,14 +60,20 @@ type GenerateInput struct {
 // Generate assembles the full system prompt. Section order:
 //
 //  1. Identity (soul)
-//  2. Operating Principles (safety)
-//  3. Current Time
-//  4. Runtime
-//  5. Workspace
+//  2. How To Read This Prompt (contract)
+//  3. Operating Principles (safety)
+//  4. Personality & Style
+//  5. Anecdotal Context (soul fragments)
 //  6. Available Tools
 //  7. Installed Skills
-//  8. Bootstrap (operator files)
-//  9. Context (wrapped tool/memory output)
+//  8. Host Binaries
+//  9. User Profile + Agent Notes (pinned memory)
+//  10. Current Time
+//  11. Runtime
+//  12. Workspace
+//  13. Environment
+//  14. Bootstrap (operator files)
+//  15. Context (wrapped tool/memory output)
 //
 // Deterministic: same input → identical output. Stable across runs
 // so provider-side prompt caches hit consistently.
@@ -90,6 +96,10 @@ func Generate(in GenerateInput) string {
 	// cheap and fixes the attention failure.
 	sections := []Section{
 		BuildIdentity(in.Soul),
+		// Second, above every imperative it governs: a rule about how
+		// to read this document is worth nothing underneath the
+		// document. See BuildPromptContract.
+		BuildPromptContract(),
 		BuildSafety(),
 		BuildPersonality(in.Soul),
 		BuildFragments(in.Soul),

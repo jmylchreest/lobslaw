@@ -64,8 +64,14 @@ func TestBuildIdentityOmitsName(t *testing.T) {
 	if !strings.Contains(identity.Body, "A thoughtful assistant.") {
 		t.Error("persona description should appear in Identity")
 	}
-	if !strings.Contains(personality.Body, "formality: 6/10") {
-		t.Error("emotive scores should render as n/10 in Personality")
+	// Prose, not the dial that produced it. The score is the
+	// operator's interface and never the model's — see
+	// BuildPersonality.
+	if !strings.Contains(personality.Body, "Write plainly") {
+		t.Error("a mid formality should render as guidance in Personality")
+	}
+	if strings.Contains(personality.Body, "6/10") {
+		t.Error("a raw dial value reached the prompt; models read those back")
 	}
 	if !strings.Contains(identity.Body, "scope: personal") {
 		t.Error("scope should appear in Identity")
@@ -77,15 +83,92 @@ func TestBuildPersonalitySkipsZeroScores(t *testing.T) {
 	soul := &types.SoulConfig{
 		EmotiveStyle: types.EmotiveStyle{
 			Formality:  5,
-			Directness: 0, // zero — should not render
+			Directness: 0, // unset — should not render
 		},
 	}
 	s := BuildPersonality(soul)
-	if !strings.Contains(s.Body, "formality") {
-		t.Error("non-zero score should render")
+	if !strings.Contains(s.Body, "Write plainly") {
+		t.Error("a set dial should render its guidance")
 	}
-	if strings.Contains(s.Body, "directness") {
-		t.Error("zero score should be elided to reduce prompt noise")
+	// An unset dial contributes nothing. Asserted on the guidance
+	// rather than the word "directness", which no longer appears in
+	// the prompt at any score.
+	for _, band := range []string{"Ease into things", "Say what you mean", "Lead with the answer"} {
+		if strings.Contains(s.Body, band) {
+			t.Errorf("an unset dial rendered guidance: %q", band)
+		}
+	}
+}
+
+// The Telegram regression: a reply that agreed to its own instructions
+// and then described them. Both halves are prompt tokens, so the fix is
+// that neither is in the prompt to be read back.
+func TestPersonalityCarriesNoDialVocabulary(t *testing.T) {
+	t.Parallel()
+	soul := &types.SoulConfig{
+		EmotiveStyle: types.EmotiveStyle{
+			EmojiUsage: "minimal",
+			Excitement: 5,
+			Formality:  2,
+			Directness: 3,
+			Sarcasm:    4,
+			Humor:      7,
+		},
+	}
+	body := BuildPersonality(soul).Body
+	for _, leak := range []string{
+		"3/10", "7/10", "2/10", "4/10", "5/10",
+		"emoji_usage", "directness", "formality", "excitement", "sarcasm",
+	} {
+		if strings.Contains(body, leak) {
+			t.Errorf("configuration vocabulary %q reached the prompt", leak)
+		}
+	}
+	// ...and the guidance it was replaced by is actually there.
+	for _, want := range []string{
+		"Do not use emoji.",
+		"Write casually",
+		"Ease into things",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing guidance %q", want)
+		}
+	}
+}
+
+// An unrecognised emoji_usage renders nothing rather than guessing.
+func TestEmojiRuleIgnoresUnknownValues(t *testing.T) {
+	t.Parallel()
+	for _, v := range []string{"", "reduced", "lots", "  "} {
+		if got := emojiRule(v); got != "" {
+			t.Errorf("emojiRule(%q) = %q, want empty", v, got)
+		}
+	}
+	if emojiRule("  MINIMAL ") != "Do not use emoji." {
+		t.Error("emoji_usage should be matched case- and space-insensitively")
+	}
+}
+
+// The contract has to be in the assembled prompt, above the imperatives
+// it governs, or it is describing a document the model has already read.
+func TestPromptContractPrecedesTheInstructionsItGoverns(t *testing.T) {
+	t.Parallel()
+	out := Generate(GenerateInput{
+		Soul: &types.SoulConfig{EmotiveStyle: types.EmotiveStyle{Humor: 7}},
+	})
+	contract := strings.Index(out, "How To Read This Prompt")
+	principles := strings.Index(out, "Operating Principles")
+	personality := strings.Index(out, "Personality & Style")
+	switch {
+	case contract < 0:
+		t.Fatal("the prompt contract is missing from the assembled prompt")
+	case principles < 0 || personality < 0:
+		t.Fatal("expected sections are missing")
+	case contract > principles, contract > personality:
+		t.Error("the contract must precede the instructions it governs")
+	}
+	if !strings.Contains(out, "It is not a message") {
+		t.Error("the contract must say the prompt is not a message from the user")
 	}
 }
 

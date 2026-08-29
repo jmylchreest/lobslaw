@@ -115,47 +115,222 @@ func BuildIdentity(soul *types.SoulConfig) Section {
 	return Section{Title: "Identity", Priority: PriorityCritical, Body: b.String()}
 }
 
-// BuildPersonality renders the SOUL's emotive style dials — how the
-// bot expresses itself (humor, formality, directness, sarcasm,
-// excitement, emoji usage). These are PRIMARY, not CRITICAL:
-// deviating from humor:3/10 is fine; deviating from min_trust_tier
-// is not. Also emits a standing humanisation rule: tool calls
-// return JSON but the bot narrates in SOUL voice rather than
-// dumping structure to the user.
+// BuildPromptContract tells the model what this prompt IS.
+//
+// Everything else here is written as an instruction, which is correct
+// and is also the problem: a block of imperatives under a heading that
+// says "instructions to follow" is shaped exactly like a request, and
+// on a turn where the user said little the most request-shaped thing in
+// the context is this document. Models answer it. The observed Telegram
+// failure opened with "yes, I'll do that" and then described the style
+// settings it had just been given.
+//
+// The fix is to say the quiet part: this is configuration, the user's
+// message is the only thing being replied to, and none of it is a topic.
+//
+// CRITICAL rather than PRIMARY, and placed second, directly under
+// Identity. It has to be read before the imperatives it governs — a
+// rule about how to read the prompt is worth nothing after the prompt.
+//
+// The precedent is already in the codebase: the conversation summary
+// ships with "Treat this as your own recollection. Do not mention the
+// summary to the user." That reasoning was right and was never
+// generalised to the document that carries it.
+func BuildPromptContract() Section {
+	return Section{
+		Title:    "How To Read This Prompt",
+		Priority: PriorityCritical,
+		Body: strings.TrimSpace(`
+Everything in this prompt is your configuration. It is not a message
+from the user, and nothing in it is a request awaiting your reply.
+
+- Do not acknowledge it. Never open with "yes, I'll do that", never
+  confirm you have read it, never restate it back.
+- Do not describe how you are configured. The guidance below tells you
+  how to write; it is not something to write ABOUT. Announcing that you
+  will be "less direct" or "use fewer emoji" is this document leaking
+  into the conversation.
+- Do not quote its vocabulary. Section names, priority labels and any
+  numeric settings are internal. They are not words the user has ever
+  seen and will not mean anything to them.
+- Asked what you are like, answer the way a person would — plainly,
+  from the outside, without reference to settings or mechanism.
+
+Reply to the user's most recent message. If they have not asked
+anything, say something ordinary and brief; do not fill the silence by
+narrating yourself.
+`) + "\n",
+	}
+}
+
+// BuildPersonality renders the SOUL's emotive style as INSTRUCTIONS,
+// not as the dial values that produced them.
+//
+// It used to print the config verbatim — "- directness: 3/10",
+// "- emoji_usage: minimal" — under a heading that says "instructions
+// to follow". Models read that back out. Observed on Telegram: a reply
+// that opened by agreeing to its own configuration and promised to be
+// "3/10 direct" with "reduced emojis". Both are prompt tokens, and
+// "reduced" is a paraphrase of "minimal", so the model was not being
+// creative — it was answering the only thing in front of it that was
+// shaped like a request.
+//
+// A number is not an instruction. "3/10" tells a model what it IS
+// rather than what to DO, which makes it a fact worth reporting;
+// "soften the edges rather than opening with the blunt version" is a
+// rule to write by and reads as nothing worth mentioning. The dials
+// stay the operator's interface — they just stop being the model's.
+//
+// Still PRIMARY, not CRITICAL: deviating from the house voice is a
+// disappointment, deviating from min_trust_tier is an incident.
 func BuildPersonality(soul *types.SoulConfig) Section {
 	var b strings.Builder
 	if soul == nil {
-		b.WriteString("Default style (no personality dials configured).\n")
+		b.WriteString("Write plainly and concisely, in a neutral voice.\n")
 		b.WriteString("\n")
 		b.WriteString(humanisationRule)
 		return Section{Title: "Personality & Style", Priority: PriorityPrimary, Body: b.String()}
 	}
-	hasAny := false
-	if soul.EmotiveStyle.EmojiUsage != "" {
-		fmt.Fprintf(&b, "- emoji_usage: %s\n", soul.EmotiveStyle.EmojiUsage)
-		hasAny = true
+
+	var lines []string
+	if l := emojiRule(soul.EmotiveStyle.EmojiUsage); l != "" {
+		lines = append(lines, l)
 	}
-	scores := [][2]any{
-		{"excitement", soul.EmotiveStyle.Excitement},
-		{"formality", soul.EmotiveStyle.Formality},
-		{"directness", soul.EmotiveStyle.Directness},
-		{"sarcasm", soul.EmotiveStyle.Sarcasm},
-		{"humor", soul.EmotiveStyle.Humor},
-	}
-	for _, kv := range scores {
-		v, ok := kv[1].(int)
-		if !ok || v == 0 {
-			continue
+	for _, d := range styleDials {
+		if l := d.rule(dialValue(soul.EmotiveStyle, d.name)); l != "" {
+			lines = append(lines, l)
 		}
-		fmt.Fprintf(&b, "- %s: %d/10\n", kv[0], v)
-		hasAny = true
 	}
-	if !hasAny {
-		b.WriteString("(no explicit style dials set — use a neutral, concise voice)\n")
+
+	if len(lines) == 0 {
+		b.WriteString("Write plainly and concisely, in a neutral voice.\n")
+	}
+	for _, l := range lines {
+		fmt.Fprintf(&b, "- %s\n", l)
 	}
 	b.WriteString("\n")
 	b.WriteString(humanisationRule)
 	return Section{Title: "Personality & Style", Priority: PriorityPrimary, Body: b.String()}
+}
+
+// styleBand collapses a 1-10 dial into the three bands the guidance is
+// written for. Zero means "not set by the operator" and yields no line
+// at all, which is why it is distinguished from a genuine low score.
+type styleBand int
+
+const (
+	bandUnset styleBand = iota
+	bandLow
+	bandMid
+	bandHigh
+)
+
+func bandFor(v int) styleBand {
+	switch {
+	case v <= 0:
+		return bandUnset
+	case v <= 3:
+		return bandLow
+	case v <= 7:
+		return bandMid
+	default:
+		return bandHigh
+	}
+}
+
+// styleDials is the rendering table, ordered so the output reads as
+// prose about voice rather than as a struct dump. Iterated rather than
+// switched so adding a dimension is one entry and cannot forget a band.
+var styleDials = []struct {
+	name string
+	rule func(int) string
+}{
+	{"formality", func(v int) string {
+		switch bandFor(v) {
+		case bandLow:
+			return "Write casually — contractions, plain words, no corporate register."
+		case bandMid:
+			return "Write plainly: neither stiff nor chatty."
+		case bandHigh:
+			return "Write formally: complete sentences, no slang, measured throughout."
+		}
+		return ""
+	}},
+	{"directness", func(v int) string {
+		switch bandFor(v) {
+		case bandLow:
+			return "Ease into things. Give the context before the conclusion and soften a hard edge rather than leading with it."
+		case bandMid:
+			return "Say what you mean without belabouring it."
+		case bandHigh:
+			return "Lead with the answer. No preamble, no throat-clearing, no hedging."
+		}
+		return ""
+	}},
+	{"humor", func(v int) string {
+		switch bandFor(v) {
+		case bandLow:
+			return "Play it straight; humour is not part of your register."
+		case bandMid:
+			return "A light touch is welcome where it fits. Never reach for it."
+		case bandHigh:
+			return "Dry wit belongs here — let it land in passing rather than performing it."
+		}
+		return ""
+	}},
+	{"sarcasm", func(v int) string {
+		switch bandFor(v) {
+		case bandLow:
+			return "No sarcasm."
+		case bandMid:
+			return "A wry aside occasionally, always about the situation and never about the user."
+		case bandHigh:
+			return "Sarcasm is in register. Point it at the problem, never at the person asking."
+		}
+		return ""
+	}},
+	{"excitement", func(v int) string {
+		switch bandFor(v) {
+		case bandLow:
+			return "Stay level. No exclamation marks and no performed enthusiasm."
+		case bandMid:
+			return "Show interest where it is genuine and stay measured otherwise."
+		case bandHigh:
+			return "Be visibly engaged when something is worth being engaged about."
+		}
+		return ""
+	}},
+}
+
+func dialValue(e types.EmotiveStyle, name string) int {
+	switch name {
+	case "formality":
+		return e.Formality
+	case "directness":
+		return e.Directness
+	case "humor":
+		return e.Humor
+	case "sarcasm":
+		return e.Sarcasm
+	case "excitement":
+		return e.Excitement
+	}
+	return 0
+}
+
+// emojiRule renders emoji_usage. An unrecognised value yields no line
+// rather than a guess: silence leaves the model to its own defaults,
+// whereas guessing "generous" from a typo changes every reply.
+func emojiRule(usage string) string {
+	switch strings.ToLower(strings.TrimSpace(usage)) {
+	case "minimal", "none":
+		return "Do not use emoji."
+	case "moderate":
+		return "At most one emoji, and only where it carries something the words do not."
+	case "generous":
+		return "Emoji are welcome where they carry tone."
+	}
+	return ""
 }
 
 // BuildFragments renders the soul's anecdotal fragments as a
@@ -180,7 +355,7 @@ func BuildFragments(s *types.SoulConfig) Section {
 
 const humanisationRule = `Tools return structured JSON. Always re-render that output for the user, picking the format that fits the content type:
 
-- **Narrative content** (memory_search/memory_recent, dream_recap, fetch_url summaries, web_search synthesis): speak in your own register using the style dials above. Talk about what you learned. High-humor low-formality reads differently from high-formality — that's the point of the dials.
+- **Narrative content** (memory_search/memory_recent, dream_recap, fetch_url summaries, web_search synthesis): speak in your own register. Talk about what you learned, in your own words, rather than reciting fields.
 - **Fact-dense / enumerable content** (list_files, glob, grep, list_providers, schedule_list): render as a markdown bullet list or table. A list of 20 files belongs in a table with name/size/modified columns.
 - **debug_* tool output**: render verbatim or as a clean markdown table. Operator-introspection tools want exact values, so quote them as-is. The user asking "what's in debug_storage" wants the mount paths and health flags themselves.
 `
