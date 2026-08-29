@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,11 +29,18 @@ import (
 
 type fakeRemoteServer struct {
 	ln       net.Listener
-	hostKey  ssh.Signer
 	authKeys map[string]bool
+
+	// mu guards everything a test reconfigures AFTER serve() is
+	// already accepting. handle() runs on its own goroutine per
+	// connection, so "set the field, then reconnect" is a write racing
+	// a read however well-ordered it looks in the test body.
+	mu      sync.Mutex
+	hostKey ssh.Signer
 
 	// lastCommand is what the client actually asked to run, so a test
 	// can assert on the composed command rather than its effect.
+	// A channel, so it needs no lock.
 	lastCommand chan string
 	// reply decides what a command produces.
 	reply func(cmd string) (stdout, stderr string, code int)
@@ -61,6 +69,32 @@ func newFakeRemote(t *testing.T, clientPub ssh.PublicKey, hostKey ssh.Signer) *f
 	return s
 }
 
+func (s *fakeRemoteServer) setHostKey(k ssh.Signer) {
+	s.mu.Lock()
+	s.hostKey = k
+	s.mu.Unlock()
+}
+
+func (s *fakeRemoteServer) setReply(f func(string) (string, string, int)) {
+	s.mu.Lock()
+	s.reply = f
+	s.mu.Unlock()
+}
+
+func (s *fakeRemoteServer) setOnStdin(f func([]byte)) {
+	s.mu.Lock()
+	s.onStdin = f
+	s.mu.Unlock()
+}
+
+// snapshot takes the handlers once per connection, so a test that
+// swaps one mid-connection cannot change behaviour halfway through.
+func (s *fakeRemoteServer) snapshot() (ssh.Signer, func(string) (string, string, int), func([]byte)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hostKey, s.reply, s.onStdin
+}
+
 func (s *fakeRemoteServer) addr() (host string, port int) {
 	a := s.ln.Addr().(*net.TCPAddr)
 	return a.IP.String(), a.Port
@@ -78,6 +112,7 @@ func (s *fakeRemoteServer) serve() {
 
 func (s *fakeRemoteServer) handle(nc net.Conn) {
 	defer func() { _ = nc.Close() }()
+	hostKey, _, _ := s.snapshot()
 	cfg := &ssh.ServerConfig{
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			if s.authKeys[string(key.Marshal())] {
@@ -86,7 +121,7 @@ func (s *fakeRemoteServer) handle(nc net.Conn) {
 			return nil, fmt.Errorf("unknown key")
 		},
 	}
-	cfg.AddHostKey(s.hostKey)
+	cfg.AddHostKey(hostKey)
 
 	_, chans, reqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {
@@ -108,6 +143,7 @@ func (s *fakeRemoteServer) handle(nc net.Conn) {
 
 func (s *fakeRemoteServer) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 	defer func() { _ = ch.Close() }()
+	_, reply, onStdin := s.snapshot()
 	for req := range reqs {
 		if req.Type != "exec" {
 			_ = req.Reply(false, nil)
@@ -125,11 +161,11 @@ func (s *fakeRemoteServer) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		default:
 		}
 
-		if s.onStdin != nil {
+		if onStdin != nil {
 			body, _ := io.ReadAll(ch)
-			s.onStdin(body)
+			onStdin(body)
 		}
-		stdout, stderr, code := s.reply(payload.Command)
+		stdout, stderr, code := reply(payload.Command)
 		_, _ = ch.Write([]byte(stdout))
 		_, _ = ch.Stderr().Write([]byte(stderr))
 		_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(code)}))
@@ -196,9 +232,9 @@ func remoteUnderTest(t *testing.T, knownHosts string) (*RemoteSet, *fakeRemoteSe
 // reading the compiler.
 func TestRemoteNonZeroExitIsAResultNotAnError(t *testing.T) {
 	set, srv := remoteUnderTest(t, "")
-	srv.reply = func(string) (string, string, int) {
+	srv.setReply(func(string) (string, string, int) {
 		return "", "undefined: Frobnicate\n", 2
-	}
+	})
 	box, err := set.Get("go")
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +289,7 @@ func TestRemoteRecordsHostKeyThenRefusesAChange(t *testing.T) {
 	// The remote comes back with a different host key: either it was
 	// rebuilt, or somebody is in the middle. Both are refused.
 	newHost, _ := newEd25519Signer(t)
-	srv.hostKey = newHost
+	srv.setHostKey(newHost)
 	_, err = box.Exec(context.Background(), "true", "", 0)
 	if err == nil {
 		t.Fatal("a changed host key was accepted")
@@ -272,7 +308,7 @@ func TestRemoteWithoutKnownHostsStillPinsWithinTheRun(t *testing.T) {
 		t.Fatalf("first connect: %v", err)
 	}
 	newHost, _ := newEd25519Signer(t)
-	srv.hostKey = newHost
+	srv.setHostKey(newHost)
 	if _, err := box.Exec(context.Background(), "true", "", 0); err == nil {
 		t.Fatal("a mid-run host key change was accepted with no known_hosts file")
 	}
@@ -297,9 +333,9 @@ func TestRemoteQuotesTheWorkingDirectory(t *testing.T) {
 // Truncation must be reported, and must not kill the command.
 func TestRemoteTruncatesAndSaysSo(t *testing.T) {
 	set, srv := remoteUnderTest(t, "")
-	srv.reply = func(string) (string, string, int) {
+	srv.setReply(func(string) (string, string, int) {
 		return strings.Repeat("x", int(remoteMaxOutput)+4096), "", 0
-	}
+	})
 	box, _ := set.Get("go")
 	res, err := box.Exec(context.Background(), "cat big.log", "", 0)
 	if err != nil {
@@ -320,7 +356,7 @@ func TestRemoteTruncatesAndSaysSo(t *testing.T) {
 // exit 2, and a command that ran is exit 0 whatever it returned.
 func TestRemoteBuiltinSeparatesTransportFromResult(t *testing.T) {
 	set, srv := remoteUnderTest(t, "")
-	srv.reply = func(string) (string, string, int) { return "", "boom\n", 1 }
+	srv.setReply(func(string) (string, string, int) { return "", "boom\n", 1 })
 	h := newRemoteSSHHandler(set)
 
 	out, code, err := h(context.Background(), map[string]string{"remote": "go", "command": "make"})
@@ -431,7 +467,7 @@ func TestRemoteTransferIsBinaryExact(t *testing.T) {
 
 	payload := []byte{0x00, 0xff, 0x0a, 0x0d, 0x1b, '\'', '"', '$', '`', 0x80, 0xfe}
 	var got []byte
-	srv.onStdin = func(b []byte) { got = append([]byte(nil), b...) }
+	srv.setOnStdin(func(b []byte) { got = append([]byte(nil), b...) })
 
 	if err := box.Put(context.Background(), "/workspace/it's a file", payload); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -453,9 +489,9 @@ func TestRemoteTransferRefusesOversizeRatherThanTruncating(t *testing.T) {
 	set, srv := remoteUnderTest(t, "")
 	box, _ := set.Get("go")
 
-	srv.reply = func(string) (string, string, int) {
+	srv.setReply(func(string) (string, string, int) {
 		return strings.Repeat("x", int(remoteMaxTransferBytes)+1024), "", 0
-	}
+	})
 	if _, err := box.Get(context.Background(), "/workspace/big.bin"); !errors.Is(err, ErrTransferTooLarge) {
 		t.Errorf("an oversized download should be refused, got %v", err)
 	}
@@ -493,10 +529,10 @@ func TestNewRemoteSetRefusesABrokenEntry(t *testing.T) {
 // A turn that ends must not leave a build running to its own deadline.
 func TestRemoteHonoursACancelledContext(t *testing.T) {
 	set, srv := remoteUnderTest(t, "")
-	srv.reply = func(string) (string, string, int) {
+	srv.setReply(func(string) (string, string, int) {
 		time.Sleep(5 * time.Second)
 		return "", "", 0
-	}
+	})
 	box, _ := set.Get("go")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
