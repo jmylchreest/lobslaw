@@ -471,6 +471,24 @@ type ComputeConfig struct {
 	// deployment and ambiguous for any other — declare it explicitly
 	// once there is more than one place a file could land.
 	ArtifactMount string `koanf:"artifact_mount,omitempty"`
+
+	// ArtifactDiskPercent bounds what generated media may occupy, as a
+	// share of the filesystem the artifact mount sits on.
+	//
+	// A percentage rather than a byte cap because the right number
+	// depends entirely on the volume: 500MB is nothing on a 4TB array
+	// and most of a container's scratch space, and an operator should
+	// not have to restate that for every deployment.
+	//
+	// Zero takes the default (5%). NEGATIVE DISABLES SWEEPING, which is
+	// a real choice for a node whose mount is already managed by
+	// something else — and is spelled as a negative number rather than
+	// a separate bool so "off" cannot be reached by leaving a field
+	// unset and assuming it meant unlimited.
+	//
+	// Oldest first, and only under generated/. Nothing else in the
+	// mount is reachable by the sweep.
+	ArtifactDiskPercent float64 `koanf:"artifact_disk_percent,omitempty"`
 	// Roles maps named functional roles (main, preflight,
 	// reranker, summariser, etc.) to provider labels. Internal
 	// code asks the resolver for a role by name; the resolver

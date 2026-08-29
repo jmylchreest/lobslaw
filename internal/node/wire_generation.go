@@ -295,6 +295,10 @@ func (n *Node) artifactResolver() *compute.ArtifactResolver {
 	return &compute.ArtifactResolver{
 		Mounts:       nodeMounts{mounts: mounts},
 		DefaultMount: dest,
+		Retention: compute.ArtifactRetention{
+			DiskPercent: n.cfg.Compute.ArtifactDiskPercent,
+			Logger:      n.log,
+		},
 	}
 }
 

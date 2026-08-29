@@ -97,6 +97,11 @@ type ArtifactResolver struct {
 	// MaxBytes caps a download. A generated video is large and a
 	// hostile or broken provider is unbounded.
 	MaxBytes int64
+
+	// Retention bounds what generated/ may occupy. Swept after a
+	// successful write — the point growth happens is the cheapest
+	// place to bound it, and it needs no scheduler.
+	Retention ArtifactRetention
 }
 
 // DefaultMaxArtifactBytes bounds a single artifact. Generous enough
@@ -208,10 +213,19 @@ func (r *ArtifactResolver) write(name, mime string, b []byte) (*ResolvedArtifact
 	if err := os.WriteFile(full, b, 0o600); err != nil {
 		return nil, fmt.Errorf("artifact: write: %w", err)
 	}
+	// After the write, not before: the file that triggers the sweep is
+	// the newest and would never be a candidate anyway, and sweeping
+	// first would leave the budget wrong by exactly this file.
+	sweepGenerated(root, r.Retention)
 	return &ResolvedArtifact{
 		Mount: r.DefaultMount, Path: rel, MIME: mime, Bytes: int64(len(b)),
 	}, nil
 }
+
+// generatedDir is where resolved artifacts land inside the mount. Named
+// once because the retention sweep must walk exactly this directory and
+// nothing else in the tree.
+const generatedDir = "generated"
 
 // safeArtifactName keeps a provider-influenced name from escaping the
 // mount. The name reaches us via a job the model prompted for, so it
@@ -237,7 +251,7 @@ func safeArtifactName(name, mime string) string {
 			base += ext
 		}
 	}
-	return filepath.Join("generated", base)
+	return filepath.Join(generatedDir, base)
 }
 
 // hasFileExt reports whether base already ends in something that is
