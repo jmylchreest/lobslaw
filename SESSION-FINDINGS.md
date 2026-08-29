@@ -156,6 +156,7 @@ does.
 | # | Bug | Where |
 |---|---|---|
 | B1 | dashscope polled a compiled-in host instead of the one that took the job — 401 forever on any non-international deployment | merged, #180 |
+| B11 | Generation commitments carried no `DueAt`, and `fireDue` skips a nil `DueAt` forever — every video ran, was billed, and was collected by nobody | branch `chore/comment-pass`; closes #179 |
 | B2 | `cadence` / `retention` written by `lobslaw init` and both deploy configs for a struct that has neither | branch `chore/comment-pass` |
 | B3 | Six comments asserting the opposite of current behaviour, incl. "skills run unsandboxed" | branch `chore/comment-pass` |
 
@@ -175,10 +176,12 @@ does.
 | # | Bug | Notes |
 |---|---|---|
 | B10 | `RoleReranker` has no runtime callers | `reranker = "x"` is accepted, reported by `debug_providers`, and does nothing. Config that silently no-ops. Its only live behaviour is the fallback rule in `roles.go:136`. |
-| B11 | `NewGenerationCommitment` takes an `iv time.Duration` it never uses; `startGenerationJob` passes `0` | The returned commitment carries `Trigger: "time"` with no interval and no next-fire. Prime suspect for B4 — verify before filing, likely a comment on #179 rather than its own issue. |
 | B12 | `errManagerNotAvailable` declared, `//nolint:unused`, returned by no manager | Cosmetic; the sentinel was designed and never adopted. Either adopt it or delete it. |
 | B13 | Schedule created via the agent did not persist | `schedule_list` returned 0 after the user set up weather alerts. Confounded — the creating turn was killed by the pre-fix `hard_timeout`. Re-test before filing. |
-| B14 | `commitment_list` returns empty even with `include_history: true` for a commitment just created | Observed twice with video jobs. May be scoping rather than a bug. Part of B4's investigation. |
+| B14 | `commitment_list` returns empty while the scheduler is actively firing that exact commitment | **Confirmed a real bug, not scoping.** Reproduced: `commitment_list include_history=true` → `count: 0` at the same moment the log shows `firing commitment id=gen-01M16ME74SY4Q53P9FXMN7N0PK` every 15s. An operator has no way to see in-flight generation work. |
+| B15 | Video artifacts are named with the entire prompt | The delivered file is a 242-character filename — the whole prompt, spaces and full stops included. Images are slugged (`a-simple-flat-red-circle.png`); videos are not. Near the filesystem limit, and one longer prompt away from failing to write at all. |
+| B16 | Video artifacts have no file extension | The delivered file is `ISO Media, MP4 Base Media v1` with no `.mp4`. Nothing downstream can identify it by name, and a channel deciding how to attach it has to sniff. |
+| B17 | A generation started over REST is never delivered to anyone | `generation: no originating channel recorded; result not delivered`. The artifact lands on disk and the requester is never told. Only Telegram records an originating channel, so every REST-initiated generation completes silently. |
 
 ---
 

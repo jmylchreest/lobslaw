@@ -316,3 +316,38 @@ func TestGenerationOwnerIsThePrincipal(t *testing.T) {
 		t.Error("Owner must not be the raw channel id — ownedByCaller compares against the principal")
 	}
 }
+
+// A generation commitment with no DueAt is skipped by the scheduler on
+// every scan, so the job runs at the provider, is billed, and is
+// collected by nobody. That is what shipped: generate_video submitted
+// successfully, returned a commitment id, and never delivered.
+func TestGenerationCommitmentIsDue(t *testing.T) {
+	h := compute.JobHandle{Driver: "dashscope", Raw: "task-1"}
+	before := time.Now()
+	c, err := NewGenerationCommitment("gen-1", h, 0, "alice", "rest", "chat-1", "a red circle", "qwen-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DueAt == nil {
+		t.Fatal("DueAt is nil; the scheduler will never fire this commitment")
+	}
+	if got := c.DueAt.AsTime(); got.After(time.Now()) && got.Sub(before) > time.Second {
+		t.Errorf("DueAt = %v, want due immediately for iv=0", got)
+	}
+}
+
+// iv is the delay before the FIRST poll. A driver that wants to wait
+// before asking must be able to say so.
+func TestGenerationCommitmentHonoursInterval(t *testing.T) {
+	h := compute.JobHandle{Driver: "dashscope", Raw: "task-2"}
+	c, err := NewGenerationCommitment("gen-2", h, time.Minute, "alice", "rest", "chat-1", "x", "qwen-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DueAt == nil {
+		t.Fatal("DueAt is nil")
+	}
+	if d := time.Until(c.DueAt.AsTime()); d < 30*time.Second {
+		t.Errorf("DueAt is %v away, want ~1m", d)
+	}
+}
