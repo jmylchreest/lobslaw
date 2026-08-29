@@ -6,23 +6,13 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// Making [[compute.chains]] route.
+// A chain picks the START of the provider backup walk. Everything the
+// walk already does — the trust floor at every candidate, health
+// cooldowns, failure classification, a span per attempt — applies
+// unchanged; the chain only decides where it begins.
 //
-// Chains were parsed, validated for coherence, logged at boot — and
-// inert. `Resolver.Resolve` had no callers; the turn path went straight
-// to `ProviderRegistry.Chain(PrimaryLabel)`, which walks `backup` links
-// and knows nothing about triggers, multi-step chains or per-chain
-// trust floors.
-//
-// The chain selection now picks the START of that backup walk. That is
-// the whole change: everything the walk already does — the trust floor
-// at every candidate, health cooldowns, failure classification, a span
-// per attempt — applies unchanged, and a chain decides where it begins.
-//
-// Multi-step execution (a reviewer step consuming the primary's output
-// through its prompt template) is the remaining half of R8. A chain's
-// later steps are resolved and carried here, but only the first is
-// dispatched today.
+// Later steps run as a pipeline once the turn has an answer. See
+// runChainSteps.
 
 type routeCtxKey struct{}
 

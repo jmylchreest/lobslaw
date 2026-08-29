@@ -210,18 +210,9 @@ func (n *Node) wireCompute() error {
 
 // wireResolver builds the provider/chain resolver.
 //
-// The resolver VALIDATES chains and then nothing routes through it.
-// `Resolver.Resolve` has no callers: the turn path is the provider
-// backup chain (ProviderRegistry.Chain), which knows about `backup`
-// links and nothing about triggers, multi-step chains or per-chain
-// trust floors. So `[[compute.chains]]` is parsed, checked for
-// coherence, and inert.
-//
-// Kept, rather than deleted, because the validation is worth having
-// the day the routing lands and deleting it would silently accept
-// broken chains in the meantime. But an operator who writes a chain
-// and sees it accepted is entitled to think it does something, so
-// this says otherwise, loudly, once.
+// A node with no [[compute.chains]] still gets a resolver: the turn
+// then starts at roles.main, which is what it did before chains
+// routed. Chains only ever move the start.
 func (n *Node) wireResolver() error {
 	// Before anything is constructed, and fatal. A dev source that is
 	// configured but not gated is a node that would either silently

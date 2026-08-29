@@ -1280,15 +1280,9 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 		attempt    int
 	)
 	for _, entry := range chain {
-		// The floor, at EVERY candidate.
-		//
-		// It was checked nowhere on this path: the only code that read
-		// min_trust_tier was the chain Resolver, which nothing calls.
-		// So an operator could set a floor, watch it render into the
-		// prompt, and have a turn silently complete on a public
-		// provider the moment the primary returned a 429 — the
-		// failover machinery that makes the assistant resilient was
-		// the same machinery that lowered the floor.
+		// Checked at EVERY candidate, not just the first: a failover is
+		// precisely when an unchecked floor would be lowered, silently,
+		// on the hop the operator never sees.
 		considered = append(considered, TrustCandidate{Label: entry.Label, Tier: entry.TrustTier})
 		if !MeetsFloor(floor, entry.TrustTier) {
 			belowFloor++

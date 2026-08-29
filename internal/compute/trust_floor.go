@@ -8,25 +8,13 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// The trust floor, enforced on the paths content actually leaves by.
-//
-// `min_trust_tier` in SOUL.md was parsed, validated, logged at boot and
-// rendered into the system prompt — and enforced nowhere. The only code
-// that checked it was Resolver.buildDecision, and nothing calls
-// Resolver.Resolve: the turn path is the provider BACKUP chain, which
-// walked from label to label with no notion of a tier. soul's own
-// ValidateProviderTier had no callers either.
-//
-// So an operator could set min_trust_tier = "private", watch it appear
-// in the prompt, and have a turn silently complete on a public provider
-// the moment the primary returned a 429. The failover machinery that
-// makes the assistant resilient was the same machinery that quietly
-// lowered the floor.
+// The trust floor is enforced at EVERY candidate in the backup walk,
+// not just the first.
 //
 // A floor checked at the first candidate and nowhere after is not a
-// floor. It is a floor with a hole in it exactly where the interesting
-// case lives, because the whole point of a backup is that it is used
-// when something has gone wrong.
+// floor: the whole point of a backup is that it is used when something
+// has gone wrong, so a failover is exactly when the floor would
+// otherwise be lowered — silently, and at the moment content leaves.
 
 // TrustUnsetFloor is the zero value: no floor configured. Named
 // rather than written as a bare zero at each check, because "floor ==
