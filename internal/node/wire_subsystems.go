@@ -244,9 +244,10 @@ func (n *Node) wireSkills() error {
 // the operator declared a base URL. No-op when ClawhubBaseURL is
 // empty — operators with no clawhub access just don't configure it.
 //
-// Signing is wired but defaults to "off" — no publisher infrastructure
-// exists yet. When clawhub.ai starts publishing signed bundles, an
-// operator-trust-store config block + CLI will land alongside it.
+// Signing defaults to "off". The verifying half exists — a trust store
+// of minisign keys and allowed prefixes, see trusted_publishers.toml —
+// but nothing here signs a bundle, so an operator cannot produce one
+// their own policy would accept.
 func (n *Node) wireClawhub() error {
 	base := strings.TrimSpace(n.cfg.Security.ClawhubBaseURL)
 	if base == "" {

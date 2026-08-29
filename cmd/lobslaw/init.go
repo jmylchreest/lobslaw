@@ -319,8 +319,6 @@ key_ref = "env:LOBSLAW_MEMORY_KEY"
 
 [memory.snapshot]
 target    = "storage:local-snapshots"
-cadence   = "1h"
-retention = "7d"
 
 [[storage.mounts]]
 label = "local-snapshots"

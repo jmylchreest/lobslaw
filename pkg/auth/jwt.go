@@ -38,10 +38,9 @@ var (
 // Validator verifies an inbound bearer token and produces a
 // *types.Claims. Construction is config-driven: HS256 when
 // allow_hs256=true and a shared secret is provided; JWKS-based
-// (RS256/EdDSA) when a JWKS URL is configured (Phase 6d.2 — not
-// yet implemented). A Validator that has neither returns
-// ErrNoValidator on every call so unauthenticated deployments fail
-// loud rather than silently allowing everything.
+// (RS256/EdDSA) when a JWKS URL is configured. A Validator that has
+// neither returns ErrNoValidator on every call so unauthenticated
+// deployments fail loud rather than silently allowing everything.
 type Validator struct {
 	hs256Secret []byte
 	issuer      string

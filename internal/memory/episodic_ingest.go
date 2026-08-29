@@ -227,10 +227,10 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 	return nil
 }
 
-// turnEventSummary generates a short (max ~140-char) synopsis
-// from the user message. Dream reranker will replace this with a
-// better LLM-backed summary when it consolidates; this is just
-// enough context for substring search to find the record.
+// turnEventSummary generates a short (max ~140-char) synopsis from the
+// user message. Deliberately mechanical: it runs on the ingest path for
+// every turn, and it only has to be enough for substring search to find
+// the record again.
 func turnEventSummary(userMsg string) string {
 	// Runes, not bytes. userMsg[:140] cut a Telegram paste inside an
 	// em dash, protobuf refused the record, and the turn answered
