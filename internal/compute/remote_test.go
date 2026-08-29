@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -35,6 +36,9 @@ type fakeRemoteServer struct {
 	lastCommand chan string
 	// reply decides what a command produces.
 	reply func(cmd string) (stdout, stderr string, code int)
+	// onStdin receives whatever the client wrote to the session, so an
+	// upload can be asserted on the bytes that actually arrived.
+	onStdin func([]byte)
 }
 
 func newFakeRemote(t *testing.T, clientPub ssh.PublicKey, hostKey ssh.Signer) *fakeRemoteServer {
@@ -121,6 +125,10 @@ func (s *fakeRemoteServer) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		default:
 		}
 
+		if s.onStdin != nil {
+			body, _ := io.ReadAll(ch)
+			s.onStdin(body)
+		}
 		stdout, stderr, code := s.reply(payload.Command)
 		_, _ = ch.Write([]byte(stdout))
 		_, _ = ch.Stderr().Write([]byte(stderr))
@@ -340,20 +348,119 @@ func TestRemoteBuiltinSeparatesTransportFromResult(t *testing.T) {
 func TestRemoteToolDefConstrainsTheTargetToConfiguredNames(t *testing.T) {
 	set, _ := remoteUnderTest(t, "")
 	defs := RemoteToolDefs(set)
-	if len(defs) != 1 {
-		t.Fatalf("want one tool def, got %d", len(defs))
+	if len(defs) != 2 {
+		t.Fatalf("want remote_ssh and remote_scp, got %d", len(defs))
 	}
-	schema := string(defs[0].ParametersSchema)
-	if !strings.Contains(schema, `"enum": ["go"]`) {
-		t.Errorf("remote should be constrained to an enum of configured names:\n%s", schema)
-	}
-	for _, forbidden := range []string{"host", "port", "user", "key"} {
-		if strings.Contains(schema, `"`+forbidden+`": {`) {
-			t.Errorf("the schema exposes %q; the model must not be able to choose one", forbidden)
+	for _, def := range defs {
+		schema := string(def.ParametersSchema)
+		if !strings.Contains(schema, `"enum": ["go"]`) {
+			t.Errorf("%s: remote should be constrained to an enum of configured names:\n%s", def.Name, schema)
+		}
+		// The property the whole design rests on: no field the model
+		// fills can name a machine the operator did not.
+		for _, forbidden := range []string{"host", "port", "user", "key"} {
+			if strings.Contains(schema, `"`+forbidden+`": {`) {
+				t.Errorf("%s: the schema exposes %q; the model must not be able to choose one", def.Name, forbidden)
+			}
+		}
+		if def.RiskTier != "irreversible" {
+			t.Errorf("%s: RiskTier = %q, want irreversible", def.Name, def.RiskTier)
 		}
 	}
-	if defs[0].RiskTier != "irreversible" {
-		t.Errorf("RiskTier = %q, want irreversible", defs[0].RiskTier)
+}
+
+// remote_scp touches the LOCAL filesystem, which is where the cluster
+// CA, the node key and the memory key live. Both directions have to
+// refuse a cluster-internal path — upload because it would leave the
+// node, download because the remote would then choose what this node
+// reads back.
+func TestRemoteSCPRefusesInternalPathsBothWays(t *testing.T) {
+	set, _ := remoteUnderTest(t, "")
+	h := newRemoteSCPHandler(set)
+
+	// A path isInternalPath matches regardless of mount configuration.
+	internal := filepath.Join(t.TempDir(), "certs", "ca-key.pem")
+	if err := os.MkdirAll(filepath.Dir(internal), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(internal, []byte("PRIVATE KEY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !isInternalPath(internal) {
+		t.Skipf("%q is not classed internal; the guard under test does not apply", internal)
+	}
+
+	for _, dir := range []string{"upload", "download"} {
+		out, code, err := h(context.Background(), map[string]string{
+			"remote": "go", "direction": dir,
+			"local_path": internal, "remote_path": "/tmp/stolen",
+		})
+		if err != nil {
+			t.Fatalf("%s: unexpected transport error: %v", dir, err)
+		}
+		if code == 0 {
+			t.Errorf("%s of a cluster-internal path was allowed", dir)
+		}
+		if !strings.Contains(string(out), "internal_path") {
+			t.Errorf("%s: expected an internal_path refusal, got %s", dir, out)
+		}
+	}
+}
+
+// A direction is required and must be one of two words. Defaulting it
+// would mean guessing whether a file is arriving or leaving.
+func TestRemoteSCPRequiresAnExplicitDirection(t *testing.T) {
+	set, _ := remoteUnderTest(t, "")
+	h := newRemoteSCPHandler(set)
+	for _, dir := range []string{"", "sideways", "put"} {
+		if _, code, err := h(context.Background(), map[string]string{
+			"remote": "go", "direction": dir,
+			"local_path": "/tmp/x", "remote_path": "/tmp/y",
+		}); code != 2 || err == nil {
+			t.Errorf("direction %q should be a malformed call, got code=%d err=%v", dir, code, err)
+		}
+	}
+}
+
+// A file round-trips byte-for-byte. `cat` over a session is only
+// acceptable if it is binary-exact, so this uses bytes that would not
+// survive any quoting or text handling.
+func TestRemoteTransferIsBinaryExact(t *testing.T) {
+	set, srv := remoteUnderTest(t, "")
+	box, _ := set.Get("go")
+
+	payload := []byte{0x00, 0xff, 0x0a, 0x0d, 0x1b, '\'', '"', '$', '`', 0x80, 0xfe}
+	var got []byte
+	srv.onStdin = func(b []byte) { got = append([]byte(nil), b...) }
+
+	if err := box.Put(context.Background(), "/workspace/it's a file", payload); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("upload corrupted the bytes:\n got %x\nwant %x", got, payload)
+	}
+	// The path is quoted rather than interpolated, so a quote in a
+	// filename cannot start a second command.
+	cmd := <-srv.lastCommand
+	if !strings.Contains(cmd, `cat > '/workspace/it'"'"'s a file'`) {
+		t.Errorf("upload did not quote the remote path: %q", cmd)
+	}
+}
+
+// Truncation is the wrong failure for a file: a half-copied binary is
+// corrupt in a way the model cannot see and reports as success.
+func TestRemoteTransferRefusesOversizeRatherThanTruncating(t *testing.T) {
+	set, srv := remoteUnderTest(t, "")
+	box, _ := set.Get("go")
+
+	srv.reply = func(string) (string, string, int) {
+		return strings.Repeat("x", int(remoteMaxTransferBytes)+1024), "", 0
+	}
+	if _, err := box.Get(context.Background(), "/workspace/big.bin"); !errors.Is(err, ErrTransferTooLarge) {
+		t.Errorf("an oversized download should be refused, got %v", err)
+	}
+	if err := box.Put(context.Background(), "/tmp/x", make([]byte, remoteMaxTransferBytes+1)); !errors.Is(err, ErrTransferTooLarge) {
+		t.Errorf("an oversized upload should be refused, got %v", err)
 	}
 }
 

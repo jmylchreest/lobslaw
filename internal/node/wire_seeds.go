@@ -77,6 +77,11 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		// to type. That the devbox is disposable bounds the damage and
 		// does not make the decision ours to make for the operator.
 		"remote_ssh": true,
+		// remote_scp is the same argument plus one: it also touches the
+		// LOCAL filesystem, which is where the cluster CA and the memory
+		// key live. The fs guards refuse those paths, and the policy
+		// question is still the operator's.
+		"remote_scp": true,
 		// Reading a workspace's Slack history is not in the same class
 		// as read_file. Builtins are seeded default-allow because they
 		// are lobslaw-curated with a well-understood blast radius; the

@@ -124,6 +124,7 @@ Default-deny. Open with extreme care; this is the most prompt-injection-vulnerab
 | Tool | Risk | Description |
 |---|---|---|
 | `remote_ssh` | irreversible | Run a command on a configured host over SSH — see [Remote hosts](/configuration/remotes) |
+| `remote_scp` | irreversible | Copy one file to/from a configured host. `local_path` gets the same guards as `read_file`/`write_file`, in the direction of travel |
 
 **Disabled by default.** Configured via `[[remote]]`, enabled via `disabled_tools` below.
 

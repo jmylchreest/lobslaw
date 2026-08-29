@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -390,22 +391,22 @@ type RemoteResult struct {
 // agent retrying the transport instead of reading the compiler. The
 // error return is for the transport only: unreachable, refused, timed
 // out. Same split shell_command makes.
-func (d *Remote) Exec(ctx context.Context, command, cwd string, timeout time.Duration) (*RemoteResult, error) {
+func (r *Remote) Exec(ctx context.Context, command, cwd string, timeout time.Duration) (*RemoteResult, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return nil, errors.New("remote: command is required")
 	}
 	switch {
 	case timeout <= 0:
-		timeout = d.defaultTimeout
-	case timeout > d.maxTimeout:
-		timeout = d.maxTimeout
+		timeout = r.defaultTimeout
+	case timeout > r.maxTimeout:
+		timeout = r.maxTimeout
 	}
 
 	dialCtx, cancelDial := context.WithTimeout(ctx, remoteDialTimeout)
 	defer cancelDial()
 
-	client, err := d.dial(dialCtx)
+	client, err := r.dial(dialCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +414,7 @@ func (d *Remote) Exec(ctx context.Context, command, cwd string, timeout time.Dur
 
 	session, err := client.NewSession()
 	if err != nil {
-		return nil, fmt.Errorf("remote %s: session: %w", d.Name, err)
+		return nil, fmt.Errorf("remote %s: session: %w", r.Name, err)
 	}
 	defer func() { _ = session.Close() }()
 
@@ -442,11 +443,11 @@ func (d *Remote) Exec(ctx context.Context, command, cwd string, timeout time.Dur
 	started := time.Now()
 	exitCode, err := runSession(runCtx, session, full)
 	if err != nil {
-		return nil, fmt.Errorf("remote %s: %w", d.Name, err)
+		return nil, fmt.Errorf("remote %s: %w", r.Name, err)
 	}
 
 	return &RemoteResult{
-		Remote:    d.Name,
+		Remote:    r.Name,
 		Command:   command,
 		ExitCode:  exitCode,
 		Stdout:    string(stdout.Bytes()),
@@ -456,24 +457,24 @@ func (d *Remote) Exec(ctx context.Context, command, cwd string, timeout time.Dur
 	}, nil
 }
 
-func (d *Remote) dial(ctx context.Context) (*ssh.Client, error) {
+func (r *Remote) dial(ctx context.Context) (*ssh.Client, error) {
 	cfg := &ssh.ClientConfig{
-		User:            d.user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(d.signer)},
-		HostKeyCallback: d.hostKeys,
+		User:            r.user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(r.signer)},
+		HostKeyCallback: r.hostKeys,
 		Timeout:         remoteDialTimeout,
 	}
 	// Dialled through a context-aware net.Dialer so a cancelled turn
 	// does not leave a connect attempt running to its own deadline.
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", d.addr)
+	conn, err := dialer.DialContext(ctx, "tcp", r.addr)
 	if err != nil {
-		return nil, fmt.Errorf("remote %s: dial %s: %w", d.Name, d.addr, err)
+		return nil, fmt.Errorf("remote %s: dial %s: %w", r.Name, r.addr, err)
 	}
-	sshConn, chans, reqs, err := ssh.NewClientConn(conn, d.addr, cfg)
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, r.addr, cfg)
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("remote %s: handshake %s: %w", d.Name, d.addr, err)
+		return nil, fmt.Errorf("remote %s: handshake %s: %w", r.Name, r.addr, err)
 	}
 	return ssh.NewClient(sshConn, chans, reqs), nil
 }
@@ -524,4 +525,138 @@ func deadlineOf(ctx context.Context) string {
 // remaining metacharacters inside it.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+// --- file transfer ----------------------------------------------------
+
+// remoteMaxTransferBytes caps one file in either direction.
+//
+// Lower than you might expect, deliberately. This is not a bulk copy
+// tool: a repository moves by git and a build artefact moves by the
+// registry. What is left is a log to attach to a reply, a patch, a
+// config — all small. A ceiling that would accommodate a container
+// image would also accommodate exfiltrating one.
+const remoteMaxTransferBytes int64 = 32 << 20
+
+// ErrTransferTooLarge is returned rather than truncating.
+//
+// Truncation is the wrong failure for a file: a half-copied binary is
+// corrupt in a way the model cannot see and will report as success.
+// Command OUTPUT truncates because the tail of a build log is noise;
+// the tail of a file is the file.
+var ErrTransferTooLarge = errors.New("remote: file exceeds the transfer cap")
+
+// Put writes body to remotePath on the far end.
+//
+// Implemented as `cat > path` over a session rather than by adding an
+// SFTP dependency. The bytes go down stdin untouched, so this is
+// binary-exact — the only thing needing care is the PATH, which is
+// quoted, and which is why the path is never interpolated raw.
+func (r *Remote) Put(ctx context.Context, remotePath string, body []byte) error {
+	if int64(len(body)) > remoteMaxTransferBytes {
+		return fmt.Errorf("%w (%d bytes, cap %d)", ErrTransferTooLarge, len(body), remoteMaxTransferBytes)
+	}
+	dialCtx, cancelDial := context.WithTimeout(ctx, remoteDialTimeout)
+	defer cancelDial()
+	client, err := r.dial(dialCtx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = client.Close() }()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return fmt.Errorf("remote %s: session: %w", r.Name, err)
+	}
+	defer func() { _ = session.Close() }()
+
+	session.Stdin = bytes.NewReader(body)
+	var stderr cappedBuffer
+	stderr.cap = 8 << 10
+	session.Stderr = &stderr
+
+	runCtx, cancelRun := context.WithTimeout(ctx, r.defaultTimeout)
+	defer cancelRun()
+
+	// The redirect is the whole command, so a failure here is a real
+	// failure rather than a result to report: nothing was written, or
+	// something was half written, and either way the caller must not
+	// be told the file arrived.
+	code, err := runSession(runCtx, session, "cat > "+shellQuote(remotePath))
+	if err != nil {
+		return fmt.Errorf("remote %s: upload %s: %w", r.Name, remotePath, err)
+	}
+	if code != 0 {
+		return fmt.Errorf("remote %s: upload %s failed (exit %d): %s",
+			r.Name, remotePath, code, strings.TrimSpace(string(stderr.Bytes())))
+	}
+	return nil
+}
+
+// Get reads remotePath from the far end.
+//
+// Refuses at the cap rather than truncating — see ErrTransferTooLarge.
+// The limit is enforced on the way in, so an oversized file costs one
+// read of the cap and not one of the whole file.
+func (r *Remote) Get(ctx context.Context, remotePath string) ([]byte, error) {
+	dialCtx, cancelDial := context.WithTimeout(ctx, remoteDialTimeout)
+	defer cancelDial()
+	client, err := r.dial(dialCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+
+	session, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("remote %s: session: %w", r.Name, err)
+	}
+	defer func() { _ = session.Close() }()
+
+	// One byte over the cap, so a file exactly AT the limit reads
+	// whole and only a genuinely oversized one trips it.
+	out := &limitedBuffer{limit: remoteMaxTransferBytes + 1}
+	var stderr cappedBuffer
+	stderr.cap = 8 << 10
+	session.Stdout = out
+	session.Stderr = &stderr
+
+	runCtx, cancelRun := context.WithTimeout(ctx, r.defaultTimeout)
+	defer cancelRun()
+
+	code, err := runSession(runCtx, session, "cat -- "+shellQuote(remotePath))
+	if err != nil {
+		return nil, fmt.Errorf("remote %s: download %s: %w", r.Name, remotePath, err)
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("remote %s: download %s failed (exit %d): %s",
+			r.Name, remotePath, code, strings.TrimSpace(string(stderr.Bytes())))
+	}
+	if int64(out.buf.Len()) > remoteMaxTransferBytes {
+		return nil, fmt.Errorf("%w (cap %d)", ErrTransferTooLarge, remoteMaxTransferBytes)
+	}
+	return out.buf.Bytes(), nil
+}
+
+// limitedBuffer stops at limit and remembers that it did. Unlike
+// cappedBuffer it is used where truncation must become an ERROR, so
+// the overflow flag is read by the caller rather than reported to the
+// model as a note.
+type limitedBuffer struct {
+	buf   bytes.Buffer
+	limit int64
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if remaining := l.limit - int64(l.buf.Len()); remaining > 0 {
+		if int64(len(p)) > remaining {
+			l.buf.Write(p[:remaining])
+		} else {
+			l.buf.Write(p)
+		}
+	}
+	// Full length, as cappedBuffer does: a short write aborts the ssh
+	// session, and the caller wants to report "too large" rather than
+	// "broken pipe".
+	return len(p), nil
 }

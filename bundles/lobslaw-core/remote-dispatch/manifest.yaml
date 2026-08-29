@@ -1,0 +1,6 @@
+name: remote-dispatch
+version: 1.0.0
+description: How to do development work on a remote host — what survives, where to edit, and what the path guards will refuse.
+runtime: prose
+body: SKILL.md
+body_sha256: 23b33ee2cb6a0bf7f5a3fe23f86c75d5fc2a26a5dc91ace4273c9420d5cd88bc

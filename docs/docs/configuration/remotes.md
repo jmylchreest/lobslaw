@@ -84,6 +84,37 @@ effect   = "allow"
 priority = 20
 ```
 
+## `remote_scp`
+
+Moves **one file** between this machine and a remote. For a log, a patch, a generated artefact — a repository moves by git, not by this.
+
+```json
+{"remote": "go", "direction": "upload", "local_path": "workspace/patch.diff", "remote_path": "/workspace/tasks/fix/patch.diff"}
+```
+
+It is separately riskier than `remote_ssh`, because it touches the **local** filesystem — which is where the cluster CA, the node key and the memory key live. So it reuses the guards `read_file` and `write_file` already apply, in the direction that matches what it is about to do:
+
+| direction | locally | guards applied | the risk being guarded |
+|---|---|---|---|
+| `upload` | reads | read | exfiltration — a key leaving the node |
+| `download` | writes | write | overwrite — a remote choosing what this node reads back |
+
+Getting that backwards would apply a read check to a write and leave the mount's write bit unchecked, so the direction is resolved first and the guards chosen from it.
+
+Cluster-internal paths are refused either way, and that refusal is compiled in. Transfers cap at 32 MiB and **refuse** rather than truncate: a half-copied binary is corrupt in a way the model cannot see and will report as success.
+
+`remote_ssh` and `remote_scp` are both behind the `remote_*` glob, so enabling the family gets both. `disabled_tools = ["remote_scp"]` is the "run things there, but nothing crosses back" posture.
+
+## The skill
+
+The tools do not teach the agent how to use them. `bundles/lobslaw-core/remote-dispatch` is a prose skill shipped alongside them covering the three things that make the difference:
+
+- **nothing you have not pushed is real** — the remote's disk is a cache, not a record;
+- **edit on the remote, not here** — a heredoc gets you no build, no test and no type-check, so use `remote_ssh` against a checkout rather than composing files locally and copying them over;
+- **one task, one directory.**
+
+Plus what the path guards refuse and why not to route around them.
+
 ## What a call returns
 
 ```json

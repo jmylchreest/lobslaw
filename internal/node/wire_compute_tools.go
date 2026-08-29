@@ -669,8 +669,8 @@ func (n *Node) wireShellTools(builtins *compute.Builtins) error {
 	return nil
 }
 
-// wireRemoteTools registers remote_ssh over the configured [[devbox]]
-// blocks.
+// wireRemoteTools registers the remote_* family over the configured
+// [[remote]] blocks.
 //
 // Skipped silently when there are none: a deployment with no isolated
 // host to dispatch to should not advertise a tool that refuses every
@@ -686,8 +686,12 @@ func (n *Node) wireRemoteTools(builtins *compute.Builtins) error {
 	// SSH key for a tool that will not be registered is work whose
 	// only possible outcome is a boot failure over a tool the operator
 	// switched off.
-	if n.toolRegistry.Disabled("remote_ssh") {
-		n.log.Info("compute: remote_ssh is disabled by compute.disabled_tools; " +
+	// Only when the WHOLE family is off. Disabling one of the pair is
+	// a legitimate posture — remote_ssh without remote_scp is "run
+	// things there, but nothing crosses back" — and the registry drops
+	// the individual ToolDef, so the work below is still worth doing.
+	if n.toolRegistry.Disabled("remote_ssh") && n.toolRegistry.Disabled("remote_scp") {
+		n.log.Info("compute: the remote_* tools are disabled by compute.disabled_tools; " +
 			"the [[remote]] blocks are not wired")
 		return nil
 	}
@@ -696,14 +700,14 @@ func (n *Node) wireRemoteTools(builtins *compute.Builtins) error {
 		return err
 	}
 	if err := compute.RegisterRemoteBuiltins(builtins, set); err != nil {
-		return fmt.Errorf("register remote_ssh: %w", err)
+		return fmt.Errorf("register remote tools: %w", err)
 	}
 	for _, td := range compute.RemoteToolDefs(set) {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register %s tool def: %w", td.Name, err)
 		}
 	}
-	n.log.Info("compute: remote_ssh registered", "devboxes", set.Names())
+	n.log.Info("compute: remote tools registered", "remotes", set.Names())
 	return nil
 }
 
