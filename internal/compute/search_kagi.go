@@ -37,6 +37,8 @@ import (
 // Verified against the live API. An operator on a v1 key sets
 // `endpoint` and, today, would also need the v1 response shape — which
 // is a second driver, not a config knob.
+
+// DefaultKagiEndpoint is Kagi's v0 search API.
 const DefaultKagiEndpoint = "https://kagi.com/api/v0/search"
 
 // kagiResultType is the value of `t` that marks an actual search
