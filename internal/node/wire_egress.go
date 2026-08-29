@@ -2,6 +2,7 @@ package node
 
 import (
 	"net"
+	"sort"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/binaries"
@@ -94,14 +95,10 @@ func (n *Node) subprocessProxyURL(role string, networkIsolation bool) string {
 	return n.egressProvider.SubprocessProxyURL(role)
 }
 
-// buildEgressInputs aggregates the live config + skill registry
-// into the ACL builder's input shape. Called at boot and on every
-// config hot-reload (Phase E.6 wires the reload trigger).
-//
-// Skill networks are TODO: the registry isn't populated this early
-// in boot (Watch starts later). For v1 we register skills with
-// permissive networks; Phase E.6 + skill registry's change hook
-// will narrow them as manifests load.
+// buildEgressInputs aggregates the live config + skill registry into
+// the ACL builder's input shape. Called at boot and from
+// refreshEgressACL when a skill or storage mount changes — which is
+// what lets a skill installed after boot get its role.
 func buildEgressInputs(n *Node) egress.ACLInputs {
 	in := egress.ACLInputs{
 		Providers:          n.cfg.Compute.Providers,
@@ -138,8 +135,6 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		}
 		in.OAuthProviders = eps
 	}
-	// MCP servers + skill networks: rules emerge once subprocesses
-	// spawn. Phase E.4 + E.6 fold them in.
 	// Mirrors the predicate applyModelsDevAutoCapabilities uses, so
 	// the allowance exists exactly when the fetch happens.
 	for _, prov := range n.cfg.Compute.Providers {
@@ -157,7 +152,7 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 	in.WebSearchHosts = webSearchEgressHosts(n)
 
 	in.MCPServerNetworks = map[string][]string{}
-	in.SkillNetworks = map[string][]string{}
+	in.SkillNetworks = skillNetworks(n)
 	return in
 }
 
@@ -220,4 +215,42 @@ func isPrivateHost(host string) bool {
 	// construction. A dotted name might be anything, so it is left
 	// alone rather than guessed at.
 	return !strings.Contains(host, ".")
+}
+
+// skillNetworks maps each skill that DECLARED a network onto the hosts
+// it declared, so the ACL builder can give it a skill/<name> role —
+// which is the role the invoker already sets on the subprocess.
+//
+// Only skills that declared one. A skill with no `network:` keeps
+// falling through to DefaultAllowedHosts, because the builder treats an
+// empty host list as an explicit deny and every skill written before
+// this was populated omits the field. Denying them here would be a
+// silent breaking change to a running deployment rather than a fix.
+//
+// That leaves undeclared skills unconstrained, which is why boot warns
+// about them by name: the operator can see what is unconfined and
+// decide, rather than reading a permissive default as a working ACL.
+func skillNetworks(n *Node) map[string][]string {
+	out := map[string][]string{}
+	if n.skillRegistry == nil {
+		return out
+	}
+	var unconfined []string
+	for _, s := range n.skillRegistry.List() {
+		if s == nil {
+			continue
+		}
+		if hosts := s.Manifest.Network; len(hosts) > 0 {
+			out[s.Name()] = append([]string(nil), hosts...)
+			continue
+		}
+		unconfined = append(unconfined, s.Name())
+	}
+	if len(unconfined) > 0 {
+		sort.Strings(unconfined)
+		n.log.Warn("egress: skills with no declared network reach any host the default ACL allows; "+
+			"add a network: list to the manifest to confine one",
+			"skills", unconfined)
+	}
+	return out
 }
