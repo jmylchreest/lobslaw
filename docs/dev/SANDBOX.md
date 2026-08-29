@@ -77,6 +77,8 @@ That left the builtins deriving filesystem reach themselves, in four different w
 
 That direction is the safety argument, not a stylistic choice. `policy.d` is a set of hot-reloaded files under search paths that include one inside the operator's home — and the agent runs as that user. If a policy file could *grant* reach, an agent that talks somebody into running a shell would have a supported, documented, auto-reloading route to the memory key. Subtract-only means the worst a hostile policy file achieves is a broken tool: noisy, and recoverable.
 
+The modality tools (`read_image`, `read_audio`, `read_pdf`) get one concession: their `AllowedRoot` satisfies step 1 in place of the mount resolver. Inbound attachments are written by the *channel* layer into that directory, and an operator who pointed `IncomingDir` somewhere that is not a declared mount had a working deployment before this chain existed — requiring a mount there would silently make every image, voice note and PDF unreadable. `AllowedRoot` replaces step 1 and nothing else; steps 2–5 still run, which is the point, because these tools previously had no internal-path check, no hardline and no policy at all.
+
 The tools now on the shared chain: `read_file`, `write_file`, `edit_file`, `search_files`, `read_image`, `read_audio`, `read_pdf`, `remote_scp`. `list_files` and `glob` return names rather than content and keep the shorter chain. `shell_command` still uses `policy.CheckCommandPaths`, because it has a command string rather than a path.
 
 ---

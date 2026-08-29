@@ -67,6 +67,26 @@ func SetPathGuardRegistry(r *Registry) { activePathGuard.registry = r }
 // and rewording them per call site is how two tools come to disagree
 // about what the same refusal means.
 func guardPath(tool, path string, need MountMode) (resolved string, payload []byte, exit int) {
+	return guardPathWithin(tool, path, need, "")
+}
+
+// guardPathWithin is guardPath with an implicit root that satisfies
+// step 1 on its own.
+//
+// It exists for the modality tools. Inbound attachments are written by
+// the CHANNEL layer into AllowedRoot — the agent never chose that
+// directory and cannot write outside it — and an operator who pointed
+// IncomingDir somewhere that is not a declared mount had a working
+// deployment before this chain existed. Requiring a mount there would
+// be a new demand on existing configuration, and the failure would be
+// every image, audio note and PDF silently becoming unreadable.
+//
+// So AllowedRoot stands in for the mount check, and ONLY for it.
+// Steps 2-5 run unchanged, which is the whole point: these tools
+// previously had no internal-path check, no hardline and no policy,
+// and a root pointed at the wrong place could read a TLS key that
+// read_file refuses.
+func guardPathWithin(tool, path string, need MountMode, implicitRoot string) (resolved string, payload []byte, exit int) {
 	raw := strings.TrimSpace(path)
 	if raw == "" {
 		p, e, _ := marshalToolError("missing_arg", "path is required",
@@ -77,12 +97,21 @@ func guardPath(tool, path string, need MountMode) (resolved string, payload []by
 	// 1. Mount resolver. Also expands a mount label ("workspace/x")
 	//    into a real path, so everything below sees the same string
 	//    the filesystem will.
-	resolved, p, e := resolveFsPathMode(raw, need)
-	if e != 0 {
-		return "", p, e
-	}
-	if resolved == "" {
-		resolved = raw
+	//
+	//    Skipped when the path is already inside implicitRoot, which
+	//    is itself an operator-set bound — see guardPathWithin.
+	if within, abs := insideImplicitRoot(raw, implicitRoot); within {
+		resolved = abs
+	} else {
+		var p []byte
+		var e int
+		resolved, p, e = resolveFsPathMode(raw, need)
+		if e != 0 {
+			return "", p, e
+		}
+		if resolved == "" {
+			resolved = raw
+		}
 	}
 
 	// 2. Absolute. After resolution, because the mount form is
@@ -184,4 +213,35 @@ func pathWithinRoot(path, root string) bool {
 		return true
 	}
 	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// insideImplicitRoot reports whether raw resolves inside root, and
+// returns the absolute form when it does.
+//
+// filepath.Abs is what the modality tools used before this chain, so a
+// relative path keeps resolving the way it always did — and it is
+// bounded, because the result still has to land inside root. Empty
+// root is no root: it never matches, and the caller falls through to
+// the mount resolver.
+func insideImplicitRoot(raw, root string) (bool, string) {
+	if strings.TrimSpace(root) == "" {
+		return false, ""
+	}
+	abs, err := filepath.Abs(raw)
+	if err != nil {
+		return false, ""
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false, ""
+	}
+	if !pathWithinRoot(abs, rootAbs) {
+		return false, ""
+	}
+	return true, abs
+}
+
+// guardReadWithin is guardRead for a tool that carries its own root.
+func guardReadWithin(tool, path, implicitRoot string) (string, []byte, int) {
+	return guardPathWithin(tool, path, MountMode{Read: true}, implicitRoot)
 }

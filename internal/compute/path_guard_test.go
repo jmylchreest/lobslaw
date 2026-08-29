@@ -142,3 +142,89 @@ func TestSandboxAccessConversion(t *testing.T) {
 		t.Errorf("rw = %v, want %v", got, sandbox.AccessRW)
 	}
 }
+
+// withMounts installs a real resolver for the duration of a test.
+//
+// Worth its own helper because NOTHING in this package's tests did
+// this before: activeMountResolver was nil everywhere, resolveFsPath
+// fell open, and a green suite said nothing about how any of these
+// tools behave on a node that has mounts. That gap hid a regression in
+// this very change — see TestModalityKeepsItsReachOutsideMounts.
+func withMounts(t *testing.T, roots map[string]string) {
+	t.Helper()
+	r := NewMountResolver()
+	for label, root := range roots {
+		r.Register(label, root, MountMode{Read: true, Write: true}, nil)
+	}
+	prev := activeMountResolver
+	SetActiveMountResolver(r)
+	t.Cleanup(func() { SetActiveMountResolver(prev) })
+}
+
+// The regression this chain nearly shipped.
+//
+// The modality tools bounded paths with AllowedRoot and nothing else.
+// Putting the mount resolver in front of that would break any
+// deployment whose IncomingDir is not inside a declared mount: every
+// image, voice note and PDF becomes unreadable, and the operator
+// changed nothing.
+//
+// AllowedRoot stands in for the mount check. Steps 2-5 still run.
+func TestModalityKeepsItsReachOutsideMounts(t *testing.T) {
+	withMounts(t, map[string]string{"workspace": "/workspace"})
+
+	// Inside a mount: the shipped layout.
+	if _, _, exit := guardReadWithin("read_image", "/workspace/incoming/t1/a.png", "/workspace/incoming"); exit != 0 {
+		t.Error("the shipped layout was refused")
+	}
+	// Outside every mount, inside AllowedRoot: an operator who pointed
+	// IncomingDir elsewhere. This is the case that regressed.
+	if _, payload, exit := guardReadWithin("read_image", "/var/lobslaw/incoming/t1/a.png", "/var/lobslaw/incoming"); exit != 0 {
+		t.Errorf("a path inside AllowedRoot but outside every mount was refused: %s", payload)
+	}
+	// Outside BOTH: still refused, and by the mount resolver.
+	if _, _, exit := guardReadWithin("read_image", "/etc/shadow", "/var/lobslaw/incoming"); exit == 0 {
+		t.Error("a path outside both the mounts and AllowedRoot was allowed")
+	}
+}
+
+// The implicit root replaces step 1 and nothing else. A modality tool
+// pointed at a root containing cluster state must still be refused —
+// that reach is exactly what these tools used to have.
+func TestImplicitRootDoesNotBypassTheFloors(t *testing.T) {
+	withMounts(t, map[string]string{"workspace": "/workspace"})
+
+	// A root that happens to contain cluster-internal state.
+	const root = "/var/lobslaw/data"
+	internal := "/var/lobslaw/data/certs/node-key.pem"
+	if !isInternalPath(internal) {
+		t.Skip("this path is not classed internal in this build")
+	}
+	_, payload, exit := guardReadWithin("read_image", internal, root)
+	if exit == 0 {
+		t.Fatal("AllowedRoot let a modality tool reach cluster-internal state")
+	}
+	if !strings.Contains(string(payload), "internal_path") {
+		t.Errorf("expected an internal_path refusal, got %s", payload)
+	}
+}
+
+// With mounts configured, the ordinary tools behave as before.
+func TestGuardWithRealMounts(t *testing.T) {
+	withMounts(t, map[string]string{"workspace": "/workspace"})
+
+	if _, _, exit := guardRead("read_file", "/workspace/notes.md"); exit != 0 {
+		t.Error("a path inside a mount was refused")
+	}
+	if _, _, exit := guardRead("read_file", "/etc/passwd"); exit == 0 {
+		t.Error("a path outside every mount was allowed")
+	}
+	// The label form expands to the mount root.
+	resolved, _, exit := guardRead("read_file", "workspace/notes.md")
+	if exit != 0 {
+		t.Fatalf("the mount-label form was refused")
+	}
+	if resolved != "/workspace/notes.md" {
+		t.Errorf("label expanded to %q, want /workspace/notes.md", resolved)
+	}
+}

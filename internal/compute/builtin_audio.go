@@ -109,7 +109,7 @@ func newReadAudioHandler(cfg AudioConfig, client *http.Client) BuiltinFunc {
 		// AllowedRoot prefix test and nothing else — which meant a
 		// modality tool could read a TLS key that read_file refuses,
 		// as long as somebody had pointed a root at it.
-		abs, payload, exit := guardRead("read_audio", path)
+		abs, payload, exit := guardReadWithin("read_audio", path, cfg.AllowedRoot)
 		if exit != 0 {
 			return payload, exit, nil
 		}
