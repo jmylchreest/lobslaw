@@ -236,10 +236,10 @@ func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float32, er
 
 // embedPrefixed is the single implementation both entry points use.
 //
-// EmbedQuery used to call Embed, which meant the passage prefix was
-// applied on top of the query one — "passage: query: where do I live"
-// — and every query would have been embedded as neither. One place
-// that prepends, so the two cannot disagree.
+// One place that prepends, so the two entry points cannot disagree.
+// Layering them — EmbedQuery calling Embed — stacks the passage prefix
+// on top of the query one ("passage: query: where do I live") and
+// embeds the query as neither.
 func (c *EmbeddingClient) embedPrefixed(ctx context.Context, prefix, text string) ([]float32, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {

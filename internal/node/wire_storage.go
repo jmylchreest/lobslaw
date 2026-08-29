@@ -88,8 +88,9 @@ func (n *Node) refreshMountResolver() {
 // mountToProto converts one [[storage.mounts]] entry into the
 // replicated form the backends are handed.
 //
-// Everything past label/type/path/bucket used to be dropped here. The
-// consequence was not a degraded mount but an impossible one: the
+// Everything past label/type/path/bucket has to survive this
+// conversion. Dropping it does not degrade a mount, it makes one
+// impossible: the
 // rclone backend refuses a mount whose remote is empty and the NFS
 // backend refuses one with no server or export — and there were no
 // config keys to set any of them with. So a `type = "rclone"` or

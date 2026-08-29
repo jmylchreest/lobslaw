@@ -180,12 +180,12 @@ type recallEntry struct {
 // recall picks a strategy and returns what it found, plus the name of
 // the strategy for the log.
 //
-// EVERY embedding-shaped failure lands on lexical. Passive recall used
-// to return an empty assembly whenever the embedder was absent, failed
-// to embed, or the vector search errored — and it did so silently, on
-// every turn. A node with no [embeddings] block ran permanently with
-// no passive recall at all and said nothing about it; an embedding
-// outage did the same thing temporarily. Lexical recall is worse than
+// EVERY embedding-shaped failure lands on lexical — embedder absent,
+// embed failed, or vector search errored. Returning an empty assembly
+// instead fails silently on every turn: a node with no [embeddings]
+// block would run permanently with no passive recall and say nothing
+// about it, and an embedding outage would do the same temporarily.
+// Lexical recall is worse than
 // semantic — it cannot match a paraphrase — but it is a great deal
 // better than nothing, and memory_search has had exactly this fallback
 // all along.

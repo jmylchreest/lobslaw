@@ -1,14 +1,14 @@
 package skills
 
-// Precedence used to be version-first: a higher semver won, and
-// signing was only a tie-break at equal version — and only under
-// SigningPrefer at that.
+// Precedence is tier-first, not version-first.
 //
-// That was defensible while nothing but an operator could write a
-// skill. It stopped being defensible the moment the agent could author
-// one, because the attack is a single line of YAML: name your skill
+// Version-first — higher semver wins, signing only a tie-break at
+// equal version — is defensible while nothing but an operator can
+// write a skill, and stops being defensible the moment the agent can
+// author one. The attack is a single line of YAML: name your skill
 // after a signed one, set version 99.0.0, and it wins. Anything that
-// can propose an artefact can then take over any name in the library.
+// can propose an artefact could then take over any name in the
+// library.
 //
 // So precedence is tier-first. A higher version cannot promote a skill
 // past its provenance.

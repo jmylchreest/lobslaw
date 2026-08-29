@@ -16,16 +16,12 @@ import (
 
 // Vision, as a driver rather than a format enum.
 //
-// `read_image` used to switch on a VisionFormat in two places — once
-// to build the request, once to decode the reply — with three vendors
-// inlined in each. Adding a fourth meant editing both switches and
-// hoping nobody added a third switch elsewhere. Chat, speech, image
-// generation and jobs had already moved to named drivers resolved from
-// a DriverSet; vision had not, so `driver = "anthropic"` selected the
-// chat wire shape and said nothing about the vision one.
-//
-// The seam is the same as the others: a named factory in a set, so a
-// vendor is one file and one registry line.
+// The seam is the same one chat, speech, image generation and jobs
+// use: a named factory in a DriverSet, so a vendor is one file and one
+// registry line rather than an arm added to every switch that builds a
+// request or decodes a reply. It also keeps `driver` meaning the wire
+// shape PER MODALITY — a vendor's chat protocol says nothing about its
+// vision one.
 
 // VisionRequest is one question about one image.
 //

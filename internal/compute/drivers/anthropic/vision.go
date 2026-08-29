@@ -16,8 +16,7 @@ import (
 // It lives beside the chat driver rather than in compute because the
 // wire types are Anthropic's, and a vendor's shape belongs in the
 // vendor's package — that separation is the whole reason the driver
-// seam exists. `read_image` used to switch on a format enum with this
-// shape inlined in two places.
+// seam exists.
 //
 // Distinct from Chat despite the same endpoint family. An image
 // question is one round trip with no tools, no streaming and no

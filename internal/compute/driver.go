@@ -297,11 +297,10 @@ type Credential interface {
 
 // QueryCredential puts a secret in a URL query parameter.
 //
-// Google's generateContent endpoints authenticate this way. The vision
-// builtin used to handle it by appending "?key=" to the configured
-// endpoint before the request was built — which worked, and meant the
-// one provider whose auth was not a header had its auth expressed
-// somewhere no other provider's was.
+// Google's generateContent endpoints authenticate this way. Expressed
+// as a Credential like every other provider's, so the one vendor whose
+// auth is not a header does not have it living somewhere no other
+// provider's does — an endpoint string, say.
 //
 // A credential that edits the URL is still a credential. Keeping it
 // behind the same interface is what stops the next such provider
