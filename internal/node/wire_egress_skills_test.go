@@ -54,3 +54,44 @@ func TestSkillNetworksToleratesNoRegistry(t *testing.T) {
 		t.Errorf("want empty, got %v", got)
 	}
 }
+
+// strict_skill_egress is opt-in because turning it on breaks every
+// skill written before per-skill roles were populated — those manifests
+// omit network: entirely. Off, an undeclared skill must stay ABSENT
+// from the map (absent = default ACL); on, it must be present and nil
+// (nil = the builder's explicit-deny branch).
+func TestStrictSkillEgressDeniesUndeclaredSkills(t *testing.T) {
+	newNode := func(strict bool) *Node {
+		reg := skills.NewRegistry(slog.New(slog.DiscardHandler))
+		reg.Put(skillWithNetwork("weather", []string{"wttr.in"}))
+		reg.Put(skillWithNetwork("undeclared", nil))
+		n := &Node{skillRegistry: reg, log: slog.New(slog.DiscardHandler)}
+		n.cfg.Security.StrictSkillEgress = strict
+		return n
+	}
+
+	lax := skillNetworks(newNode(false))
+	if _, present := lax["undeclared"]; present {
+		t.Error("lax: an undeclared skill must be absent so it keeps the default ACL")
+	}
+
+	strict := skillNetworks(newNode(true))
+	hosts, present := strict["undeclared"]
+	if !present {
+		t.Fatal("strict: an undeclared skill must be present so the builder denies it")
+	}
+	if hosts != nil {
+		t.Errorf("strict: hosts = %v, want nil", hosts)
+	}
+	// A declared skill is unaffected by the switch either way.
+	if len(strict["weather"]) != 1 || len(lax["weather"]) != 1 {
+		t.Error("a declared network must be honoured under both settings")
+	}
+
+	// And the builder must turn that nil into a registered deny-all
+	// role rather than leaving the skill on the unknown-role path.
+	rules := egress.Build(egress.ACLInputs{SkillNetworks: strict})
+	if got, ok := rules.Roles["skill/undeclared"]; !ok || len(got) != 0 {
+		t.Errorf("rules.Roles[skill/undeclared] = %v (present=%v), want a registered empty role", got, ok)
+	}
+}

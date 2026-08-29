@@ -221,21 +221,23 @@ func isPrivateHost(host string) bool {
 // it declared, so the ACL builder can give it a skill/<name> role —
 // which is the role the invoker already sets on the subprocess.
 //
-// Only skills that declared one. A skill with no `network:` keeps
-// falling through to DefaultAllowedHosts, because the builder treats an
-// empty host list as an explicit deny and every skill written before
-// this was populated omits the field. Denying them here would be a
-// silent breaking change to a running deployment rather than a fix.
+// A skill that declares no `network:` is handled by
+// [security] strict_skill_egress. Off (the default) it is omitted, so
+// it keeps falling through to DefaultAllowedHosts — because the builder
+// reads an empty host list as an explicit deny, and every skill written
+// before this input was populated omits the field. Denying them by
+// default would be a silent breaking change to a running deployment
+// rather than a fix. On, it is mapped to nil and denied.
 //
-// That leaves undeclared skills unconstrained, which is why boot warns
-// about them by name: the operator can see what is unconfined and
-// decide, rather than reading a permissive default as a working ACL.
+// Either way boot names them, so an operator can see what is
+// unconfined rather than reading a permissive default as a working ACL.
 func skillNetworks(n *Node) map[string][]string {
 	out := map[string][]string{}
 	if n.skillRegistry == nil {
 		return out
 	}
-	var unconfined []string
+	strict := n.cfg.Security.StrictSkillEgress
+	var undeclared []string
 	for _, s := range n.skillRegistry.List() {
 		if s == nil {
 			continue
@@ -244,13 +246,27 @@ func skillNetworks(n *Node) map[string][]string {
 			out[s.Name()] = append([]string(nil), hosts...)
 			continue
 		}
-		unconfined = append(unconfined, s.Name())
+		undeclared = append(undeclared, s.Name())
+		if strict {
+			// nil, not absent: the builder registers the role with no
+			// allowed hosts so smokescreen reports a deny naming the
+			// skill, rather than the caller hitting the unknown-role
+			// path and being told nothing useful.
+			out[s.Name()] = nil
+		}
 	}
-	if len(unconfined) > 0 {
-		sort.Strings(unconfined)
-		n.log.Warn("egress: skills with no declared network reach any host the default ACL allows; "+
-			"add a network: list to the manifest to confine one",
-			"skills", unconfined)
+	if len(undeclared) > 0 {
+		sort.Strings(undeclared)
+		if strict {
+			n.log.Warn("egress: skills with no declared network are DENIED egress "+
+				"(security.strict_skill_egress is on); add a network: list to the manifest",
+				"skills", undeclared)
+		} else {
+			n.log.Warn("egress: skills with no declared network reach any host the default ACL "+
+				"allows; add a network: list to the manifest, then set "+
+				"security.strict_skill_egress to enforce it",
+				"skills", undeclared)
+		}
 	}
 	return out
 }

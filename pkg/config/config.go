@@ -1479,6 +1479,20 @@ type SecurityConfig struct {
 	// allowlist (typically /tmp). Empty = TCP-only.
 	EgressUDSPath string `koanf:"egress_uds_path,omitempty"`
 
+	// StrictSkillEgress makes a skill that declares no `network:` be
+	// DENIED egress rather than falling through to the default ACL.
+	//
+	// Opt-in because it is a breaking change for any skill written
+	// before per-skill roles were populated: those manifests omit the
+	// field, and every one of them stops reaching the network the day
+	// this flips. The safe default leaves them on the default ACL and
+	// warns at boot with their names.
+	//
+	// Turn it on once every skill on the node declares what it needs.
+	// Boot warns with the names of those that do not, under either
+	// setting, so the list to work through is in the log already.
+	StrictSkillEgress bool `koanf:"strict_skill_egress,omitempty"`
+
 	// FetchURLAllowHosts narrows the fetch_url builtin's egress.
 	// Empty = permissive (any public host, smokescreen still blocks
 	// private IPs). Non-empty = explicit allowlist; the agent's
