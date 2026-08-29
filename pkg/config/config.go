@@ -37,6 +37,10 @@ type Config struct {
 	SelfLearning SelfLearningConfig `koanf:"self_learning"`
 	Users        []UserConfig       `koanf:"user"`
 	Binaries     []BinaryConfig     `koanf:"binary"`
+	// Remotes are the hosts remote_ssh may reach. A
+	// top-level repeated block like [[user]] and [[binary]], because
+	// it is a property of the deployment rather than of the agent.
+	Remotes []RemoteConfig `koanf:"remote"`
 
 	// resolvedPath is the filesystem path Load resolved via
 	// findConfigPath. Empty when no config.toml was found (env-only
@@ -457,13 +461,30 @@ type ComputeConfig struct {
 	// ProviderConfig would mean a struct where two thirds of the fields
 	// never apply.
 	SearchProviders []SearchProviderConfig `koanf:"search_providers,omitempty"`
-	Vision          VisionConfig           `koanf:"vision,omitempty"`
-	Audio           AudioConfig            `koanf:"audio,omitempty"`
-	PDF             PDFConfig              `koanf:"pdf,omitempty"`
-	Embeddings      EmbeddingsConfig       `koanf:"embeddings,omitempty"`
-	Speak           SpeakConfig            `koanf:"speak,omitempty"`
-	Image           ImageGenConfig         `koanf:"image,omitempty"`
-	Video           VideoGenConfig         `koanf:"video,omitempty"`
+	// DisabledTools are glob patterns matched against tool NAMES. A
+	// matching tool is never registered, so the agent does not see it
+	// and cannot call it — a stronger gate than a policy deny, which
+	// still puts the tool in the model's list and then refuses it.
+	//
+	// A POINTER because unset and empty mean opposite things. Absent
+	// takes compute.DefaultDisabledTools, which switches the remote_*
+	// family off; `disabled_tools = []` is how an operator says "I
+	// want all of them", deliberately and in writing. A plain slice
+	// could not tell those apart, and the one that would silently win
+	// is the permissive one.
+	//
+	//	disabled_tools = ["remote_*", "shell_command"]
+	//	disabled_tools = []              # nothing disabled, including remote_*
+	//	disabled_tools = ["remote_scp"]  # remote_ssh on, remote_scp off
+	DisabledTools *[]string `koanf:"disabled_tools,omitempty"`
+
+	Vision     VisionConfig     `koanf:"vision,omitempty"`
+	Audio      AudioConfig      `koanf:"audio,omitempty"`
+	PDF        PDFConfig        `koanf:"pdf,omitempty"`
+	Embeddings EmbeddingsConfig `koanf:"embeddings,omitempty"`
+	Speak      SpeakConfig      `koanf:"speak,omitempty"`
+	Image      ImageGenConfig   `koanf:"image,omitempty"`
+	Video      VideoGenConfig   `koanf:"video,omitempty"`
 
 	// ArtifactMount names the storage mount that receives generated
 	// files (speech, images, video). Empty falls back to the first
@@ -1671,6 +1692,80 @@ type LogFilterConfig struct {
 	Level       string `koanf:"level"`        // "debug" | "info" | "warn" | "error"
 	OutputLevel string `koanf:"output_level"` // optional — transform the output level when filter matches
 	Enabled     bool   `koanf:"enabled"`
+}
+
+// RemoteConfig is one host the agent may run development work on.
+//
+// The whole point of this block is that the AGENT CANNOT WRITE IT. A
+// remote_ssh call names a remote; it does not supply a host, a port, a
+// user or a key. Those are facts about the deployment, and the same
+// reasoning applies as for compute.TurnIdentity: a value the model can
+// choose is a request, not a fact, and the two must not share a channel.
+// Without that split, "run this command over SSH" is a tool that dials
+// anywhere, and the operator's only control is the prose in a prompt.
+//
+//	[[remote]]
+//	name        = "go"
+//	description = "Go toolchain, opencode, aide"
+//	host        = "devbox-go.lobslaw-dev.svc.cluster.local"
+//	port        = 2222
+//	user        = "dev"
+//	key_ref     = "file:/etc/lobslaw/remote/id_ed25519"
+//	known_hosts = "/var/lobslaw/data/remote_known_hosts"
+type RemoteConfig struct {
+	// Name is what the agent passes to remote_ssh. Short and about
+	// the stack ("go", "rust"), because it is what the model reasons
+	// with and a hostname is not.
+	Name string `koanf:"name"`
+
+	// Description reaches the model in the tool schema, so it is how
+	// the agent picks between remotes. Say what the toolchain is;
+	// an empty one leaves the model guessing from the name.
+	Description string `koanf:"description,omitempty"`
+
+	Host string `koanf:"host"`
+	// Port defaults to 2222 rather than 22: a devbox sshd running
+	// unprivileged under a restricted PodSecurity policy cannot bind
+	// a privileged port, so 2222 is the normal case here and 22 is
+	// the exception.
+	Port int    `koanf:"port,omitempty"`
+	User string `koanf:"user,omitempty"`
+
+	// KeyRef resolves to a PEM private key through the secrets
+	// resolver — "file:/path" or "env:NAME". Prefer file: for a key:
+	// an env var round-trips the newlines through whatever wrote it,
+	// and the failure mode is an unparseable key at first dial rather
+	// than at boot.
+	KeyRef string `koanf:"key_ref"`
+
+	// KeyPassphraseRef decrypts an encrypted private key. Empty means
+	// the key is expected to be unencrypted, which is the normal shape
+	// for a key a daemon uses unattended.
+	KeyPassphraseRef string `koanf:"key_passphrase_ref,omitempty"`
+
+	// KnownHosts is the path to an OpenSSH known_hosts file. It is a
+	// PATH and not a secret ref because it is written as well as read:
+	// an unknown host is recorded on first connect and pinned
+	// thereafter.
+	//
+	// Trust-on-first-use, and deliberately not host-key verification
+	// turned off. TOFU is weak exactly once — the first dial after the
+	// file is created — and strong every time after. Disabled
+	// verification is weak forever, and the difference matters here
+	// because the agent's whole job on that connection is to run code.
+	//
+	// Empty disables persistence, NOT verification: the key is pinned
+	// for the process lifetime and a change mid-run is still refused.
+	KnownHosts string `koanf:"known_hosts,omitempty"`
+
+	// DefaultTimeoutSecs bounds a call that does not ask for one.
+	// Builds are slow, so this is minutes rather than the seconds
+	// shell_command allows. Zero takes the built-in default.
+	DefaultTimeoutSecs int `koanf:"default_timeout_secs,omitempty"`
+
+	// MaxTimeoutSecs caps what a call may ask for. Zero takes the
+	// built-in ceiling.
+	MaxTimeoutSecs int `koanf:"max_timeout_secs,omitempty"`
 }
 
 // BinaryConfig is one operator-declared host binary. Mirrors the

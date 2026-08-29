@@ -261,6 +261,16 @@ type Config struct {
 	// pipeline clawhub_install uses. Empty disables binary_install.
 	Binaries []config.BinaryConfig
 
+	// Remotes is the operator-declared set of hosts remote_ssh may
+	// reach. Empty leaves the tool unregistered — a node with nowhere
+	// to dispatch to should not advertise a dispatcher.
+	Remotes []config.RemoteConfig
+
+	// DisabledTools are the glob patterns from compute.disabled_tools.
+	// A pointer so "unset" and "explicitly empty" stay distinguishable
+	// all the way down — see config.ComputeConfig.DisabledTools.
+	DisabledTools *[]string
+
 	// APIKeyResolverForChannels overrides the secret-resolver used by
 	// channels (Telegram bot token, webhook secret, etc.). Empty means
 	// "reuse APIKeyResolver / default env:/file: resolver". Separate

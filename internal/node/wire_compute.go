@@ -66,6 +66,11 @@ func (n *Node) wireCompute() error {
 	n.providerHealth = compute.NewProviderHealth()
 
 	n.toolRegistry = compute.NewRegistry()
+	// Before anything registers. SetDisabled does not evict what is
+	// already present, deliberately — a tool the agent has already
+	// listed and then loses mid-run is worse than one that was never
+	// there — so the only correct moment is here.
+	n.toolRegistry.SetDisabled(disabledToolPatterns(n.cfg.DisabledTools))
 	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
 	// One store, shared: the channel records "approve for this chat"
 	// and the executor spends it. Two instances would mean the user
@@ -1336,4 +1341,18 @@ func (n *Node) applyOperatorPolicies() {
 	n.log.Info("sandbox: operator policies applied",
 		"tools", tools, "dirs", n.cfg.SandboxPolicyDirs,
 		"presets", len(res.PresetsLoaded), "overridden_builtins", res.OverriddenBuiltins)
+}
+
+// disabledToolPatterns resolves compute.disabled_tools.
+//
+// nil is "the operator said nothing" and takes the default, which
+// switches the remote_* family off. A non-nil empty slice is the
+// operator writing `disabled_tools = []`, which means all of them —
+// including the ones off by default. The pointer exists to keep those
+// two apart; see config.ComputeConfig.DisabledTools.
+func disabledToolPatterns(configured *[]string) []string {
+	if configured == nil {
+		return compute.DefaultDisabledTools
+	}
+	return *configured
 }

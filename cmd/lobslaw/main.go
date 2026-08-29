@@ -571,6 +571,8 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		Security:            cfg.Security,
 		Users:               cfg.Users,
 		Binaries:            cfg.Binaries,
+		Remotes:             cfg.Remotes,
+		DisabledTools:       cfg.Compute.DisabledTools,
 		SoulPath:            cfg.Soul.Path,
 		Logger:              logger,
 	}, nil

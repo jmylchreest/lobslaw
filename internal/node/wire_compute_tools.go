@@ -70,6 +70,12 @@ func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.E
 	if err := n.wireShellTools(builtins); err != nil {
 		return nil, err
 	}
+	// After shell, deliberately: the two are the same kind of tool
+	// pointed at different machines, and reading them together is how
+	// the next person sees that shell_command is the LOCAL one.
+	if err := n.wireRemoteTools(builtins); err != nil {
+		return nil, err
+	}
 	if err := n.wireWebSearchTools(builtins); err != nil {
 		return nil, err
 	}
@@ -662,6 +668,50 @@ func (n *Node) wireShellTools(builtins *compute.Builtins) error {
 	n.log.Debug("compute: shell_command registered")
 	return nil
 }
+
+// wireRemoteTools registers remote_ssh over the configured [[devbox]]
+// blocks.
+//
+// Skipped silently when there are none: a deployment with no isolated
+// host to dispatch to should not advertise a tool that refuses every
+// call. But a block that is PRESENT and broken fails boot — an
+// unreadable key or a bad host is a configuration error the operator
+// needs at start-up, not a tool error surfacing mid-turn hours later
+// and reading like a model fault.
+func (n *Node) wireRemoteTools(builtins *compute.Builtins) error {
+	if len(n.cfg.Remotes) == 0 {
+		return nil
+	}
+	// Asked before the key is read and the set is built: resolving an
+	// SSH key for a tool that will not be registered is work whose
+	// only possible outcome is a boot failure over a tool the operator
+	// switched off.
+	if n.toolRegistry.Disabled("remote_ssh") {
+		n.log.Info("compute: remote_ssh is disabled by compute.disabled_tools; " +
+			"the [[remote]] blocks are not wired")
+		return nil
+	}
+	set, err := compute.NewRemoteSet(n.cfg.Remotes, secretResolverFunc(n.resolveAPIKey))
+	if err != nil {
+		return err
+	}
+	if err := compute.RegisterRemoteBuiltins(builtins, set); err != nil {
+		return fmt.Errorf("register remote_ssh: %w", err)
+	}
+	for _, td := range compute.RemoteToolDefs(set) {
+		if err := n.toolRegistry.Register(td); err != nil {
+			return fmt.Errorf("register %s tool def: %w", td.Name, err)
+		}
+	}
+	n.log.Info("compute: remote_ssh registered", "devboxes", set.Names())
+	return nil
+}
+
+// secretResolverFunc adapts the node's ref resolver to the narrow
+// interface compute defines, so compute keeps not importing secrets.
+type secretResolverFunc func(string) (string, error)
+
+func (f secretResolverFunc) Resolve(ref string) (string, error) { return f(ref) }
 
 // wireWebSearchTools registers web_search over the search backends
 // config selects, in failover order. Skipped silently when none

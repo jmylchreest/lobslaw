@@ -3,6 +3,7 @@ package compute
 import (
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -32,6 +33,9 @@ type Registry struct {
 	mu       sync.RWMutex
 	tools    map[string]*types.ToolDef
 	policies map[string]*sandbox.Policy
+	// disabled are glob patterns that suppress registration entirely.
+	// See SetDisabled.
+	disabled []string
 }
 
 // NewRegistry returns an empty registry.
@@ -51,6 +55,13 @@ func (r *Registry) Register(t *types.ToolDef) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Silently, and not as an error: every caller's correct response
+	// to "the operator disabled this" is to carry on, so returning an
+	// error would mean each of them re-deciding that and one of them
+	// eventually failing boot over a tool nobody wanted.
+	if matchesAny(r.disabled, t.Name) {
+		return nil
+	}
 	if _, exists := r.tools[t.Name]; exists {
 		return fmt.Errorf("%w: %q", ErrToolExists, t.Name)
 	}
@@ -107,6 +118,9 @@ func (r *Registry) Replace(t *types.ToolDef) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if matchesAny(r.disabled, t.Name) {
+		return nil
+	}
 	r.tools[t.Name] = cloneTool(t)
 	return nil
 }
@@ -239,4 +253,65 @@ func cloneTool(t *types.ToolDef) *types.ToolDef {
 		out.ParametersSchema = append([]byte(nil), t.ParametersSchema...)
 	}
 	return &out
+}
+
+// --- disabled tools ---------------------------------------------------
+
+// DefaultDisabledTools is what a deployment that has said nothing gets.
+//
+// `remote_*` is off by default because those tools run commands on a
+// machine this process does not control, and "which machines exist" is
+// not a question the agent's absence of configuration should answer.
+// Every other builtin is available by virtue of running the binary; a
+// tool that reaches off the box is the one place where arriving switched
+// on is the wrong default.
+//
+// Turning it on is one line — see the docs for [[remote]] — and it is a
+// line the operator writes knowingly, which is the entire point.
+var DefaultDisabledTools = []string{"remote_*"}
+
+// SetDisabled installs the glob patterns that suppress tool
+// registration. Matched against the tool NAME with path.Match, so
+// "remote_*" covers remote_ssh and anything the family grows.
+//
+// It lives on the registry rather than in the builtin wiring because
+// the registry is the only place every source passes through. A skill
+// manifest or an MCP server can declare a tool called anything it
+// likes, including a name in a family the operator disabled; gating in
+// wireX would cover the builtins and quietly miss those.
+//
+// Call before registration. Patterns set afterwards do not evict what
+// is already there — the agent would have seen the tool in its list for
+// the turns in between, and a tool that half-exists is worse than one
+// that either does or does not.
+func (r *Registry) SetDisabled(patterns []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.disabled = append([]string(nil), patterns...)
+}
+
+// Disabled reports whether name matches a disable pattern. Exported so
+// wiring can skip the expensive part — resolving an SSH key, dialling a
+// server — for a tool that is not going to be registered anyway.
+//
+// An invalid pattern MATCHES NOTHING rather than everything. A typo in
+// a disable list should not silently strip the agent of every tool it
+// has; the operator will see the tool still present and fix the
+// pattern, which is a recoverable mistake in a way the reverse is not.
+func (r *Registry) Disabled(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return matchesAny(r.disabled, name)
+}
+
+func matchesAny(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if p == name {
+			return true
+		}
+		if ok, err := path.Match(p, name); err == nil && ok {
+			return true
+		}
+	}
+	return false
 }

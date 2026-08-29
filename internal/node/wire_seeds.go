@@ -70,6 +70,13 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		"credentials_grant":     true,
 		"credentials_revoke":    true,
 		"clawhub_install":       true,
+		// remote_ssh runs commands the MODEL composed, on a host that
+		// holds a git push token. The default-allow seed exists because
+		// builtins are lobslaw-curated with a well-understood blast
+		// radius; here the blast radius is whatever the agent decides
+		// to type. That the devbox is disposable bounds the damage and
+		// does not make the decision ours to make for the operator.
+		"remote_ssh": true,
 		// Reading a workspace's Slack history is not in the same class
 		// as read_file. Builtins are seeded default-allow because they
 		// are lobslaw-curated with a well-understood blast radius; the
