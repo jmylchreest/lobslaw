@@ -783,6 +783,7 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 		// photograph.
 		driver, err := n.drivers().Vision(ep.format, compute.VisionDriverConfig{
 			Endpoint:   ep.endpoint,
+			HTTPClient: modalityEgressClient(ep.label),
 			Model:      ep.model,
 			Credential: visionCredential(ep.format, ep.apiKey),
 			Logger:     n.log,
@@ -838,6 +839,7 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 		}
 		driver, err := n.drivers().Audio(driverName, compute.AudioDriverConfig{
 			Endpoint:   ep.endpoint,
+			HTTPClient: modalityEgressClient(ep.label),
 			Model:      ep.model,
 			Credential: compute.NewBearerCredential(ep.apiKey),
 			Logger:     n.log,

@@ -1,8 +1,10 @@
 package node
 
 import (
+	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/anthropic"
@@ -12,6 +14,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/imagen"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/minimax"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/veo"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -220,4 +223,39 @@ func minimaxSpeakFactory(cfg compute.SpeakDriverConfig) (compute.SpeakDriver, er
 		HTTPClient: cfg.HTTPClient,
 		Logger:     cfg.Logger,
 	})
+}
+
+// modalityEgressTimeout is the ceiling on a modality driver's HTTP
+// client when it is routed through the egress proxy.
+//
+// Deliberately LOOSER than every driver's own default (the longest is
+// 3 minutes, for image generation) so that routing through the proxy
+// cannot tighten a deadline the driver already chose. It is a ceiling
+// for a driver that set none, not a policy about how long generation
+// may take.
+const modalityEgressTimeout = 5 * time.Minute
+
+// modalityEgressClient returns the proxy-aware client for one
+// provider's own egress role.
+//
+// Modality drivers were the only outbound path in the tree that did not
+// route through smokescreen: chat, fetch_url, web_search, the gateways
+// and the model download all did, while speak, image, video, vision and
+// audio dialled their providers directly. The ACL already carried the
+// hosts — "llm/<label>" is built for every [[compute.providers]] entry
+// — so nothing needed declaring, only using.
+//
+// The client is COPIED before its timeout is set, as llmclient does:
+// the provider hands out a shared client per role, and mutating it in
+// place would change the deadline for every other caller of that role.
+//
+// egress.For's own DefaultTimeout is 30s, which is right for a chat
+// round trip and wrong for image generation — passing that client
+// unmodified is what turned "route this through the proxy" into a
+// timeout on every picture.
+func modalityEgressClient(label string) *http.Client {
+	base := egress.For("llm/" + label).HTTPClient()
+	wrapped := *base
+	wrapped.Timeout = modalityEgressTimeout
+	return &wrapped
 }

@@ -374,6 +374,7 @@ func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
 	for _, ep := range eps {
 		d, err := n.drivers().Speak(ep.driver, compute.SpeakDriverConfig{
 			Endpoint:   ep.endpoint,
+			HTTPClient: modalityEgressClient(ep.label),
 			Model:      ep.model,
 			Credential: credentialForDriver(ep.driver, ep.apiKey),
 			Logger:     n.log,
@@ -456,6 +457,7 @@ func (n *Node) wireImageTools(builtins *compute.Builtins) error {
 	for _, ep := range eps {
 		d, err := n.drivers().Image(ep.driver, compute.ImageDriverConfig{
 			Endpoint:   ep.endpoint,
+			HTTPClient: modalityEgressClient(ep.label),
 			Model:      ep.model,
 			Credential: credentialForDriver(ep.driver, ep.apiKey),
 			Logger:     n.log,
@@ -552,6 +554,7 @@ func (n *Node) wireVideoTools(builtins *compute.Builtins) error {
 	ep := eps[0]
 	d, err := n.drivers().Job(ep.driver, compute.JobDriverConfig{
 		Endpoint:   ep.endpoint,
+		HTTPClient: modalityEgressClient(ep.label),
 		Model:      ep.model,
 		Credential: credentialForDriver(ep.driver, ep.apiKey),
 		Logger:     n.log,
