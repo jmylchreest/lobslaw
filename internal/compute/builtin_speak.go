@@ -157,27 +157,7 @@ func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {
 // mount full of generated audio is browsable rather than a wall of
 // identifiers.
 func speakFileName(text string) string {
-	words := strings.Fields(text)
-	if len(words) > 5 {
-		words = words[:5]
-	}
-	var b strings.Builder
-	for _, w := range words {
-		for _, r := range w {
-			switch {
-			case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-				b.WriteRune(r)
-			case r >= 'A' && r <= 'Z':
-				b.WriteRune(r + 32)
-			}
-		}
-		b.WriteByte('-')
-	}
-	name := strings.Trim(b.String(), "-")
-	if name == "" {
-		name = "speech"
-	}
-	return name
+	return ArtifactFileName(text, "speech")
 }
 
 // SpeakToolDef describes the tool to the model.

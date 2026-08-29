@@ -124,27 +124,7 @@ func newImageHandler(cfg ImageConfig) BuiltinFunc {
 }
 
 func imageFileName(prompt string) string {
-	words := strings.Fields(prompt)
-	if len(words) > 5 {
-		words = words[:5]
-	}
-	var b strings.Builder
-	for _, w := range words {
-		for _, r := range w {
-			switch {
-			case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-				b.WriteRune(r)
-			case r >= 'A' && r <= 'Z':
-				b.WriteRune(r + 32)
-			}
-		}
-		b.WriteByte('-')
-	}
-	name := strings.Trim(b.String(), "-")
-	if name == "" {
-		name = "image"
-	}
-	return name
+	return ArtifactFileName(prompt, "image")
 }
 
 // ImageToolDef describes the tool to the model. As with speak, it says

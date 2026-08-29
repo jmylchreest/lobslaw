@@ -223,12 +223,49 @@ func safeArtifactName(name, mime string) string {
 	if base == "" || base == "." || base == "/" || base == ".." {
 		base = "artifact"
 	}
+	// Trailing dots are trimmed before asking whether there is an
+	// extension. A name ending in "." — which a prompt-derived name
+	// does whenever the prompt ended in a full stop — has an Ext() of
+	// "." rather than "", so the type suffix was skipped and the file
+	// landed with nothing downstream could identify it by.
+	base = strings.TrimRight(base, ".")
+	if base == "" {
+		base = "artifact"
+	}
 	if filepath.Ext(base) == "" {
 		if ext := extForMIME(mime); ext != "" {
 			base += ext
 		}
 	}
 	return filepath.Join("generated", base)
+}
+
+// ArtifactFileName turns a prompt into a short slug for a generated
+// file. Bounded at five words because the name is derived from
+// model-supplied text of arbitrary length, and an unbounded one is a
+// filesystem limit waiting to be hit.
+func ArtifactFileName(s, fallback string) string {
+	words := strings.Fields(s)
+	if len(words) > 5 {
+		words = words[:5]
+	}
+	var b strings.Builder
+	for _, w := range words {
+		for _, r := range w {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+				b.WriteRune(r)
+			case r >= 'A' && r <= 'Z':
+				b.WriteRune(r + 32)
+			}
+		}
+		b.WriteByte('-')
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		name = fallback
+	}
+	return name
 }
 
 // extForMIME covers the generation types. Deliberately a small table

@@ -300,8 +300,11 @@ func NewGenerationCommitment(id string, h compute.JobHandle, iv time.Duration, o
 		Reason: "generation job " + h.Driver,
 		Params: map[string]string{
 			paramJobHandle:     raw,
-			paramJobDeadline:   time.Now().Add(compute.MaxJobLifetime).Format(time.RFC3339),
-			paramArtifactName:  name,
+			paramJobDeadline: time.Now().Add(compute.MaxJobLifetime).Format(time.RFC3339),
+			// Slugged, as the synchronous modalities already do. name is
+			// the prompt, so storing it raw produced filenames that were
+			// the whole prompt — punctuation, spaces and all.
+			paramArtifactName:  compute.ArtifactFileName(name, "video"),
 			paramOrigChannel:   channel,
 			paramOrigChatID:    chatID,
 			paramProviderLabel: providerLabel,
