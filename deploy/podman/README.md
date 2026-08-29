@@ -86,8 +86,12 @@ mapping, so what it writes is indistinguishable from what the node
 writes. The running node holds an exclusive lock on `raft.db`, so
 anything that opens raft wants the node stopped first.
 
-Most of `config.toml` is picked up live — `[config] watch = true` — but
-restart if a change looks like it hasn't landed.
+`config.toml` is watched, but almost nothing in it is hot-swappable:
+listeners are bound, raft has a server ID, mounts are open. What the
+watcher gives you is a warning naming the sections you changed that
+need a restart, so an edit that hasn't landed says so instead of being
+silently ignored. `[logging]` level and filters are the exception and
+apply immediately.
 
 ## Resetting
 

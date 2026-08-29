@@ -624,11 +624,16 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 		}
 	}
 
-	// Config hot-reload watcher. Watches SOUL.md for edits and swaps
-	// the atomic Soul pointer — subsystems reading via n.Soul() see
-	// the new baseline on their next Load. config.toml watching is
-	// follow-up work (it requires coordinating subsystem-specific
-	// swap handlers).
+	// Watches SOUL.md for edits and swaps the atomic Soul pointer —
+	// subsystems reading via n.Soul() see the new baseline on their
+	// next Load.
+	//
+	// config.toml is watched in cmd/lobslaw instead, because the
+	// subsystem-specific swap handlers this used to wait for are not
+	// coming: a bound listener and an open mount cannot be swapped.
+	// What that watcher does is report which sections an edit changed
+	// that need a restart. Soul is different precisely because it HAS
+	// a swap point — one atomic pointer, read fresh every turn.
 	if n.cfg.SoulPath != "" {
 		go n.runSoulWatcher(ctx)
 	}

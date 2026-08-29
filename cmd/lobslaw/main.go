@@ -21,9 +21,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 
+	"github.com/fsnotify/fsnotify"
 	logfilter "github.com/jmylchreest/slog-logfilter"
 
 	"github.com/jmylchreest/lobslaw/internal/logging"
@@ -389,6 +391,10 @@ func main() {
 		}
 	}()
 
+	// config.toml, watched. Only the parts that a running process can
+	// actually change are applied; everything else is reported.
+	go watchConfig(ctx, cfg, f, logger)
+
 	if err := n.Start(ctx); err != nil {
 		logger.Error("node.Start", "error", err)
 		// gocritic exitAfterDefer: the deferred signal.Stop(hupCh) is
@@ -640,4 +646,111 @@ func effectiveLogging(flagLevel, flagFormat string, setOnWire map[string]bool, c
 		format, changed = v, true
 	}
 	return level, format, changed
+}
+
+// watchConfig re-reads config.toml on edit, applies what can be
+// applied to a live process, and names what cannot.
+//
+// The README claimed "most of config.toml is picked up live"; nothing
+// read the file after boot. The claim was worse than the gap it
+// described, because an operator who edited a setting and saw no
+// warning had been told the edit was in force.
+//
+// Almost nothing here IS hot-swappable, and pretending otherwise would
+// need a swap handler per subsystem — listeners are bound, raft has a
+// server ID, storage mounts are open, driver clients hold connections.
+// What an operator actually needs from a watcher is not silent
+// application: it is being told, at the moment of the edit, whether
+// this one lands or waits for a restart.
+func watchConfig(ctx context.Context, current *config.Config, f flags, logger *slog.Logger) {
+	path := current.Path()
+	if path == "" {
+		// Defaults-only boot with no file. Nothing to watch, and no
+		// warning either: running without a config file is supported.
+		return
+	}
+	// Loaded once here so the watcher diffs against what is actually
+	// running, and each subsequent reload re-bases onto the last good
+	// parse rather than against boot forever — otherwise every reload
+	// after the first re-reports sections that were already reported.
+	running := current
+	err := config.Watch(ctx, config.WatchOptions{
+		Paths:  []string{path},
+		Logger: logger,
+	}, func(_ []fsnotify.Event) {
+		next, err := config.Load(config.LoadOptions{Path: path})
+		if err != nil {
+			// Keep running on the last good config. A half-parsed
+			// config is not a safer state than a stale one.
+			logger.Warn("config reload: parse failed; keeping the running config",
+				"path", path, "err", err)
+			return
+		}
+		applyLoggingReload(running.Logging, next.Logging, f, logger)
+		if restart := restartRequiredSections(running, next); len(restart) > 0 {
+			logger.Warn("config reload: these sections changed but need a restart to take effect",
+				"sections", restart, "path", path)
+		}
+		running = next
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		logger.Warn("config watcher exited; edits will need a restart", "path", path, "err", err)
+	}
+}
+
+// restartRequiredSections is every changed section the running process
+// cannot adopt. [logging] is excluded because applyLoggingReload has
+// already handled it — including reporting the part of it that does
+// need a restart, which is why that exclusion is not a claim that all
+// of [logging] is live.
+func restartRequiredSections(a, b *config.Config) []string {
+	changed := config.ChangedSections(a, b)
+	out := make([]string, 0, len(changed))
+	for _, s := range changed {
+		if s == "logging" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// applyLoggingReload swaps the parts of [logging] that a running
+// process can change.
+//
+// Level and filters are genuinely live: internal/logging picked
+// slog-logfilter for exactly this ("per-subsystem debug enabling
+// without a restart") and then only ever called it at boot. Format is
+// not — it is fixed when the handler is constructed, and swapping the
+// logger out from under every component holding a reference to it is
+// not worth a formatting change.
+//
+// The flag-wins rule from effectiveLogging applies unchanged: somebody
+// who booted with --log-level to debug this process keeps their level
+// when the file changes underneath them.
+func applyLoggingReload(old, next config.LoggingConfig, f flags, logger *slog.Logger) {
+	if lvl := strings.TrimSpace(next.Level); lvl != old.Level && lvl != "" {
+		if f.logSetOnWire["log-level"] {
+			logger.Info("config reload: [logging] level ignored; --log-level was set on this boot",
+				"file_level", lvl, "flag_level", f.logLevel)
+		} else {
+			logfilter.SetLevel(parseLogLevel(lvl))
+			logger.Info("config reload: log level applied", "level", lvl)
+		}
+	}
+	if strings.TrimSpace(next.Format) != strings.TrimSpace(old.Format) {
+		logger.Warn("config reload: [logging] format needs a restart; the handler is built once",
+			"format", next.Format)
+	}
+	if !reflect.DeepEqual(next.Filters, old.Filters) {
+		if len(next.Filters) == 0 {
+			// applyLogFilters no-ops on empty, which is right at boot
+			// and wrong here: deleting every filter from the file must
+			// remove them, not leave the previous set installed.
+			logfilter.ClearFilters()
+			logger.Info("config reload: log filters cleared")
+			return
+		}
+		applyLogFilters(next.Filters, logger)
+	}
 }

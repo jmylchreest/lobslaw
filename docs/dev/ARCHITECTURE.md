@@ -103,7 +103,7 @@ flowchart TB
 ### What's not shown
 
 - **Per-request details** (request IDs, OpenTelemetry spans, logging) — cross-cutting, documented per subsystem.
-- **Configuration flow** — `config.toml` is read once at boot and watched for reload; each component consumes its own section.
+- **Configuration flow** — `config.toml` is read once at boot; each component consumes its own section. It is watched for edits, but a reload applies only `[logging]` level and filters — every other changed section is reported as needing a restart rather than swapped underneath a running subsystem.
 - **Skill + plugin system** (Phase 8) — will slot between the Channel layer and the Executor's Registry; not yet wired.
 
 ---
