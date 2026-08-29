@@ -95,6 +95,7 @@ func (n *Node) drivers() *compute.DriverSet {
 		// a private proxy — is a TOML block against it rather than a
 		// line here.
 		s.RegisterSearch(compute.DriverExa, compute.ExaSearchFactory)
+		s.RegisterSearch(compute.DriverKagi, compute.KagiSearchFactory)
 		s.RegisterSearch(compute.DriverSearxng, compute.SearxngSearchFactory)
 		s.RegisterSearch(compute.DriverTemplate, compute.TemplateSearchFactory)
 		driverSet = s

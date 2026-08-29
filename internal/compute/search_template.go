@@ -48,7 +48,7 @@ var templateResponseFields = map[string]string{
 
 var templateOptionKeys = []string{
 	"method", "query_param", "count_param", "depth_param",
-	"auth_style", "auth_name",
+	"auth_style", "auth_name", "auth_prefix",
 }
 
 // TemplateSearchFactory builds a search driver entirely from config.
@@ -139,6 +139,18 @@ func TemplateSearchFactory(cfg SearchDriverConfig) (SearchDriver, error) {
 func templateCredential(cfg SearchDriverConfig) (Credential, error) {
 	style := strings.ToLower(option(cfg.Options, "auth_style"))
 	name := option(cfg.Options, "auth_name")
+	// auth_prefix carries a scheme the built-in styles do not name —
+	// Kagi's `Authorization: Bot <token>`, say.
+	//
+	// The separator is inferred rather than typed. An auth-scheme is
+	// followed by a space (RFC 7235: "Bot ", "Token "), while a
+	// parameter-style prefix is not ("key="), and the two are told
+	// apart by whether the prefix ends in an alphanumeric. Requiring
+	// the operator to write the space instead would hang correctness on
+	// trailing whitespace surviving TOML, an editor and option()'s own
+	// TrimSpace — and its loss shows up as "Bottok" in a header nobody
+	// prints.
+	prefix := authPrefixWithSeparator(option(cfg.Options, "auth_prefix"))
 	if style == "" {
 		// An operator who supplied a key wants it sent; bearer is the
 		// overwhelmingly common shape. One who supplied none means none.
@@ -164,19 +176,26 @@ func templateCredential(cfg SearchDriverConfig) (Credential, error) {
 
 	switch style {
 	case "none":
+		if prefix != "" {
+			return nil, errors.New(`template search: auth_prefix is set but auth_style = "none" sends no credential`)
+		}
 		return nil, nil
 	case "bearer":
+		if prefix != "" {
+			return nil, errors.New(`template search: auth_style = "bearer" already sends "Bearer "; ` +
+				`for a different scheme use auth_style = "header" with auth_name = "Authorization" and auth_prefix`)
+		}
 		return NewBearerCredential(secret), nil
 	case "header":
 		if name == "" {
 			return nil, errors.New(`template search: auth_style = "header" needs auth_name (e.g. auth_name = "X-Subscription-Token")`)
 		}
-		return NewHeaderCredential(name, secret), nil
+		return NewHeaderCredential(name, prefix+secret), nil
 	case "query":
 		if name == "" {
 			return nil, errors.New(`template search: auth_style = "query" needs auth_name (e.g. auth_name = "key")`)
 		}
-		return NewQueryCredential(name, secret), nil
+		return NewQueryCredential(name, prefix+secret), nil
 	default:
 		return nil, fmt.Errorf(`template search: auth_style %q not supported; use header, bearer, query or none`, style)
 	}
@@ -365,4 +384,18 @@ func dotFloat(v any, path string) float64 {
 	default:
 		return 0
 	}
+}
+
+// authPrefixWithSeparator appends the space an auth-scheme takes,
+// leaving a parameter-style prefix alone. See templateCredential.
+func authPrefixWithSeparator(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	last := rune(prefix[len(prefix)-1])
+	alnum := (last >= 'a' && last <= 'z') || (last >= 'A' && last <= 'Z') || (last >= '0' && last <= '9')
+	if alnum {
+		return prefix + " "
+	}
+	return prefix
 }

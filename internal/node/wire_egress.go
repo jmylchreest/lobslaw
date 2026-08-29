@@ -181,8 +181,11 @@ func webSearchEgressHosts(n *Node) []string {
 	seen := make(map[string]struct{}, len(providers))
 	for _, p := range providers {
 		endpoint := p.Endpoint
-		if d := normaliseSearchDriver(p.Driver); d == "" || d == compute.DriverExa {
+		switch normaliseSearchDriver(p.Driver) {
+		case "", compute.DriverExa:
 			endpoint = compute.ExaEffectiveEndpoint(endpoint)
+		case compute.DriverKagi:
+			endpoint = compute.KagiEffectiveEndpoint(endpoint)
 		}
 		host := egress.HostOf(endpoint)
 		if host == "" {

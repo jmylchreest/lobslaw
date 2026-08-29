@@ -117,6 +117,10 @@ const (
 	// [compute.web_search] block meant.
 	DriverExa = "exa"
 
+	// DriverKagi is Kagi's search API. Compiled rather than templated
+	// because its result array is heterogeneous — see search_kagi.go.
+	DriverKagi = "kagi"
+
 	// DriverSearxng is a self-hosted SearXNG instance's JSON API.
 	DriverSearxng = "searxng"
 

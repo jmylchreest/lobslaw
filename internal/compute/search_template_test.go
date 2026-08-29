@@ -285,3 +285,72 @@ func TestTemplateCountIsTextInAQueryString(t *testing.T) {
 		t.Errorf("query = %q; want count=7", gotQuery)
 	}
 }
+
+// auth_prefix covers the schemes that are neither Bearer nor a bare
+// header value — Kagi's `Authorization: Bot <token>` being the case
+// that prompted it.
+func TestTemplateAuthPrefix(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	defer srv.Close()
+
+	d, err := TemplateSearchFactory(SearchDriverConfig{
+		Endpoint:   srv.URL,
+		Credential: &StaticCredential{Value: "tok"},
+		Options: map[string]string{
+			"auth_style":  "header",
+			"auth_name":   "Authorization",
+			"auth_prefix": "Bot ",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Search(context.Background(), SearchRequest{Query: "q"}); err != nil {
+		t.Fatal(err)
+	}
+	if got != "Bot tok" {
+		t.Errorf("Authorization = %q, want %q", got, "Bot tok")
+	}
+}
+
+// A parameter-style prefix ends in punctuation and must NOT gain a
+// separator, unlike an auth-scheme token.
+func TestTemplateAuthPrefixParameterStyleGetsNoSpace(t *testing.T) {
+	c, err := templateCredential(SearchDriverConfig{
+		Credential: &StaticCredential{Value: "tok"},
+		Options: map[string]string{
+			"auth_style": "query", "auth_name": "auth", "auth_prefix": "key=",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	qc, ok := c.(*QueryCredential)
+	if !ok {
+		t.Fatalf("credential type %T", c)
+	}
+	if qc.Value != "key=tok" {
+		t.Errorf("value = %q, want %q (no space inserted)", qc.Value, "key=tok")
+	}
+}
+
+// A prefix that cannot be applied is a config error at boot, not a
+// silently ignored key: bearer already carries its own scheme, and
+// none sends nothing to prefix.
+func TestTemplateAuthPrefixRejectedWhereMeaningless(t *testing.T) {
+	for _, style := range []string{"bearer", "none"} {
+		t.Run(style, func(t *testing.T) {
+			_, err := templateCredential(SearchDriverConfig{
+				Credential: &StaticCredential{Value: "tok"},
+				Options:    map[string]string{"auth_style": style, "auth_prefix": "Bot "},
+			})
+			if err == nil {
+				t.Errorf("auth_style %q with auth_prefix should fail at boot", style)
+			}
+		})
+	}
+}
