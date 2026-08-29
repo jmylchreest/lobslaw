@@ -350,6 +350,12 @@ the user before sending mail or creating events.
 
 [compute]
 enabled = true
+# Tools matching these globs are never registered, so the agent does
+# not see them. Written out rather than left implicit: a default
+# nobody can read is a default nobody revisits. Deleting the line is
+# NOT the same as setting it to [] — see
+# /reference/builtin-tools#disabling-tools.
+disabled_tools = ["remote_*"]
 
 # Providers self-declare their capabilities. The modality builtins
 # (read_image, read_audio, read_pdf) auto-discover by capability tag

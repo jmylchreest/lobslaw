@@ -113,9 +113,60 @@ Sensitive — operator-only by default. See [OAuth and credentials](/security/oa
 
 | Tool | Risk | Description |
 |---|---|---|
-| `shell_command` | comm./destructive | Execute a shell command in the workspace mount |
+| `shell_command` | comm./destructive | Execute a shell command in the workspace mount, **on this machine** |
 
 Default-deny. Open with extreme care; this is the most prompt-injection-vulnerable surface.
+
+`ssh` and `scp` are on its hard denylist — see `remote_ssh` below for why that is a feature rather than a gap.
+
+## Remote
+
+| Tool | Risk | Description |
+|---|---|---|
+| `remote_ssh` | irreversible | Run a command on a configured host over SSH — see [Remote hosts](/configuration/remotes) |
+
+**Disabled by default.** Configured via `[[remote]]`, enabled via `disabled_tools` below.
+
+## Disabling tools
+
+`compute.disabled_tools` is a list of glob patterns matched against tool **names**. A matching tool is never registered, so the agent does not see it in its tool list and cannot call it.
+
+```toml
+[compute]
+disabled_tools = ["remote_*"]
+```
+
+### Why registration and not policy
+
+A policy deny leaves the tool in the model's list and refuses each call. The agent keeps trying, the refusals accumulate, and the user reads it as the agent being broken rather than as a setting somebody chose. Not registering the tool means the question never arises.
+
+The two gates answer different questions and both still apply:
+
+| | question | mechanism |
+|---|---|---|
+| `disabled_tools` | does this tool exist on this node? | registration |
+| `[[policy.rules]]` | may this caller use it? | policy engine |
+
+A tool can be registered and denied. A tool that is disabled is not reachable by any rule, because there is nothing to write a rule about.
+
+### Absent is not empty
+
+| value | effect |
+|---|---|
+| *(absent)* | `["remote_*"]` — the default |
+| `[]` | nothing disabled, including `remote_*` |
+| `["remote_scp"]` | `remote_ssh` on, `remote_scp` off |
+| `["remote_*", "shell_command"]` | the remote family, plus the local shell |
+
+Deleting the key is **not** the same as setting it to `[]`. An absent key means "I have not decided" and takes the default; an empty list means "I have decided: all of them". `lobslaw init` writes the default out explicitly for exactly this reason — a default nobody can read is a default nobody revisits.
+
+### It covers every source of tools
+
+The gate sits on the tool registry, which is the only place builtins, skill manifests and MCP servers all pass through. A skill or an MCP server declaring a tool named `remote_ssh` is suppressed by the same list; gating in the builtin wiring would have covered the builtins and quietly missed those.
+
+### A bad pattern matches nothing
+
+`disabled_tools = ["[unclosed"]` disables nothing at all. The failure directions are not symmetric: a typo that matches nothing leaves you with a tool still visible and a pattern to fix, while a typo that matched everything would be a node with no tools and no obvious cause.
 
 ## Naming convention
 

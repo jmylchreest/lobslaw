@@ -120,11 +120,37 @@ resource    = "soul_*"
 
 See [policy rules](/configuration/policy-rules) for matching semantics.
 
+## `[[remote]]`
+
+```toml
+# Hosts remote_ssh may reach. The agent names one; it cannot supply a
+# host, port, user or key. Requires remote_ssh to be enabled — see
+# compute.disabled_tools below. Full page: /configuration/remotes
+[[remote]]
+name        = "go"
+description = "Go toolchain, opencode, aide"   # reaches the model; how it chooses
+host        = "devbox-go.lobslaw-dev.svc.cluster.local"
+port        = 2222                              # default 2222, not 22
+user        = "dev"                             # default "dev"
+key_ref     = "file:/etc/lobslaw/remote/id_ed25519"
+known_hosts = "/var/lobslaw/data/remote_known_hosts"  # written as well as read
+default_timeout_secs = 300                      # builds are slow
+max_timeout_secs     = 3600
+```
+
+`known_hosts` is trust-on-first-use: an unknown host is recorded, a host whose key *changed* is refused. Empty disables persistence, never verification.
+
 ## `[compute]`
 
 ```toml
 [compute]
 default_chain = "main"
+
+# Glob patterns matched against tool NAMES. A match is never
+# registered, so the agent never sees the tool. Absent takes the
+# default below; `[]` means nothing is disabled. The two are NOT the
+# same — see /reference/builtin-tools#disabling-tools.
+disabled_tools = ["remote_*"]
 
 [[compute.providers]]
 label              = "openrouter"

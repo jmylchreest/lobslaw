@@ -59,25 +59,16 @@ No `[[remote]]` blocks leaves `remote_ssh` unregistered — a node with nowhere 
 
 ## Turning it on
 
-`remote_*` is **disabled by default**, at registration rather than by policy: the tool is never added to the registry, so the agent does not see it and cannot call it.
-
-That is a stronger gate than a policy deny, which still puts the tool in the model's list and then refuses each call — the agent keeps trying, and the user reads the refusals as the agent being broken.
+`remote_*` is **disabled by default**, at registration rather than by policy — the tool is never added to the registry, so the agent does not see it and cannot call it.
 
 ```toml
 [compute]
 disabled_tools = []              # nothing disabled, including remote_*
 ```
 
-`disabled_tools` is a list of globs matched against tool names, and it distinguishes *unset* from *empty*:
+`disabled_tools` is a general mechanism, not a remotes one: it takes glob patterns, covers builtins, skills and MCP tools alike, and distinguishes an *absent* key from an empty one. **[Disabling tools](/reference/builtin-tools#disabling-tools)** is the full reference.
 
-| value | effect |
-|---|---|
-| *(absent)* | `["remote_*"]` — the default |
-| `[]` | nothing disabled |
-| `["remote_scp"]` | `remote_ssh` on, `remote_scp` off |
-| `["remote_*", "shell_command"]` | the family, plus the local shell |
-
-It applies to every source of tools, not just builtins — a skill manifest or an MCP server declaring a `remote_*` tool is suppressed by the same list. A malformed glob matches *nothing*: a typo should leave you with a tool still visible and a pattern to fix, not a node that looks broken.
+`lobslaw init` writes the default into the generated config, so a new deployment can see the posture it is running rather than inherit it invisibly.
 
 ## Policy
 

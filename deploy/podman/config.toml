@@ -94,6 +94,12 @@ signing_policy = "prefer"
 
 [compute]
 enabled = true
+# Tools matching these globs are never registered, so the agent does
+# not see them. Written out rather than left implicit: a default
+# nobody can read is a default nobody revisits. Deleting the line is
+# NOT the same as setting it to [] — see
+# /reference/builtin-tools#disabling-tools.
+disabled_tools = ["remote_*"]
 
 # Providers are keyed off env vars set in <state>/.env. A provider
 # whose key is empty simply fails when called — comment out the ones
