@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -286,5 +287,32 @@ func TestAnUnknownLabelYieldsNoRatesRatherThanFailing(t *testing.T) {
 	}
 	if got := n.pricingForLabel(""); got.IsSet() {
 		t.Errorf("pricing = %+v for no label, want empty", got)
+	}
+}
+
+// Owner has to be the PRINCIPAL, because that is what ownedByCaller
+// compares against. Stamping turn.UserID instead meant no caller ever
+// matched their own generation work: an unauthenticated REST turn is
+// UserID "anon" and principal "user:anon", so commitment_list answered
+// "count: 0" while the scheduler was polling the job every 15s.
+func TestGenerationOwnerIsThePrincipal(t *testing.T) {
+	ctx := compute.WithTurnIdentity(context.Background(), compute.TurnIdentity{
+		UserID:    "anon",
+		Principal: identity.User("anon"),
+		Channel:   "rest",
+		ChannelID: "c1",
+	})
+	turn, _ := compute.TurnIdentityFrom(ctx)
+
+	c, err := NewGenerationCommitment("gen-1", compute.JobHandle{Driver: "dashscope", Raw: "t"},
+		0, turn.Principal.String(), turn.Channel, turn.ChannelID, "a cube", "qwen-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Owner != "user:anon" {
+		t.Errorf("Owner = %q, want the principal form %q", c.Owner, "user:anon")
+	}
+	if c.Owner == turn.UserID {
+		t.Error("Owner must not be the raw channel id — ownedByCaller compares against the principal")
 	}
 }

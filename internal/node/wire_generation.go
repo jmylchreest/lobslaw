@@ -454,7 +454,15 @@ func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, prov
 	}
 	id := "gen-" + ids.New()
 	turn, _ := compute.TurnIdentityFrom(ctx)
-	c, err := NewGenerationCommitment(id, h, 0, turn.UserID, turn.Channel, turn.ChannelID, prompt, providerLabel)
+	// Owner is the PRINCIPAL, not the channel's own id for the caller.
+	// ownedByCaller compares against turn.Principal.String(), and the
+	// two are different strings by construction: an unauthenticated
+	// REST turn is UserID "anon" and principal "user:anon". Stamping
+	// the raw id meant no caller ever matched their own generation
+	// work, so commitment_list answered "count: 0" while the scheduler
+	// was actively polling the job. commitment_create has always used
+	// the principal here.
+	c, err := NewGenerationCommitment(id, h, 0, turn.Principal.String(), turn.Channel, turn.ChannelID, prompt, providerLabel)
 	if err != nil {
 		return "", err
 	}
