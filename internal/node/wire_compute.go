@@ -66,6 +66,12 @@ func (n *Node) wireCompute() error {
 	n.providerHealth = compute.NewProviderHealth()
 
 	n.toolRegistry = compute.NewRegistry()
+	// The fs guard consults per-tool policies, which live on the
+	// registry. Wired here rather than beside the mount resolver
+	// because the registry is what it needs and the registry is born
+	// on this line — storage wiring runs earlier and has no registry
+	// to hand it.
+	compute.SetPathGuardRegistry(n.toolRegistry)
 	// Before anything registers. SetDisabled does not evict what is
 	// already present, deliberately — a tool the agent has already
 	// listed and then loses mid-run is worse than one that was never

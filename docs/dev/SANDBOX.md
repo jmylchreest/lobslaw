@@ -57,6 +57,30 @@ Prompt injection defence lives in three other places in the stack, and they matt
 | PreToolUse hooks | `internal/hooks/dispatcher.go` | Allow a hook to block a tool call based on arbitrary code — "is this invocation consistent with the current turn's intent?". |
 | Registry constraints | `internal/compute/registry.go` | `allowed_paths`, argv templates, and param shapes constrain what a tool can even be **asked** to do. A `read_file` tool restricted to `/home/user/projects` gives injection a much smaller address space to target. |
 
+### In-process builtins — and how `policy.d` reaches them anyway
+
+Landlock and seccomp confine a **process**. The process running `read_file` is lobslaw: confining it would confine the agent loop, the Raft client and every provider connection along with the tool. So `sandbox.Apply` runs in `runSubprocess` and never in `runBuiltin`, and no amount of kernel enforcement will reach an in-process builtin.
+
+That left the builtins deriving filesystem reach themselves, in four different ways — the mount resolver in some, a private `AllowedRoot` prefix test in the modality tools, `policy.CheckCommandPaths` in the shell, and nothing at all in others. An operator could confine `git` and not `read_file`, and after `policy.d` was wired to the registry the failure got quieter rather than louder: `policy.d/read_file.toml` would parse, load, log success, and be consulted by nothing.
+
+`Policy.AllowsPath(path, Access)` closes that. It evaluates the **same struct** Landlock consumes, in Go, so the kernel check and the in-process check cannot disagree about what a policy said. `compute.guardPath` runs it as the last of five steps:
+
+| # | step | can a policy file lift it? |
+|---|---|---|
+| 1 | mount resolver — inside a declared mount, in this mode | no |
+| 2 | absolute path | no |
+| 3 | cluster-internal — Raft snapshots, TLS keys, the memory key | no |
+| 4 | hardline floor | no |
+| 5 | **`policy.d/<tool>.toml`** | this is the policy |
+
+**`policy.d` may only subtract.** Steps 1–4 are floors; step 5 narrows what they already permitted and can never widen it.
+
+That direction is the safety argument, not a stylistic choice. `policy.d` is a set of hot-reloaded files under search paths that include one inside the operator's home — and the agent runs as that user. If a policy file could *grant* reach, an agent that talks somebody into running a shell would have a supported, documented, auto-reloading route to the memory key. Subtract-only means the worst a hostile policy file achieves is a broken tool: noisy, and recoverable.
+
+The tools now on the shared chain: `read_file`, `write_file`, `edit_file`, `search_files`, `read_image`, `read_audio`, `read_pdf`, `remote_scp`. `list_files` and `glob` return names rather than content and keep the shorter chain. `shell_command` still uses `policy.CheckCommandPaths`, because it has a command string rather than a path.
+
+---
+
 In the security model, the sandbox is the **last line**: if policy, hooks, and registry constraints all let a bad invocation through, the sandbox ensures the *blast radius* is bounded by the tool's declared capabilities. It does not — and cannot — distinguish a legitimate `read_file /tmp/notes.md` from an injected one.
 
 **Practical implication:** for tools with broad capabilities (anything that writes, executes, or sends data off the host), the right defence is `require_confirmation` in policy, not tighter sandboxing. A human-in-the-loop prompt is the only robust counter to "the LLM was tricked into doing something".

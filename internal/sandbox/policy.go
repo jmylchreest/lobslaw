@@ -3,6 +3,9 @@ package sandbox
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
 )
 
 // Policy describes the sandboxing to apply to a tool subprocess.
@@ -180,4 +183,138 @@ func (p *Policy) Validate() error {
 		return errors.New("NetworkFilter requires Namespaces.Network")
 	}
 	return nil
+}
+
+// --- in-process evaluation --------------------------------------------
+
+// AllowsPath reports whether this policy permits `need` on path.
+//
+// `need` is the same Access bitmask the path-rule parser produces from
+// a "path:rw" line, so the thing an operator writes and the thing a
+// builtin asks for are one vocabulary rather than two.
+//
+// It exists because Landlock cannot help an in-process builtin.
+// Landlock confines a process, and the process running read_file IS
+// lobslaw — confining it would confine the agent, its Raft client and
+// its provider connections along with the tool. So the subprocess
+// tools get kernel enforcement from exactly this struct, and the
+// in-process ones have to evaluate the same struct in Go.
+//
+// Same struct on purpose. Two implementations of "what did the policy
+// say" is one implementation and one bug, and the bug is invisible
+// until someone compares a confined `git` against an unconfined
+// `read_file` and finds they disagree about a path the operator wrote
+// down once.
+//
+// # What a nil or empty policy means
+//
+// True. A tool with no policy is unconfined BY THIS LAYER, which is
+// the existing behaviour for subprocesses (sandbox.Apply is a no-op on
+// a nil Policy) and the only reading that keeps this additive.
+//
+// That is safe only because of the contract below, and would be a hole
+// without it.
+//
+// # This layer may only SUBTRACT
+//
+// The mount resolver, the internal-path list and the hardline floor
+// run FIRST and are not reachable from a policy file. A policy can
+// narrow what those already allowed; it can never widen it.
+//
+// The direction matters more than it looks. policy.d is a directory of
+// files, hot-reloaded, under paths that include one inside the
+// operator's home — and the agent runs as that user. If a policy file
+// could grant reach, then an agent that talks a user into running a
+// shell has a supported, documented, auto-reloading route to reading
+// the memory key. Subtract-only means the worst a hostile policy file
+// can do is break a tool, which is noisy and recoverable.
+func (p *Policy) AllowsPath(path string, need Access) bool {
+	if p == nil {
+		return true
+	}
+	// A policy that names no filesystem area is not a filesystem
+	// policy — it may be seccomp or namespaces only. Reading it as
+	// "deny everything" would silently disable every path-taking tool
+	// the moment an operator confined one of them by syscall.
+	if len(p.Mounts) == 0 && len(p.AllowedPaths) == 0 {
+		return true
+	}
+	if need == 0 {
+		return true
+	}
+
+	clean := filepath.Clean(path)
+	for _, m := range p.effectiveMounts() {
+		if !pathWithin(clean, m.Path) {
+			continue
+		}
+		// First containing entry decides, and it must satisfy EVERY
+		// requested bit. A wider entry later in the list does not
+		// rescue a narrower one that already matched — otherwise
+		// ordering, not intent, decides whether a write is allowed.
+		return mountAccess(m).Has(need)
+	}
+	return false
+}
+
+// effectiveMounts renders the legacy AllowedPaths/ReadOnlyPaths pair
+// in the Mounts vocabulary, so AllowsPath has one shape to reason
+// about. Mounts first, matching the install layer's stated preference
+// when both are set.
+//
+// Longest path first, so /workspace/secrets:r is consulted before
+// /workspace:rw rather than being shadowed by it. Without the sort the
+// answer depends on the order somebody happened to write the file in,
+// which for a confinement policy is not a defensible way to decide.
+func (p *Policy) effectiveMounts() []PolicyMount {
+	out := make([]PolicyMount, 0, len(p.Mounts)+len(p.AllowedPaths))
+	out = append(out, p.Mounts...)
+
+	readOnly := make(map[string]struct{}, len(p.ReadOnlyPaths))
+	for _, path := range p.ReadOnlyPaths {
+		readOnly[path] = struct{}{}
+	}
+	for _, path := range p.AllowedPaths {
+		if _, ro := readOnly[path]; ro {
+			out = append(out, PolicyMount{Path: path, Read: true})
+			continue
+		}
+		out = append(out, PolicyMount{Path: path, Read: true, Write: true})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return len(out[i].Path) > len(out[j].Path)
+	})
+	return out
+}
+
+// pathWithin reports whether path is root or sits underneath it.
+//
+// Separator-aware, so "/workspaces" is not inside "/workspace" — a
+// prefix test alone is the classic way a confinement boundary leaks to
+// the directory next door.
+func pathWithin(path, root string) bool {
+	root = filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	if root == string(filepath.Separator) {
+		return true
+	}
+	return strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+// mountAccess renders a PolicyMount's three bools as the Access mask
+// the rest of the package speaks.
+func mountAccess(m PolicyMount) Access {
+	var a Access
+	if m.Read {
+		a |= AccessR
+	}
+	if m.Write {
+		a |= AccessW
+	}
+	if m.Exec {
+		a |= AccessX
+	}
+	return a
 }

@@ -104,16 +104,24 @@ func newReadAudioHandler(cfg AudioConfig, client *http.Client) BuiltinFunc {
 		}
 		language := strings.TrimSpace(args["language"])
 
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return nil, 2, fmt.Errorf("read_audio: resolve path: %w", err)
+		// The shared chain: mounts, absolute, cluster-internal,
+		// hardline, then the operator's policy.d. This used to be an
+		// AllowedRoot prefix test and nothing else — which meant a
+		// modality tool could read a TLS key that read_file refuses,
+		// as long as somebody had pointed a root at it.
+		abs, payload, exit := guardRead("read_audio", path)
+		if exit != 0 {
+			return payload, exit, nil
 		}
+		// AllowedRoot survives as a FURTHER narrowing. It is how the
+		// channel layer pins these tools to the directory it drops
+		// inbound attachments in, which is tighter than any mount.
 		if cfg.AllowedRoot != "" {
 			rootAbs, err := filepath.Abs(cfg.AllowedRoot)
 			if err != nil {
 				return nil, 1, fmt.Errorf("read_audio: resolve allowed root: %w", err)
 			}
-			if !strings.HasPrefix(abs, rootAbs+string(filepath.Separator)) && abs != rootAbs {
+			if !pathWithinRoot(abs, rootAbs) {
 				return nil, 2, fmt.Errorf("read_audio: path %q outside allowed root %q", abs, rootAbs)
 			}
 		}

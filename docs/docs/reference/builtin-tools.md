@@ -169,6 +169,20 @@ The gate sits on the tool registry, which is the only place builtins, skill mani
 
 `disabled_tools = ["[unclosed"]` disables nothing at all. The failure directions are not symmetric: a typo that matches nothing leaves you with a tool still visible and a pattern to fix, while a typo that matched everything would be a node with no tools and no obvious cause.
 
+## Path guards
+
+Every builtin that takes a filesystem path runs the same five-step chain, in this order:
+
+1. **mount resolver** — is the path inside a declared `[[storage.mounts]]`, in the mode being asked for
+2. **absolute** — after mount-label expansion
+3. **cluster-internal** — Raft snapshots, TLS keys, the memory key
+4. **hardline floor** — the compiled-in refusals
+5. **`policy.d/<tool>.toml`** — the operator's per-tool confinement
+
+Steps 1–4 are floors: no configuration lifts them. Step 5 can only narrow what they already permitted — see [the sandbox notes](https://github.com/jmylchreest/lobslaw/blob/main/docs/dev/SANDBOX.md) for why that direction is load-bearing.
+
+`list_files` and `glob` return names rather than content and stop after step 3. `shell_command` takes a command string rather than a path and uses `policy.CheckCommandPaths` instead.
+
 ## Naming convention
 
 `<noun>_<verb>` — `commitment_create`, `memory_recall`, `schedule_cancel`. Skill tools follow `<skill>.<tool>` (`gws-workspace.gmail.send`). MCP tools follow `<server>.<tool>` (`minimax.text_to_image`).

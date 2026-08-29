@@ -450,20 +450,16 @@ func searchFilesBuiltin(ctx context.Context, args map[string]string) ([]byte, in
 		return marshalToolError("missing_arg", "path is required",
 			"pass an absolute directory or file path to search under. grep does NOT search the web or GitHub — use fetch_url for that")
 	}
-	resolved, errPayload, errExit := resolveFsPath(searchPath, false)
+	// The shared chain, which adds the hardline floor and policy.d.
+	// search_files returns matching LINES, so it is a content-returning
+	// tool and belongs to read_file's standard — it previously refused
+	// cluster-internal paths but would happily grep a hardline one.
+	// list_files and glob return names only and stay as they are.
+	resolved, errPayload, errExit := guardRead("search_files", searchPath)
 	if errExit != 0 {
 		return errPayload, errExit, nil
 	}
-	if resolved != "" {
-		searchPath = resolved
-	}
-	if !filepath.IsAbs(searchPath) {
-		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
-			"use '/abs/path' or 'mount-label/subpath'. grep is local-filesystem only — for web/GitHub use fetch_url")
-	}
-	if isInternalPath(searchPath) {
-		return marshalToolError("internal_path", searchPath+" is a cluster-internal path", "")
-	}
+	searchPath = resolved
 	if _, err := os.Stat(searchPath); err != nil {
 		if os.IsNotExist(err) {
 			return marshalToolError("path_not_found", searchPath+" does not exist",
