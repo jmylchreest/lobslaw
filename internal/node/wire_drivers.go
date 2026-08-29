@@ -55,6 +55,7 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
 		s.RegisterSpeak(elevenlabs.DriverName, elevenlabsSpeakFactory)
 		s.RegisterSpeak(minimax.DriverName, minimaxSpeakFactory)
+		s.RegisterSpeak(dashscope.DriverName, dashscopeSpeakFactory)
 		s.RegisterSpeak(compute.DriverMock, compute.MockSpeakFactory)
 		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
 		s.RegisterImage(imagen.DriverName, imagenImageFactory)
@@ -203,6 +204,20 @@ func dashscopeImageFactory(cfg compute.ImageDriverConfig) (compute.ImageDriver, 
 	return dashscope.NewImage(dashscope.ImageConfig{
 		Endpoint:   cfg.Endpoint,
 		Model:      cfg.Model,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+		Logger:     cfg.Logger,
+	})
+}
+
+// dashscopeSpeakFactory adapts Qwen TTS, which is a WebSocket task
+// rather than a request — see the dashscope speak driver.
+func dashscopeSpeakFactory(cfg compute.SpeakDriverConfig) (compute.SpeakDriver, error) {
+	return dashscope.NewSpeak(dashscope.SpeakConfig{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
+		Voice:      cfg.Voice,
+		Format:     cfg.Format,
 		Credential: cfg.Credential,
 		HTTPClient: cfg.HTTPClient,
 		Logger:     cfg.Logger,
