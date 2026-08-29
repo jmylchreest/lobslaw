@@ -91,6 +91,12 @@ type LoadResult struct {
 	// for preset files, so operators can grep startup logs and see
 	// which file triggered the rejection.
 	Rejected []string
+
+	// Errors carries WHY each parse rejection happened, in the same
+	// order as the Rejected entries it corresponds to. Separate from
+	// Rejected because that field is documented as bare tool names and
+	// operators grep it; the reason belongs beside it, not inside it.
+	Errors []error
 }
 
 // LoadPolicyDirs is the multi-directory variant of LoadPolicyDir.
@@ -124,6 +130,7 @@ func LoadPolicyDirs(dirs []string, opts LoadOptions) (*LoadResult, error) {
 		merged.PresetsLoaded = append(merged.PresetsLoaded, r.PresetsLoaded...)
 		merged.OverriddenBuiltins = append(merged.OverriddenBuiltins, r.OverriddenBuiltins...)
 		merged.Rejected = append(merged.Rejected, r.Rejected...)
+		merged.Errors = append(merged.Errors, r.Errors...)
 	}
 	return merged, nil
 }
@@ -189,7 +196,21 @@ func LoadPolicyDir(dir string, opts LoadOptions) (*LoadResult, error) {
 		name := strings.TrimSuffix(entry.Name(), ".toml")
 		policy, err := loadToolPolicyFile(path, name, opts)
 		if err != nil {
-			return nil, err
+			// ONE BAD FILE MUST NOT DISCARD THE DIRECTORY.
+			//
+			// This used to return, so a single unparseable .policy.toml
+			// took every valid policy beside it with it — and because
+			// these are confinement policies, the result was every
+			// OTHER tool quietly reverting to its default. A syntax
+			// error in one file silently widening the sandbox for
+			// unrelated tools is the wrong way round.
+			//
+			// Recorded the same way a permission rejection is, so the
+			// caller reports "this tool kept its default" per file
+			// rather than losing the batch.
+			result.Rejected = append(result.Rejected, name)
+			result.Errors = append(result.Errors, err)
+			continue
 		}
 		// policy is nil when the perm check rejected — skip but keep going.
 		if policy == nil {

@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -142,6 +145,7 @@ func (n *Node) wireCompute() error {
 	if n.skillRegistry != nil {
 		n.skillRegistry.SetPolicySink(n.toolRegistry)
 	}
+	n.applyOperatorPolicies()
 
 	if err := n.wireResolver(); err != nil {
 		return err
@@ -1268,4 +1272,64 @@ func truncateLine(s string, n int) string {
 		s = s[:n] + "…"
 	}
 	return s
+}
+
+// applyOperatorPolicies loads the operator's policy.d chain onto the
+// tool registry.
+//
+// This is step 2 of the ordering the comment above SetPolicySink has
+// always described: skills register their own bundled policies during
+// the scan, and the operator's load runs afterwards so that on a
+// same-tool conflict the operator wins. SetPolicy is last-write-wins,
+// which is what makes "afterwards" mean "overrides".
+//
+// It never ran. The chain was resolved in cmd/lobslaw, logged so
+// operators could "verify precedence", and discarded — so an operator
+// setting --policy-dir saw a line confirming their choice and got no
+// policy at all. Everything else was already built: the flag, the
+// config key, the discovery, the merge loader, the docs.
+//
+// NOT FATAL. A malformed .policy.toml should not stop a node booting,
+// but it must be loud: a policy that failed to load is a confinement
+// the operator believes is in place. Rejections are reported
+// individually rather than counted, because "3 files rejected" does not
+// tell anybody which tool is now running on the fleet default.
+func (n *Node) applyOperatorPolicies() {
+	if n.toolRegistry == nil || len(n.cfg.SandboxPolicyDirs) == 0 {
+		return
+	}
+	res, err := sandbox.LoadPolicyDirs(n.cfg.SandboxPolicyDirs, sandbox.LoadOptions{})
+	if err != nil {
+		n.log.Error("sandbox: operator policy.d failed to load; tools keep their defaults",
+			"dirs", n.cfg.SandboxPolicyDirs, "err", err)
+		return
+	}
+	// Rejected names and Errors are parallel report channels, not a
+	// pair: a permission reject records a name and logs its own reason
+	// inside the loader, while a parse failure records both. Logging
+	// each separately keeps the reason attached where there is one and
+	// still names the tool where there is not.
+	for _, name := range res.Rejected {
+		n.log.Warn("sandbox: policy file rejected; that tool keeps its default",
+			"tool", name)
+	}
+	for _, e := range res.Errors {
+		n.log.Warn("sandbox: policy file could not be loaded", "err", e)
+	}
+	if len(res.Policies) == 0 {
+		n.log.Debug("sandbox: no operator policies found", "dirs", n.cfg.SandboxPolicyDirs)
+		return
+	}
+	tools := make([]string, 0, len(res.Policies))
+	for name, policy := range res.Policies {
+		n.toolRegistry.SetPolicy(name, policy)
+		tools = append(tools, name)
+	}
+	sort.Strings(tools)
+	// Named, not counted. These policies override what a skill declared
+	// for itself, and an operator reading the log needs to see which
+	// tools that happened to.
+	n.log.Info("sandbox: operator policies applied",
+		"tools", tools, "dirs", n.cfg.SandboxPolicyDirs,
+		"presets", len(res.PresetsLoaded), "overridden_builtins", res.OverriddenBuiltins)
 }

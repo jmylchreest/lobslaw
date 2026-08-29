@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -39,11 +38,34 @@ func TestDiscoverPolicyDirsDefaultBuildsLayered(t *testing.T) {
 	if !slices.Contains(got, wantConfig) {
 		t.Errorf("config-dir entry missing: got %v, want containing %q", got, wantConfig)
 	}
-	// Last entry should be cwd-derived (the "most specific" in
-	// precedence order).
-	last := got[len(got)-1]
-	if !strings.HasSuffix(last, "policy.d") {
-		t.Errorf("last entry should end in policy.d; got %q", last)
+	// Config-dir is last, and therefore highest precedence: it is the
+	// most specific location an operator actually chose.
+	if last := got[len(got)-1]; last != wantConfig {
+		t.Errorf("last entry (highest precedence): got %q, want %q", last, wantConfig)
+	}
+}
+
+// The working directory is NOT searched. It was, and dropping it is
+// the point: a policy file can loosen a tool's sandbox as well as
+// tighten it, so discovering one because of where the binary was
+// started makes a shell prompt into a privilege decision.
+func TestDiscoverPolicyDirsIgnoresWorkingDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := DiscoverPolicyDirs(nil, "/app/data")
+	if slices.Contains(got, filepath.Join(cwd, "policy.d")) {
+		t.Errorf("the working directory was searched: %v", got)
+	}
+	for _, p := range got {
+		if p == "./policy.d" {
+			t.Errorf("relative cwd fallback present: %v", got)
+		}
 	}
 }
 
@@ -62,18 +84,15 @@ func TestDiscoverPolicyDirsXDGWinsOverHome(t *testing.T) {
 	}
 }
 
-// TestDiscoverPolicyDirsDedupsSamePath — when configDir == cwd (dev
-// workflow), the two candidate paths collide. Dedup keeps the first
-// occurrence and drops the duplicate so the caller doesn't reload
-// the same directory twice per event.
+// Dedup keeps the first occurrence so the caller does not load the
+// same directory twice per event. Exercised with configDir pointing at
+// the user-global location, which is the collision that remains now
+// that the working directory is no longer searched.
 func TestDiscoverPolicyDirsDedupsSamePath(t *testing.T) {
-	t.Parallel()
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// configDir == cwd → both derive to the same policy.d.
-	got := DiscoverPolicyDirs(nil, cwd)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	got := DiscoverPolicyDirs(nil, filepath.Join(home, ".config", "lobslaw"))
 	seen := make(map[string]int)
 	for _, p := range got {
 		if real, err := filepath.EvalSymlinks(p); err == nil {

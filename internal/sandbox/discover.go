@@ -44,11 +44,19 @@ func DiscoverPolicyDirs(explicit []string, configDir string) []string {
 	if configDir != "" {
 		candidates = append(candidates, filepath.Join(configDir, "policy.d"))
 	}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, "policy.d"))
-	} else {
-		candidates = append(candidates, "./policy.d")
-	}
+	// The WORKING DIRECTORY IS NOT SEARCHED.
+	//
+	// It was, and the two remaining locations are the difference: XDG
+	// and the config directory are places an operator chose, while cwd
+	// is wherever the process happened to be started from. A policy
+	// file can LOOSEN a tool's sandbox as well as tighten it, so
+	// "grant filesystem access based on where you ran the binary" is a
+	// privilege decision made by a shell prompt.
+	//
+	// It also made the container case worse rather than better: the
+	// image's working directory is not a path an operator mounts
+	// anything into, while <config-dir>/policy.d sits beside the
+	// config.toml they already bind-mount.
 
 	return dedupByRealpath(candidates)
 }

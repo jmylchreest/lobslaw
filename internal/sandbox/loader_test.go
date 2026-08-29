@@ -176,9 +176,28 @@ func TestLoadPolicyDirRejectsFilenameMismatch(t *testing.T) {
 	writePolicyFile(t, filepath.Join(dir, "git.toml"), `
 name = "rsync"
 `)
-	_, err := LoadPolicyDir(dir, LoadOptions{})
-	if err == nil || !strings.Contains(err.Error(), "doesn't match filename") {
-		t.Errorf("expected name-mismatch error, got %v", err)
+	writePolicyFile(t, filepath.Join(dir, "curl.toml"), `
+name = "curl"
+`)
+	res, err := LoadPolicyDir(dir, LoadOptions{})
+	// Rejected per-file rather than returned: a mismatched name is an
+	// operator typo in ONE file, and aborting the directory over it
+	// would revert every tool beside it to its default — widening the
+	// sandbox in response to a naming mistake.
+	if err != nil {
+		t.Fatalf("one bad file should not fail the directory: %v", err)
+	}
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0].Error(), "doesn't match filename") {
+		t.Errorf("expected a name-mismatch error recorded, got %v", res.Errors)
+	}
+	if len(res.Rejected) != 1 || res.Rejected[0] != "git" {
+		t.Errorf("rejected = %v, want [git]", res.Rejected)
+	}
+	if _, ok := res.Policies["curl"]; !ok {
+		t.Error("the valid sibling policy should still have loaded")
+	}
+	if _, ok := res.Policies["git"]; ok {
+		t.Error("the mismatched file must not be registered under either name")
 	}
 }
 

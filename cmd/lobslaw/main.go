@@ -309,7 +309,7 @@ func main() {
 	// having to wait for actual tool invocations to surface the
 	// chosen paths.
 	policyDirs := resolvePolicyDirs(f.policyDirs, cfg)
-	logger.Info("sandbox policy dirs resolved",
+	logger.Debug("sandbox policy dirs resolved",
 		"dirs", policyDirs,
 		"source", policyDirsSource(f.policyDirs, cfg))
 
@@ -331,6 +331,7 @@ func main() {
 	// parsed config file and not the command line: this is a one-boot
 	// operator decision, never a persisted setting.
 	nodeCfg.AllowEmbeddingModelChange = f.allowEmbeddingModelChange
+	nodeCfg.SandboxPolicyDirs = policyDirs
 
 	// One resolver for the whole node, injected through the two hooks
 	// that already existed for it. Built here because it must outlive

@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
+
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
 
@@ -158,6 +160,16 @@ type Config struct {
 	// RUNNING node, and refusing unconditionally made the supported
 	// migration impossible.
 	AllowEmbeddingModelChange bool
+
+	// SandboxPolicyDirs is the resolved policy.d discovery chain, in
+	// load order — later overrides earlier on the same tool.
+	//
+	// Resolved in cmd/lobslaw rather than here because the precedence
+	// spans CLI, config and defaults, and only main sees the flags.
+	// Empty means no operator policies, which is a supported and common
+	// configuration; it is not the same as "use the defaults", because
+	// the defaults have already been applied by the time this is set.
+	SandboxPolicyDirs []string
 
 	// MTLS carries the certificate PATHS, which Creds does not expose.
 	// Enrolment needs them: it reads the cluster CA to hand back to a
@@ -632,6 +644,18 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	if n.cfg.SoulPath != "" {
 		go n.runSoulWatcher(ctx)
 	}
+
+	// Operator policy.d, watched for the same reason SOUL.md is: it is
+	// a file the OPERATOR owns and edits, not content the store is
+	// authoritative for.
+	//
+	// That distinction is what makes this consistent with
+	// lobslaw-skill-storage-model rather than a return to what it
+	// retired. Skill content moved into the store precisely so a
+	// filesystem edit stopped being a trust event; an operator's own
+	// policy file never lived there, and editing one is exactly the
+	// trust event it appears to be.
+	n.startSandboxPolicyWatcher(ctx)
 
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
 	// cancel. Only present on Raft-hosting nodes (the construction
@@ -1163,4 +1187,31 @@ func defaultOAuthProvider(name string) oauth.ProviderConfig {
 	default:
 		return oauth.ProviderConfig{Name: name}
 	}
+}
+
+// startSandboxPolicyWatcher reloads operator policy.d on edit.
+//
+// Watcher.Start performs its own synchronous initial load before
+// returning, which repeats the one applyOperatorPolicies already did
+// during wiring. That is deliberate rather than tolerated: the second
+// load is what seeds the watcher's knownTools set, and knownTools is
+// what makes a DELETED policy file mean "hand this tool back to its
+// default" instead of leaving the last-loaded policy in force forever.
+// The cost is one directory read at boot.
+//
+// Failure is not fatal. The policies applied during wiring are already
+// in force; losing the watcher costs hot-reload, not confinement.
+func (n *Node) startSandboxPolicyWatcher(ctx context.Context) {
+	if n.toolRegistry == nil || len(n.cfg.SandboxPolicyDirs) == 0 {
+		return
+	}
+	w := sandbox.NewWatcherMulti(
+		n.cfg.SandboxPolicyDirs, n.toolRegistry, sandbox.LoadOptions{}, 0)
+	if err := w.Start(ctx); err != nil {
+		n.log.Warn("sandbox: policy.d watcher did not start; edits will need a restart",
+			"dirs", n.cfg.SandboxPolicyDirs, "err", err)
+		return
+	}
+	n.log.Info("sandbox: watching operator policy.d for changes",
+		"dirs", n.cfg.SandboxPolicyDirs)
 }
