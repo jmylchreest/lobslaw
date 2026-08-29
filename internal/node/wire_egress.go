@@ -8,6 +8,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
 )
 
@@ -151,6 +152,7 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 
 	in.WebSearchHosts = webSearchEgressHosts(n)
 
+	in.CallbackHosts = callbackEgressHosts(n)
 	in.MCPServerNetworks = map[string][]string{}
 	in.SkillNetworks = skillNetworks(n)
 	return in
@@ -272,4 +274,44 @@ func skillNetworks(n *Node) map[string][]string {
 		}
 	}
 	return out
+}
+
+// callbackEgressHosts derives the gateway/callback role from the
+// callback addresses operators bound in [[user]].channels, and warns
+// about the deployment shape where a correct allowlist still fails.
+//
+// That shape is a callback aimed at the operator's own tooling, which
+// lands on a private address most of the time and is exactly what this
+// feature is for. Smokescreen's IP filter refuses RFC1918 whatever the
+// hostname ACL says, so without security.egress_allow_ranges the
+// operator gets a proxy rejection naming neither the range nor the
+// setting that fixes it.
+func callbackEgressHosts(n *Node) []string {
+	privateOK := n.cfg.Security.EgressAllowPrivateRanges || len(n.cfg.Security.EgressAllowRanges) > 0
+	var hosts []string
+	seen := map[string]struct{}{}
+	for _, u := range n.cfg.Users {
+		for _, c := range u.Channels {
+			if c.Type != gateway.ChannelCallback {
+				continue
+			}
+			host := egress.HostOf(c.Address)
+			if host == "" {
+				n.log.Warn("egress: callback address has no host and will never be reachable",
+					"user", u.ID, "address", c.Address)
+				continue
+			}
+			if _, dup := seen[host]; dup {
+				continue
+			}
+			seen[host] = struct{}{}
+			hosts = append(hosts, host)
+			if !privateOK && isPrivateHost(host) {
+				n.log.Warn("egress: callback host is a private address that smokescreen will refuse; "+
+					"set security.egress_allow_ranges to the network it is on",
+					"user", u.ID, "host", host)
+			}
+		}
+	}
+	return hosts
 }

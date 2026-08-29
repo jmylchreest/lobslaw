@@ -27,6 +27,15 @@ type ACLInputs struct {
 	// per-channel upstreams.
 	Channels []config.GatewayChannelConfig
 
+	// CallbackHosts are the hosts of every operator-declared callback
+	// address in [[user]].channels. Derived, never written by hand.
+	//
+	// A callback aimed at something on the local network — the obvious
+	// shape for an operator wiring lobslaw into their own tooling —
+	// needs security.egress_allow_ranges as well: smokescreen refuses
+	// private IP ranges regardless of what the ACL says.
+	CallbackHosts []string
+
 	// MCPServerNetworks maps MCP server name → upstream hosts the
 	// server is expected to reach. MCP servers are subprocesses
 	// (lobslaw talks to them via stdio, not HTTP); these rules
@@ -135,6 +144,13 @@ func Build(in ACLInputs) Rules {
 	// Gateway channels with an outbound upstream. Webhook channels are
 	// INBOUND; they don't need an outbound rule. Future channels with
 	// their own upstream (Discord, Matrix) extend this switch.
+	// Outbound callbacks. Fails closed: no declared callback address
+	// means no role, and a POST to an undeclared host is refused by the
+	// proxy rather than by nothing.
+	if len(in.CallbackHosts) > 0 {
+		rules.Roles["gateway/callback"] = in.CallbackHosts
+	}
+
 	for _, ch := range in.Channels {
 		switch ch.Type {
 		case "telegram":

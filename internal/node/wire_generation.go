@@ -15,6 +15,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -176,6 +177,31 @@ func (n *Node) notifyGeneration(ctx context.Context, c *lobslawv1.AgentCommitmen
 		n.log.Info("generation: no originating channel recorded; result not delivered",
 			"commitment", c.Id, "body", body)
 		return
+	}
+	// Through the notify service, which knows every registered sink,
+	// rather than straight to Telegram. A generation started over REST
+	// has no open response to return into — that is the whole reason it
+	// is a commitment — so the only way to tell that caller anything is
+	// a channel that can be dialled outbound later. researchNotifyAdapter
+	// answers "channel is not telegram" by warning and returning nil,
+	// which is how every REST generation completed in silence.
+	if n.notifySvc != nil {
+		if user := c.CreatedFor; user != "" {
+			err := n.notifySvc.Send(ctx, notify.Notification{
+				UserID:            user,
+				Body:              body,
+				OriginatorChannel: ch,
+				OriginatorID:      id,
+				Reason:            "generation",
+			})
+			if err == nil {
+				return
+			}
+			// Not fatal: the originator path below still covers a
+			// Telegram turn whose user has no bound preferences.
+			n.log.Warn("generation: notify service delivery failed; trying the originating channel",
+				"commitment", c.Id, "user", user, "err", err)
+		}
 	}
 	notifier := &researchNotifyAdapter{tg: n.telegramHandler, log: n.log}
 	if err := notifier.Notify(ctx, ch, id, body); err != nil {
@@ -472,6 +498,13 @@ func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, prov
 	// was actively polling the job. commitment_create has always used
 	// the principal here.
 	c, err := NewGenerationCommitment(id, h, 0, turn.Principal.String(), turn.Channel, turn.ChannelID, prompt, providerLabel)
+	if c != nil {
+		// The raw channel id as well as the principal. Owner answers
+		// "whose is this" for ownedByCaller; CreatedFor answers "who do
+		// I tell", because notify resolves preferences by user id and
+		// the two are different strings — "anon" against "user:anon".
+		c.CreatedFor = turn.UserID
+	}
 	if err != nil {
 		return "", err
 	}

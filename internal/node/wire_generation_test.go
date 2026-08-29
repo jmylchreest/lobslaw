@@ -351,3 +351,26 @@ func TestGenerationCommitmentHonoursInterval(t *testing.T) {
 		t.Errorf("DueAt is %v away, want ~1m", d)
 	}
 }
+
+// CreatedFor carries the raw channel id alongside Owner's principal.
+// notify resolves preferences by user id, and the two are different
+// strings by construction — "anon" against "user:anon" — so a
+// commitment holding only the principal has nobody to deliver to.
+func TestGenerationCommitmentRecordsBothIdentities(t *testing.T) {
+	c, err := NewGenerationCommitment("gen-1", compute.JobHandle{Driver: "dashscope", Raw: "t"},
+		0, identity.User("anon").String(), "rest", "c1", "a cube", "qwen-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.CreatedFor = "anon"
+
+	if c.Owner != "user:anon" {
+		t.Errorf("Owner = %q, want the principal", c.Owner)
+	}
+	if c.CreatedFor != "anon" {
+		t.Errorf("CreatedFor = %q, want the raw user id", c.CreatedFor)
+	}
+	if c.Owner == c.CreatedFor {
+		t.Error("the two identities must stay distinct; notify and ownedByCaller key on different ones")
+	}
+}

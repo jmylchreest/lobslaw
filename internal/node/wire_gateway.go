@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -177,6 +178,18 @@ func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHan
 	}
 	if err := notifySvc.RegisterSink(&gateway.RESTSink{}); err != nil {
 		n.log.Warn("notify: rest sink register failed", "err", err)
+	}
+	// The callback sink is what makes asynchronous work reachable over
+	// REST at all — see gateway.CallbackSink. Registered
+	// unconditionally: it costs nothing until somebody binds a callback
+	// address, and registering it only when one already exists would
+	// leave a node that gains a user later with no sink for them until
+	// it restarted.
+	if err := notifySvc.RegisterSink(&gateway.CallbackSink{
+		Client: egress.For("gateway/callback").HTTPClient(),
+		Logger: n.log,
+	}); err != nil {
+		n.log.Warn("notify: callback sink register failed", "err", err)
 	}
 	n.notifySvc = notifySvc
 
