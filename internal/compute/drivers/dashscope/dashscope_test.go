@@ -226,3 +226,69 @@ func TestSubmitClassifiesFailures(t *testing.T) {
 		}
 	}
 }
+
+// A job can only be polled on the host that accepted it. Pinning the
+// poll host to the compiled-in international default meant a Token
+// Plan deployment submitted successfully and then polled a host where
+// its sk-sp- key is not valid — HTTP 401 forever, against work that
+// was running and billed. Same trap for the Beijing and US hosts.
+func TestTaskEndpointFollowsTheSubmitHost(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		submit string
+		want   string
+	}{
+		{
+			name:   "token plan",
+			submit: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+			want:   "https://token-plan.ap-southeast-1.maas.aliyuncs.com/api/v1/tasks/",
+		},
+		{
+			name:   "beijing",
+			submit: "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+			want:   "https://dashscope.aliyuncs.com/api/v1/tasks/",
+		},
+		{
+			name:   "unset submit falls back to the default",
+			submit: "",
+			want:   DefaultTaskEndpoint,
+		},
+		{
+			name:   "unparseable submit falls back to the default",
+			submit: "://not a url",
+			want:   DefaultTaskEndpoint,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{
+				SubmitEndpoint: tc.submit,
+				Model:          "happyhorse-1.1-t2v",
+				Credential:     compute.NewBearerCredential("k"),
+			}
+			d, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := d.cfg.TaskEndpoint; got != tc.want {
+				t.Errorf("TaskEndpoint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// An explicit TaskEndpoint is still honoured: deriving is the default,
+// not an override of what the operator asked for.
+func TestExplicitTaskEndpointWins(t *testing.T) {
+	d, err := New(Config{
+		SubmitEndpoint: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+		TaskEndpoint:   "https://elsewhere.example/api/v1/tasks/",
+		Model:          "happyhorse-1.1-t2v",
+		Credential:     compute.NewBearerCredential("k"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := d.cfg.TaskEndpoint, "https://elsewhere.example/api/v1/tasks/"; got != want {
+		t.Errorf("TaskEndpoint = %q, want %q", got, want)
+	}
+}

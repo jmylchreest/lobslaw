@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -29,7 +30,15 @@ const (
 	// DefaultTaskEndpoint is where a task is polled. The id is
 	// appended; it is NOT the submit path, which is the first thing a
 	// design assuming "GET the submit URL" gets wrong.
+	//
+	// Only reached when SubmitEndpoint is also defaulted — otherwise
+	// the poll host is derived from the submit host by taskPath.
 	DefaultTaskEndpoint = "https://dashscope-intl.aliyuncs.com/api/v1/tasks/"
+
+	// taskPath is the poll path on whichever DashScope host submitted
+	// the job. It is a constant across every deployment; only the host
+	// moves.
+	taskPath = "/api/v1/tasks/"
 
 	// DriverName is embedded in every handle this driver mints, so it
 	// must stay stable across restarts: a handle stored under one name
@@ -66,7 +75,7 @@ func New(cfg Config) (*Driver, error) {
 		cfg.SubmitEndpoint = DefaultSubmitEndpoint
 	}
 	if cfg.TaskEndpoint == "" {
-		cfg.TaskEndpoint = DefaultTaskEndpoint
+		cfg.TaskEndpoint = taskEndpointFor(cfg.SubmitEndpoint)
 	}
 	if cfg.PollEvery <= 0 {
 		cfg.PollEvery = defaultPollInterval
@@ -79,6 +88,29 @@ func New(cfg Config) (*Driver, error) {
 }
 
 func (d *Driver) PollInterval() time.Duration { return d.cfg.PollEvery }
+
+// taskEndpointFor derives the poll URL from the submit URL.
+//
+// Submit and poll are always the same host — the task only exists on
+// the deployment that accepted it — so pinning the poll host to a
+// compiled-in default breaks every DashScope deployment that is not
+// the international pay-as-you-go one. A Token Plan subscription
+// (token-plan.<region>.maas.aliyuncs.com, sk-sp- keys) submits
+// happily and then polls dashscope-intl, where its key is not valid:
+// HTTP 401 InvalidApiKey forever, on a job that is running and billed.
+// The same trap catches the Beijing and US hosts.
+//
+// Only the host is taken from the submit URL. The path is not
+// derivable — submit is a service path and poll is /api/v1/tasks/ —
+// which is exactly what JobDriverConfig means by leaving the second
+// URL to the driver.
+func taskEndpointFor(submit string) string {
+	u, err := url.Parse(submit)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return DefaultTaskEndpoint
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: taskPath}).String()
+}
 
 type submitWire struct {
 	Model string `json:"model"`
