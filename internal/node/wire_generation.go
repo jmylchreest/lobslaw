@@ -173,11 +173,12 @@ func (n *Node) deliverGeneration(ctx context.Context, c *lobslawv1.AgentCommitme
 // would only re-run a poll that has nothing left to do.
 func (n *Node) notifyGeneration(ctx context.Context, c *lobslawv1.AgentCommitment, body string) {
 	ch, id := c.Params[paramOrigChannel], c.Params[paramOrigChatID]
-	if ch == "" || id == "" {
-		n.log.Info("generation: no originating channel recorded; result not delivered",
-			"commitment", c.Id, "body", body)
-		return
-	}
+	// NOT gated on the originating channel. Notify resolves a person's
+	// bound channels by user id, so it can deliver to someone whose
+	// turn arrived somewhere that cannot be dialled back — which is
+	// the REST case this whole path exists for. Returning early on an
+	// empty originator is what made every REST generation silent even
+	// once a callback address was bound.
 	// Through the notify service, which knows every registered sink,
 	// rather than straight to Telegram. A generation started over REST
 	// has no open response to return into — that is the whole reason it
@@ -202,6 +203,11 @@ func (n *Node) notifyGeneration(ctx context.Context, c *lobslawv1.AgentCommitmen
 			n.log.Warn("generation: notify service delivery failed; trying the originating channel",
 				"commitment", c.Id, "user", user, "err", err)
 		}
+	}
+	if ch == "" || id == "" {
+		n.log.Info("generation: nowhere to deliver the result; it is saved but nobody was told",
+			"commitment", c.Id, "user", c.CreatedFor, "body", body)
+		return
 	}
 	notifier := &researchNotifyAdapter{tg: n.telegramHandler, log: n.log}
 	if err := notifier.Notify(ctx, ch, id, body); err != nil {
