@@ -119,7 +119,6 @@ func TestTelegramDoesNotSerialiseAcrossChats(t *testing.T) {
 		QueueMode:        QueueSerial,
 	})
 
-	start := time.Now()
 	var wg sync.WaitGroup
 	for i := 1; i <= 3; i++ {
 		wg.Add(1)
@@ -130,12 +129,18 @@ func TestTelegramDoesNotSerialiseAcrossChats(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Three 120ms turns run serially would take ~360ms. Concurrent
-	// they take ~120ms. A generous bound still separates the two.
-	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
-		t.Errorf("three chats took %v — they were serialised against each other", elapsed)
+	calls, overlaps, _ := prov.stats()
+	// Asserted on observed overlap, not on the clock. This used to
+	// require three 120ms turns to finish inside 300ms, which measures
+	// how loaded the machine is as much as whether the gate is
+	// per-chat: a contended runner failed it at 338ms while the turns
+	// had demonstrably overlapped — serial execution could not have
+	// come in under 360ms. inFlight > 1 is the property the test is
+	// actually about, and it does not care how slow the box is.
+	if overlaps == 0 {
+		t.Error("no two chats were ever in flight together — they serialised against each other")
 	}
-	if calls, _, _ := prov.stats(); calls != 3 {
+	if calls != 3 {
 		t.Errorf("provider saw %d turns, want 3", calls)
 	}
 }
