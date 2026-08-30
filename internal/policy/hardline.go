@@ -204,7 +204,63 @@ type protectedPath struct {
 	abs string
 	// base matches a basename glob anywhere.
 	base string
-	why  string
+	// carveOutIf downgrades a base match to confirm when it returns
+	// true. A predicate rather than a list because the case it exists
+	// for — *.pem — is a container format whose name does not say what
+	// is inside, and the safe half is describable ("says cert, never
+	// says key") while the dangerous half is open-ended.
+	//
+	// Confirm, never allow. The bar for a compiled-in floor to stop
+	// refusing something outright is higher than "we are fairly sure",
+	// and one tap is a cheap place to put the remaining doubt.
+	carveOutIf func(base string) bool
+	why        string
+}
+
+// looksLikeCertificate reports whether a PEM basename is a
+// certificate rather than a key.
+//
+// TWO conditions, and the second is the one doing the work. Naming
+// cert-ish spellings is easy and incomplete; refusing anything that
+// mentions a key is what makes a miss safe. "server-cert.pem" carves
+// out, "server-key.pem" does not, and a name matching neither list
+// stays refused — the default is the floor, not the exception.
+//
+// Deliberately does not read the file. A floor that opened files to
+// classify them would be a floor with an I/O dependency and a TOCTOU
+// window, and the name is what every caller already has.
+func looksLikeCertificate(base string) bool {
+	name := strings.TrimSuffix(strings.ToLower(base), ".pem")
+
+	// First: anything that mentions key material is out, whatever else
+	// it says. "ca-key" contains "ca"; this ordering is what makes a
+	// miss in the list below safe rather than dangerous.
+	for _, forbidden := range []string{"key", "priv", "secret"} {
+		if strings.Contains(name, forbidden) {
+			return false
+		}
+	}
+
+	// Then: whole parts, not substrings. A substring test would carve
+	// out "cacophony.pem" on the strength of "ca", and the parts these
+	// names are built from are separated by exactly these characters.
+	//
+	// The concatenated spellings are enumerated rather than derived.
+	// "fullchain" is a Let's Encrypt convention, not a rule about
+	// English, and guessing at compounds is how "monkey" becomes a
+	// certificate.
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.'
+	})
+	for _, part := range parts {
+		switch part {
+		case "ca", "cert", "certs", "certificate", "crt",
+			"chain", "fullchain", "cacert", "cabundle", "certchain",
+			"bundle", "issuer", "root", "intermediate", "public", "pub":
+			return true
+		}
+	}
+	return false
 }
 
 var protectedPaths = []protectedPath{
@@ -219,7 +275,19 @@ var protectedPaths = []protectedPath{
 	{name: "envrc", base: ".envrc", why: ".envrc holds environment secrets"},
 	{name: "cluster-state", base: "state.db*", why: "this is lobslaw's own replicated state"},
 	{name: "tls-material", base: "*.key", why: "this is private key material"},
-	{name: "tls-material", base: "*.pem", why: "this is private key material"},
+	// *.pem is the one pattern where the extension does not say what
+	// the file is. PEM is a container: a private key is PEM, and so is
+	// the certificate that key signed, which is the PUBLIC half and is
+	// meant to be read. Refusing both meant ca.pem was refused
+	// alongside the ca-key.pem that signs with it — and the operator
+	// procedure for verifying a node's certs is to list that very
+	// directory.
+	//
+	// So a name that is unambiguously a certificate downgrades to
+	// CONFIRM rather than allow: the file is public, the directory it
+	// sits in is not, and asking a human costs one tap.
+	{name: "tls-material", base: "*.pem", why: "this is private key material",
+		carveOutIf: looksLikeCertificate},
 
 	// lobslaw's own on-disk state. These used to live in a SECOND
 	// list — internalExcludes, over in the fs builtins — which
@@ -285,9 +353,18 @@ func CheckPath(path string) (PathVerdict, error) {
 			}
 			return PathDenied, &HardlineError{Pattern: pp.name, Detail: pp.why}
 		case pp.base != "":
-			if ok, _ := filepath.Match(pp.base, base); ok {
-				return PathDenied, &HardlineError{Pattern: pp.name, Detail: pp.why}
+			ok, _ := filepath.Match(pp.base, base)
+			if !ok {
+				continue
 			}
+			if pp.carveOutIf != nil && pp.carveOutIf(base) {
+				return PathConfirm, &HardlineError{
+					Pattern: pp.name,
+					Detail: pp.why + " — but this name reads as a certificate, which is the " +
+						"public half and is meant to be readable. Confirm rather than refuse",
+				}
+			}
+			return PathDenied, &HardlineError{Pattern: pp.name, Detail: pp.why}
 		}
 	}
 	return PathAllowed, nil

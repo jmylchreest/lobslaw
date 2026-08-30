@@ -118,7 +118,14 @@ func TestHardlineProtectedPaths(t *testing.T) {
 		{"/srv/app/.envrc", PathDenied},
 		{"/var/lib/lobslaw/state.db", PathDenied},
 		{"/var/lib/lobslaw/tls/node.key", PathDenied},
-		{"/var/lib/lobslaw/tls/ca.pem", PathDenied},
+		// ca.pem is CONFIRM, not denied. PEM is a container: the key
+		// and the certificate it signed share an extension, and the
+		// certificate is the public half. This line asserted the old
+		// flat refusal — see cert_carveout_test.go for the pair that
+		// makes the distinction, including every spelling that stays
+		// denied.
+		{"/var/lib/lobslaw/tls/ca.pem", PathConfirm},
+		{"/var/lib/lobslaw/tls/ca-key.pem", PathDenied},
 
 		// Traversal must not walk around the match.
 		{"/etc/../etc/shadow", PathDenied},
