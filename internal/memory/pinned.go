@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -145,13 +146,11 @@ func (p *PinnedStore) Add(ctx context.Context, kind PinnedKind, userID, entry st
 		if text == "" {
 			return nil, errors.New("pinned memory: entry is empty")
 		}
-		for _, e := range entries {
-			if e == text {
-				// Silently accepting a duplicate would let a model that
-				// re-remembers the same fact every turn fill the block
-				// with one sentence.
-				return nil, fmt.Errorf("pinned memory: that entry is already stored")
-			}
+		// Silently accepting a duplicate would let a model that
+		// re-remembers the same fact every turn fill the block with one
+		// sentence.
+		if slices.Contains(entries, text) {
+			return nil, fmt.Errorf("pinned memory: that entry is already stored")
 		}
 		return append(append([]string(nil), entries...), text), nil
 	})

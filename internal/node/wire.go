@@ -2,6 +2,7 @@ package node
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -65,7 +66,7 @@ func gateRaft(cfg Config) bool { return needsRaft(cfg.Functions) }
 
 // gateCompute selects stages that need the compute stack — agent,
 // builtins, tool registry.
-func gateCompute(cfg Config) bool { return has(cfg.Functions, types.FunctionCompute) }
+func gateCompute(cfg Config) bool { return slices.Contains(cfg.Functions, types.FunctionCompute) }
 
 // gateGateway selects stages that need the gateway. Both the
 // function bit AND the explicit Enabled toggle must be set: an
@@ -75,13 +76,13 @@ func gateGateway(cfg Config) bool {
 	// One switch, not two. The gateway function normalises to compute
 	// (it cannot run without an agent), so what remains is: does this
 	// node run an agent, and did the operator enable the channels.
-	return has(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
+	return slices.Contains(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
 }
 
 // gateStorage selects stages that need the storage function. Storage
 // is sub-conditional on raft (storage uses raft for replicated
 // mount config) so callers compose: gateRaft AND gateStorage.
-func gateStorage(cfg Config) bool { return has(cfg.Functions, types.FunctionStorage) }
+func gateStorage(cfg Config) bool { return slices.Contains(cfg.Functions, types.FunctionStorage) }
 
 // gateAuth selects stages that need the JWT auth path. Triggered by
 // either an HS256 secret being declared OR a JWKS URL configured —

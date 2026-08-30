@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -342,10 +343,10 @@ func CheckPath(path string) (PathVerdict, error) {
 			// Matched by segment rather than by home-relative prefix:
 			// the process HOME is not necessarily the operator's, and a
 			// mount can surface someone's .ssh at any depth.
-			if !containsSegment(segments, pp.dir) {
+			if !slices.Contains(segments, pp.dir) {
 				continue
 			}
-			if base != pp.dir && contains(pp.carveOut, base) {
+			if base != pp.dir && slices.Contains(pp.carveOut, base) {
 				return PathConfirm, &HardlineError{
 					Pattern: pp.name,
 					Detail:  pp.why + ", but this particular file does not — it needs confirmation, not refusal",
@@ -396,24 +397,6 @@ func CheckCommandPaths(cmd string) error {
 		}
 	}
 	return nil
-}
-
-func containsSegment(segments []string, want string) bool {
-	for _, s := range segments {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 func homeDir() string {

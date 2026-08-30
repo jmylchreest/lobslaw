@@ -334,20 +334,11 @@ func containsAny(hay string, needles ...string) bool {
 		if n == "" {
 			continue
 		}
-		if idx := indexOf(hay, n); idx >= 0 {
+		if strings.Contains(hay, n) {
 			return true
 		}
 	}
 	return false
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 // loadVectorIndex returns a set of episodic IDs that already have

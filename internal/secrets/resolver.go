@@ -3,6 +3,7 @@ package secrets
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,12 +27,7 @@ var BootstrapSchemes = []string{"env", "file"}
 // provider that would shadow one.
 func IsBootstrapScheme(s string) bool {
 	s = normalise(s)
-	for _, b := range BootstrapSchemes {
-		if s == b {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(BootstrapSchemes, s)
 }
 
 // DefaultCacheTTL is how long a resolved value is reused.

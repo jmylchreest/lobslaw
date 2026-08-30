@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -205,7 +206,7 @@ func (s *CredentialService) Grant(ctx context.Context, provider, subject, skill 
 	if err != nil {
 		return err
 	}
-	if !contains(cred.AllowedSkills, skill) {
+	if !slices.Contains(cred.AllowedSkills, skill) {
 		cred.AllowedSkills = append(cred.AllowedSkills, skill)
 	}
 	if cred.AllowedScopesPerSkill == nil {
@@ -215,7 +216,7 @@ func (s *CredentialService) Grant(ctx context.Context, provider, subject, skill 
 	// at OAuth time. A skill can't be granted scopes the credential
 	// doesn't have.
 	for _, sc := range scopes {
-		if !contains(cred.Scopes, sc) {
+		if !slices.Contains(cred.Scopes, sc) {
 			return fmt.Errorf("credentials: cannot grant scope %q — not in credential's granted scopes %v", sc, cred.Scopes)
 		}
 	}
@@ -241,7 +242,7 @@ func (s *CredentialService) Revoke(ctx context.Context, provider, subject, skill
 // in AllowedSkills. Used by the credentials_request builtin to
 // validate per-skill scope subsetting.
 func (s *CredentialService) ScopesAllowedForSkill(p *PlaintextCredential, skill string) []string {
-	if p == nil || !contains(p.AllowedSkills, skill) {
+	if p == nil || !slices.Contains(p.AllowedSkills, skill) {
 		return nil
 	}
 	return p.AllowedScopesPerSkill[skill]
@@ -437,15 +438,6 @@ func (s *CredentialService) decrypt(rec *lobslawv1.CredentialRecord) (*Plaintext
 // don't need to import pkg/types.
 func IsCredentialNotFound(err error) bool {
 	return errors.Is(err, types.ErrNotFound)
-}
-
-func contains(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
 }
 
 func removeString(haystack []string, needle string) []string {

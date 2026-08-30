@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -290,7 +291,7 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 			if !audience.AllowsEpisodic(&epi) {
 				continue
 			}
-			if tagFilter != "" && !containsString(epi.Tags, tagFilter) {
+			if tagFilter != "" && !slices.Contains(epi.Tags, tagFilter) {
 				continue
 			}
 			results = append(results, episodicToMap(&epi, h.Score()))
@@ -354,7 +355,7 @@ func runSubstringMatches(store *memory.Store, audience memory.Audience, query, t
 		if exclude[r.Id] {
 			return nil
 		}
-		if tagFilter != "" && !containsString(r.Tags, tagFilter) {
+		if tagFilter != "" && !slices.Contains(r.Tags, tagFilter) {
 			return nil
 		}
 		hay := strings.ToLower(r.Event + " " + r.Context)

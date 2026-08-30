@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -996,7 +997,7 @@ func validateConfig(cfg Config) error {
 	// amnesia. Require EITHER a snapshot target OR seed nodes (which
 	// mean this node joins a multi-node cluster where replication
 	// provides durability).
-	if has(cfg.Functions, types.FunctionMemory) && cfg.SnapshotTarget == "" && len(cfg.SeedNodes) == 0 {
+	if slices.Contains(cfg.Functions, types.FunctionMemory) && cfg.SnapshotTarget == "" && len(cfg.SeedNodes) == 0 {
 		return errors.New("node.Config: memory-enabled nodes without seeds must configure memory.snapshot.target " +
 			"(a single-node cluster with no off-cluster backup risks total data loss on disk failure)")
 	}
@@ -1004,16 +1005,7 @@ func validateConfig(cfg Config) error {
 }
 
 func needsRaft(fns []types.NodeFunction) bool {
-	return has(fns, types.FunctionMemory) || has(fns, types.FunctionPolicy)
-}
-
-func has(fns []types.NodeFunction, target types.NodeFunction) bool {
-	for _, f := range fns {
-		if f == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(fns, types.FunctionMemory) || slices.Contains(fns, types.FunctionPolicy)
 }
 
 // wireCompute constructs the Compute-function stack: Registry,

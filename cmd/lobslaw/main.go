@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -423,7 +424,7 @@ func secretSchemes(c config.SecretsConfig) []string {
 }
 
 func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFunction, logger *slog.Logger) (node.Config, error) {
-	needsRaft := containsFn(funcs, types.FunctionMemory) || containsFn(funcs, types.FunctionPolicy)
+	needsRaft := slices.Contains(funcs, types.FunctionMemory) || slices.Contains(funcs, types.FunctionPolicy)
 
 	// Merge .mcp.json from the same dir as config.toml. Trust model
 	// is identical to the [[mcp.servers]] block: operator-controlled
@@ -586,15 +587,6 @@ func resolveBootstrap(v *bool) bool {
 		return true
 	}
 	return *v
-}
-
-func containsFn(fns []types.NodeFunction, target types.NodeFunction) bool {
-	for _, f := range fns {
-		if f == target {
-			return true
-		}
-	}
-	return false
 }
 
 // resolvePolicyDirs implements the sandbox policy.d discovery chain

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -371,7 +372,7 @@ func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query,
 		if !audience.AllowsEpisodic(&r) {
 			return nil
 		}
-		if tagFilter != "" && !containsString(r.Tags, tagFilter) {
+		if tagFilter != "" && !slices.Contains(r.Tags, tagFilter) {
 			return nil
 		}
 		hay := strings.ToLower(r.Event + " " + r.Context)
@@ -464,15 +465,6 @@ func runSubstringSearch(store *memory.Store, audience memory.Audience, query, ta
 		return nil, 1, err
 	}
 	return payload, 0, nil
-}
-
-func containsString(hay []string, needle string) bool {
-	for _, s := range hay {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // memorySearchStopwords are low-signal words that generate too

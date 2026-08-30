@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -252,12 +253,7 @@ func subjectMatches(subject string, claims *types.Claims) bool {
 	case "user":
 		return claims.UserID == value
 	case "role":
-		for _, r := range claims.Roles {
-			if r == value {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(claims.Roles, value)
 	case "scope":
 		return claims.Scope == value
 	default:

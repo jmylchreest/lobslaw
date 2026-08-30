@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -79,7 +80,7 @@ func (f RecordFilter) keepEpisodic(e *lobslawv1.EpisodicRecord) bool {
 	if f.Scope != "" {
 		return false
 	}
-	if f.Tag != "" && !containsString(e.GetTags(), f.Tag) {
+	if f.Tag != "" && !slices.Contains(e.GetTags(), f.Tag) {
 		return false
 	}
 	return ownerMatches(e.GetOwner(), f.Owner, f.Unowned)
@@ -213,7 +214,7 @@ func ReferencedBy(store *Store, id string) ([]string, error) {
 		if uerr := proto.Unmarshal(raw, &v); uerr != nil {
 			return fmt.Errorf("unmarshal vector %q: %w", key, uerr)
 		}
-		if containsString(v.GetSourceIds(), id) {
+		if slices.Contains(v.GetSourceIds(), id) {
 			out = append(out, v.GetId())
 		}
 		return nil
@@ -226,7 +227,7 @@ func ReferencedBy(store *Store, id string) ([]string, error) {
 		if uerr := proto.Unmarshal(raw, &e); uerr != nil {
 			return fmt.Errorf("unmarshal episodic %q: %w", key, uerr)
 		}
-		if containsString(e.GetSourceIds(), id) {
+		if slices.Contains(e.GetSourceIds(), id) {
 			out = append(out, e.GetId())
 		}
 		return nil
@@ -251,15 +252,6 @@ func ownerMatches(owner, want string, unowned bool) bool {
 		return true
 	}
 	return owner == want
-}
-
-func containsString(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 // LaterThan orders by timestamp, treating a missing one as oldest so

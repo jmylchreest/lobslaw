@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Claims is the validated JWT payload. The raw token is discarded
 // at validation time and never held here.
@@ -20,10 +23,5 @@ type Claims struct {
 // HasRole reports whether the token carries the named role. Roles
 // are compared exactly — there is no hierarchy or wildcard.
 func (c *Claims) HasRole(role string) bool {
-	for _, r := range c.Roles {
-		if r == role {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.Roles, role)
 }

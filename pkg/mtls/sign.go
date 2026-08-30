@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -234,10 +235,5 @@ func IsOperatorCert(cert *x509.Certificate) bool {
 	if cert == nil {
 		return false
 	}
-	for _, ou := range cert.Subject.OrganizationalUnit {
-		if ou == OperatorOU {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(cert.Subject.OrganizationalUnit, OperatorOU)
 }

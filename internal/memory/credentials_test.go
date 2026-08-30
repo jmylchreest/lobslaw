@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestCredentialGrantValidatesScopeSubset(t *testing.T) {
 		t.Fatalf("subset grant should succeed: %v", err)
 	}
 	got, _ := cs.Get(ctx, "google", "u@e")
-	if !contains(got.AllowedSkills, "gws-workspace") {
+	if !slices.Contains(got.AllowedSkills, "gws-workspace") {
 		t.Error("skill should be in AllowedSkills after Grant")
 	}
 	if scopes := got.AllowedScopesPerSkill["gws-workspace"]; len(scopes) != 1 || scopes[0] != "gmail.readonly" {
@@ -118,10 +119,10 @@ func TestCredentialRevokeClearsACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := cs.Get(ctx, "google", "u@e")
-	if contains(got.AllowedSkills, "skill-a") {
+	if slices.Contains(got.AllowedSkills, "skill-a") {
 		t.Error("skill-a should be removed from AllowedSkills")
 	}
-	if !contains(got.AllowedSkills, "skill-b") {
+	if !slices.Contains(got.AllowedSkills, "skill-b") {
 		t.Error("skill-b should be untouched")
 	}
 	if _, present := got.AllowedScopesPerSkill["skill-a"]; present {
