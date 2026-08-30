@@ -66,9 +66,7 @@ func BuildSafety(tools []ToolInfo) Section {
 
 		`- **You run headless. Route interactive flows through chat.** There is no browser, no clipboard, no GUI on this machine. When a CLI needs OAuth, device-code, magic-link, or any flow that says "open this URL in your browser" — look for a headless flag (commonly --manual, --remote, --device-code, --headless, --no-browser, --offline) so it prints a URL or code you can read. Pass that URL/code back to the user via the chat reply (or the notify builtin for proactive turns); ask them to complete the flow on their own device and paste the result back to you. Never tell the user "open the browser locally" — they're not at this machine. If a CLI doesn't expose a headless mode, say so explicitly rather than launching a flow that will hang.`,
 
-		`- **Inspect before guessing.** When you need a CLI's flags or behaviour and they aren't in the Host Binaries section above` +
-			clause(`, run "<name> --help" (or --help-all / -h depending on the tool) once via `, named("shell_command"), ` and reason from the actual output`) +
-			`. Don't invent flags from training-data memory; CLIs change.`,
+		inspectBullet(named("shell_command")),
 
 		`- **Quote facts; don't manufacture them.** Numeric data, dates, URLs, page contents — render them only when a tool returned them this turn. When a scrape was partial, say what you got and what was missing.`,
 
@@ -94,6 +92,27 @@ func BuildSafety(tools []ToolInfo) Section {
 		Priority: PriorityCritical,
 		Body:     "You operate autonomously on behalf of the user. Hold to these principles:\n\n" + strings.Join(bullets, "\n") + "\n",
 	}
+}
+
+// inspectBullet advises reading a CLI's own help, when there is
+// something to read it with.
+//
+// The conditional framing has to go with the tool, not just the clause
+// inside it. "When you need a CLI's flags and they aren't listed
+// above" sets up a condition; dropping only the middle left it with no
+// consequent, which is a sentence that stops halfway through. The
+// advice that survives losing a shell is the second half — don't
+// invent flags — and that stands on its own.
+func inspectBullet(shell string) string {
+	if shell == "" {
+		return "- **Don't invent flags from training-data memory.** CLIs change, and a flag " +
+			"remembered from training is a guess wearing the clothes of a fact. Say you cannot " +
+			"check the invocation rather than producing one that looks right."
+	}
+	return "- **Inspect before guessing.** When you need a CLI's flags or behaviour and they " +
+		"aren't in the Host Binaries section above, run \"<name> --help\" (or --help-all / -h " +
+		"depending on the tool) once via " + shell + " and reason from the actual output. " +
+		"Don't invent flags from training-data memory; CLIs change."
 }
 
 // noIntrospection tells the model what to do when it cannot check.

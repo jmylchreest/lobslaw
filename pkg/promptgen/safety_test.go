@@ -99,3 +99,37 @@ func TestPrinciplesNameOnlyRegisteredTools(t *testing.T) {
 		}
 	})
 }
+
+// Dropping a clause must not leave a sentence that stops halfway.
+//
+// The first version of this filtering removed the middle of "When you
+// need a CLI's flags and they aren't listed above, run --help via X"
+// and left the condition with no consequent — a sentence that sets
+// something up and never resolves it. Rendering the prompt is how that
+// was noticed; a Contains assertion would not have seen it.
+func TestNoPrincipleIsLeftHalfFinished(t *testing.T) {
+	t.Parallel()
+
+	for _, tools := range [][]ToolInfo{
+		nil,
+		{{Name: "shell_command"}},
+		{{Name: "debug_tools"}, {Name: "web_search"}},
+	} {
+		for _, line := range strings.Split(BuildSafety(tools).Body, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "- ") {
+				continue
+			}
+			// A bullet ending in a comma, or in "above." with nothing
+			// after it, is one whose middle was removed.
+			for _, bad := range []string{",", "above.", "via.", "call again,"} {
+				if strings.HasSuffix(line, bad) {
+					t.Errorf("a principle ends mid-sentence (%q):\n  %s", bad, line)
+				}
+			}
+			if strings.Contains(line, "  ") {
+				t.Errorf("a principle has a doubled space where a list was removed:\n  %s", line)
+			}
+		}
+	}
+}
