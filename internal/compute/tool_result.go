@@ -2,16 +2,11 @@ package compute
 
 import "encoding/json"
 
-// The shape every builtin failure takes, and the helpers the guard
-// chain shares with them.
+// The shape every builtin failure takes.
 //
-// These lived in builtin_fs.go, which made them look like a
-// filesystem concern. They are not: marshalToolError is what EVERY
-// builtin returns a failure as, and hardline.go, mount_resolver.go
-// and path_guard.go — none of them a tool — all call it. A helper
-// declared inside one tool and used by the infrastructure around all
-// of them is filed under the first caller that needed it rather than
-// under what it is.
+// Shared by the tools and by the guard chain around them —
+// hardline.go, mount_resolver.go and path_guard.go all return
+// failures this way, and none of them is a tool.
 
 // toolError is the structured failure shape fs/exec builtins emit
 // on error. Mirrors opencode's pattern: every failure carries a
@@ -35,16 +30,4 @@ func marshalToolError(errType, msg, suggestion string) ([]byte, int, error) {
 		return nil, 1, err
 	}
 	return payload, 1, nil
-}
-
-// firstNonEmpty returns a, or b when a is blank.
-//
-// Declared in builtin_council.go and used by image.go and speak.go,
-// which is two subsystems reaching into a tool for a two-line string
-// helper. It belongs with neither.
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }

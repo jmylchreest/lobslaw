@@ -1,14 +1,12 @@
 // Package turn carries who a turn came from and where it arrived.
 //
-// Its own package because it is a FACT ABOUT A CALLER, not a compute
-// concern. It lived in internal/compute for as long as compute was
-// the only thing that read it; once the tools moved out, compute
-// importing tools and tools importing compute for this one type would
-// have been a cycle over a struct with no behaviour of its own.
+// Its own package because it is a FACT ABOUT A CALLER, not any one
+// subsystem's concern.
 //
 // A leaf: pkg/types, internal/identity, and the standard library.
-// Nothing here should ever import a subsystem, because everything
-// that authorises or attributes anything needs to import this.
+// Nothing here may import a subsystem — everything that authorises or
+// attributes anything imports this, so a single subsystem dependency
+// here becomes a cycle for all of them.
 package turn
 
 import (
@@ -162,14 +160,9 @@ func IdentityFrom(ctx context.Context) (Identity, bool) {
 // SessionKey identifies one conversation, as the session store
 // addresses it.
 //
-// It lived in internal/compute and was duplicated by the gateway and
-// memory packages to avoid an import cycle — the comment on the old
-// declaration said so. Here it is a leaf, so those copies now have
-// somewhere to converge on rather than a reason to exist.
-//
-// Moved with Identity because Identity.SessionKey returns one, and
-// leaving it behind would have made this package import the thing it
-// was extracted to stop importing.
+// The gateway and memory packages each carry their own copy to avoid
+// an import cycle. This one is a leaf, so those two now have somewhere
+// to converge rather than a reason to stay separate.
 type SessionKey struct {
 	Channel   string
 	ChannelID string
