@@ -3,6 +3,7 @@ package compute
 import (
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 )
@@ -38,25 +39,28 @@ import (
 // memory key. Subtract-only means the worst a hostile policy file
 // achieves is a broken tool, which is noisy and recoverable.
 
-// pathGuard bundles what the chain needs that a package-level function
-// cannot reach: the tool's name, for the policy lookup.
-type pathGuard struct {
-	// registry supplies PolicyFor. Nil skips step 5 — which is the
-	// correct reading of a node with no registry wired (a test driving
-	// a builtin directly), not an excuse to skip 1-4.
-	registry *Registry
-}
-
-// activePathGuard is set once at wiring time, alongside the mount
-// resolver it complements. Package-level for the same reason
+// activePathGuard is the registry the guard consults for per-tool
+// policies, set at wiring time. Package-level for the same reason
 // activeMountResolver is: the builtins are plain funcs registered into
 // a map, and threading a struct through every one of them would be a
 // larger change than the thing it carries.
-var activePathGuard pathGuard
+//
+// ATOMIC, not a bare pointer. "Set once at wiring, read on the hot
+// path" sounds single-threaded and is not: every node.New() writes it,
+// and a process that builds two nodes — which every parallel test in
+// internal/node does — has two goroutines writing while others read.
+// The race detector called it, and it was a real one: an unsynchronised
+// pointer write is not guaranteed to be visible to another goroutine at
+// all, so a builtin could consult a nil registry on a node that has
+// one and skip the operator's policy silently.
+//
+// atomic.Pointer rather than a mutex because the read is on every path
+// check and the write happens once per node.
+var activePathGuard atomic.Pointer[Registry]
 
 // SetPathGuardRegistry wires the tool registry the guard consults for
 // per-tool policies. Called once during compute wiring.
-func SetPathGuardRegistry(r *Registry) { activePathGuard.registry = r }
+func SetPathGuardRegistry(r *Registry) { activePathGuard.Store(r) }
 
 // guardPath runs the full chain for one tool and one path.
 //
@@ -134,7 +138,7 @@ func guardPathWithin(tool, path string, need MountMode, implicitRoot string) (re
 	}
 
 	// 3. The operator's policy for THIS tool. Narrowing only.
-	if pol := activePathGuard.policyFor(tool); pol != nil {
+	if pol := policyFor(tool); pol != nil {
 		if !pol.AllowsPath(resolved, sandboxAccess(need)) {
 			p, e, _ := marshalToolError("policy_denied",
 				resolved+" is outside what policy.d permits "+tool+" to "+accessVerb(need),
@@ -145,11 +149,15 @@ func guardPathWithin(tool, path string, need MountMode, implicitRoot string) (re
 	return resolved, nil, 0
 }
 
-func (g pathGuard) policyFor(tool string) *sandbox.Policy {
-	if g.registry == nil {
+// policyFor returns the tool's policy, or nil when no registry is
+// wired — which is the correct reading of a test driving a builtin
+// directly, and skips step 3 only.
+func policyFor(tool string) *sandbox.Policy {
+	r := activePathGuard.Load()
+	if r == nil {
 		return nil
 	}
-	return g.registry.PolicyFor(tool)
+	return r.PolicyFor(tool)
 }
 
 // sandboxAccess converts the mount vocabulary to the sandbox one. The

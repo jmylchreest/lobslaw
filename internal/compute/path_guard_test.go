@@ -13,9 +13,9 @@ func guardRegistryWith(t *testing.T, tool string, p *sandbox.Policy) *Registry {
 	if p != nil {
 		r.SetPolicy(tool, p)
 	}
-	prev := activePathGuard
+	prev := activePathGuard.Load()
 	SetPathGuardRegistry(r)
-	t.Cleanup(func() { activePathGuard = prev })
+	t.Cleanup(func() { activePathGuard.Store(prev) })
 	return r
 }
 
@@ -88,9 +88,9 @@ func TestPolicyIsPerTool(t *testing.T) {
 // No registry (a test driving a builtin directly) skips step 5 only.
 // It must not skip the floors.
 func TestNoRegistrySkipsPolicyNotTheFloors(t *testing.T) {
-	prev := activePathGuard
+	prev := activePathGuard.Load()
 	SetPathGuardRegistry(nil)
-	t.Cleanup(func() { activePathGuard = prev })
+	t.Cleanup(func() { activePathGuard.Store(prev) })
 
 	if _, _, exit := guardRead("read_file", "/workspace/ordinary.md"); exit != 0 {
 		t.Error("an ordinary path should pass with no registry wired")
@@ -156,7 +156,7 @@ func withMounts(t *testing.T, roots map[string]string) {
 	for label, root := range roots {
 		r.Register(label, root, MountMode{Read: true, Write: true}, nil)
 	}
-	prev := activeMountResolver
+	prev := activeMountResolver.Load()
 	SetActiveMountResolver(r)
 	t.Cleanup(func() { SetActiveMountResolver(prev) })
 }

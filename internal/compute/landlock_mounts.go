@@ -16,10 +16,11 @@ import (
 // any mounts get an empty slice and must decide whether to refuse
 // the operation or run unsandboxed.
 func LandlockMounts() []sandbox.PolicyMount {
-	if activeMountResolver == nil {
+	resolver := activeMountResolver.Load()
+	if resolver == nil {
 		return nil
 	}
-	mounts := activeMountResolver.Mounts()
+	mounts := resolver.Mounts()
 	out := make([]sandbox.PolicyMount, 0, len(mounts))
 	for _, m := range mounts {
 		out = append(out, sandbox.PolicyMount{
@@ -38,10 +39,11 @@ func LandlockMounts() []sandbox.PolicyMount {
 // a configuration error (the manifest references a mount the
 // operator hasn't wired).
 func LandlockMountsByLabel(label string) (sandbox.PolicyMount, bool) {
-	if activeMountResolver == nil {
+	resolver := activeMountResolver.Load()
+	if resolver == nil {
 		return sandbox.PolicyMount{}, false
 	}
-	for _, m := range activeMountResolver.Mounts() {
+	for _, m := range resolver.Mounts() {
 		if m.Label == label {
 			return sandbox.PolicyMount{
 				Path:  m.Root,

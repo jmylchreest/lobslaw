@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // MountMode is a unified read/write/exec triple. Replaces the old
@@ -294,12 +295,16 @@ var (
 // consult. Nil during tests that don't exercise mount enforcement;
 // in that case resolveFsPath falls open with the raw path so simple
 // unit tests don't need full storage wiring.
-var activeMountResolver *MountResolver
+// Atomic for the same reason activePathGuard is: every node.New()
+// writes this, so a process building two nodes has concurrent writers
+// and readers. Same shape, same race, and fixing one while leaving the
+// other would be leaving a known bug next door.
+var activeMountResolver atomic.Pointer[MountResolver]
 
 // SetActiveMountResolver installs a resolver for fs builtins. Called
 // once during node boot after refreshing the resolver from config.
 func SetActiveMountResolver(r *MountResolver) {
-	activeMountResolver = r
+	activeMountResolver.Store(r)
 }
 
 // resolveFsPath is the helper every fs builtin uses to turn a user-
@@ -317,10 +322,11 @@ func resolveFsPath(p string, needWrite bool) (string, []byte, int) {
 }
 
 func resolveFsPathMode(p string, need MountMode) (string, []byte, int) {
-	if activeMountResolver == nil {
+	resolver := activeMountResolver.Load()
+	if resolver == nil {
 		return p, nil, 0
 	}
-	resolved, err := activeMountResolver.Resolve(p, need)
+	resolved, err := resolver.Resolve(p, need)
 	if err == nil {
 		return resolved, nil, 0
 	}
@@ -328,10 +334,10 @@ func resolveFsPathMode(p string, need MountMode) (string, []byte, int) {
 	switch {
 	case errors.Is(err, ErrMountNotFound):
 		errType = "mount_not_found"
-		suggestion = fmt.Sprintf("known mounts: %s. Prefix paths with the mount label, e.g. 'workspace/foo.md'", strings.Join(activeMountResolver.Labels(), ", "))
+		suggestion = fmt.Sprintf("known mounts: %s. Prefix paths with the mount label, e.g. 'workspace/foo.md'", strings.Join(resolver.Labels(), ", "))
 	case errors.Is(err, ErrOutsideMounts):
 		errType = "outside_mounts"
-		suggestion = fmt.Sprintf("absolute paths must fall under a registered mount root. Known mounts: %s. Prefer the label form like 'workspace/foo.md'", strings.Join(activeMountResolver.Labels(), ", "))
+		suggestion = fmt.Sprintf("absolute paths must fall under a registered mount root. Known mounts: %s. Prefer the label form like 'workspace/foo.md'", strings.Join(resolver.Labels(), ", "))
 	case errors.Is(err, ErrModeDenied):
 		errType = "mode_denied"
 		suggestion = "the requested access (write/exec) is not granted by this mount's mode. Pick a mount with the right rwx bits or read instead of writing"
