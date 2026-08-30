@@ -48,7 +48,7 @@ func readFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 	}
 	if !filepath.IsAbs(path) {
 		return compute.MarshalToolError("relative_path", "path must be absolute OR mount-scoped (e.g. 'workspace/notes.md')",
-			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
+			mountLabelHint())
 	}
 	if payload, exit, refused := compute.HardlinePathRefusal(path, "read"); refused {
 		return payload, exit, nil

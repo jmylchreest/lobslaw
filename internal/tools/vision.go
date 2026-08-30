@@ -30,11 +30,11 @@ import (
 // received AND could not be read. See [gateway] incoming_dir.
 const DefaultIncomingDir = "/workspace/incoming"
 
-// DefaultVisionQuestion is asked when the caller focuses on nothing in
+// defaultVisionQuestion is asked when the caller focuses on nothing in
 // particular. It requests transcription as well as description because
 // the commonest attachment is a screenshot, and a description of a
 // screenshot that omits its text has described the wrong thing.
-const DefaultVisionQuestion = "Describe this image in detail. If it contains text, transcribe it accurately."
+const defaultVisionQuestion = "Describe this image in detail. If it contains text, transcribe it accurately."
 
 // VisionConfig wires the read_image builtin to a vision-capable
 // endpoint. Empty Endpoint OR APIKey leaves the builtin
@@ -133,7 +133,7 @@ func newReadImageHandler(cfg VisionConfig, client *http.Client) compute.BuiltinF
 		}
 		question := strings.TrimSpace(args["question"])
 		if question == "" {
-			question = DefaultVisionQuestion
+			question = defaultVisionQuestion
 		}
 
 		// The shared chain: mounts, absolute, cluster-internal,

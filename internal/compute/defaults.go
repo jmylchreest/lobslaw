@@ -13,11 +13,21 @@ const (
 	// the credential has to be able to say so.
 	DefaultAuthHeader = "Authorization"
 
-	// DefaultMaxToolCallsPerTurn caps tool invocations in one turn
-	// when the operator has set no limit. High enough that ordinary
+	// DefaultMaxToolCallsPerTurn caps tool INVOCATIONS in one turn when
+	// the operator has set no limit. High enough that ordinary
 	// multi-step work never reaches it; low enough that a model stuck
 	// re-calling a failing tool stops in the same minute rather than
 	// the same hour.
+	//
+	// Not the same axis as [DefaultMaxToolLoops], and deliberately a
+	// larger number. That one bounds round TRIPS; a single round trip
+	// can carry several tool calls, because the model may request them
+	// in parallel (see the range over chatResp.ToolCalls in the agent
+	// loop). So neither cap subsumes the other: a wide parallel fan-out
+	// reaches 30 invocations in a handful of trips, while a long
+	// serial chain reaches 24 trips having made 24 calls.
+	//
+	// Reconciling the two to one number would remove a real bound.
 	DefaultMaxToolCallsPerTurn = 30
 
 	// DefaultArtifactBaseName names a generated artifact whose prompt

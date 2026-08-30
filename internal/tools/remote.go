@@ -208,7 +208,7 @@ func remoteUpload(ctx context.Context, box *Remote, localRaw, remotePath string)
 	}
 	if !filepath.IsAbs(local) {
 		return compute.MarshalToolError("relative_path", "local_path must be absolute OR mount-scoped (e.g. 'workspace/out.log')",
-			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
+			mountLabelHint())
 	}
 	if payload, exit, refused := compute.HardlinePathRefusal(local, "sent to a remote"); refused {
 		return payload, exit, nil
@@ -237,7 +237,7 @@ func remoteDownload(ctx context.Context, box *Remote, localRaw, remotePath strin
 	}
 	if !filepath.IsAbs(local) {
 		return compute.MarshalToolError("relative_path", "local_path must be absolute OR mount-scoped (e.g. 'workspace/out.log')",
-			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
+			mountLabelHint())
 	}
 	if payload, exit, refused := compute.HardlinePathRefusal(local, "overwritten from a remote"); refused {
 		return payload, exit, nil

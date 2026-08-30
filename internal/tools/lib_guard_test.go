@@ -228,3 +228,19 @@ func TestGuardWithRealMounts(t *testing.T) {
 		t.Errorf("label expanded to %q, want /workspace/notes.md", resolved)
 	}
 }
+
+// A refusal that names a tool the operator may have disabled is worse
+// than one that names nothing: the model spends a call discovering the
+// tool is absent, and the guidance was never actionable anyway. The
+// resolver knows the labels, so the error carries them.
+func TestMountLabelHintNamesLabelsNotATool(t *testing.T) {
+	t.Parallel()
+
+	hint := mountLabelHint()
+	if strings.Contains(hint, "debug_") {
+		t.Errorf("the hint points at a tool that is disabled by default: %q", hint)
+	}
+	if !strings.Contains(hint, "prefix with / for absolute") {
+		t.Errorf("the hint lost its absolute-path advice: %q", hint)
+	}
+}
