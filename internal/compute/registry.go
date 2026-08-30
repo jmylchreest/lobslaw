@@ -135,7 +135,7 @@ func (r *Registry) Get(name string) (*types.ToolDef, bool) {
 	if !ok {
 		return nil, false
 	}
-	return cloneTool(t), true
+	return r.withCrossRefsLocked(t), true
 }
 
 // List returns all registered tools sorted by name. Deterministic
@@ -145,7 +145,7 @@ func (r *Registry) List() []*types.ToolDef {
 	defer r.mu.RUnlock()
 	out := make([]*types.ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
-		out = append(out, cloneTool(t))
+		out = append(out, r.withCrossRefsLocked(t))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -314,4 +314,56 @@ func matchesAny(patterns []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// --- cross-references -------------------------------------------------
+
+// withCrossRefsLocked clones a tool and appends its recommend/avoid
+// lines, resolved against what is registered right now.
+//
+// Rendered on the way OUT rather than at registration, and that is not
+// a style choice: at registration time the tools a definition points
+// at may not exist yet. shell_command recommends glob; whichever
+// registers first would render an empty list. Resolving at read time
+// has no ordering to get wrong, and costs a couple of string joins on
+// a call that already clones every tool.
+//
+// The caller holds at least RLock.
+func (r *Registry) withCrossRefsLocked(t *types.ToolDef) *types.ToolDef {
+	out := cloneTool(t)
+	suffix := r.crossRefLine("Prefer these where they fit", t.RecommendTools) +
+		r.crossRefLine("Do not use these in its place", t.AvoidTools)
+	if suffix != "" {
+		out.Description = strings.TrimRight(out.Description, " ") + suffix
+	}
+	return out
+}
+
+// crossRefLine renders one list, or nothing.
+//
+// Nothing is the important case. A tool whose every recommendation is
+// disabled must produce NO sentence at all — "Prefer these where they
+// fit:" with an empty list tells the model something was withheld and
+// invites it to guess what. Same for avoid.
+//
+// Names are kept in the order the author wrote them. They are a
+// preference ordering ("try glob, then grep"), and sorting would throw
+// that away for tidiness nobody asked for.
+func (r *Registry) crossRefLine(lead string, names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	live := make([]string, 0, len(names))
+	for _, n := range names {
+		// Registered, not merely known: a tool disabled by
+		// compute.disabled_tools is one the model cannot call, and
+		// naming it is the bug this exists to fix.
+		if _, ok := r.tools[n]; ok {
+			live = append(live, n)
+		}
+	}
+	if len(live) == 0 {
+		return ""
+	}
+	return " " + lead + ": " + strings.Join(live, ", ") + "."
 }

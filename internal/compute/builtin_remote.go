@@ -122,7 +122,13 @@ func RemoteToolDefs(set *RemoteSet) []*types.ToolDef {
 			// disposable host bounds the blast radius; it does not make
 			// the action reversible, and the risk tier is about the
 			// action rather than about where it lands.
-			RiskTier: types.RiskIrreversible,
+			//
+			// Work that belongs on another machine does not belong in
+			// the local shell, and the split is structural:
+			// shell_command runs inside THIS process, next to the model
+			// keys and the cluster's mTLS material.
+			AvoidTools: []string{"shell_command"},
+			RiskTier:   types.RiskIrreversible,
 		},
 		remoteSCPToolDef(set),
 	}

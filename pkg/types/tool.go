@@ -23,8 +23,24 @@ type ToolDef struct {
 	Description      string          `json:"description,omitempty"`
 	ParametersSchema json.RawMessage `json:"parameters_schema,omitempty"`
 	Capabilities     []string        `json:"capabilities,omitempty"`
-	SidecarOnly      bool            `json:"sidecar_only,omitempty"`
-	RiskTier         RiskTier        `json:"risk_tier"`
+
+	// RecommendTools names tools to reach for INSTEAD of this one
+	// where they fit, and AvoidTools names tools that should not be
+	// used in this one's place.
+	//
+	// Both are rendered into the description from what is ACTUALLY
+	// REGISTERED on the node, so a cross-reference is never made to a
+	// tool the model cannot call. shell_command's description used to
+	// hardcode "prefer read_file, list_files, glob, grep" — and once
+	// compute.disabled_tools could switch any of those off, that
+	// sentence became a standing lie the model kept acting on.
+	//
+	// Names, not descriptions: the point is that the LIST is derived
+	// and the prose around it is not.
+	RecommendTools []string `json:"recommend_tools,omitempty"`
+	AvoidTools     []string `json:"avoid_tools,omitempty"`
+	SidecarOnly    bool     `json:"sidecar_only,omitempty"`
+	RiskTier       RiskTier `json:"risk_tier"`
 }
 
 // ToolPermission is a per-tool grant attached to a role or session.

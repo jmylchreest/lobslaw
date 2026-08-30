@@ -62,7 +62,13 @@ func StdlibToolDefs() []*types.ToolDef {
 				"required": ["path"],
 				"additionalProperties": false
 			}`),
-			RiskTier: types.RiskReversible,
+			// The mirror of shell_command's recommendation, and it
+			// lands in the same place: the model reads every
+			// description at selection time, so saying it from both
+			// ends is what makes the split stick rather than being
+			// re-derived each turn.
+			AvoidTools: []string{"shell_command"},
+			RiskTier:   types.RiskReversible,
 		},
 		{
 			Name:        "list_files",
