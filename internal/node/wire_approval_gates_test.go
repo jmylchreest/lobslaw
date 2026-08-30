@@ -74,7 +74,7 @@ func TestBothDefaultsSurviveWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := effectFor(t, eng, compute.ApprovalAction, "episodic"); got != types.EffectRequireConfirmation {
+	if got := effectFor(t, eng, compute.MemoryWriteAction, "episodic"); got != types.EffectRequireConfirmation {
 		t.Errorf("memory writes are not staged: effect = %v", got)
 	}
 	if got := effectFor(t, eng, compute.ShellAction, "git status"); got != types.EffectRequireConfirmation {
@@ -95,7 +95,7 @@ func TestOffMeansAbsent(t *testing.T) {
 
 	// Default-deny, because nothing matched — not require_confirmation
 	// from a default that should not exist.
-	if got := effectFor(t, eng, compute.ApprovalAction, "episodic"); got == types.EffectRequireConfirmation {
+	if got := effectFor(t, eng, compute.MemoryWriteAction, "episodic"); got == types.EffectRequireConfirmation {
 		t.Error("a memory write default was installed for a node that did not ask for one")
 	}
 	if got := effectFor(t, eng, compute.ShellAction, "git status"); got != types.EffectRequireConfirmation {
@@ -116,7 +116,7 @@ func TestNoShellGateWithoutTheTool(t *testing.T) {
 	if got := effectFor(t, eng, compute.ShellAction, "git status"); got == types.EffectRequireConfirmation {
 		t.Error("a shell rule was installed on a node with no shell tool")
 	}
-	if got := effectFor(t, eng, compute.ApprovalAction, "episodic"); got != types.EffectRequireConfirmation {
+	if got := effectFor(t, eng, compute.MemoryWriteAction, "episodic"); got != types.EffectRequireConfirmation {
 		t.Errorf("the memory gate was collateral damage: effect = %v", got)
 	}
 }

@@ -40,14 +40,14 @@ import (
 // both.
 const ShellAction = "shell:run"
 
-// ShellUnclassified is the resource a command with no derivable key is
+// UnclassifiedResource is the resource a command with no derivable key is
 // evaluated under.
 //
 // A real key always starts with a rendered token, and a token
 // beginning with "!" renders single-quoted, so no command can reach
 // this namespace by accident. An operator who writes an allow for it
 // has explicitly said "stop asking me about compound commands".
-const ShellUnclassified = "!unclassified"
+const UnclassifiedResource = "!unclassified"
 
 // ShellApprovalDefault is the rule that makes the gate ask.
 //
@@ -76,10 +76,38 @@ func ShellApprovalDefault() types.PolicyRule {
 // be minted from it: the channel offers Approve and Deny only. The
 // resource is still returned in that case, because policy must be able
 // to match on it even when no approval can create a rule for it.
-func ShellGrantResource(params map[string]string) (string, bool) {
-	key, ok := NormaliseCommand(params["command"])
+func ShellGrantResource(params map[string]string) GrantTarget {
+	raw := params["command"]
+	key, ok := NormaliseCommand(raw)
 	if !ok {
-		return ShellUnclassified, false
+		return GrantTarget{Action: ShellAction, Resource: UnclassifiedResource}
+	}
+
+	// A command that reaches off the box is governed by what it does,
+	// not by the tool that ran it. `ssh web01 git pull` here and
+	// remote_ssh(remote=web01, command="git pull") are the same
+	// operation, so they resolve to the same action and the same key
+	// and one rule covers both. Without this, an operator who gated
+	// remote_ssh would have said nothing about the shell reaching the
+	// very same host.
+	if tokens, tok := shellTokens(raw); tok {
+		if class, host, rest, classified := ClassifyCommand(ActiveCommandClasses(), tokens); classified {
+			if host == "" {
+				// Classified but the target could not be read out of
+				// the argv. Confirmable, never grantable: a standing
+				// grant naming a host we guessed at is worse than
+				// asking again.
+				return GrantTarget{Action: class.Action, Resource: UnclassifiedResource}
+			}
+			remoteKey, rok := NormaliseCommand(strings.Join(rest, " "))
+			if !rok || len(rest) == 0 {
+				// scp and friends have no remote command, and an ssh
+				// with none opens a shell. Either way the key is the
+				// host itself.
+				remoteKey = ""
+			}
+			return remoteTarget(class.Action, host, remoteKey)
+		}
 	}
 	if cwd := strings.TrimSpace(params["cwd"]); cwd != "" {
 		// Only when the caller supplied one. The model usually omits
@@ -87,13 +115,13 @@ func ShellGrantResource(params map[string]string) (string, bool) {
 		// different checkouts is two different operations, and an
 		// approval given for one must not cover the other.
 		if !cwdUsableInKey(cwd) {
-			return ShellUnclassified, false
+			return GrantTarget{Action: ShellAction, Resource: UnclassifiedResource}
 		}
 		key = "(cwd=" + cwd + ") " + key
 	}
 	if len([]rune(key)) > shellKeyDisplayMax {
 		// Matchable, not grantable. See shellKeyDisplayMax.
-		return key, false
+		return GrantTarget{Action: ShellAction, Resource: key}
 	}
 	if strings.Contains(key, "*") {
 		// ApprovalRules.Mint refuses any resource containing a
@@ -101,9 +129,21 @@ func ShellGrantResource(params map[string]string) (string, bool) {
 		// that reports success and stores nothing. A quoted glob —
 		// `grep '*.go'` — is a literal to the shell but still a
 		// wildcard to the engine's matcher.
-		return key, false
+		return GrantTarget{Action: ShellAction, Resource: key}
 	}
-	return key, true
+	return GrantTarget{Action: ShellAction, Resource: key, Grantable: true}
+}
+
+// remoteTarget builds the grant for a host-aimed command, applying the
+// same grantability rules the shell key gets: too long to display, or
+// carrying a wildcard the minter would refuse, means confirmable but
+// not mintable.
+func remoteTarget(action, host, command string) GrantTarget {
+	key := RemoteResourceKey(host, command)
+	if len([]rune(key)) > shellKeyDisplayMax || strings.Contains(key, "*") {
+		return GrantTarget{Action: action, Resource: key}
+	}
+	return GrantTarget{Action: action, Resource: key, Grantable: true}
 }
 
 // ShellCommandSummary renders the call for the confirmation prompt.
@@ -121,7 +161,8 @@ func ShellCommandSummary(params map[string]string) string {
 	if cmd == "" {
 		return ""
 	}
-	resource, grantable := ShellGrantResource(params)
+	t := ShellGrantResource(params)
+	resource, grantable := t.Resource, t.Grantable
 
 	var b strings.Builder
 	b.WriteString("run `")

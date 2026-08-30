@@ -27,13 +27,13 @@ import (
 // have grown a second, subtly different approval system beside the one
 // R2 built.
 
-// ApprovalAction is the policy action a gated write is checked under.
+// MemoryWriteAction is the policy action a gated write is checked under.
 //
 // Distinct from tool:exec, deliberately. A deployment allows tool:exec
 // on memory_write in the ordinary way — otherwise the tool could not
 // run at all — so reusing that action would mean the allow rule
 // already in place silently satisfied the gate.
-const ApprovalAction = "memory:write"
+const MemoryWriteAction = "memory:write"
 
 // gatedTool is what an extra approval check needs to know.
 type gatedTool struct {
@@ -47,7 +47,7 @@ type gatedTool struct {
 	// grantable=false means confirmable but not generalisable: there
 	// is no class a grant could name, so the channel is told the
 	// resource is empty and offers no scope button.
-	resolve func(map[string]string) (string, bool)
+	resolve func(map[string]string) GrantTarget
 	// summarise turns the call's parameters into something a person
 	// can decide about. A confirmation that says only "the agent wants
 	// to write a memory" is one nobody can answer usefully, so they
@@ -72,18 +72,44 @@ func (e *Executor) RequireApproval(tool, resource string, summarise func(map[str
 	if e.gated == nil {
 		e.gated = map[string]gatedTool{}
 	}
-	e.gated[tool] = gatedTool{action: ApprovalAction, resource: resource, summarise: summarise}
+	e.gated[tool] = gatedTool{action: MemoryWriteAction, resource: resource, summarise: summarise}
+}
+
+// GrantTarget is what a command resolves to: the rule that governs it,
+// the key it is granted under, and whether a standing grant may be
+// minted from it at all.
+type GrantTarget struct {
+	// Action selects the rule. Chosen by the resolver rather than the
+	// registration site, because one tool can perform more than one
+	// kind of operation — shell_command running ssh is reaching
+	// another host, whatever the tool is called.
+	//
+	// Validated against a closed set before use. That is the same
+	// protection the old fixed action gave: a resolver returning
+	// "tool:exec" would otherwise be satisfied by the blanket rule
+	// every deployment already carries.
+	Action string
+
+	// Resource is the grant key.
+	Resource string
+
+	// Grantable false means confirmable but not mintable: the channel
+	// offers Approve and Deny, without "always".
+	Grantable bool
+}
+
+// grantActions is every action a resolver may name. A closed set, not
+// a convention — see GrantTarget.Action.
+var grantActions = map[string]bool{
+	ShellAction:      true,
+	RemoteAction:     true,
+	RemoteCopyAction: true,
+	NetFetchAction:   true,
 }
 
 // RequireCommandApproval marks a tool whose approval is about its
 // PARAMETERS rather than its name.
-//
-// The ACTION is not a parameter here for the same reason it is not one
-// on RequireApproval: a caller could pass "tool:exec", which every
-// deployment already allows for this tool from the wire_seeds.go
-// default, and the gate would be satisfied by a rule that has nothing
-// to do with it.
-func (e *Executor) RequireCommandApproval(tool string, resolve func(map[string]string) (string, bool), summarise func(map[string]string) string) {
+func (e *Executor) RequireCommandApproval(tool string, resolve func(map[string]string) GrantTarget, summarise func(map[string]string) string) {
 	e.gateMu.Lock()
 	defer e.gateMu.Unlock()
 	if e.gated == nil {
@@ -112,11 +138,20 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 	if !ok {
 		return nil
 	}
-	resource, grantable := gate.resource, true
+	action, resource, grantable := gate.action, gate.resource, true
 	if gate.resolve != nil {
-		resource, grantable = gate.resolve(params)
+		t := gate.resolve(params)
+		resource, grantable = t.Resource, t.Grantable
+		// An unrecognised action falls back to the registered one
+		// rather than being trusted. A resolver is in-tree code, but
+		// the whole point of the closed set is that a mistake here
+		// cannot silently borrow a rule that was written about
+		// something else.
+		if grantActions[t.Action] {
+			action = t.Action
+		}
 	}
-	err := e.PolicyAllow(ctx, claims, gate.action, resource)
+	err := e.PolicyAllow(ctx, claims, action, resource)
 	if err == nil {
 		return nil
 	}
@@ -129,7 +164,7 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 		return err
 	}
 	req := &ConfirmationRequest{
-		inner: err, Action: gate.action, Resource: resource, Grantable: grantable,
+		inner: err, Action: action, Resource: resource, Grantable: grantable,
 	}
 	if gate.summarise != nil {
 		req.Summary = gate.summarise(params)
@@ -206,7 +241,7 @@ func MemoryWriteSummary(params map[string]string) string {
 	return b.String()
 }
 
-// WriteApprovalDefault is the policy rule the config flag installs.
+// MemoryWriteApprovalDefault is the policy rule the config flag installs.
 //
 // A rule rather than a hardcoded branch, so it composes: an operator
 // can override it with anything of higher priority, an approval can
@@ -215,11 +250,11 @@ func MemoryWriteSummary(params map[string]string) string {
 //
 // Priority is deliberately the lowest the type allows. A default that
 // could outrank an operator's rule would not be a default.
-func WriteApprovalDefault() types.PolicyRule {
+func MemoryWriteApprovalDefault() types.PolicyRule {
 	return types.PolicyRule{
 		ID:       "config:memory.write_approval",
 		Subject:  "*",
-		Action:   ApprovalAction,
+		Action:   MemoryWriteAction,
 		Resource: "*",
 		Effect:   types.EffectRequireConfirmation,
 		Priority: -1 << 30,

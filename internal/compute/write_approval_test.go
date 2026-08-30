@@ -58,7 +58,7 @@ func gatedExecutor(t *testing.T, rules ...*lobslawv1.PolicyRule) (*Executor, *Se
 	}
 
 	eng := policy.NewEngine(store, slog.New(slog.DiscardHandler))
-	eng.SetDefaults([]types.PolicyRule{WriteApprovalDefault()})
+	eng.SetDefaults([]types.PolicyRule{MemoryWriteApprovalDefault()})
 
 	approvals := NewSessionApprovals()
 	e := NewExecutor(newTestCatalogue(), eng, nil, ExecutorConfig{}, slog.New(slog.DiscardHandler))
@@ -108,7 +108,7 @@ func TestThePromptSaysWhatIsBeingWritten(t *testing.T) {
 func TestADeniedWriteCarriesNoContent(t *testing.T) {
 	t.Parallel()
 	e, _ := gatedExecutor(t, &lobslawv1.PolicyRule{
-		Id: "operator-forbids", Subject: "*", Action: ApprovalAction, Resource: "*",
+		Id: "operator-forbids", Subject: "*", Action: MemoryWriteAction, Resource: "*",
 		Effect: "deny", Priority: 0,
 	})
 
@@ -129,7 +129,7 @@ func TestAnAlwaysAllowRulePassesTheGate(t *testing.T) {
 	t.Parallel()
 	e, _ := gatedExecutor(t, &lobslawv1.PolicyRule{
 		Id: "approval:prompt-1", Subject: "user:alice",
-		Action: ApprovalAction, Resource: "episodic",
+		Action: MemoryWriteAction, Resource: "episodic",
 		Effect: "allow", Priority: 1,
 	})
 
@@ -152,7 +152,7 @@ func TestASessionGrantSatisfiesTheGate(t *testing.T) {
 		"memory_write", writeParams()); !errors.Is(err, ErrRequireConfirm) {
 		t.Fatalf("the first write was not staged: %v", err)
 	}
-	approvals.Grant(ctx, ApprovalAction, "episodic")
+	approvals.Grant(ctx, MemoryWriteAction, "episodic")
 	if err := e.CheckGate(ctx, &types.Claims{UserID: "alice"},
 		"memory_write", writeParams()); err != nil {
 		t.Errorf("a granted conversation was asked again: %v", err)
@@ -170,7 +170,7 @@ func TestAGrantDoesNotCoverAnotherConversation(t *testing.T) {
 	other := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "99",
 	})
-	approvals.Grant(granted, ApprovalAction, "episodic")
+	approvals.Grant(granted, MemoryWriteAction, "episodic")
 
 	if err := e.CheckGate(other, &types.Claims{UserID: "alice"},
 		"memory_write", writeParams()); !errors.Is(err, ErrRequireConfirm) {
@@ -230,14 +230,14 @@ func TestTheGateUsesItsOwnAction(t *testing.T) {
 // default.
 func TestTheDefaultRuleIsTheLowestPriority(t *testing.T) {
 	t.Parallel()
-	r := WriteApprovalDefault()
+	r := MemoryWriteApprovalDefault()
 	if r.Priority >= 0 {
 		t.Errorf("priority = %d; it must lose to anything an operator wrote", r.Priority)
 	}
 	if r.Effect != types.EffectRequireConfirmation {
 		t.Errorf("effect = %v", r.Effect)
 	}
-	if r.Action != ApprovalAction {
+	if r.Action != MemoryWriteAction {
 		t.Errorf("action = %q", r.Action)
 	}
 	// The provenance says where it came from, so an operator seeing it

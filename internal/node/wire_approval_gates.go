@@ -1,6 +1,8 @@
 package node
 
 import (
+	"strings"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -34,10 +36,10 @@ func (n *Node) wireApprovalGates() error {
 				"agent-initiated writes are NOT being staged",
 				"has_executor", n.executor != nil, "has_policy", n.policyEngine != nil)
 		} else {
-			defaults = append(defaults, compute.WriteApprovalDefault())
+			defaults = append(defaults, compute.MemoryWriteApprovalDefault())
 			n.executor.RequireApproval("memory_write", "episodic", compute.MemoryWriteSummary)
 			n.log.Info("memory: agent-initiated writes are staged for approval",
-				"action", compute.ApprovalAction,
+				"action", compute.MemoryWriteAction,
 				"override", "write a policy rule of higher priority, or approve with scope=always")
 		}
 	}
@@ -60,6 +62,34 @@ func (n *Node) wireApprovalGates() error {
 		}
 	}
 
+	// The defaults for the reaching-off-the-box actions go in whenever
+	// anything can produce them, which includes a node with no
+	// [[remote]] at all: shell_command classifies `ssh host uptime`
+	// as remote:run, and without a rule for that action the call hits
+	// default-deny rather than asking. Gating these on remotes being
+	// declared turned a question into a refusal.
+	if n.executor != nil && n.policyEngine != nil && (n.shellIsRegistered() || len(n.cfg.Remotes) > 0) {
+		defaults = append(defaults,
+			compute.RemoteApprovalDefault(),
+			compute.RemoteCopyApprovalDefault(),
+			compute.NetFetchApprovalDefault())
+	}
+
+	// The remote tools' own gates, which do need a remote to exist.
+	if len(n.cfg.Remotes) > 0 && n.executor != nil && n.policyEngine != nil {
+		// Keyed on the host the name resolves to, so a grant written
+		// for this remote also covers shell_command reaching the same
+		// box — which only knows the host.
+		hostOf := n.remoteHostLookup()
+		n.executor.RequireCommandApproval("remote_ssh",
+			compute.RemoteGrantResourceFor(hostOf), compute.RemoteCommandSummary)
+		n.executor.RequireCommandApproval("remote_scp",
+			compute.RemoteCopyGrantResourceFor(hostOf), compute.RemoteCopySummary)
+		n.log.Info("compute: remote commands are approved per command and host",
+			"action", compute.RemoteAction,
+			"override", `write a policy rule, e.g. action="remote:run" resource="(remote=*) git *"`)
+	}
+
 	// Once, and unconditionally — including with an empty slice, so a
 	// node that turned a gate off clears the rule rather than leaving
 	// the previous boot's default in place.
@@ -79,4 +109,18 @@ func (n *Node) shellIsRegistered() bool {
 	}
 	_, ok := n.toolRegistry.Get("shell_command")
 	return ok
+}
+
+// remoteHostLookup maps a configured remote's name to its host, off
+// config rather than the live RemoteSet: the gate is registered before
+// the tools are wired, and the two read the same [[remote]] blocks.
+func (n *Node) remoteHostLookup() compute.RemoteHostLookup {
+	hosts := make(map[string]string, len(n.cfg.Remotes))
+	for _, r := range n.cfg.Remotes {
+		hosts[strings.TrimSpace(r.Name)] = strings.TrimSpace(r.Host)
+	}
+	return func(name string) (string, bool) {
+		h, ok := hosts[name]
+		return h, ok
+	}
 }

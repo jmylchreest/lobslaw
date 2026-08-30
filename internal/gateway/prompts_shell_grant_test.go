@@ -122,7 +122,7 @@ func TestACommandWithNoStableFormOffersNoScopeButtons(t *testing.T) {
 	// What the executor reports for `git status && rm -rf ~`: a real
 	// resource, so policy and the turn approval can both match on it,
 	// and grantable=false, so nothing is offered to remember.
-	raiseConfirmationScoped(t, h, compute.ShellAction, compute.ShellUnclassified, false)
+	raiseConfirmationScoped(t, h, compute.ShellAction, compute.UnclassifiedResource, false)
 
 	texts := buttonTexts(t, h.capturedCalls())
 	for _, text := range texts {
