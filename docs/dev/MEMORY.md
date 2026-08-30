@@ -10,7 +10,7 @@ Buckets persisted through Raft:
 - **EpisodicRecords** — structured events with tags, importance, timestamps. Dream/REM consolidation source.
 - **Sessions / SessionMessages** — durable conversation transcripts. See [Sessions](#sessions) below.
 
-Every operation distinguishes **deterministic primitives** (cheap math — Search, FindClusters, Forget) from **LLM interpretation** (Summarizer, Adjudicator, Reranker). Callers compose the two layers into workflows. The memory service never calls an LLM directly; the LLM layer never writes to the store directly. Hard boundary.
+Every operation distinguishes **deterministic primitives** (cheap math — Search, FindClusters, Forget) from **LLM interpretation** (Summarizer, and the planned Adjudicator and Reranker — see below; only Summarizer is built). Callers compose the two layers into workflows. The memory service never calls an LLM directly; the LLM layer never writes to the store directly. Hard boundary.
 
 ## Architectural split
 

@@ -12,7 +12,6 @@ type Role string
 const (
 	RoleMain       Role = "main"
 	RolePreflight  Role = "preflight"
-	RoleReranker   Role = "reranker"
 	RoleSummariser Role = "summariser"
 
 	// RoleReview is the post-turn review fork — the pass that asks
@@ -133,13 +132,6 @@ func (rm *RoleMap) resolve(role Role) Role {
 		return role
 	}
 	switch role {
-	case RoleReranker:
-		// Reranker is the only two-step fallback: preflight first,
-		// then main.
-		if _, ok := rm.clients[RolePreflight]; ok {
-			return RolePreflight
-		}
-		return RoleMain
 	case RolePreflight, RoleSummariser, RoleReview:
 		// Review falls back to main, which is also the cheap case:
 		// same model, warm cache, full replay.

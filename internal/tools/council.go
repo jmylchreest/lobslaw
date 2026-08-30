@@ -59,7 +59,7 @@ func CouncilToolDefs() []*types.ToolDef {
 		{
 			Name:        "list_providers",
 			Path:        compute.BuiltinScheme + "list_providers",
-			Description: "List the LLM providers configured on this node. Returns label, trust tier, capabilities, backup label, and the roles each provider serves — NO model names, NO endpoints, NO credentials. Roles are 'main' (the user-facing turn), 'preflight' (fast classification on every turn), 'reranker' (memory rerank) and 'summariser'; a provider with no roles listed serves none and is available only via council_review. NOT the skills list: 'capabilities' here means modalities the provider can serve (chat, vision, image, speak), not things the assistant knows how to do. If the user asks what skills you have, what you can do, or what you know how to do, answer from the Installed Skills section of your system prompt — do NOT call this tool. Use it only for questions about models and providers, or before council_review to pick providers. Report the roles as given — do not infer purpose from the ordering or from backup pointers. Present as a markdown table.",
+			Description: "List the LLM providers configured on this node. Returns label, trust tier, capabilities, backup label, and the roles each provider serves — NO model names, NO endpoints, NO credentials. Roles are 'main' (the user-facing turn), 'preflight' (fast classification on every turn) and 'summariser'; a provider with no roles listed serves none and is available only via council_review. NOT the skills list: 'capabilities' here means modalities the provider can serve (chat, vision, image, speak), not things the assistant knows how to do. If the user asks what skills you have, what you can do, or what you know how to do, answer from the Installed Skills section of your system prompt — do NOT call this tool. Use it only for questions about models and providers, or before council_review to pick providers. Report the roles as given — do not infer purpose from the ordering or from backup pointers. Present as a markdown table.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},
@@ -90,7 +90,7 @@ func CouncilToolDefs() []*types.ToolDef {
 // operator thinks about them. RoleReview is omitted: it is an internal
 // pass with no user-facing meaning, and listing it invites questions
 // about a knob that is not in [compute.roles].
-var reportedRoles = []compute.Role{compute.RoleMain, compute.RolePreflight, compute.RoleReranker, compute.RoleSummariser}
+var reportedRoles = []compute.Role{compute.RoleMain, compute.RolePreflight, compute.RoleSummariser}
 
 func newListProvidersHandler(reg *compute.ProviderRegistry, roles *compute.RoleMap) compute.BuiltinFunc {
 	return func(_ context.Context, _ map[string]string) ([]byte, int, error) {

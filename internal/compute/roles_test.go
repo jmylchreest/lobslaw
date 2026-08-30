@@ -26,7 +26,7 @@ func TestRoleMapMainFallsThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range []Role{RoleMain, RolePreflight, RoleReranker, RoleSummariser} {
+	for _, role := range []Role{RoleMain, RolePreflight, RoleSummariser} {
 		if rm.For(role) != main {
 			t.Errorf("role %q didn't fall through to main", role)
 		}
@@ -40,10 +40,6 @@ func TestRoleMapExplicitPreflight(t *testing.T) {
 	rm, _ := NewRoleMap(main, map[Role]LLMProvider{RolePreflight: pre})
 	if rm.For(RolePreflight) != pre {
 		t.Error("preflight override failed")
-	}
-	// Reranker falls through to preflight when set.
-	if rm.For(RoleReranker) != pre {
-		t.Error("reranker should fall back to preflight")
 	}
 	// Summariser falls through to main.
 	if rm.For(RoleSummariser) != main {

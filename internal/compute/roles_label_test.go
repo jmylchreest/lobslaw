@@ -29,7 +29,7 @@ func labelledMap(t *testing.T, explicit map[Role]string) *RoleMap {
 func TestAnUnsetRoleReportsTheProviderItActuallyFallsBackTo(t *testing.T) {
 	t.Parallel()
 	rm := labelledMap(t, map[Role]string{})
-	for _, role := range []Role{RoleMain, RolePreflight, RoleReranker, RoleSummariser, RoleReview} {
+	for _, role := range []Role{RoleMain, RolePreflight, RoleSummariser, RoleReview} {
 		if got := rm.LabelFor(role); got != "main-provider" {
 			t.Errorf("%s resolved to %q, want the main provider", role, got)
 		}
@@ -44,16 +44,6 @@ func TestAnExplicitRoleReportsItsOwnProvider(t *testing.T) {
 	}
 }
 
-// Reranker is the only two-step fallback: preflight first, then main.
-// Getting this wrong would name main while the turn used preflight.
-func TestTheRerankerFallsBackThroughPreflightNotStraightToMain(t *testing.T) {
-	t.Parallel()
-	rm := labelledMap(t, map[Role]string{RolePreflight: "tiny"})
-	if got := rm.LabelFor(RoleReranker); got != "tiny" {
-		t.Errorf("reranker = %q, want tiny (via preflight)", got)
-	}
-}
-
 // THE INVARIANT. A label naming a provider other than the one the
 // turn used is worse than no label: it is a wrong answer delivered
 // with the authority of the node's own configuration. For and
@@ -64,9 +54,8 @@ func TestTheLabelAlwaysNamesTheProviderThatActuallyRuns(t *testing.T) {
 		{},
 		{RolePreflight: "tiny"},
 		{RoleSummariser: "big"},
-		{RolePreflight: "tiny", RoleReranker: "other"},
 		{RoleMain: "overridden", RolePreflight: "tiny"},
-		{RolePreflight: "tiny", RoleSummariser: "big", RoleReranker: "other"},
+		{RolePreflight: "tiny", RoleSummariser: "big"},
 	} {
 		clients := map[Role]LLMProvider{}
 		byLabel := map[string]LLMProvider{"main-provider": NewMockProvider(MockResponse{Content: "main"})}
@@ -80,7 +69,7 @@ func TestTheLabelAlwaysNamesTheProviderThatActuallyRuns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, role := range []Role{RoleMain, RolePreflight, RoleReranker, RoleSummariser, RoleReview} {
+		for _, role := range []Role{RoleMain, RolePreflight, RoleSummariser, RoleReview} {
 			label := rm.LabelFor(role)
 			if byLabel[label] != rm.For(role) {
 				t.Errorf("config %v: %s runs on the provider registered as %q, "+

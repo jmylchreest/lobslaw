@@ -196,9 +196,6 @@ func (d *debugInspector) DebugProviders() []map[string]any {
 		if roles.Preflight == p.Label {
 			assignedRoles = append(assignedRoles, "preflight")
 		}
-		if roles.Reranker == p.Label {
-			assignedRoles = append(assignedRoles, "reranker")
-		}
 		if roles.Summariser == p.Label {
 			assignedRoles = append(assignedRoles, "summariser")
 		}

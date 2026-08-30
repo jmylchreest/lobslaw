@@ -518,7 +518,7 @@ type ComputeConfig struct {
 	// mount is reachable by the sweep.
 	ArtifactDiskPercent float64 `koanf:"artifact_disk_percent,omitempty"`
 	// Roles maps named functional roles (main, preflight,
-	// reranker, summariser, etc.) to provider labels. Internal
+	// preflight, summariser, etc.) to provider labels. Internal
 	// code asks the resolver for a role by name; the resolver
 	// dereferences to the provider. Empty → first provider fills
 	// every role (today's behaviour).
@@ -626,10 +626,6 @@ type RolesConfig struct {
 	// Preflight is the cheap model used for context-engine
 	// classification and prompt tailoring. Empty → Main.
 	Preflight string `koanf:"preflight,omitempty"`
-
-	// Reranker is the model used for memory rerank (two-stage
-	// RAG). Empty → Preflight.
-	Reranker string `koanf:"reranker,omitempty"`
 
 	// Summariser is the model used for dream consolidation /
 	// episodic summarisation. Empty → Main.
