@@ -100,7 +100,7 @@ func Generate(in GenerateInput) string {
 		// to read this document is worth nothing underneath the
 		// document. See BuildPromptContract.
 		BuildPromptContract(),
-		BuildSafety(),
+		BuildSafety(in.Tools),
 		BuildPersonality(in.Soul),
 		BuildFragments(in.Soul),
 		BuildTooling(in.Tools),

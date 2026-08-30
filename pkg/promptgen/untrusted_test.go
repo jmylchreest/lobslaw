@@ -226,7 +226,7 @@ func TestThePromptPrefixIsStableAcrossTurns(t *testing.T) {
 	// Identity and safety in particular must be inside it: they are
 	// the largest static sections and the reason caching pays.
 	head := first[:shared]
-	if !strings.Contains(head, BuildSafety().Body) {
+	if !strings.Contains(head, BuildSafety(in.Tools).Body) {
 		t.Error("the safety section is outside the cacheable prefix")
 	}
 }
