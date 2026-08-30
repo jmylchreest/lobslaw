@@ -516,8 +516,8 @@ func learnedRollback(args []string) error {
 // firstLine keeps a listing to one row per version even when a
 // description slipped past its single-line rule.
 func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, "\n"); ok {
+		return before
 	}
 	return s
 }

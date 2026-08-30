@@ -25,11 +25,9 @@ func startREST(t *testing.T, agent *compute.Agent) (string, func()) {
 	srv := NewServer(RESTConfig{Addr: "127.0.0.1:0"}, agent)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = srv.Start(ctx)
-	}()
+	})
 	// Wait briefly for Start to bind.
 	deadline := time.Now().Add(time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {
@@ -203,11 +201,9 @@ func startRESTWithAuth(t *testing.T, agent *compute.Agent, requireAuth bool) (st
 	}, agent)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = srv.Start(ctx)
-	}()
+	})
 	deadline := time.Now().Add(time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)

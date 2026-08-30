@@ -117,12 +117,10 @@ func lookupBuiltin(model string) (types.ProviderPricing, bool) {
 // integer-cent approach would lose meaningful precision for
 // sub-penny calls.
 func EstimateCost(usage Usage, pricing types.ProviderPricing) float64 {
-	nonCached := usage.PromptTokens - usage.CachedTokens
-	if nonCached < 0 {
+	nonCached := max(usage.PromptTokens-usage.CachedTokens,
 		// Defensive: provider reported cached > total prompt. Treat as
 		// all-cached rather than negative.
-		nonCached = 0
-	}
+		0)
 	cost := 0.0
 	cost += float64(nonCached) * pricing.InputUSDPer1K / 1000.0
 	cost += float64(usage.CachedTokens) * pricing.CachedUSDPer1K / 1000.0

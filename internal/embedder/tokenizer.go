@@ -304,7 +304,7 @@ func (t *Tokenizer) Encode(text string) []int32 {
 		// Each whitespace-delimited word tokenised independently with a
 		// leading U+2581, so no piece can span a word boundary.
 		var out []int32
-		for _, word := range strings.Fields(normalized) {
+		for word := range strings.FieldsSeq(normalized) {
 			out = append(out, t.viterbi(metaspace+word)...)
 		}
 		return out

@@ -385,8 +385,8 @@ func CheckCommandPaths(cmd string) error {
 		if w == "" || !strings.ContainsAny(w, "/.") {
 			continue
 		}
-		if strings.HasPrefix(w, "~/") {
-			w = filepath.Join(homeDir(), strings.TrimPrefix(w, "~/"))
+		if after, ok := strings.CutPrefix(w, "~/"); ok {
+			w = filepath.Join(homeDir(), after)
 		}
 		verdict, err := CheckPath(w)
 		// A shell has no way to ask for confirmation mid-command, so a

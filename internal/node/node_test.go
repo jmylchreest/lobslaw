@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -607,8 +608,7 @@ func TestNodeGatewayUnknownChannelTypeSkipped(t *testing.T) {
 		t.Fatalf("node.New should tolerate unknown types: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- n.Start(ctx) }()
 
@@ -1537,13 +1537,7 @@ emotive_style:
 	if len(resp.Reloaded) == 0 {
 		t.Errorf("empty sections should reload all; got empty response")
 	}
-	found := false
-	for _, s := range resp.Reloaded {
-		if s == "soul" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(resp.Reloaded, "soul")
 	if !found {
 		t.Errorf("soul missing from reloaded=%v", resp.Reloaded)
 	}

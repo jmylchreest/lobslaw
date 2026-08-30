@@ -200,11 +200,9 @@ func TestLoadDoesNotFallBackToEtc(t *testing.T) {
 	}
 }
 
-func intPtr(v int) *int { return &v }
-
 func TestValidateContextConfigRejectsNegatives(t *testing.T) {
 	t.Parallel()
-	c := &Config{Compute: ComputeConfig{Context: ContextConfig{TailTokens: intPtr(-1)}}}
+	c := &Config{Compute: ComputeConfig{Context: ContextConfig{TailTokens: new(-1)}}}
 	if err := c.Validate(); err == nil {
 		t.Error("negative tail_tokens should fail validation")
 	}
@@ -215,8 +213,8 @@ func TestValidateContextConfigRejectsNegatives(t *testing.T) {
 func TestValidateContextConfigRejectsOversizedSummary(t *testing.T) {
 	t.Parallel()
 	c := &Config{Compute: ComputeConfig{Context: ContextConfig{
-		TailTokens:              intPtr(1000),
-		CompactMaxSummaryTokens: intPtr(2000),
+		TailTokens:              new(1000),
+		CompactMaxSummaryTokens: new(2000),
 	}}}
 	err := c.Validate()
 	if err == nil {
@@ -230,9 +228,9 @@ func TestValidateContextConfigRejectsOversizedSummary(t *testing.T) {
 func TestValidateContextConfigAcceptsSaneValues(t *testing.T) {
 	t.Parallel()
 	c := &Config{Compute: ComputeConfig{Context: ContextConfig{
-		TailTokens:              intPtr(4000),
-		CompactMaxSummaryTokens: intPtr(600),
-		CompactKeepMessages:     intPtr(40),
+		TailTokens:              new(4000),
+		CompactMaxSummaryTokens: new(600),
+		CompactKeepMessages:     new(40),
 	}}}
 	if err := c.Validate(); err != nil {
 		t.Errorf("sane config rejected: %v", err)
@@ -243,8 +241,8 @@ func TestValidateContextConfigAcceptsSaneValues(t *testing.T) {
 func TestValidateContextConfigAllowsExplicitZero(t *testing.T) {
 	t.Parallel()
 	c := &Config{Compute: ComputeConfig{Context: ContextConfig{
-		TailTokens:             intPtr(0),
-		HistoryToolResultBytes: intPtr(0),
+		TailTokens:             new(0),
+		HistoryToolResultBytes: new(0),
 	}}}
 	if err := c.Validate(); err != nil {
 		t.Errorf("explicit zero should be allowed as 'disabled': %v", err)

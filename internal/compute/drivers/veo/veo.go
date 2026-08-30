@@ -239,8 +239,8 @@ func (d *Driver) Poll(ctx context.Context, h compute.JobHandle) (compute.JobStat
 // resolve time as "unknown mount", which names the problem exactly.
 func splitGCSURI(uri string) (mount, path string) {
 	trimmed := strings.TrimPrefix(uri, "gs://")
-	if i := strings.Index(trimmed, "/"); i >= 0 {
-		return trimmed[:i], trimmed[i+1:]
+	if before, after, ok := strings.Cut(trimmed, "/"); ok {
+		return before, after
 	}
 	return trimmed, ""
 }

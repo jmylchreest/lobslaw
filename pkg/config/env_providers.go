@@ -61,12 +61,12 @@ func collectEnvProviders(env []string) (map[string]types.ProviderConfig, error) 
 	capabilitiesByLabel := make(map[string][]string)
 
 	for _, kv := range env {
-		eq := strings.IndexByte(kv, '=')
-		if eq < 0 {
+		before, after, ok := strings.Cut(kv, "=")
+		if !ok {
 			continue
 		}
-		key := kv[:eq]
-		val := kv[eq+1:]
+		key := before
+		val := after
 		if !strings.HasPrefix(key, envProviderPrefix) {
 			continue
 		}

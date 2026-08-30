@@ -172,9 +172,9 @@ func runBootstrap(ctx context.Context, satisfier *Satisfier, mgrName string, cli
 	}
 	out, err := satisfier.runner.Run(ctx, interp, []string{tmp.Name()}, env)
 	if err != nil {
-		return fmt.Errorf("binaries: bootstrap %q %s: %w (output: %s)", mgrName, interp, err, textutil.Truncate(string(out), "…", 512))
+		return fmt.Errorf("binaries: bootstrap %q %s: %w (output: %s)", mgrName, interp, err, textutil.Truncate(out, "…", 512))
 	}
-	satisfier.log.Info("binaries: bootstrap ok", "manager", mgrName, "url", recipe.URL, "output_head", textutil.Truncate(string(out), "…", 256))
+	satisfier.log.Info("binaries: bootstrap ok", "manager", mgrName, "url", recipe.URL, "output_head", textutil.Truncate(out, "…", 256))
 
 	target, ok := satisfier.managers[mgrName]
 	if !ok {

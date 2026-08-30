@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/jmylchreest/lobslaw/internal/storage"
@@ -195,19 +196,19 @@ func flattenOptions(opts map[string]string) string {
 		keys = append(keys, k)
 	}
 	sortStrings(keys)
-	out := ""
+	var out strings.Builder
 	for i, k := range keys {
 		if i > 0 {
-			out += ","
+			out.WriteString(",")
 		}
 		v := opts[k]
 		if v == "" {
-			out += k
+			out.WriteString(k)
 		} else {
-			out += k + "=" + v
+			out.WriteString(k + "=" + v)
 		}
 	}
-	return out
+	return out.String()
 }
 
 // sortStrings is a tiny insertion sort — avoids pulling sort into

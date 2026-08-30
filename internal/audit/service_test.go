@@ -103,7 +103,7 @@ func TestServiceQueryUnknownSink(t *testing.T) {
 func TestServiceVerifyChainClean(t *testing.T) {
 	t.Parallel()
 	svc, _ := newServiceWithLocal(t)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := svc.Append(t.Context(), &lobslawv1.AppendRequest{
 			Entry: &lobslawv1.AuditEntry{
 				Timestamp: timestamppb.Now(),

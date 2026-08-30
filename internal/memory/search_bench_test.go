@@ -82,7 +82,7 @@ func seedVectors(b *testing.B, s *Store, n, dim int) {
 	for i := range text {
 		text[i] = byte('a' + i%26)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		rec := &lobslawv1.VectorRecord{
 			Id:        fmt.Sprintf("vec-%08d", i),
 			Embedding: randVec(rng, dim),
@@ -163,9 +163,8 @@ func BenchmarkScanDecryptOnly(b *testing.B) {
 	s := benchStore(b)
 	seedVectors(b, s, n, benchDim)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var bytes int
 		if err := s.ForEach(BucketVectorRecords, func(_ string, v []byte) error {
 			bytes += len(v)
@@ -184,9 +183,8 @@ func BenchmarkScanDecryptUnmarshal(b *testing.B) {
 	s := benchStore(b)
 	seedVectors(b, s, n, benchDim)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if err := s.ForEach(BucketVectorRecords, func(_ string, raw []byte) error {
 			var v lobslawv1.VectorRecord
 			return proto.Unmarshal(raw, &v)
@@ -210,9 +208,8 @@ func BenchmarkCosineOnly(b *testing.B) {
 	q := randVec(rand.New(rand.NewSource(7)), benchDim)
 	qn := norm(q)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var best float32
 		for _, v := range vecs {
 			if score := dot(q, v) / (qn * norm(v)); score > best {
@@ -234,8 +231,7 @@ func BenchmarkNormRecompute(b *testing.B) {
 		vecs[i] = randVec(rng, benchDim)
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		var sum float32
 		for _, v := range vecs {
 			sum += norm(v)

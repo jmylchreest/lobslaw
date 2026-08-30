@@ -165,7 +165,7 @@ func TestTheUsageAdvertisesNothingUnwired(t *testing.T) {
 		"list": true, "import": true, "export": true,
 		"remove": true, "rollback": true,
 	}
-	for _, line := range strings.Split(skillsUsage, "\n") {
+	for line := range strings.SplitSeq(skillsUsage, "\n") {
 		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
 			continue
 		}

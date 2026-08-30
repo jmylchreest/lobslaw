@@ -161,9 +161,7 @@ func TestPromptsConcurrentResolveHasOneWinner(t *testing.T) {
 			if i%2 == 0 {
 				d = PromptDenied
 			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				switch err := r.Resolve(p.ID, d, PromptScopeOnce); {
 				case err == nil:
@@ -173,7 +171,7 @@ func TestPromptsConcurrentResolveHasOneWinner(t *testing.T) {
 				default:
 					t.Errorf("unexpected error: %v", err)
 				}
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()

@@ -157,8 +157,8 @@ func callbackDataFor(t *testing.T, calls []tgAPICall, verb string) string {
 			for _, cell := range cells {
 				b, _ := cell.(map[string]any)
 				data, _ := b["callback_data"].(string)
-				if strings.HasPrefix(data, "prompt:"+verb+":") {
-					return strings.TrimPrefix(data, "prompt:"+verb+":")
+				if after, ok := strings.CutPrefix(data, "prompt:"+verb+":"); ok {
+					return after
 				}
 			}
 		}

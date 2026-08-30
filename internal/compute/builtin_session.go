@@ -230,7 +230,7 @@ func newSessionSearchHandler(cfg SessionToolConfig) BuiltinFunc {
 		}
 		hits = filterHits(hits, visible)
 		if len(hits) == 0 {
-			return []byte(fmt.Sprintf("No past conversation contains %q.", query)), 0, nil
+			return fmt.Appendf(nil, "No past conversation contains %q.", query), 0, nil
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "%d conversation(s) mention %q:\n", len(hits), query)

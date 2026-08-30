@@ -61,7 +61,7 @@ func (w *countingWriter) lateWrites() int {
 // window wide enough to hit reliably.
 func TestNoEventIsWrittenAfterClose(t *testing.T) {
 	t.Parallel()
-	for attempt := 0; attempt < 400; attempt++ {
+	for attempt := range 400 {
 		w := &countingWriter{ResponseRecorder: httptest.NewRecorder()}
 		r := &restResponder{w: w, flusher: nopFlusher{}, streaming: true}
 
@@ -71,16 +71,14 @@ func TestNoEventIsWrittenAfterClose(t *testing.T) {
 		// rather than every time.
 		start := make(chan struct{})
 		var wg sync.WaitGroup
-		for g := 0; g < 8; g++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range 8 {
+			wg.Go(func() {
 				<-start
-				for i := 0; i < 200; i++ {
+				for range 200 {
 					_ = r.Typing(t.Context())
 					runtime.Gosched()
 				}
-			}()
+			})
 		}
 		close(start)
 		runtime.Gosched()

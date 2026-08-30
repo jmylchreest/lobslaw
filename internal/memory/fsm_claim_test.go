@@ -46,7 +46,9 @@ func applyEntry(t *testing.T, f *FSM, entry *lobslawv1.LogEntry) any {
 // rev is the pointer form LogEntry.expected_revision takes. It is
 // explicitly optional so that a CLAIM with no condition is refused
 // rather than silently unconditional — see applyClaim.
-func rev(n uint64) *uint64 { return &n }
+//
+//go:fix inline
+func rev(n uint64) *uint64 { return new(n) }
 
 func TestFSMApplyClaimFreshInsertWithEmptyExpected(t *testing.T) {
 	t.Parallel()

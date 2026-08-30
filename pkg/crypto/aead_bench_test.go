@@ -38,9 +38,9 @@ func BenchmarkSecretboxOpenAlloc(b *testing.B) {
 	sealed := secretbox.Seal(nil, payload(b), &nonce, &key)
 
 	b.SetBytes(recordSize)
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		out, ok := secretbox.Open(nil, sealed, &nonce, &key)
 		if !ok {
 			b.Fatal("open failed")
@@ -63,9 +63,9 @@ func BenchmarkSecretboxOpenReuse(b *testing.B) {
 	buf := make([]byte, 0, recordSize)
 
 	b.SetBytes(recordSize)
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		out, ok := secretbox.Open(buf[:0], sealed, &nonce, &key)
 		if !ok {
 			b.Fatal("open failed")
@@ -93,9 +93,9 @@ func BenchmarkXChaCha20Poly1305OpenReuse(b *testing.B) {
 	buf := make([]byte, 0, recordSize)
 
 	b.SetBytes(recordSize)
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		out, err := aead.Open(buf[:0], nonce, sealed, nil)
 		if err != nil {
 			b.Fatal(err)
@@ -127,9 +127,9 @@ func BenchmarkAESGCMOpenReuse(b *testing.B) {
 	buf := make([]byte, 0, recordSize)
 
 	b.SetBytes(recordSize)
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		out, err := aead.Open(buf[:0], nonce, sealed, nil)
 		if err != nil {
 			b.Fatal(err)
@@ -147,7 +147,7 @@ func BenchmarkAESGCMConstruct(b *testing.B) {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		block, err := aes.NewCipher(key)
 		if err != nil {
 			b.Fatal(err)

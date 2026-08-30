@@ -162,7 +162,7 @@ func verifyChecksums(dir string) error {
 	if err != nil {
 		return nil // no manifest; nothing to check against
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
 			continue

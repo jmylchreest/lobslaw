@@ -108,8 +108,7 @@ func TestSlackDeadPeerIsDetected(t *testing.T) {
 	t.Parallel()
 
 	h := socketTestHandler(t, fakeSocketMode(t, false))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	done := make(chan error, 1)
 	go func() { done <- h.runOneConnection(ctx) }()

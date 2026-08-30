@@ -124,7 +124,7 @@ func (v *Verifier) LoadTrustedPublishersFile(path string) error {
 		return fmt.Errorf("skills: read publishers file %q: %w", path, err)
 	}
 	lineNo := 0
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		lineNo++
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {

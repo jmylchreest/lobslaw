@@ -88,12 +88,12 @@ func ParseSkillMD(content []byte) (*SkillFrontmatter, string, error) {
 	}
 	rest := body[len(sep):]
 	rest = bytes.TrimLeft(rest, "\r\n ")
-	endIdx := bytes.Index(rest, []byte("\n"+sep))
-	if endIdx < 0 {
+	before, after, ok := bytes.Cut(rest, []byte("\n"+sep))
+	if !ok {
 		return nil, "", fmt.Errorf("clawhub: SKILL.md front-matter not terminated by --- line")
 	}
-	yamlBody := rest[:endIdx]
-	prose := rest[endIdx+len("\n"+sep):]
+	yamlBody := before
+	prose := after
 	prose = bytes.TrimLeft(prose, "\r\n ")
 
 	var fm SkillFrontmatter

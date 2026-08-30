@@ -341,7 +341,7 @@ func dotPath(v any, path string) any {
 	if path == "" {
 		return v
 	}
-	for _, seg := range strings.Split(path, ".") {
+	for seg := range strings.SplitSeq(path, ".") {
 		m, ok := v.(map[string]any)
 		if !ok {
 			return nil

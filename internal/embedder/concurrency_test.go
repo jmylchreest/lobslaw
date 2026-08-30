@@ -83,12 +83,10 @@ func TestConcurrentBatchAndLongAreSafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 3 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = m.EmbedBatch(seqs)
 			_ = m.EmbedLong(long, 0, 2)
-		}()
+		})
 	}
 	wg.Wait()
 }

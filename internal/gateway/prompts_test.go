@@ -160,11 +160,9 @@ func TestPromptRegistryWaitReturnsOnResolve(t *testing.T) {
 	var wg sync.WaitGroup
 	var gotDecision PromptDecision
 	var gotErr error
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		gotDecision, gotErr = r.Wait(context.Background(), p.ID)
-	}()
+	})
 
 	// Give Wait() a moment to reach the select, then resolve.
 	time.Sleep(10 * time.Millisecond)
@@ -347,9 +345,7 @@ func TestPromptRegistryConcurrentResolveOnlyOneWinner(t *testing.T) {
 		if i%2 == 0 {
 			d = PromptDenied
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			err := r.Resolve(p.ID, d, PromptScopeOnce)
 			switch {
@@ -358,7 +354,7 @@ func TestPromptRegistryConcurrentResolveOnlyOneWinner(t *testing.T) {
 			case errors.Is(err, ErrPromptResolved):
 				losses.Add(1)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

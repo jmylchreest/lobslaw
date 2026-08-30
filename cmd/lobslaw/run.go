@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -41,13 +42,11 @@ func dispatchRun(args []string) ([]string, bool) {
 			}
 			continue
 		}
-		for _, name := range runNames {
-			if a == name {
-				out := make([]string, 0, len(args)-1)
-				out = append(out, args[:i]...)
-				out = append(out, args[i+1:]...)
-				return out, true
-			}
+		if slices.Contains(runNames, a) {
+			out := make([]string, 0, len(args)-1)
+			out = append(out, args[:i]...)
+			out = append(out, args[i+1:]...)
+			return out, true
 		}
 		// A positional that is not a run verb: not ours.
 		return args, false

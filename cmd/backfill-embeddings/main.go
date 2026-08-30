@@ -198,10 +198,7 @@ func main() {
 	// window and tripping "input too long" errors.
 	const batchSize = 32
 	for start := 0; start < len(todo); start += batchSize {
-		end := start + batchSize
-		if end > len(todo) {
-			end = len(todo)
-		}
+		end := min(start+batchSize, len(todo))
 		chunk := todo[start:end]
 		texts := make([]string, len(chunk))
 		for i, p := range chunk {
@@ -302,7 +299,7 @@ func main() {
 // one code path is worth more than a saved branch.
 func embedBatchWithRetry(ec compute.EmbeddingProvider, texts []string) ([][]float32, error) {
 	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		vecs, err := ec.EmbedBatch(ctx, texts)
 		cancel()
@@ -313,10 +310,7 @@ func embedBatchWithRetry(ec compute.EmbeddingProvider, texts []string) ([][]floa
 		if !isRateLimited(err.Error()) {
 			return nil, err
 		}
-		wait := time.Duration(5<<attempt) * time.Second
-		if wait > 60*time.Second {
-			wait = 60 * time.Second
-		}
+		wait := min(time.Duration(5<<attempt)*time.Second, 60*time.Second)
 		fmt.Fprintf(os.Stderr, "  [RATE-LIMIT] %v — sleeping %s\n", err, wait)
 		time.Sleep(wait)
 	}

@@ -3,6 +3,7 @@ package rclone
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -211,14 +212,14 @@ func TestSplitOptionsAndSecrets(t *testing.T) {
 // Helpers ------------------------------------------------------------
 
 func stringsJoin(s []string, sep string) string {
-	out := ""
+	var out strings.Builder
 	for i, v := range s {
 		if i > 0 {
-			out += sep
+			out.WriteString(sep)
 		}
-		out += v
+		out.WriteString(v)
 	}
-	return out
+	return out.String()
 }
 
 func containsAll(haystack string, needles []string) bool {

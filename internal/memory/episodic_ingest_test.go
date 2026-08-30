@@ -92,13 +92,13 @@ func TestEpisodicIngestLongEventTruncates(t *testing.T) {
 	t.Parallel()
 	applier := &fakeApplier{}
 	ing, _ := NewEpisodicIngester(applier, 0, nil)
-	long := ""
-	for i := 0; i < 500; i++ {
-		long += "x"
+	var long strings.Builder
+	for range 500 {
+		long.WriteString("x")
 	}
 	_ = ing.IngestTurn(context.Background(), EpisodicTurn{
 		Owner:       "user:alice",
-		UserMessage: long,
+		UserMessage: long.String(),
 		AssistReply: "ok",
 		CompletedAt: time.Now(),
 	})

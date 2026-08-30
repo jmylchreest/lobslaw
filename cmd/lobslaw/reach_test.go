@@ -132,7 +132,7 @@ func TestEveryOfflineOnlySubcommandIsMarkedInTheUsage(t *testing.T) {
 // usageLineFor returns the usage line describing a subcommand — the
 // indented one that starts with its name, not any prose mentioning it.
 func usageLineFor(usage, sub string) string {
-	for _, line := range strings.Split(usage, "\n") {
+	for line := range strings.SplitSeq(usage, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || !strings.HasPrefix(line, " ") {
 			continue
@@ -250,7 +250,7 @@ func documentedCommands(t *testing.T) []string {
 	}
 	var out []string
 	seen := map[string]bool{}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		// Lines in the subcommand block look like:
 		//   lobslaw memory             # read + edit the memory store
 		if !strings.HasPrefix(line, "lobslaw ") {

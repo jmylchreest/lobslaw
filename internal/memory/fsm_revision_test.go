@@ -41,7 +41,7 @@ func claimTask(t *testing.T, f *FSM, rec *lobslawv1.ScheduledTaskRecord, expectC
 		Id:               rec.Id,
 		Payload:          &lobslawv1.LogEntry_ScheduledTask{ScheduledTask: rec},
 		ExpectedClaimer:  expectClaimer,
-		ExpectedRevision: rev(expectRev),
+		ExpectedRevision: new(expectRev),
 	})
 	if err, ok := res.(error); ok {
 		return err

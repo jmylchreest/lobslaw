@@ -222,7 +222,7 @@ func slackFilePrefix(ref string) string {
 		segs = segs[:len(segs)-1]
 	}
 	for _, seg := range segs {
-		for _, part := range strings.Split(seg, "-") {
+		for part := range strings.SplitSeq(seg, "-") {
 			if len(part) > 1 && part[0] == 'F' && isSlackIDBody(part[1:]) {
 				return part + "-"
 			}

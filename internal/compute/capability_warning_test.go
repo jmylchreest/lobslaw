@@ -114,7 +114,7 @@ func TestTheReportIsStable(t *testing.T) {
 	t.Parallel()
 	declared := []string{CapabilityVision, CapabilityPDF, CapabilityChat}
 	first := UnsupportedCapabilities(declared, []modelsdev.Model{textOnly("m")})
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got := UnsupportedCapabilities(declared, []modelsdev.Model{textOnly("m")})
 		if len(got) != len(first) {
 			t.Fatalf("run %d: %v vs %v", i, got, first)

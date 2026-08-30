@@ -23,11 +23,9 @@ func startRESTWithSessions(t *testing.T, agent *compute.Agent, sessions SessionS
 	srv := NewServer(RESTConfig{Addr: "127.0.0.1:0", Sessions: sessions}, agent)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = srv.Start(ctx)
-	}()
+	})
 	deadline := time.Now().Add(time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -227,11 +225,9 @@ func startRESTWithAuthAndSessions(t *testing.T, agent *compute.Agent, sessions S
 	}, agent)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = srv.Start(ctx)
-	}()
+	})
 	deadline := time.Now().Add(time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)

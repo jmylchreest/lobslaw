@@ -18,9 +18,7 @@ func TestNewIsUniqueUnderConcurrency(t *testing.T) {
 	seen := make(map[string]struct{}, goroutines*perGoroutine)
 	var wg sync.WaitGroup
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			local := make([]string, 0, perGoroutine)
 			for range perGoroutine {
 				local = append(local, New())
@@ -34,7 +32,7 @@ func TestNewIsUniqueUnderConcurrency(t *testing.T) {
 				}
 				seen[id] = struct{}{}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

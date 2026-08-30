@@ -53,7 +53,7 @@ func Probe() CapabilityReport {
 	// supported at all is sufficient. /proc/self/status carries a
 	// Seccomp line: 0=disabled, 2=filtered.
 	if raw, err := os.ReadFile("/proc/self/status"); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
+		for line := range strings.SplitSeq(string(raw), "\n") {
 			if strings.HasPrefix(line, "Seccomp:") {
 				r.SeccompSupported = true
 				if strings.Contains(line, "\t2") {

@@ -105,7 +105,7 @@ func newSlackSearchHandler(r SlackReader) BuiltinFunc {
 
 		var refs []string
 		if raw := strings.TrimSpace(args["channels"]); raw != "" {
-			for _, part := range strings.Split(raw, ",") {
+			for part := range strings.SplitSeq(raw, ",") {
 				if p := strings.TrimSpace(part); p != "" {
 					refs = append(refs, p)
 				}
@@ -116,7 +116,7 @@ func newSlackSearchHandler(r SlackReader) BuiltinFunc {
 			return nil, 1, err
 		}
 		if len(hits) == 0 {
-			return []byte(fmt.Sprintf("Nothing in the readable Slack history matches %q.", query)), 0, nil
+			return fmt.Appendf(nil, "Nothing in the readable Slack history matches %q.", query), 0, nil
 		}
 		return renderSlackMessages(hits)
 	}

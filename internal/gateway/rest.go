@@ -784,9 +784,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id, action string
-	if idx := strings.Index(path, "/"); idx >= 0 {
-		id = path[:idx]
-		action = path[idx+1:]
+	if before, after, ok := strings.Cut(path, "/"); ok {
+		id = before
+		action = after
 	} else {
 		id = path
 	}

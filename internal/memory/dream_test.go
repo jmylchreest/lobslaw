@@ -668,7 +668,7 @@ func TestABusyPersonCannotCrowdOutAQuietOne(t *testing.T) {
 	now := time.Now()
 
 	// Alice has been talking all day; Bob said one thing, and older.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		putEpisodicOwned(t, svc, fmt.Sprintf("a%d", i), "user:alice", now.Add(-time.Minute))
 	}
 	putEpisodicOwned(t, svc, "b1", "user:bob", now.Add(-6*time.Hour))

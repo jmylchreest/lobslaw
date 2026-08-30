@@ -91,9 +91,7 @@ func TestConcurrentResolveHasExactlyOneWinner(t *testing.T) {
 	)
 	start := make(chan struct{})
 	for i := range racers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			resolver := newStore(time.Minute)
 			by := fmt.Sprintf("node-%d", i)
 			<-start
@@ -110,7 +108,7 @@ func TestConcurrentResolveHasExactlyOneWinner(t *testing.T) {
 			default:
 				other = append(other, err)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

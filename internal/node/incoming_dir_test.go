@@ -54,7 +54,7 @@ func TestBothWiringSitesGoThroughTheOneAccessor(t *testing.T) {
 			t.Fatal(err)
 		}
 		found := false
-		for _, line := range strings.Split(string(src), "\n") {
+		for line := range strings.SplitSeq(string(src), "\n") {
 			if strings.Contains(line, want.field) && strings.Contains(line, "n.incomingDir()") {
 				found = true
 				break

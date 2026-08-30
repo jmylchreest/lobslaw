@@ -230,14 +230,15 @@ func messageLine(m *lobslawv1.SessionMessage, trunc int) string {
 	if trunc > 0 {
 		text = textutil.Truncate(text, "…", trunc)
 	}
-	line := fmt.Sprintf("  [%03d] %-9s %s", m.Seq, m.Role, text)
+	var line strings.Builder
+	fmt.Fprintf(&line, "  [%03d] %-9s %s", m.Seq, m.Role, text)
 	for _, tc := range m.ToolCalls {
-		line += " tool_call=" + tc.Name
+		line.WriteString(" tool_call=" + tc.Name)
 	}
 	if m.ToolCallId != "" {
-		line += " tool_result_for=" + m.ToolCallId
+		line.WriteString(" tool_result_for=" + m.ToolCallId)
 	}
-	return line
+	return line.String()
 }
 
 func messageFields(m *lobslawv1.SessionMessage, trunc int) map[string]any {

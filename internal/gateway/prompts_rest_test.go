@@ -27,11 +27,9 @@ func startRESTWithPrompts(t *testing.T, agent *compute.Agent) (string, *PromptRe
 	}, agent)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = srv.Start(ctx)
-	}()
+	})
 	deadline := time.Now().Add(time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)

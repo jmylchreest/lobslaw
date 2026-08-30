@@ -124,9 +124,9 @@ func renderShim(name string, env []string) string {
 	var b strings.Builder
 	b.WriteString(envWrapperHeader)
 	for _, kv := range pairs {
-		eq := strings.IndexByte(kv, '=')
-		key := kv[:eq]
-		val := kv[eq+1:]
+		before, after, _ := strings.Cut(kv, "=")
+		key := before
+		val := after
 		// Single-quote with the '\'' escape trick so paths/URLs/etc.
 		// pass through verbatim regardless of operator content.
 		fmt.Fprintf(&b, "export %s='%s'\n", key, strings.ReplaceAll(val, "'", `'\''`))

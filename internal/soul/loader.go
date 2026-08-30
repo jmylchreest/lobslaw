@@ -138,8 +138,8 @@ func splitFrontmatter(raw []byte) ([]byte, []byte, error) {
 		return nil, normalised, nil
 	}
 	remainder := normalised[len("---\n"):]
-	end := bytes.Index(remainder, []byte("\n---\n"))
-	if end < 0 {
+	before, after, ok := bytes.Cut(remainder, []byte("\n---\n"))
+	if !ok {
 		// Handle the case where the file is frontmatter-only with
 		// no trailing body (closing --- at EOF, no newline after).
 		if bytes.HasSuffix(remainder, []byte("\n---")) {
@@ -147,8 +147,8 @@ func splitFrontmatter(raw []byte) ([]byte, []byte, error) {
 		}
 		return nil, nil, errors.New("frontmatter: no closing '---' marker")
 	}
-	fm := remainder[:end]
-	body := remainder[end+len("\n---\n"):]
+	fm := before
+	body := after
 	return fm, body, nil
 }
 

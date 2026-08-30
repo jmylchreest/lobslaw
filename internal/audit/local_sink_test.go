@@ -43,7 +43,7 @@ func TestLocalSinkAppendAndQuery(t *testing.T) {
 
 	// Three entries with a chain.
 	var prev string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		e := fillEntry(i)
 		e.PrevHash = prev
 		if err := s.Append(ctx, e); err != nil {
@@ -88,7 +88,7 @@ func TestLocalSinkQueryLimit(t *testing.T) {
 	t.Parallel()
 	s := newLocalSink(t)
 	ctx := t.Context()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		_ = s.Append(ctx, fillEntry(i))
 	}
 	got, _ := s.Query(ctx, types.AuditFilter{Limit: 3})
@@ -120,7 +120,7 @@ func TestLocalSinkVerifyChainClean(t *testing.T) {
 	s := newLocalSink(t)
 	ctx := t.Context()
 	var prev string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		e := fillEntry(i)
 		e.PrevHash = prev
 		_ = s.Append(ctx, e)
@@ -153,7 +153,7 @@ func TestLocalSinkVerifyChainDetectsTampering(t *testing.T) {
 	ctx := t.Context()
 	var prev string
 	var ids []string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		e := fillEntry(i)
 		e.PrevHash = prev
 		_ = s.Append(ctx, e)
@@ -328,7 +328,7 @@ func TestLocalSinkChainSurvivesRotation(t *testing.T) {
 	// Build a padded target so entries are larger.
 	pad := strings.Repeat("x", 1024)
 	var prev string
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		e := fillEntry(i)
 		e.Target = pad
 		e.PrevHash = prev

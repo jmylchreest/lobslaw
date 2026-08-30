@@ -66,7 +66,7 @@ func TestRaftClusterOverGRPC(t *testing.T) {
 	// dial the static address we record in raft configuration.
 	const nodeCount = 3
 	nodes := make([]*clusterNode, nodeCount)
-	for i := 0; i < nodeCount; i++ {
+	for i := range nodeCount {
 		nodes[i] = newClusterNode(t, i, certDir, caCertPath, caCert, caKey)
 	}
 	defer func() {

@@ -26,11 +26,9 @@ func startRESTWith(t *testing.T, cfg RESTConfig, agent *compute.Agent) string {
 	srv := NewServer(cfg, agent)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = srv.Start(ctx)
-	}()
+	})
 	deadline := time.Now().Add(2 * time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)

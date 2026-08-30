@@ -57,7 +57,7 @@ func TestRaftSinkAppendAndQuery(t *testing.T) {
 	ctx := t.Context()
 
 	var prev string
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		e := fillEntry(i)
 		e.PrevHash = prev
 		if err := s.Append(ctx, e); err != nil {
@@ -108,7 +108,7 @@ func TestRaftSinkQueryLimit(t *testing.T) {
 	t.Parallel()
 	s, _, _ := newRaftSink(t)
 	ctx := t.Context()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := s.Append(ctx, fillEntry(i)); err != nil {
 			t.Fatal(err)
 		}
@@ -127,7 +127,7 @@ func TestRaftSinkVerifyChainClean(t *testing.T) {
 	s, _, _ := newRaftSink(t)
 	ctx := t.Context()
 	var prev string
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		e := fillEntry(i)
 		e.PrevHash = prev
 		if err := s.Append(ctx, e); err != nil {

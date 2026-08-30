@@ -295,7 +295,7 @@ func (h *SlackHandler) channelIDForName(ctx context.Context, name string) (strin
 
 	byName := map[string]string{}
 	cursor := ""
-	for page := 0; page < 10; page++ {
+	for range 10 {
 		convs, next, err := h.api.listConversations(ctx, cursor)
 		if err != nil {
 			return "", err

@@ -583,10 +583,7 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	if len(c.buf) >= c.cap {
 		return len(p), nil
 	}
-	room := c.cap - len(c.buf)
-	if room > len(p) {
-		room = len(p)
-	}
+	room := min(c.cap-len(c.buf), len(p))
 	c.buf = append(c.buf, p[:room]...)
 	return len(p), nil
 }

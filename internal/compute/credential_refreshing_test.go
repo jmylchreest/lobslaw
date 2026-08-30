@@ -94,7 +94,7 @@ func TestALiveTokenIsReused(t *testing.T) {
 	s := &countingSource{}
 	c := NewBearerTokenCredential(s.source)
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if err := c.Apply(context.Background(), req(t)); err != nil {
 			t.Fatal(err)
 		}
@@ -139,7 +139,7 @@ func TestConcurrentRequestsMintOneToken(t *testing.T) {
 	const n = 25
 	var wg sync.WaitGroup
 	errs := make([]error, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

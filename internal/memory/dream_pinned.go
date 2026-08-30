@@ -147,7 +147,7 @@ func refusePinnedConsolidation(before, after []string, cap int) string {
 // refuses if it is not actually shorter.
 func splitPinnedSummary(summary string) []string {
 	var out []string
-	for _, line := range strings.Split(summary, "\n") {
+	for line := range strings.SplitSeq(summary, "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
 		if line == "" {
 			continue

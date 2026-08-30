@@ -391,11 +391,11 @@ func proxyBasicAuth(req *http.Request) (string, string, bool) {
 		return "", "", false
 	}
 	cs := string(decoded)
-	idx := strings.IndexByte(cs, ':')
-	if idx < 0 {
+	before, after, ok := strings.Cut(cs, ":")
+	if !ok {
 		return cs, "", true
 	}
-	return cs[:idx], cs[idx+1:], true
+	return before, after, true
 }
 
 // decodeRole reverses the URL-escaping subprocesses apply to the

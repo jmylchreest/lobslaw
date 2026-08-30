@@ -29,7 +29,7 @@ func TestChatHistoryAppendAndLoad(t *testing.T) {
 func TestChatHistoryCapsAtMaxTurns(t *testing.T) {
 	t.Parallel()
 	h := newChatHistory(4, time.Hour)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		h.Append("telegram:1", compute.Message{Role: "user", Content: "msg"})
 	}
 	got := h.Load("telegram:1")

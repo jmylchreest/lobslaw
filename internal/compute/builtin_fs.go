@@ -480,7 +480,7 @@ func chooseSearchCommand(pattern, path, glob string) (string, []string) {
 func parseSearchOutput(bin string, raw []byte) []map[string]any {
 	_ = bin
 	out := []map[string]any{}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if line == "" {
 			continue
 		}

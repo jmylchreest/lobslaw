@@ -59,10 +59,7 @@ func findClusters(store *Store, req clusterQuery) ([]*lobslawv1.Cluster, error) 
 		req.minClusterSize = defaultMinClusterSize
 	}
 	if req.maxClusterSize < req.minClusterSize {
-		req.maxClusterSize = defaultMaxClusterSize
-		if req.maxClusterSize < req.minClusterSize {
-			req.maxClusterSize = req.minClusterSize
-		}
+		req.maxClusterSize = max(defaultMaxClusterSize, req.minClusterSize)
 	}
 
 	candidates, err := scanClusterCandidates(store, req)
@@ -337,10 +334,7 @@ func chunkCluster(members []int, edges []clusterEdge, maxSize int) [][]int {
 		}
 	}
 	for len(orphans) > 0 {
-		take := len(orphans)
-		if take > maxSize {
-			take = maxSize
-		}
+		take := min(len(orphans), maxSize)
 		chunks = append(chunks, orphans[:take])
 		orphans = orphans[take:]
 	}

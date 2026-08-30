@@ -152,7 +152,7 @@ func stripAccents(s string) string {
 // trailing comma would produce a different piece from the bare word.
 func bertPreTokenize(s string) []string {
 	var out []string
-	for _, field := range strings.Fields(s) {
+	for field := range strings.FieldsSeq(s) {
 		var cur strings.Builder
 		for _, r := range field {
 			if isPunctuation(r) {

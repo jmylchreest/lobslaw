@@ -71,10 +71,7 @@ func matmulBT(a, bt, c []float32, m, k, n int) {
 	// Measured on the projection shapes a short sequence produces,
 	// where m is small enough that a serial pass wins outright.
 	const parallelThreshold = 8192
-	workers := runtime.GOMAXPROCS(0)
-	if workers > m {
-		workers = m
-	}
+	workers := min(runtime.GOMAXPROCS(0), m)
 	if workers <= 1 || m*n*k < parallelThreshold {
 		matmulRange(a, bt, c, k, n, 0, m)
 		return

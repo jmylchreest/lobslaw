@@ -528,7 +528,7 @@ func (s *Scheduler) completeTask(ctx context.Context, t *lobslawv1.ScheduledTask
 	// Bounded, and it stops as soon as the record says the work is no
 	// longer ours: an operator edit is worth merging onto, another
 	// node's claim is not.
-	for attempt := 0; attempt < completeRetries; attempt++ {
+	for range completeRetries {
 		current, rerr := s.loadTask(t.Id)
 		if rerr != nil || current == nil {
 			s.log.Warn("scheduler: completeTask re-read failed",

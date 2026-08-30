@@ -255,13 +255,13 @@ func splitOptionsAndSecrets(in map[string]string) (opts, refs map[string]string)
 	opts = make(map[string]string, len(in))
 	refs = make(map[string]string)
 	for k, v := range in {
-		if strings.HasSuffix(k, "_ref") {
+		if before, ok := strings.CutSuffix(k, "_ref"); ok {
 			// Normalise: strip "_ref" and uppercase — typical rclone
 			// env var convention, e.g. "access_key_id_ref" →
 			// RCLONE_CONFIG_<REMOTE>_ACCESS_KEY_ID is the rclone
 			// convention; we expose the raw mapping so operators
 			// can choose their own env-var scheme.
-			envName := strings.ToUpper(strings.TrimSuffix(k, "_ref"))
+			envName := strings.ToUpper(before)
 			refs[envName] = v
 			continue
 		}

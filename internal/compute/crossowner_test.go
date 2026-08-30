@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -115,12 +116,7 @@ func searchIDs(t *testing.T, out []byte) []string {
 }
 
 func contains(ids []string, want string) bool {
-	for _, id := range ids {
-		if id == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ids, want)
 }
 
 // TestMemorySearchWideningIsPolicyDrivenNotRoleDriven is the pair the

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,9 +125,7 @@ func LoadPolicyDirs(dirs []string, opts LoadOptions) (*LoadResult, error) {
 		if err != nil {
 			return merged, fmt.Errorf("load policy dir %q: %w", dir, err)
 		}
-		for name, policy := range r.Policies {
-			merged.Policies[name] = policy
-		}
+		maps.Copy(merged.Policies, r.Policies)
 		merged.PresetsLoaded = append(merged.PresetsLoaded, r.PresetsLoaded...)
 		merged.OverriddenBuiltins = append(merged.OverriddenBuiltins, r.OverriddenBuiltins...)
 		merged.Rejected = append(merged.Rejected, r.Rejected...)

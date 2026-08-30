@@ -60,8 +60,7 @@ func TestWatcherEmitsInitialForExistingFiles(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "b.txt"), []byte("bye"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, err := WatchOn(ctx, dir, WatchOpts{PollInterval: -1})
 	if err != nil {
@@ -90,8 +89,7 @@ func TestWatcherRejectsRelativePath(t *testing.T) {
 func TestWatcherEmitsCreateOnNewFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, err := WatchOn(ctx, dir, WatchOpts{PollInterval: -1})
 	if err != nil {
@@ -114,8 +112,7 @@ func TestWatcherEmitsWriteOnModify(t *testing.T) {
 	target := filepath.Join(dir, "tracked.txt")
 	_ = os.WriteFile(target, []byte("initial"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, err := WatchOn(ctx, dir, WatchOpts{PollInterval: -1})
 	if err != nil {
@@ -136,8 +133,7 @@ func TestWatcherEmitsRemove(t *testing.T) {
 	target := filepath.Join(dir, "goner.txt")
 	_ = os.WriteFile(target, []byte("x"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, err := WatchOn(ctx, dir, WatchOpts{PollInterval: -1})
 	if err != nil {
@@ -160,8 +156,7 @@ func TestWatcherIncludeGlob(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "keep.yaml"), []byte("y"), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "drop.json"), []byte("j"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, err := WatchOn(ctx, dir, WatchOpts{
 		PollInterval: -1,
@@ -195,8 +190,7 @@ func TestWatcherExcludeGlob(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "keep.yaml"), []byte("y"), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "tmp.tmp"), []byte("t"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, _ := WatchOn(ctx, dir, WatchOpts{
 		PollInterval: -1,
@@ -224,8 +218,7 @@ func TestWatcherRecursiveEmitsInitialFromSubdirs(t *testing.T) {
 	_ = os.Mkdir(sub, 0o755)
 	_ = os.WriteFile(filepath.Join(sub, "nested.txt"), []byte("n"), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, _ := WatchOn(ctx, dir, WatchOpts{PollInterval: -1, Recursive: true})
 	got := drainEvents(ch, 200*time.Millisecond)
@@ -253,8 +246,7 @@ func TestWatcherPollingDetectsRemoteStyleWrite(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	_ = os.Chtimes(target, past, past)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, err := WatchOn(ctx, dir, WatchOpts{PollInterval: 100 * time.Millisecond})
 	if err != nil {
@@ -310,8 +302,7 @@ func TestManagerWatchResolvesLabel(t *testing.T) {
 	mt := &fakeMount{label: "wlbl", backend: "local", path: dir}
 	_ = m.Register(context.Background(), mt)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ch, err := m.Watch(ctx, "wlbl", WatchOpts{PollInterval: -1})
 	if err != nil {

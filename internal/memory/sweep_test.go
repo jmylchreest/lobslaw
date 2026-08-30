@@ -84,7 +84,7 @@ func TestSweep(t *testing.T) {
 
 			seed := rand.New(rand.NewSource(42))
 			emb := make([]float32, dim)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				for j := range emb {
 					emb[j] = seed.Float32()*2 - 1
 				}

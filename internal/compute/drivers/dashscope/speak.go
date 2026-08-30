@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -180,9 +181,7 @@ func (d *SpeakDriver) Speak(ctx context.Context, req compute.SpeakRequest) (*com
 	if err := d.cred.Apply(ctx, probe); err != nil {
 		return nil, compute.Permanent(fmt.Errorf("dashscope speak: apply credential: %w", err))
 	}
-	for k, v := range probe.Header {
-		header[k] = v
-	}
+	maps.Copy(header, probe.Header)
 
 	conn, resp, err := websocket.Dial(ctx, d.endpoint, &websocket.DialOptions{
 		HTTPHeader: header,

@@ -275,9 +275,7 @@ func (n *RaftNode) WaitForConfigInclusion(ctx context.Context, poll time.Duratio
 // (e.g. demotion during raft shutdown of the previous term).
 func (n *RaftNode) startStateWatch() {
 	n.watchOnce.Do(func() {
-		n.watchWG.Add(1)
-		go func() {
-			defer n.watchWG.Done()
+		n.watchWG.Go(func() {
 			leaderCh := n.Raft.LeaderCh()
 			obsCh := make(chan raft.Observation, 16)
 			obs := raft.NewObserver(obsCh, false, func(o *raft.Observation) bool {
@@ -340,7 +338,7 @@ func (n *RaftNode) startStateWatch() {
 					n.publishLeadership()
 				}
 			}
-		}()
+		})
 	})
 }
 

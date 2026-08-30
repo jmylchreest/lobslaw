@@ -171,10 +171,7 @@ func (t *toolAttributor) flush() {
 		// Present in the prompt of every call after the one that
 		// produced it. A result from call 2 of 6 rides in calls 3..6,
 		// so four carries.
-		carries := llmCalls - e.afterCall
-		if carries < 0 {
-			carries = 0
-		}
+		carries := max(llmCalls-e.afterCall, 0)
 		carried := e.resultTokens * carries
 		t.rec.Record(trace.Span{
 			TurnID:   t.turnID,

@@ -85,7 +85,7 @@ func documentedTOMLKeys(t *testing.T) []string {
 	var out []string
 	seen := map[string]bool{}
 	inBlock := false
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		switch {
 		case strings.HasPrefix(line, "```toml"):
 			inBlock = true

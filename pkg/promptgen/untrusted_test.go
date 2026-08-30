@@ -247,10 +247,7 @@ func TestTheExactTimeIsNotInThePrompt(t *testing.T) {
 }
 
 func commonPrefixLen(a, b string) int {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
+	n := min(len(b), len(a))
 	for i := 0; i < n; i++ {
 		if a[i] != b[i] {
 			return i

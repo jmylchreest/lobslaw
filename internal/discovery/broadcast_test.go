@@ -1,7 +1,6 @@
 package discovery
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -91,8 +90,7 @@ func TestBroadcasterLoopback(t *testing.T) {
 		_ = b.Close()
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go func() { _ = a.Start(ctx) }()
 	go func() { _ = b.Start(ctx) }()

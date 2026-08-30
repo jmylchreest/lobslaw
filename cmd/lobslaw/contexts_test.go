@@ -311,7 +311,7 @@ func TestTheListingMarksTheDefault(t *testing.T) {
 	if err := contextList(&buf); err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(buf.String(), "\n") {
+	for line := range strings.SplitSeq(buf.String(), "\n") {
 		if strings.Contains(line, "prod.example") && !strings.HasPrefix(line, "*") {
 			t.Errorf("the default context is not marked: %q", line)
 		}

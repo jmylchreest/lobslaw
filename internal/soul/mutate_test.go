@@ -75,7 +75,7 @@ func TestSetNamePersistsToStore(t *testing.T) {
 func TestTuneClampsToBaselineDrift(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		_, _, err := a.Tune(context.Background(), "sarcasm", 1)
 		if err != nil {
 			t.Fatalf("step %d: %v", i, err)
@@ -128,7 +128,7 @@ func TestAddFragmentRefusesDuplicates(t *testing.T) {
 func TestAddFragmentRespectsCap(t *testing.T) {
 	t.Parallel()
 	a, _ := newTestAdjuster(t)
-	for i := 0; i < MaxFragments; i++ {
+	for i := range MaxFragments {
 		if _, _, err := a.AddFragment(context.Background(), "fragment number "+strings.Repeat("x", i+1)); err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}

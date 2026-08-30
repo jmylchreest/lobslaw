@@ -21,7 +21,7 @@ func TestSerialTurnsDoNotInterleave(t *testing.T) {
 
 	const n = 5
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
+	for i := range n {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
@@ -188,7 +188,7 @@ func TestDebounceFoldsRapidFragments(t *testing.T) {
 
 	var admitted *Lease
 	folded := 0
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		select {
 		case r := <-results:
 			switch r.d {
@@ -268,7 +268,7 @@ func TestAbandonedWaiterLeavesTheQueue(t *testing.T) {
 func TestCancelRacingHandoffNeverWedgesTheSession(t *testing.T) {
 	t.Parallel()
 
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		g := NewTurnGate(QueueSerial, 0, nil)
 		held, d := g.Acquire(context.Background(), "chat:1", "turn", "running")
 		if d != Admitted {

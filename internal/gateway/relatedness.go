@@ -54,10 +54,7 @@ func (g *TurnGate) judgeTimeout() time.Duration {
 	// currently in force: the judge also runs on the mid-turn path,
 	// where no window is open at all and a budget of zero would mean
 	// every classification timed out instantly.
-	budget := g.debounce
-	if g.burstWindow > budget {
-		budget = g.burstWindow
-	}
+	budget := max(g.burstWindow, g.debounce)
 	if budget > 0 {
 		return budget
 	}

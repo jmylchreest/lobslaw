@@ -375,7 +375,7 @@ func validateProviderBackups(providers []ProviderConfig) error {
 		}
 		seen := map[string]bool{start.Label: true}
 		cur := start.Backup
-		for step := 0; step < len(providers); step++ {
+		for range providers {
 			if seen[cur] {
 				return fmt.Errorf("%w: provider backup chain has a cycle starting at %q (revisits %q)", types.ErrInvalidConfig, start.Label, cur)
 			}

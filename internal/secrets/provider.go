@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -215,9 +216,7 @@ func FromConfig(cfg config.SecretsConfig, reg *Registry, log *slog.Logger) (*Res
 		// ordering that cannot silently downgrade a secret to a
 		// literal.
 		env := make(map[string]string, len(p.Env)+len(p.SecretEnv))
-		for k, v := range p.Env {
-			env[k] = v
-		}
+		maps.Copy(env, p.Env)
 		for k, ref := range p.SecretEnv {
 			v, err := Bootstrap(ref)
 			if err != nil {

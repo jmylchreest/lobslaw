@@ -129,10 +129,7 @@ func (h *ProviderHealth) RecordFailure(label string, class FailureClass) {
 		// Exponential on repeat, so a provider that fails once is back
 		// in seconds and one that fails ten times in a row is not
 		// retried every thirty seconds forever.
-		d = cooldownTransient << min(st.consecutive-1, 8)
-		if d > maxCooldown {
-			d = maxCooldown
-		}
+		d = min(cooldownTransient<<min(st.consecutive-1, 8), maxCooldown)
 	}
 	if until := h.now().Add(d); until.After(st.until) {
 		st.until = until

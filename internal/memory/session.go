@@ -684,14 +684,8 @@ func snippetAround(content string, idx, matchLen int) string {
 	if idx < 0 {
 		idx = 0
 	}
-	start := idx - snippetContextBytes/2
-	if start < 0 {
-		start = 0
-	}
-	end := idx + matchLen + snippetContextBytes/2
-	if end > len(content) {
-		end = len(content)
-	}
+	start := max(idx-snippetContextBytes/2, 0)
+	end := min(idx+matchLen+snippetContextBytes/2, len(content))
 	start = alignRuneStart(content, start)
 	end = alignRuneStart(content, end)
 	out := content[start:end]

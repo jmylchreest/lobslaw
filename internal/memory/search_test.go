@@ -67,7 +67,7 @@ func TestVectorSearchRanksBySimilarity(t *testing.T) {
 func TestVectorSearchLimit(t *testing.T) {
 	t.Parallel()
 	s, _ := newTestStore(t)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		id := "v-" + string(rune('a'+i))
 		seedVector(t, s, id, []float32{float32(i), 1, 0}, "", "")
 	}

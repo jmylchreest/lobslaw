@@ -14,7 +14,7 @@ var detectDistro = sync.OnceValue(func() string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if !strings.HasPrefix(line, "ID=") {
 			continue
 		}
@@ -46,13 +46,13 @@ func matchDistro(want string) bool {
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if !strings.HasPrefix(line, "ID_LIKE=") {
 			continue
 		}
 		v := strings.TrimPrefix(line, "ID_LIKE=")
 		v = strings.Trim(v, "\"' ")
-		for _, p := range strings.Fields(v) {
+		for p := range strings.FieldsSeq(v) {
 			if strings.ToLower(p) == want {
 				return true
 			}

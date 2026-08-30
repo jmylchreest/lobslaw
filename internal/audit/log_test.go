@@ -78,7 +78,7 @@ func TestAuditLogAppendFansOutAndChains(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := log.Append(t.Context(), types.AuditEntry{
 			Action:    "tool:exec",
 			Target:    "bash",
@@ -191,7 +191,7 @@ func TestAuditLogVerifyChainAllSinks(t *testing.T) {
 	a := &memSink{name: "a"}
 	b := &memSink{name: "b"}
 	log, _ := NewAuditLog(t.Context(), Config{Sinks: []AuditSink{a, b}})
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_ = log.Append(t.Context(), types.AuditEntry{Action: "x"})
 	}
 	res, err := log.VerifyChain(t.Context(), "")
@@ -240,7 +240,7 @@ func TestAuditLogBootAdoptsHeadHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if err := logA.Append(t.Context(), types.AuditEntry{Action: "x"}); err != nil {
 			t.Fatal(err)
 		}

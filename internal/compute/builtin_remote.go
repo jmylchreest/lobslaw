@@ -106,7 +106,7 @@ func RemoteToolDefs(set *RemoteSet) []*types.ToolDef {
 			Name:        "remote_ssh",
 			Path:        BuiltinScheme + "remote_ssh",
 			Description: desc,
-			ParametersSchema: []byte(fmt.Sprintf(`{
+			ParametersSchema: fmt.Appendf(nil, `{
 				"type": "object",
 				"properties": {
 					"remote": {"type": "string", "enum": [%s], "description": "Which remote to run on."},
@@ -116,7 +116,7 @@ func RemoteToolDefs(set *RemoteSet) []*types.ToolDef {
 				},
 				"required": ["remote", "command"],
 				"additionalProperties": false
-			}`, jsonStringList(names))),
+			}`, jsonStringList(names)),
 			// Irreversible: the command can push a branch, delete a
 			// working tree, or install packages. That it happens on a
 			// disposable host bounds the blast radius; it does not make
@@ -280,7 +280,7 @@ func remoteSCPToolDef(set *RemoteSet) *types.ToolDef {
 			"Use it for a log, a patch or a small artefact — a repository moves by git, not by this. " +
 			"local_path is subject to the same mount and refusal rules as read_file and write_file, " +
 			"so cluster-internal paths are refused in both directions. Configured remotes:" + set.Describe(),
-		ParametersSchema: []byte(fmt.Sprintf(`{
+		ParametersSchema: fmt.Appendf(nil, `{
 			"type": "object",
 			"properties": {
 				"remote": {"type": "string", "enum": [%s], "description": "Which remote."},
@@ -290,7 +290,7 @@ func remoteSCPToolDef(set *RemoteSet) *types.ToolDef {
 			},
 			"required": ["remote", "direction", "local_path", "remote_path"],
 			"additionalProperties": false
-		}`, jsonStringList(set.Names()))),
+		}`, jsonStringList(set.Names())),
 		RiskTier: types.RiskIrreversible,
 	}
 }

@@ -49,10 +49,10 @@ func TestChangedSectionsNilIsNotAChange(t *testing.T) {
 // section rather than a subset someone remembered to list.
 func TestChangedSectionsCoversEverySection(t *testing.T) {
 	t.Parallel()
-	tp := reflect.TypeOf(Config{})
+	tp := reflect.TypeFor[Config]()
 	var tagged int
-	for i := range tp.NumField() {
-		f := tp.Field(i)
+	for f := range tp.Fields() {
+		f := f
 		if !f.IsExported() {
 			continue
 		}

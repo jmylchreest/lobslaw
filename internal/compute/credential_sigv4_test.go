@@ -61,11 +61,11 @@ func fixedSigner() *SigV4Credential {
 func signatureOf(t *testing.T, r *http.Request) string {
 	t.Helper()
 	auth := r.Header.Get("Authorization")
-	i := strings.Index(auth, "Signature=")
-	if i < 0 {
+	_, after, ok := strings.Cut(auth, "Signature=")
+	if !ok {
 		t.Fatalf("no signature in %q", auth)
 	}
-	return auth[i+len("Signature="):]
+	return after
 }
 
 // --- structure ---------------------------------------------------------
@@ -231,7 +231,7 @@ func TestSigningIsDeterministic(t *testing.T) {
 	t.Parallel()
 	const url = "https://bedrock.us-east-1.amazonaws.com/model/x/invoke"
 	first := signatureOf(t, signed(t, fixedSigner(), http.MethodPost, url, `{"a":1}`))
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if got := signatureOf(t, signed(t, fixedSigner(), http.MethodPost, url, `{"a":1}`)); got != first {
 			t.Fatalf("run %d differs", i)
 		}
