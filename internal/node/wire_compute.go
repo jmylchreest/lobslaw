@@ -393,9 +393,6 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 	if err := pickRole(compute.RolePreflight, n.cfg.Compute.Roles.Preflight); err != nil {
 		return err
 	}
-	if err := pickRole(compute.RoleReranker, n.cfg.Compute.Roles.Reranker); err != nil {
-		return err
-	}
 	if err := pickRole(compute.RoleSummariser, n.cfg.Compute.Roles.Summariser); err != nil {
 		return err
 	}
