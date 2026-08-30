@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -240,9 +241,7 @@ func (t *Tracker) List() []FlowSnapshot {
 	}
 	// Newest first — flow IDs are ULIDs which sort by time so a
 	// reverse string sort reads as "newest first."
-	for i := 0; i < len(out)/2; i++ {
-		out[i], out[len(out)-1-i] = out[len(out)-1-i], out[i]
-	}
+	slices.Reverse(out)
 	return out
 }
 

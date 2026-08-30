@@ -1,7 +1,8 @@
 package main
 
 import (
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
@@ -68,7 +69,7 @@ func channelKinds(channels []config.GatewayChannelConfig) []string {
 		}
 		seen[ch.Type] = struct{}{}
 	}
-	return sortedKeys(seen)
+	return slices.Sorted(maps.Keys(seen))
 }
 
 // ownerSubjects collects the users scoped as owner.
@@ -105,17 +106,5 @@ func ownerSubjects(channels []config.GatewayChannelConfig) []string {
 			}
 		}
 	}
-	return sortedKeys(seen)
-}
-
-func sortedKeys(m map[string]struct{}) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(seen))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -114,7 +115,7 @@ func (h *SlackHandler) ReadConversation(ctx context.Context, ref string, limit i
 		}
 		cursor = next
 	}
-	reverse(out)
+	slices.Reverse(out)
 	return out, nil
 }
 
@@ -401,10 +402,4 @@ func messageAuthor(m slackMessage) string {
 		return "bot:" + m.BotID
 	}
 	return ""
-}
-
-func reverse(s []SlackTranscriptMessage) {
-	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
-		s[i], s[j] = s[j], s[i]
-	}
 }

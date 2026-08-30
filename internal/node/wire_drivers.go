@@ -27,84 +27,82 @@ import (
 //
 // Adding a driver is one line below plus one package. If it ever needs
 // more than that, the waist has sprung a leak.
-var (
-	driverSetOnce sync.Once
-	driverSet     *compute.DriverSet
-)
+// A package-level OnceValue rather than a method with a sync.Once
+// beside it: the body never touches the receiver, so the set is a
+// property of the BINARY — which drivers were compiled in — and not of
+// any one node.
+var driverSet = sync.OnceValue(func() *compute.DriverSet {
+	s := compute.NewDriverSet()
+	s.RegisterChat(compute.DriverOpenAI, compute.OpenAIChatFactory)
+	s.RegisterChat(compute.DriverAnthropic, anthropicChatFactory)
+	s.RegisterChat(compute.DriverMock, compute.MockChatFactory)
+	// MiniMax and DashScope speak OpenAI-compatible CHAT and their
+	// own image shape. Registering the vendor name for both means
+	// `driver = "minimax"` selects the right wire format per
+	// modality — which is what an operator naming a vendor means.
+	//
+	// Without these two lines a provider entry declared for image
+	// generation fails BOOT on "unknown chat driver", because the
+	// one driver field is consulted for every modality and the
+	// chat lookup happens first.
+	s.RegisterChat(minimax.DriverName, compute.OpenAIChatFactory)
+	s.RegisterChat(dashscope.DriverName, compute.OpenAIChatFactory)
 
-func (n *Node) drivers() *compute.DriverSet {
-	driverSetOnce.Do(func() {
-		s := compute.NewDriverSet()
-		s.RegisterChat(compute.DriverOpenAI, compute.OpenAIChatFactory)
-		s.RegisterChat(compute.DriverAnthropic, anthropicChatFactory)
-		s.RegisterChat(compute.DriverMock, compute.MockChatFactory)
-		// MiniMax and DashScope speak OpenAI-compatible CHAT and their
-		// own image shape. Registering the vendor name for both means
-		// `driver = "minimax"` selects the right wire format per
-		// modality — which is what an operator naming a vendor means.
-		//
-		// Without these two lines a provider entry declared for image
-		// generation fails BOOT on "unknown chat driver", because the
-		// one driver field is consulted for every modality and the
-		// chat lookup happens first.
-		s.RegisterChat(minimax.DriverName, compute.OpenAIChatFactory)
-		s.RegisterChat(dashscope.DriverName, compute.OpenAIChatFactory)
+	// Generation modalities resolve their driver by name too, so a
+	// second vendor is a registration rather than a rewrite of the
+	// wiring. Job has no default registration under DriverOpenAI:
+	// the async protocols share no shape, so there is nothing
+	// sensible to default to.
+	s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
+	s.RegisterSpeak(elevenlabs.DriverName, elevenlabsSpeakFactory)
+	s.RegisterSpeak(minimax.DriverName, minimaxSpeakFactory)
+	s.RegisterSpeak(dashscope.DriverName, dashscopeSpeakFactory)
+	s.RegisterSpeak(compute.DriverMock, compute.MockSpeakFactory)
+	s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
+	s.RegisterImage(imagen.DriverName, imagenImageFactory)
+	s.RegisterImage(minimax.DriverName, minimaxImageFactory)
+	s.RegisterImage(dashscope.DriverName, dashscopeImageFactory)
+	s.RegisterImage(compute.DriverMock, compute.MockImageFactory)
+	s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
+	s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
+	s.RegisterJob(veo.DriverName, veoJobFactory)
 
-		// Generation modalities resolve their driver by name too, so a
-		// second vendor is a registration rather than a rewrite of the
-		// wiring. Job has no default registration under DriverOpenAI:
-		// the async protocols share no shape, so there is nothing
-		// sensible to default to.
-		s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
-		s.RegisterSpeak(elevenlabs.DriverName, elevenlabsSpeakFactory)
-		s.RegisterSpeak(minimax.DriverName, minimaxSpeakFactory)
-		s.RegisterSpeak(dashscope.DriverName, dashscopeSpeakFactory)
-		s.RegisterSpeak(compute.DriverMock, compute.MockSpeakFactory)
-		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
-		s.RegisterImage(imagen.DriverName, imagenImageFactory)
-		s.RegisterImage(minimax.DriverName, minimaxImageFactory)
-		s.RegisterImage(dashscope.DriverName, dashscopeImageFactory)
-		s.RegisterImage(compute.DriverMock, compute.MockImageFactory)
-		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
-		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
-		s.RegisterJob(veo.DriverName, veoJobFactory)
+	// Vision joins the same seam: `driver` selects the wire shape
+	// per modality, so a vendor's chat and vision protocols are
+	// registered independently rather than implied by one another.
+	s.RegisterVision(compute.DriverOpenAI, compute.OpenAIVisionFactory)
+	s.RegisterVision(compute.DriverAnthropic, anthropic.VisionFactory)
+	s.RegisterVision(gemini.DriverName, gemini.VisionFactory)
+	s.RegisterVision(compute.DriverMock, compute.MockVisionFactory)
 
-		// Vision joins the same seam: `driver` selects the wire shape
-		// per modality, so a vendor's chat and vision protocols are
-		// registered independently rather than implied by one another.
-		s.RegisterVision(compute.DriverOpenAI, compute.OpenAIVisionFactory)
-		s.RegisterVision(compute.DriverAnthropic, anthropic.VisionFactory)
-		s.RegisterVision(gemini.DriverName, gemini.VisionFactory)
-		s.RegisterVision(compute.DriverMock, compute.MockVisionFactory)
+	// Audio picks its driver by matched CAPABILITY rather than by
+	// the provider's `driver` key, so one chain can mix a Whisper
+	// endpoint with a chat-multimodal one.
+	s.RegisterAudio(compute.DriverOpenAI, compute.WhisperAudioFactory)
+	s.RegisterAudio(compute.DriverChatMultimodal, compute.ChatMultimodalAudioFactory)
+	s.RegisterAudio(compute.DriverMock, compute.MockAudioFactory)
 
-		// Audio picks its driver by matched CAPABILITY rather than by
-		// the provider's `driver` key, so one chain can mix a Whisper
-		// endpoint with a chat-multimodal one.
-		s.RegisterAudio(compute.DriverOpenAI, compute.WhisperAudioFactory)
-		s.RegisterAudio(compute.DriverChatMultimodal, compute.ChatMultimodalAudioFactory)
-		s.RegisterAudio(compute.DriverMock, compute.MockAudioFactory)
+	// Embeddings register a FACTORY rather than a built driver:
+	// the client normalises the endpoint suffix before anything
+	// can be built with it.
+	s.RegisterEmbedding(compute.DriverOpenAI, compute.OpenAIEmbeddingFactory)
+	s.RegisterEmbedding(compute.DriverMiniMax, compute.MiniMaxEmbeddingFactory)
+	s.RegisterEmbedding(compute.DriverMock, compute.MockEmbeddingFactory)
 
-		// Embeddings register a FACTORY rather than a built driver:
-		// the client normalises the endpoint suffix before anything
-		// can be built with it.
-		s.RegisterEmbedding(compute.DriverOpenAI, compute.OpenAIEmbeddingFactory)
-		s.RegisterEmbedding(compute.DriverMiniMax, compute.MiniMaxEmbeddingFactory)
-		s.RegisterEmbedding(compute.DriverMock, compute.MockEmbeddingFactory)
+	// Search is the shallowest modality, so it gets two tiers.
+	// "exa" and "searxng" are compiled because they have real
+	// behaviour behind them; "template" is the declarative
+	// interpreter, and every other engine — Brave, Tavily, Serper,
+	// a private proxy — is a TOML block against it rather than a
+	// line here.
+	s.RegisterSearch(compute.DriverExa, compute.ExaSearchFactory)
+	s.RegisterSearch(compute.DriverKagi, compute.KagiSearchFactory)
+	s.RegisterSearch(compute.DriverSearxng, compute.SearxngSearchFactory)
+	s.RegisterSearch(compute.DriverTemplate, compute.TemplateSearchFactory)
+	return s
+})
 
-		// Search is the shallowest modality, so it gets two tiers.
-		// "exa" and "searxng" are compiled because they have real
-		// behaviour behind them; "template" is the declarative
-		// interpreter, and every other engine — Brave, Tavily, Serper,
-		// a private proxy — is a TOML block against it rather than a
-		// line here.
-		s.RegisterSearch(compute.DriverExa, compute.ExaSearchFactory)
-		s.RegisterSearch(compute.DriverKagi, compute.KagiSearchFactory)
-		s.RegisterSearch(compute.DriverSearxng, compute.SearxngSearchFactory)
-		s.RegisterSearch(compute.DriverTemplate, compute.TemplateSearchFactory)
-		driverSet = s
-	})
-	return driverSet
-}
+func (n *Node) drivers() *compute.DriverSet { return driverSet() }
 
 // anthropicChatFactory adapts the package's own constructor to the
 // generic factory signature.

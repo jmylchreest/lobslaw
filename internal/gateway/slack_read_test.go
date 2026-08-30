@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -200,7 +201,7 @@ func TestReverseOrdersOldestFirst(t *testing.T) {
 	// conversations.history returns newest-first; the agent reads a
 	// transcript, which only makes sense oldest-first.
 	msgs := []SlackTranscriptMessage{{TS: "3"}, {TS: "2"}, {TS: "1"}}
-	reverse(msgs)
+	slices.Reverse(msgs)
 	if msgs[0].TS != "1" || msgs[2].TS != "3" {
 		t.Fatalf("order = %v", []string{msgs[0].TS, msgs[1].TS, msgs[2].TS})
 	}

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -74,7 +76,7 @@ func (s *DriverSet) Audio(name string, cfg AudioDriverConfig) (AudioDriver, erro
 }
 
 // AudioNames lists the registered audio drivers, sorted.
-func (s *DriverSet) AudioNames() []string { return sortedKeys(s.audio) }
+func (s *DriverSet) AudioNames() []string { return slices.Sorted(maps.Keys(s.audio)) }
 
 // WhisperAudioFactory adapts the /v1/audio/transcriptions multipart
 // upload — OpenAI, MiniMax STT, and any self-hosted server exposing

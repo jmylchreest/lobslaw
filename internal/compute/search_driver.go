@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -167,7 +169,7 @@ func (s *DriverSet) Search(name string, cfg SearchDriverConfig) (SearchDriver, e
 }
 
 // SearchNames lists the registered search drivers, sorted.
-func (s *DriverSet) SearchNames() []string { return sortedKeys(s.search) }
+func (s *DriverSet) SearchNames() []string { return slices.Sorted(maps.Keys(s.search)) }
 
 // searchHTTPClient is the per-driver client default. Separate from
 // HTTPClientOr because 60s is the wrong answer for an interactive

@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -57,9 +59,9 @@ func TemplateSearchFactory(cfg SearchDriverConfig) (SearchDriver, error) {
 		return nil, fmt.Errorf("template search: unknown option(s) %v; supported: %s",
 			bad, strings.Join(templateOptionKeys, ", "))
 	}
-	if bad := unknownOptions(cfg.Response, sortedKeys(templateResponseFields)...); len(bad) > 0 {
+	if bad := unknownOptions(cfg.Response, slices.Sorted(maps.Keys(templateResponseFields))...); len(bad) > 0 {
 		return nil, fmt.Errorf("template search: unknown response field(s) %v; supported: %s",
-			bad, strings.Join(sortedKeys(templateResponseFields), ", "))
+			bad, strings.Join(slices.Sorted(maps.Keys(templateResponseFields)), ", "))
 	}
 	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return nil, errors.New("template search: endpoint required")

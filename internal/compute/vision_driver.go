@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -91,7 +93,7 @@ func (s *DriverSet) Vision(name string, cfg VisionDriverConfig) (VisionDriver, e
 }
 
 // VisionNames lists the registered vision drivers, sorted.
-func (s *DriverSet) VisionNames() []string { return sortedKeys(s.vision) }
+func (s *DriverSet) VisionNames() []string { return slices.Sorted(maps.Keys(s.vision)) }
 
 // --- the OpenAI-shaped driver -----------------------------------------
 

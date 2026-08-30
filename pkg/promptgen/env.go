@@ -100,26 +100,18 @@ func isForeignMount(dir string) bool {
 	return false
 }
 
-var (
-	pathSnapshotOnce   sync.Once
-	pathSnapshotResult []string
-)
-
 // discoverSpecialtyCommands walks each directory on $PATH, collects
 // executable regular files, and returns those NOT in commonUnixCommands
 // — i.e., the operator-installed specialty binaries the LLM wouldn't
 // otherwise know about.
 //
-// Runs once per process (sync.Once) — output is cached in the
-// package. Node restart refreshes; runtime $PATH changes won't.
-// Intentional tradeoff: zero per-turn overhead vs. staleness on a
-// change operators have to explicitly trigger.
-func discoverSpecialtyCommands() []string {
-	pathSnapshotOnce.Do(func() {
-		pathSnapshotResult = enumerateSpecialtyPath(os.Getenv("PATH"))
-	})
-	return pathSnapshotResult
-}
+// Runs once per process — output is cached. Node restart refreshes;
+// runtime $PATH changes won't. Intentional tradeoff: zero per-turn
+// overhead vs. staleness on a change operators have to explicitly
+// trigger.
+var discoverSpecialtyCommands = sync.OnceValue(func() []string {
+	return enumerateSpecialtyPath(os.Getenv("PATH"))
+})
 
 // enumerateSpecialtyPath is the testable core — takes a PATH string
 // so unit tests can feed a controlled directory set.

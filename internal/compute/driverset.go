@@ -3,7 +3,9 @@ package compute
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -259,7 +261,7 @@ func (s *DriverSet) Speak(name string, cfg SpeakDriverConfig) (SpeakDriver, erro
 	f, ok := s.speak[key]
 	if !ok {
 		return nil, fmt.Errorf("unknown speak driver %q; available: %s",
-			name, strings.Join(sortedKeysSpeak(s.speak), ", "))
+			name, strings.Join(slices.Sorted(maps.Keys(s.speak)), ", "))
 	}
 	return f(cfg)
 }
@@ -273,7 +275,7 @@ func (s *DriverSet) Image(name string, cfg ImageDriverConfig) (ImageDriver, erro
 	f, ok := s.image[key]
 	if !ok {
 		return nil, fmt.Errorf("unknown image driver %q; available: %s",
-			name, strings.Join(sortedKeysImage(s.image), ", "))
+			name, strings.Join(slices.Sorted(maps.Keys(s.image)), ", "))
 	}
 	return f(cfg)
 }
@@ -288,34 +290,17 @@ func (s *DriverSet) Job(name string, cfg JobDriverConfig) (JobDriver, error) {
 	if key == "" {
 		return nil, fmt.Errorf("a video provider must name its driver explicitly (available: %s); "+
 			"the async protocols share no common shape, so there is no sensible default",
-			strings.Join(sortedKeysJob(s.job), ", "))
+			strings.Join(slices.Sorted(maps.Keys(s.job)), ", "))
 	}
 	f, ok := s.job[key]
 	if !ok {
 		return nil, fmt.Errorf("unknown job driver %q; available: %s",
-			name, strings.Join(sortedKeysJob(s.job), ", "))
+			name, strings.Join(slices.Sorted(maps.Keys(s.job)), ", "))
 	}
 	return f(cfg)
 }
 
 func normaliseDriverName(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
-
-// sortedKeys replaces what were three near-identical helpers, one per
-// factory type, written before this package used generics.
-func sortedKeys[T any](m map[string]T) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sortedKeysSpeak(m map[string]SpeakDriverFactory) []string { return sortedKeys(m) }
-
-func sortedKeysImage(m map[string]ImageDriverFactory) []string { return sortedKeys(m) }
-
-func sortedKeysJob(m map[string]JobDriverFactory) []string { return sortedKeys(m) }
 
 // OpenAISpeakFactory adapts the /v1/audio/speech driver.
 func OpenAISpeakFactory(cfg SpeakDriverConfig) (SpeakDriver, error) {

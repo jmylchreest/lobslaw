@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -74,7 +76,7 @@ func (s *DriverSet) EmbeddingFactory(name string) (EmbeddingDriverFactory, error
 }
 
 // EmbeddingNames lists the registered embedding drivers, sorted.
-func (s *DriverSet) EmbeddingNames() []string { return sortedKeys(s.embedding) }
+func (s *DriverSet) EmbeddingNames() []string { return slices.Sorted(maps.Keys(s.embedding)) }
 
 // OpenAIEmbeddingFactory adapts the /v1/embeddings shape:
 // {input, model} → {data: [{embedding, index}]}.
