@@ -195,7 +195,14 @@ func (f *ReviewFork) memoryThreshold() int {
 
 // Consider fires a review if the turn warrants one. Non-blocking: the
 // reply has already gone out and nothing waits on this.
-func (f *ReviewFork) Consider(req ProcessMessageRequest, messages []Message, toolCalls int) {
+//
+// Takes the turn's context even though it detaches from it. Both
+// callers have one, and the line directly above each is
+// maybeIngestTurn(ctx, ...) — the same shape, the same detached
+// goroutine, the same reason. Consider was the one that did not, and a
+// review is an LLM call: without the turn's values on it, a failure in
+// the fork is unattributable to the turn that caused it.
+func (f *ReviewFork) Consider(ctx context.Context, req ProcessMessageRequest, messages []Message, toolCalls int) {
 	if f == nil {
 		return
 	}
@@ -210,7 +217,10 @@ func (f *ReviewFork) Consider(req ProcessMessageRequest, messages []Message, too
 	copy(replay, messages)
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), reviewTimeout)
+		// WithoutCancel: the turn's context is cancelled the moment the
+		// reply goes out, and this deliberately outlives it. The values
+		// stay true.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reviewTimeout)
 		defer cancel()
 		if err := f.run(ctx, req, replay, axes); err != nil {
 			f.log.Warn("review: fork failed", "turn_id", req.TurnID, "err", err)

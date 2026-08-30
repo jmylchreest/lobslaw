@@ -908,7 +908,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// received is what should be remembered; ingesting the
 			// draft would seed memory with a reply nobody saw.
 			a.maybeIngestTurn(ctx, req, final)
-			a.cfg.Review.Consider(req, resp.Messages, len(resp.ToolCalls))
+			a.cfg.Review.Consider(ctx, req, resp.Messages, len(resp.ToolCalls))
 			return resp, nil
 		}
 
@@ -1034,7 +1034,7 @@ func (a *Agent) forceSummaryReply(
 	// After the reply is assembled, never before. A learning side
 	// effect must not delay somebody's answer, and Consider does not
 	// block.
-	a.cfg.Review.Consider(req, messages, len(resp.ToolCalls))
+	a.cfg.Review.Consider(ctx, req, messages, len(resp.ToolCalls))
 	return resp, nil
 }
 

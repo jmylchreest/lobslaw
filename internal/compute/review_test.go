@@ -471,7 +471,7 @@ func TestConsiderDoesNotBlock(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		f.Consider(aTurn(), nil, 5)
+		f.Consider(context.Background(), aTurn(), nil, 5)
 		close(done)
 	}()
 	select {
@@ -486,7 +486,7 @@ func TestConsiderDoesNotBlock(t *testing.T) {
 func TestNilForkIsInert(t *testing.T) {
 	t.Parallel()
 	var f *ReviewFork
-	f.Consider(aTurn(), nil, 100)
+	f.Consider(context.Background(), aTurn(), nil, 100)
 	if f.shouldReview(aTurn(), 100).any() {
 		t.Error("a nil fork reported that a review should run")
 	}
