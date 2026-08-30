@@ -23,11 +23,19 @@ func TestSummarizerSendsPriorSummaryAndMessages(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("provider calls = %d, want 1", len(calls))
 	}
-	prompt := calls[0].Messages[len(calls[0].Messages)-1].Content
-	if !strings.Contains(prompt, "earlier: they said hello") {
-		t.Error("prior summary not carried into the prompt")
+	// The harness's own framing and the transcript travel in
+	// different messages. The prior summary is this system's output,
+	// the transcript is not, and one string containing both left a
+	// line of prose as the only boundary — which an injected message
+	// can imitate.
+	system, transcript := calls[0].Messages[0].Content, calls[0].Messages[1].Content
+	if !strings.Contains(system, "earlier: they said hello") {
+		t.Error("prior summary not carried into the instructions")
 	}
-	if !strings.Contains(prompt, "my name is james") {
+	if strings.Contains(transcript, "earlier: they said hello") {
+		t.Error("the prior summary is in the transcript message; it is not part of the transcript")
+	}
+	if !strings.Contains(transcript, "my name is james") {
 		t.Error("new messages not carried into the prompt")
 	}
 }
@@ -39,9 +47,9 @@ func TestSummarizerNoPriorReadsAsConversationStart(t *testing.T) {
 	if _, err := s.SummarizeConversation(context.Background(), "", []Message{{Role: "user", Content: "hi"}}); err != nil {
 		t.Fatal(err)
 	}
-	prompt := provider.Calls()[0].Messages[1].Content
-	if !strings.Contains(prompt, "no summary yet") {
-		t.Errorf("first compaction should say so: %q", prompt[:80])
+	system := provider.Calls()[0].Messages[0].Content
+	if !strings.Contains(system, "no summary yet") {
+		t.Error("first compaction should say so")
 	}
 }
 
