@@ -18,11 +18,11 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// DefaultPDFQuestion is asked when the caller focuses on nothing in
+// defaultPDFQuestion is asked when the caller focuses on nothing in
 // particular. It names dates, figures and purpose explicitly: a model
 // asked only to "summarise" a document reliably drops the details
 // somebody is about to be asked about.
-const DefaultPDFQuestion = "Read this PDF and provide a structured summary. Note any dates, names, key figures, and the document's purpose. Transcribe text verbatim where the content is short."
+const defaultPDFQuestion = "Read this PDF and provide a structured summary. Note any dates, names, key figures, and the document's purpose. Transcribe text verbatim where the content is short."
 
 // PDFConfig wires the read_pdf builtin. Today there's only one wire
 // shape: OpenRouter's chat-completions with a `file` content part
@@ -107,7 +107,7 @@ func newReadPDFHandler(cfg PDFConfig, client *http.Client) compute.BuiltinFunc {
 		}
 		question := strings.TrimSpace(args["question"])
 		if question == "" {
-			question = DefaultPDFQuestion
+			question = defaultPDFQuestion
 		}
 
 		// The shared chain: mounts, absolute, cluster-internal,

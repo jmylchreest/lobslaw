@@ -2,6 +2,7 @@ package tools
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -58,6 +59,29 @@ import (
 //
 // atomic.Pointer rather than a mutex because the read is on every path
 // check and the write happens once per node.
+
+// mountLabelHint names the mount labels a relative path could have
+// meant.
+//
+// It used to say "see debug_storage for known mounts", which assumed a
+// tool that is disabled by default — a suggestion that dead-ends is
+// worse than none, because the model spends a call discovering the
+// tool is absent. The resolver already knows the labels, so the error
+// can carry the answer rather than a pointer to it.
+func mountLabelHint() string {
+	const lead = "prefix with / for absolute, or use a mount label"
+	r := activeMountResolver.Load()
+	if r == nil {
+		return lead
+	}
+	labels := r.Labels()
+	if len(labels) == 0 {
+		return lead
+	}
+	slices.Sort(labels)
+	return lead + " (" + strings.Join(labels, ", ") + ")"
+}
+
 var activePathGuard atomic.Pointer[Registry]
 
 // SetPathGuardRegistry wires the tool registry the guard consults for
@@ -125,7 +149,7 @@ func guardPathWithin(tool, path string, need MountMode, implicitRoot string) (re
 	if !filepath.IsAbs(resolved) {
 		p, e, _ := compute.MarshalToolError("relative_path",
 			"path must be absolute OR mount-scoped (e.g. 'workspace/notes.md')",
-			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
+			mountLabelHint())
 		return "", p, e
 	}
 

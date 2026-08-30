@@ -51,6 +51,10 @@ var (
 // wall mid-research with useful state but nowhere to go. 24 gives
 // genuine multi-file research turns room to land while still
 // catching the broken-loop pathology before it racks up tokens.
+//
+// Bounds round TRIPS, where [DefaultMaxToolCallsPerTurn] bounds
+// individual invocations — a trip can carry several of those. The two
+// numbers are not meant to agree.
 const DefaultMaxToolLoops = 24
 
 // AgentConfig configures the agent loop.
