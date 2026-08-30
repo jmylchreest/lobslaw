@@ -33,6 +33,21 @@ const (
 	// own segment rather than to somebody else's network.
 	DefaultDiscoveryBroadcastAddress = "255.255.255.255"
 
+	// DefaultTimezone is the cluster-wide IANA zone used to render
+	// stored UTC times when GatewayConfig.DefaultTimezone is empty and
+	// the user has bound no zone of their own. UTC rather than the
+	// host's zone: a cluster whose displayed times depend on which
+	// node answered is one nobody can reason about.
+	DefaultTimezone = "UTC"
+
+	// DefaultSkillMountLabel is the storage mount skill bundles are
+	// installed into and read back from. config already called this
+	// "the canonical" label in prose while two packages each spelled
+	// it themselves; the installer writing to one label and the
+	// watcher reading another is a skill that installs successfully
+	// and never appears.
+	DefaultSkillMountLabel = "skill-tools"
+
 	// DefaultGatewayHTTPPort is the port the REST gateway listens on
 	// when GatewayConfig.HTTPPort is zero. Shared with the gateway's
 	// own RESTConfig default so the TOML key and the server agree by

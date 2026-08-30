@@ -145,7 +145,7 @@ func newCouncilReviewHandler(reg *compute.ProviderRegistry) compute.BuiltinFunc 
 		}
 		mode := strings.TrimSpace(strings.ToLower(args["mode"]))
 		if mode == "" {
-			mode = "independent"
+			mode = DefaultCouncilMode
 		}
 		if mode != "independent" && mode != "adversarial" {
 			return nil, 2, fmt.Errorf("council_review: mode must be 'independent' or 'adversarial', got %q", mode)

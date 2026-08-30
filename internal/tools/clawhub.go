@@ -11,6 +11,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -50,7 +51,7 @@ func RegisterClawhubBuiltin(b *Builtins, cfg ClawhubConfig) error {
 		return nil
 	}
 	if cfg.DefaultMount == "" {
-		cfg.DefaultMount = "skill-tools"
+		cfg.DefaultMount = config.DefaultSkillMountLabel
 	}
 	return b.Register("clawhub_install", newClawhubInstallHandler(cfg))
 }

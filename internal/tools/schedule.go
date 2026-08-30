@@ -134,7 +134,7 @@ func newScheduleCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		}
 		notifyOn := strings.TrimSpace(strings.ToLower(args["notify_on"]))
 		if notifyOn == "" {
-			notifyOn = "match"
+			notifyOn = DefaultScheduleNotifyOn
 		}
 		if notifyOn != "always" && notifyOn != "match" && notifyOn != "never" {
 			return nil, 2, fmt.Errorf("schedule_create: notify_on must be always|match|never, got %q", notifyOn)
