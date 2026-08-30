@@ -32,6 +32,11 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
+// defaultVideoMIME is what Veo returns when the response omits a type.
+// Veo's own default container, so assuming anything else would
+// mislabel the bytes we were actually handed.
+const defaultVideoMIME = "video/mp4"
+
 const (
 	DriverName = "veo"
 
@@ -204,7 +209,7 @@ func (d *Driver) Poll(ctx context.Context, h compute.JobHandle) (compute.JobStat
 	v := resp.Response.Videos[0]
 	mime := v.MIMEType
 	if mime == "" {
-		mime = "video/mp4"
+		mime = defaultVideoMIME
 	}
 	st := compute.JobState{
 		Status: compute.JobSucceeded,

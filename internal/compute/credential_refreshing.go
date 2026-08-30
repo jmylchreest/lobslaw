@@ -66,7 +66,7 @@ type RefreshingCredential struct {
 // bare token passes an empty prefix.
 func NewRefreshingCredential(source TokenSource, header, prefix string) *RefreshingCredential {
 	if header == "" {
-		header = "Authorization"
+		header = DefaultAuthHeader
 	}
 	return &RefreshingCredential{
 		source: source,
