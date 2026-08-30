@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/sandbox"
 )
 
 func TestShellCommandHappyPath(t *testing.T) {
@@ -146,5 +147,47 @@ func TestShellCommandRejectsEmpty(t *testing.T) {
 	_, _, err := shellCommandBuiltin(context.Background(), map[string]string{})
 	if err == nil {
 		t.Error("empty command should fail")
+	}
+}
+
+// Landlock denies anything a policy does not name, so the shell floor
+// has to name the device nodes an ordinary command assumes. The bug
+// this guards was reported as "ssh fails" and was actually `2>/dev/null`
+// getting EACCES — a failure that looks like the command being broken
+// rather than the sandbox refusing it.
+//
+// Asserted on the floor rather than through Landlock because the floor
+// is the thing that regresses: a preset can be edited without anyone
+// noticing the shell stopped inheriting it.
+func TestShellFloorGrantsTheOrdinaryDeviceNodes(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]bool{ // path -> needs write
+		"/dev/null": true, "/dev/zero": false, "/dev/full": true,
+		"/dev/random": false, "/dev/urandom": false, "/dev/shm": true,
+	}
+	got := map[string]sandbox.PolicyMount{}
+	for _, m := range shellSystemPaths {
+		got[m.Path] = m
+	}
+	for path, needsWrite := range want {
+		m, ok := got[path]
+		if !ok {
+			t.Errorf("%s is not in the shell floor; a command redirecting to it gets EACCES", path)
+			continue
+		}
+		if !m.Read {
+			t.Errorf("%s is granted without read", path)
+		}
+		if m.Write != needsWrite {
+			t.Errorf("%s write = %v, want %v", path, m.Write, needsWrite)
+		}
+	}
+	// A controlling terminal is the one device the agent must not have:
+	// a command that prompts should fail, not hang forever.
+	for _, denied := range []string{"/dev/tty", "/dev/ptmx", "/dev/pts", "/dev/console"} {
+		if _, ok := got[denied]; ok {
+			t.Errorf("%s is in the shell floor; a prompting command will hang instead of failing", denied)
+		}
 	}
 }

@@ -226,6 +226,39 @@ var BuiltinPresets = []Preset{
 		},
 	},
 	{
+		// The devices ordinary programs assume exist. `cmd 2>/dev/null`
+		// is not an exotic request, and libcrypto seeds itself from
+		// /dev/urandom, so a policy without these refuses work nobody
+		// thinks of as privileged.
+		//
+		// /dev/tty, /dev/ptmx and /dev/pts are deliberately absent. A
+		// tool running under the agent has no controlling terminal, and
+		// a command that wants to prompt a human should fail rather
+		// than block forever waiting for one who is not there.
+		// Granting a PTY turns a clean error into a wedged turn.
+		//
+		// /dev/stdin, /dev/stdout, /dev/stderr and /dev/fd are absent
+		// because listing them would not work. All four are symlinks
+		// into /proc/self/fd, Landlock resolves to the target, and
+		// /proc is granted by no policy here. A rule for them would
+		// read as support for `<(cmd)` process substitution while
+		// changing nothing; making that work needs a /proc/self/fd
+		// grant, which is a wider decision than a device node.
+		Name:        "devices",
+		Description: "Harmless character devices: null, zero, full, random, urandom, shm",
+		Rules: []PathRule{
+			{"/dev/null", AccessRW},
+			{"/dev/zero", AccessR},
+			{"/dev/full", AccessRW},
+			{"/dev/random", AccessR},
+			{"/dev/urandom", AccessR},
+			// POSIX shared memory. shm_open lands here, which is how
+			// Python's multiprocessing and several crypto libraries
+			// allocate; a tmpfs like /tmp, which is already granted.
+			{"/dev/shm", AccessRW},
+		},
+	},
+	{
 		Name:        "home-config",
 		Description: "User config dir under ~/.config (RO)",
 		Rules: []PathRule{
