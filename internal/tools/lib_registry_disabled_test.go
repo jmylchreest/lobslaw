@@ -105,3 +105,31 @@ func TestDisabledAcceptsExactNames(t *testing.T) {
 		t.Error("an unrelated tool matched")
 	}
 }
+
+// The defaults are a product decision, and the thing that erodes one
+// is a later edit that "tidies" the list without knowing why an entry
+// is on it. Naming both families here means removing one has to be
+// deliberate enough to also edit a test that says why.
+func TestDefaultsDisableTheRemoteAndDebugFamilies(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	r.SetDisabled(DefaultDisabledTools)
+
+	for _, name := range []string{"remote_ssh", "remote_scp", "debug_soul", "debug_policy", "debug_providers"} {
+		if !r.Disabled(name) {
+			t.Errorf("%s is registered by default; it reaches off the box or describes it, "+
+				"and neither should arrive switched on", name)
+		}
+	}
+	// The gate is a family glob, not a hardcoded list: a debug tool
+	// added tomorrow must be off without anyone remembering to add it.
+	if !r.Disabled("debug_something_added_later") {
+		t.Error("a new debug_* tool would arrive enabled; the default must match the family")
+	}
+	for _, name := range []string{"read_file", "shell_command", "memory_search"} {
+		if r.Disabled(name) {
+			t.Errorf("%s is disabled by default; only remote_* and debug_* should be", name)
+		}
+	}
+}

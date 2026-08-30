@@ -467,15 +467,22 @@ type ComputeConfig struct {
 	// still puts the tool in the model's list and then refuses it.
 	//
 	// A POINTER because unset and empty mean opposite things. Absent
-	// takes compute.DefaultDisabledTools, which switches the remote_*
-	// family off; `disabled_tools = []` is how an operator says "I
-	// want all of them", deliberately and in writing. A plain slice
-	// could not tell those apart, and the one that would silently win
-	// is the permissive one.
+	// takes tools.DefaultDisabledTools, which switches the remote_*
+	// and debug_* families off; `disabled_tools = []` is how an
+	// operator says "I want all of them", deliberately and in
+	// writing. A plain slice could not tell those apart, and the one
+	// that would silently win is the permissive one.
 	//
-	//	disabled_tools = ["remote_*", "shell_command"]
-	//	disabled_tools = []              # nothing disabled, including remote_*
-	//	disabled_tools = ["remote_scp"]  # remote_ssh on, remote_scp off
+	// The list REPLACES the defaults rather than adding to them, so
+	// naming one family re-enables every other family the defaults
+	// had switched off. That is the trade for being able to say "all
+	// of them" at all, and it is why the shipped config writes the
+	// list out in full rather than leaving it implicit.
+	//
+	//	disabled_tools = ["remote_*", "debug_*"] # the default, written out
+	//	disabled_tools = ["remote_*"]            # debug_* ON, remote_* off
+	//	disabled_tools = []                      # nothing disabled at all
+	//	disabled_tools = ["remote_scp"]          # remote_ssh on, remote_scp off
 	DisabledTools *[]string `koanf:"disabled_tools,omitempty"`
 
 	Vision     VisionConfig     `koanf:"vision,omitempty"`

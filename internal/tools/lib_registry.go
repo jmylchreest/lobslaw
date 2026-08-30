@@ -260,16 +260,28 @@ func cloneTool(t *types.ToolDef) *types.ToolDef {
 
 // DefaultDisabledTools is what a deployment that has said nothing gets.
 //
-// `remote_*` is off by default because those tools run commands on a
-// machine this process does not control, and "which machines exist" is
-// not a question the agent's absence of configuration should answer.
-// Every other builtin is available by virtue of running the binary; a
-// tool that reaches off the box is the one place where arriving switched
-// on is the wrong default.
+// `remote_*` is off because those tools run commands on a machine this
+// process does not control, and "which machines exist" is not a
+// question the agent's absence of configuration should answer.
 //
-// Turning it on is one line — see the docs for [[remote]] — and it is a
-// line the operator writes knowingly, which is the entire point.
-var DefaultDisabledTools = []string{"remote_*"}
+// `debug_*` is off because the eleven of them describe the deployment
+// rather than act on it — debug_soul returns the soul text,
+// debug_providers the configured endpoints and models, debug_policy
+// the rules that gate every other tool. They are an operator's
+// introspection surface, and an operator can ask for them by name; on
+// by default they are eleven descriptions in the tool list of every
+// turn, any of which a sufficiently steered model can be talked into
+// reciting into whatever channel it is answering.
+//
+// Every other builtin is available by virtue of running the binary.
+// Reaching off the box and describing the box are the two cases where
+// arriving switched on is the wrong default.
+//
+// Turning either on is one line the operator writes knowingly, which
+// is the entire point. Note that disabled_tools REPLACES this list
+// rather than adding to it, so a deployment that wants debug_* on and
+// remote_* off writes disabled_tools = ["remote_*"].
+var DefaultDisabledTools = []string{"remote_*", "debug_*"}
 
 // SetDisabled installs the glob patterns that suppress tool
 // registration. Matched against the tool NAME with path.Match, so

@@ -99,6 +99,12 @@ enabled = true
 # nobody can read is a default nobody revisits. Deleting the line is
 # NOT the same as setting it to [] — see
 # /reference/builtin-tools#disabling-tools.
+#
+# The shipped default is ["remote_*", "debug_*"]. This local stack
+# omits debug_* deliberately: it exists to be poked at, and
+# debug_policy/debug_sandbox/debug_providers are how you find out what
+# the node actually loaded rather than what this file says. On a
+# deployment answering to people who are not the operator, put it back.
 disabled_tools = ["remote_*"]
 
 # Providers are keyed off env vars set in <state>/.env. A provider

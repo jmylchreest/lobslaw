@@ -128,13 +128,45 @@ Default-deny. Open with extreme care; this is the most prompt-injection-vulnerab
 
 **Disabled by default.** Configured via `[[remote]]`, enabled via `disabled_tools` below.
 
+## Debug
+
+Operator introspection. Each returns what the node currently believes,
+not what the config file says — the point of them is catching the gap
+between the two.
+
+| Tool | Risk | Description |
+|---|---|---|
+| `debug_tools` | reversible | Every tool registered on this node, after `disabled_tools` has been applied |
+| `debug_policy` | reversible | The policy rules in force, in evaluation order |
+| `debug_storage` | reversible | Storage mounts, their roots and their modes |
+| `debug_memory` | reversible | Record counts per memory bucket |
+| `debug_soul` | reversible | The soul text as loaded |
+| `debug_raft` | reversible | Raft term, leader and peer state |
+| `debug_scheduler` | reversible | Scheduled tasks and commitments |
+| `debug_providers` | reversible | Configured providers, their models and health |
+| `debug_version` | reversible | Build version and commit |
+| `debug_sandbox` | reversible | The sandbox policy actually applied to subprocesses |
+| `debug_mcp` | reversible | MCP servers and the tools they contributed |
+
+**Disabled by default.** They describe the deployment rather than act
+on it, and describing the deployment is something a steered model can
+be talked into doing out loud in whatever channel it is answering:
+`debug_soul` returns the persona text, `debug_providers` the endpoints
+and models, `debug_policy` the rules gating every other tool. Eleven
+descriptions also sit in the tool list of every turn, for tools an
+operator reaches for occasionally.
+
+Enable them with `disabled_tools = ["remote_*"]` — naming only the
+remote family leaves the debug family on. See below for why that is a
+replacement rather than an addition.
+
 ## Disabling tools
 
 `compute.disabled_tools` is a list of glob patterns matched against tool **names**. A matching tool is never registered, so the agent does not see it in its tool list and cannot call it.
 
 ```toml
 [compute]
-disabled_tools = ["remote_*"]
+disabled_tools = ["remote_*", "debug_*"]
 ```
 
 ### Why registration and not policy
@@ -154,10 +186,15 @@ A tool can be registered and denied. A tool that is disabled is not reachable by
 
 | value | effect |
 |---|---|
-| *(absent)* | `["remote_*"]` — the default |
-| `[]` | nothing disabled, including `remote_*` |
-| `["remote_scp"]` | `remote_ssh` on, `remote_scp` off |
-| `["remote_*", "shell_command"]` | the remote family, plus the local shell |
+| *(absent)* | `["remote_*", "debug_*"]` — the default |
+| `[]` | nothing disabled, including `remote_*` and `debug_*` |
+| `["remote_*"]` | the debug family **on**, the remote family off |
+| `["remote_scp"]` | `remote_ssh` and every `debug_*` on, `remote_scp` off |
+| `["remote_*", "debug_*", "shell_command"]` | both defaults, plus the local shell |
+
+The list **replaces** the defaults rather than adding to them. Naming
+one family re-enables every other family the defaults had switched
+off — which is the point of the third row, and the trap in the fourth.
 
 Deleting the key is **not** the same as setting it to `[]`. An absent key means "I have not decided" and takes the default; an empty list means "I have decided: all of them". `lobslaw init` writes the default out explicitly for exactly this reason — a default nobody can read is a default nobody revisits.
 
