@@ -294,7 +294,14 @@ func (i *Installer) Install(ctx context.Context, entry *SkillEntry, target Insta
 				return nil, fmt.Errorf("clawhub: bundle %q declares host bins %v but no Satisfier wired (operator must enable binary install path)", entry.Name, processed.RequiresBins)
 			}
 			for _, bin := range processed.RequiresBins {
-				if _, err := i.satisfier.Satisfy(ctx, bin, processed.InstallSpecs); err != nil {
+				// SatisfyOpts, matching installFromBody. Satisfy is
+				// SatisfyOpts with a ZERO SatisfyOptions, so this path
+				// silently discarded whatever WithSatisfyOptions had
+				// been given — including the BootstrapMissingManagers
+				// the clawhub_install builtin sets from the agent's
+				// bootstrap_managers argument, which is the one caller
+				// WithSatisfyOptions' own doc comment names.
+				if _, err := i.satisfier.SatisfyOpts(ctx, bin, processed.InstallSpecs, i.satisfyOptions); err != nil {
 					cleanup()
 					return nil, fmt.Errorf("clawhub: satisfy %q: %w", bin, err)
 				}
