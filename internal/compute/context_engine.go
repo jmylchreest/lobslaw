@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -35,6 +36,10 @@ import (
 // registry, and a multi-provider RoleMap — enough to compute
 // "relevant memory + likely-useful tools" per turn.
 type ContextEngine struct {
+	// now is the clock recency weighting reads. A field so a test can
+	// age a record without sleeping.
+	now func() time.Time
+
 	store      *memory.Store
 	embedder   EmbeddingProvider
 	crossOwner CrossOwnerAuthorizer
@@ -59,9 +64,15 @@ type ContextEngineConfig struct {
 	// prompt rather than anywhere the user can see it.
 	CrossOwner CrossOwnerAuthorizer
 
-	// MaxRecall caps the number of memory records injected into
-	// the prompt per turn. 3 is the sweet spot — enough for
-	// continuity without drowning the turn in stale context.
+	// MaxRecall caps the number of memory records injected into the
+	// prompt per turn. Zero takes DefaultMaxRecall.
+	//
+	// A count rather than a token budget, which is the cruder unit:
+	// each record is truncated at 800 characters, so three of them is
+	// anywhere from a line to most of a page. Conversation history is
+	// already token-budgeted through ContextBudget and recall should
+	// probably follow, but a count matches what an operator can
+	// reason about today.
 	MaxRecall int
 }
 
@@ -74,9 +85,10 @@ func NewContextEngine(cfg ContextEngineConfig) *ContextEngine {
 	}
 	maxRecall := cfg.MaxRecall
 	if maxRecall <= 0 {
-		maxRecall = 3
+		maxRecall = DefaultMaxRecall
 	}
 	return &ContextEngine{
+		now:        time.Now,
 		store:      cfg.Store,
 		embedder:   cfg.Embedder,
 		crossOwner: cfg.CrossOwner,
@@ -137,6 +149,17 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 		return ContextAssembly{}
 	}
 	e.log.Debug("context-engine: recall", "strategy", strategy, "hits", len(entries))
+
+	// Recency folded into the score before ranking.
+	//
+	// Ranking was pure similarity, so a three-year-old fact and a
+	// three-minute-old one competed on wording alone. The decay kernel
+	// already existed in dream.go and drove only consolidation — what
+	// to prune — never what to recall.
+	now := e.now()
+	for i := range entries {
+		entries[i].score *= recencyWeight(entries[i].rec.Timestamp, now)
+	}
 
 	// Deterministic render order: higher score first, then
 	// higher importance, then newer.
@@ -334,6 +357,62 @@ func (e *ContextEngine) quarantined(rec *lobslawv1.EpisodicRecord) bool {
 	e.log.Warn("context engine: skipping quarantined record in recall",
 		"id", rec.Id, "tags", rec.Tags)
 	return true
+}
+
+// DefaultMaxRecall is how many memories reach the prompt when the
+// operator has not said. Enough for continuity, few enough that a turn
+// is not drowned in context the user did not ask about.
+//
+// Worth raising only once ranking is sound: before recency weighting
+// existed, a larger budget bought more chances for the same stale
+// record to keep winning rather than better recall.
+const DefaultMaxRecall = 3
+
+// Recency weighting for recall ranking.
+//
+// Deliberately gentler than consolidation's kernel, because the two
+// answer different questions. Dream asks "should this be pruned",
+// where a 14-day half-life is right. Recall asks "which of these is
+// more likely what they mean now", and a fact from last month is not
+// half as relevant as one from this week.
+const (
+	// recallHalfLife is when recency has cost a record half of what
+	// it can cost. Ninety days: long enough that a fact stated once
+	// last season still competes, short enough that this week's
+	// version of a changed fact wins.
+	recallHalfLife = 90 * 24 * time.Hour
+
+	// recallRecencyFloor is the share of its similarity score the
+	// oldest record keeps.
+	//
+	// Without a floor this is not weighting, it is deletion: at any
+	// half-life, exp decay takes a year-old record to a rounding
+	// error and "the user lives in Leeds", said once and still true,
+	// stops being recallable. Recency should break ties and tilt the
+	// ordering. It should never overrule relevance outright, because
+	// the model asking about someone's home city wants the answer
+	// whenever it was learned.
+	recallRecencyFloor = 0.5
+)
+
+// recencyWeight returns a multiplier in [recallRecencyFloor, 1].
+//
+// An undated record scores 1 rather than the floor. Age unknown is not
+// age proven — penalising it would quietly demote every record written
+// before timestamps, and a missing field is a gap in what we know
+// rather than evidence about the record.
+func recencyWeight(ts *timestamppb.Timestamp, now time.Time) float32 {
+	if ts == nil {
+		return 1
+	}
+	age := now.Sub(ts.AsTime())
+	if age < 0 {
+		// A clock skew between nodes must not make a record score
+		// above a fresh one.
+		age = 0
+	}
+	decay := math.Exp(-math.Ln2 * age.Seconds() / recallHalfLife.Seconds())
+	return float32(recallRecencyFloor + (1-recallRecencyFloor)*decay)
 }
 
 func truncateContext(s string, max int) string {
