@@ -485,6 +485,27 @@ type ComputeConfig struct {
 	//	disabled_tools = ["remote_scp"]          # remote_ssh on, remote_scp off
 	DisabledTools *[]string `koanf:"disabled_tools,omitempty"`
 
+	// CommandClasses maps a command name to the action that governs
+	// it and how its target host is read out of the argv:
+	//
+	//	[compute.command_classes]
+	//	ssh    = { action = "remote:run",  host_from = "ssh-style" }
+	//	podman = { action = "remote:run",  host_from = "ssh-style" }
+	//	curl   = { action = "" }   # stop classifying it
+	//
+	// A command that reaches off the box is governed by what it does
+	// rather than by which tool ran it, so `ssh web01 git pull`
+	// through shell_command and remote_ssh against the same host land
+	// on one rule instead of two.
+	//
+	// Empty action means "do not classify" — the way an operator
+	// disagrees with a shipped entry without patching Go, which is
+	// what the old compiled-in denylist got wrong.
+	//
+	// Unset takes tools' shipped table. Setting the section REPLACES
+	// it, matching disabled_tools.
+	CommandClasses map[string]CommandClassConfig `koanf:"command_classes,omitempty"`
+
 	Vision     VisionConfig     `koanf:"vision,omitempty"`
 	Audio      AudioConfig      `koanf:"audio,omitempty"`
 	PDF        PDFConfig        `koanf:"pdf,omitempty"`
@@ -1029,6 +1050,19 @@ type MCPServerConfig struct {
 	// Empty → spawn directly without installing (assume the binary
 	// is already on PATH).
 	Install []string `koanf:"install,omitempty"`
+}
+
+// CommandClassConfig is one entry of [compute.command_classes].
+type CommandClassConfig struct {
+	// Action is the policy action, e.g. "remote:run". Empty disables
+	// classification for this command.
+	Action string `koanf:"action"`
+
+	// HostFrom names the argv shape the target is read from:
+	// "ssh-style", "scp-style" or "url-style". Empty with a non-empty
+	// action classifies the command but extracts no host, which makes
+	// every call confirmable and none grantable.
+	HostFrom string `koanf:"host_from,omitempty"`
 }
 
 // LimitsConfig holds non-cost safety valves. These are about

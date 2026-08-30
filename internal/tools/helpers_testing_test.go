@@ -85,7 +85,16 @@ func shellGatedExecutor(t *testing.T, rules ...*lobslawv1.PolicyRule) (*compute.
 	}
 
 	eng := policy.NewEngine(store, slog.New(slog.DiscardHandler))
-	eng.SetDefaults([]types.PolicyRule{compute.ShellApprovalDefault()})
+	// The same set wire_approval_gates seeds. A command that reaches
+	// off the box resolves to remote:run or net:fetch, so a fixture
+	// carrying only the shell default would default-deny exactly the
+	// commands this file is about.
+	eng.SetDefaults([]types.PolicyRule{
+		compute.ShellApprovalDefault(),
+		compute.RemoteApprovalDefault(),
+		compute.RemoteCopyApprovalDefault(),
+		compute.NetFetchApprovalDefault(),
+	})
 
 	approvals := compute.NewSessionApprovals()
 	e := compute.NewExecutor(NewRegistry(), eng, nil, compute.ExecutorConfig{}, slog.New(slog.DiscardHandler))

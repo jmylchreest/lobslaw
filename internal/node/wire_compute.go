@@ -40,7 +40,33 @@ import (
 // last because it reads the finished registry plus the binary
 // catalogue that tool registration produced. The per-subsystem helpers
 // live in wire_compute_tools.go; this function is the running order.
+// applyCommandClasses installs the operator's command table, if any.
+//
+// Replaces the shipped defaults rather than merging with them, so a
+// section that omits ssh really means "do not classify ssh" — the same
+// contract disabled_tools has, for the same reason: a merge cannot
+// express removal.
+func (n *Node) applyCommandClasses() {
+	if len(n.cfg.Compute.CommandClasses) == 0 {
+		return
+	}
+	table := make(map[string]compute.CommandClass, len(n.cfg.Compute.CommandClasses))
+	for name, c := range n.cfg.Compute.CommandClasses {
+		table[name] = compute.CommandClass{
+			Action:   strings.TrimSpace(c.Action),
+			HostFrom: compute.HostFrom(strings.TrimSpace(c.HostFrom)),
+		}
+	}
+	compute.SetCommandClasses(table)
+	n.log.Info("compute: command classification table replaced by config",
+		"commands", len(table))
+}
+
 func (n *Node) wireCompute() error {
+	// Before any gate resolves a command, so the first call is judged
+	// by the operator's table rather than the defaults.
+	n.applyCommandClasses()
+
 	// hooks.Dispatcher from config.Hooks. NewDispatcher expects the
 	// keyed-by-event map shape; the config's HooksConfig already
 	// matches modulo a string→HookEvent conversion.

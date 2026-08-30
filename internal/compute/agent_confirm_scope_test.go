@@ -65,7 +65,7 @@ func gatedAgent(t *testing.T, rules ...*lobslawv1.PolicyRule) (*Agent, *Executor
 	}
 
 	eng := policy.NewEngine(store, slog.New(slog.DiscardHandler))
-	eng.SetDefaults([]types.PolicyRule{WriteApprovalDefault()})
+	eng.SetDefaults([]types.PolicyRule{MemoryWriteApprovalDefault()})
 
 	reg := newTestCatalogue()
 	if err := reg.Register(&types.ToolDef{
@@ -118,8 +118,8 @@ func TestAGatedConfirmationCarriesTheGatesOwnAction(t *testing.T) {
 	if pending == nil {
 		t.Fatal("the write was not staged for confirmation")
 	}
-	if pending.Action != ApprovalAction {
-		t.Errorf("Action = %q, want %q", pending.Action, ApprovalAction)
+	if pending.Action != MemoryWriteAction {
+		t.Errorf("Action = %q, want %q", pending.Action, MemoryWriteAction)
 	}
 	if pending.Resource != "episodic" {
 		t.Errorf("Resource = %q, want %q", pending.Resource, "episodic")

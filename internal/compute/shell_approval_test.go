@@ -208,8 +208,8 @@ func TestACompoundCommandOffersNoGrant(t *testing.T) {
 	// The resource is still the real one: policy has to match on it, and
 	// the turn approval has to key on it, or approving once resumes
 	// straight back into the same prompt.
-	if cr.Resource != ShellUnclassified {
-		t.Errorf("Resource = %q, want %q", cr.Resource, ShellUnclassified)
+	if cr.Resource != UnclassifiedResource {
+		t.Errorf("Resource = %q, want %q", cr.Resource, UnclassifiedResource)
 	}
 	if !strings.Contains(cr.Summary, "git status && rm -rf ~") {
 		t.Errorf("Summary = %q; the user cannot see what would run", cr.Summary)
@@ -222,7 +222,7 @@ func TestAllowingTheSentinelCoversCompoundCommands(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t, &lobslawv1.PolicyRule{
 		Id: "operator-accepts-compound", Subject: "*",
-		Action: ShellAction, Resource: ShellUnclassified,
+		Action: ShellAction, Resource: UnclassifiedResource,
 		Effect: "allow", Priority: 20,
 	})
 
@@ -403,7 +403,7 @@ func TestATurnApprovalIsSpentOnce(t *testing.T) {
 	base := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
-	ctx := WithTurnApproval(base, ShellAction, ShellUnclassified)
+	ctx := WithTurnApproval(base, ShellAction, UnclassifiedResource)
 
 	if err := checkShell(ctx, t, e, "cd /tmp && ls"); err != nil {
 		t.Fatalf("the approved command was asked about: %v", err)
@@ -431,4 +431,12 @@ func TestASpentApprovalDoesNotCoverARepeatOfTheSameCommand(t *testing.T) {
 	if err := checkShell(ctx, t, e, "git status --short"); !errors.Is(err, ErrRequireConfirm) {
 		t.Errorf("one approval covered two runs: %v", err)
 	}
+}
+
+// shellGrant keeps these tests reading as they did when the resolver
+// returned two values. The gate now needs an action as well, because a
+// command can be governed by a rule that is not shell:run.
+func shellGrant(params map[string]string) (string, bool) {
+	t := ShellGrantResource(params)
+	return t.Resource, t.Grantable
 }

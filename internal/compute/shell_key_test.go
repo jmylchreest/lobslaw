@@ -88,9 +88,9 @@ func TestTheKeyIsWhatTheUserIsShown(t *testing.T) {
 		`sudo systemctl restart nginx`,
 	} {
 		params := map[string]string{"command": cmd}
-		resource, grantable := ShellGrantResource(params)
+		resource, grantable := shellGrant(params)
 		if !grantable {
-			t.Errorf("ShellGrantResource(%q) was not grantable", cmd)
+			t.Errorf("shellGrant(%q) was not grantable", cmd)
 			continue
 		}
 		summary := ShellCommandSummary(params)
@@ -164,11 +164,11 @@ func TestInvalidUTF8IsRefused(t *testing.T) {
 func TestALongCommandIsMatchableButNotGrantable(t *testing.T) {
 	t.Parallel()
 	long := "echo " + strings.Repeat("a", shellKeyDisplayMax+50)
-	resource, grantable := ShellGrantResource(map[string]string{"command": long})
+	resource, grantable := shellGrant(map[string]string{"command": long})
 	if grantable {
 		t.Error("a command past the display bound was offered as grantable")
 	}
-	if resource == ShellUnclassified {
+	if resource == UnclassifiedResource {
 		t.Error("a long command lost its key; policy can no longer match on it")
 	}
 	if resource == "" {
@@ -220,12 +220,12 @@ func TestAKeyNeverReachesTheSentinel(t *testing.T) {
 		`echo !unclassified`,
 	} {
 		key, ok := NormaliseCommand(cmd)
-		if ok && key == ShellUnclassified {
+		if ok && key == UnclassifiedResource {
 			t.Errorf("NormaliseCommand(%q) reached the sentinel", cmd)
 		}
 	}
 	// And the resolver returns it only for commands it refused.
-	if r, grantable := ShellGrantResource(map[string]string{"command": `git status; rm -rf ~`}); r != ShellUnclassified || grantable {
+	if r, grantable := shellGrant(map[string]string{"command": `git status; rm -rf ~`}); r != UnclassifiedResource || grantable {
 		t.Errorf("a refused command gave resource=%q grantable=%v, want the sentinel and false", r, grantable)
 	}
 }
@@ -249,16 +249,16 @@ func TestAQuotedMetacharacterIsData(t *testing.T) {
 	// And a key carrying a literal `*` is not grantable, because
 	// ApprovalRules.Mint refuses a wildcard resource — offering the
 	// button would report success and store nothing.
-	if _, grantable := ShellGrantResource(map[string]string{"command": `grep '*.go' .`}); grantable {
+	if _, grantable := shellGrant(map[string]string{"command": `grep '*.go' .`}); grantable {
 		t.Error("a key containing a wildcard was offered as grantable")
 	}
 }
 
 func TestTheWorkingDirectoryIsPartOfTheGrantWhenSupplied(t *testing.T) {
 	t.Parallel()
-	bare, _ := ShellGrantResource(map[string]string{"command": "git status"})
-	inA, _ := ShellGrantResource(map[string]string{"command": "git status", "cwd": "/repo-a"})
-	inB, _ := ShellGrantResource(map[string]string{"command": "git status", "cwd": "/repo-b"})
+	bare, _ := shellGrant(map[string]string{"command": "git status"})
+	inA, _ := shellGrant(map[string]string{"command": "git status", "cwd": "/repo-a"})
+	inB, _ := shellGrant(map[string]string{"command": "git status", "cwd": "/repo-b"})
 
 	if inA == inB {
 		t.Errorf("the same command in two directories shares one key: %q", inA)
@@ -280,7 +280,7 @@ func TestARelativeWorkingDirectoryIsNotGrantable(t *testing.T) {
 	t.Parallel()
 	// "../thing" resolves against whatever the process happens to be
 	// in, so it does not identify a directory and cannot anchor a grant.
-	if _, grantable := ShellGrantResource(map[string]string{
+	if _, grantable := shellGrant(map[string]string{
 		"command": "git status", "cwd": "../elsewhere",
 	}); grantable {
 		t.Error("a relative cwd was offered as grantable")
