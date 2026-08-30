@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/jmylchreest/lobslaw/internal/policy"
 )
 
 // readFileLineCap prevents a malicious or overeager tool call from
@@ -29,55 +27,6 @@ const (
 	listFilesMaxLimit     = 1000
 	globMaxMatches        = 500
 )
-
-// toolError is the structured failure shape fs/exec builtins emit
-// on error. Mirrors opencode's pattern: every failure carries a
-// category + human message + actionable next step the LLM can
-// follow. Returning this as stdout JSON (exit code 0, but with
-// error_type set) keeps the LLM's tool-call result parseable as
-// JSON every time — saves it from regex-splitting stderr.
-type toolError struct {
-	ErrorType  string `json:"error_type"`
-	Message    string `json:"message"`
-	Suggestion string `json:"suggestion,omitempty"`
-}
-
-// marshalToolError encodes the structured error. Returns exitCode=1
-// so the executor still treats it as a tool failure, but the JSON
-// body carries actionable detail. Use instead of fmt.Errorf in the
-// fs builtins.
-func marshalToolError(errType, msg, suggestion string) ([]byte, int, error) {
-	payload, err := json.Marshal(toolError{
-		ErrorType:  errType,
-		Message:    msg,
-		Suggestion: suggestion,
-	})
-	if err != nil {
-		return nil, 1, fmt.Errorf("%s: %s", errType, msg)
-	}
-	return payload, 1, nil
-}
-
-// isInternalPath reports whether a path is hidden from LISTINGS.
-//
-// One list now: policy.CheckPath, the compiled-in floor. There used to
-// be a second — internalExcludes, right here — which overlapped the
-// floor on state.db, *.key and *.pem, missed everything the floor
-// caught (~/.ssh, ~/.aws, /etc/shadow, .env), and blocked .git
-// wholesale because it was written for lobslaw's own data directory.
-//
-// Listing is where a floor becomes a FILTER rather than a refusal:
-// list_files does not fail because a directory contains a key, it
-// just does not show it. That is the only reason this wrapper exists
-// rather than the callers asking CheckPath themselves.
-//
-// PathDenied only, deliberately. A confirm-tier path (~/.ssh/config)
-// is sensitive-but-answerable, and hiding it from a listing would
-// mean the user can never discover the file they would be approving.
-func isInternalPath(path string) bool {
-	verdict, _ := policy.CheckPath(path)
-	return verdict == policy.PathDenied
-}
 
 // readFileBuiltin streams a text file with offset/limit paging.
 // JSON output so the model can reason about line numbers without

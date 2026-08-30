@@ -2,15 +2,18 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -337,4 +340,168 @@ func truncateContext(s string, max int) string {
 		return s
 	}
 	return textutil.Truncate(s, "…", max)
+}
+
+// lexicalEpisodicSearch is the ranking half of the substring search,
+// split out because the CONTEXT ENGINE needs it too.
+//
+// Kept reachable by both callers, not just the memory_search tool.
+// Passive recall — the path that puts memories in front of the model
+// without it having to ask — has no vector form on a node with no
+// embedder, so without a lexical form here that node runs every turn
+// with no recall at all and only ever sees a memory the model went
+// looking for.
+//
+// Deliberately does NOT filter quarantined records. runSubstringSearch
+// never did, and the two callers want different things: a model that
+// explicitly asks for a record may see a flagged one, but passive
+// recall replays it into every later prompt unasked. The context
+// engine applies that filter itself, exactly as its vector path does.
+func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]lexicalHit, error) {
+	tokens := tokeniseQuery(query)
+	if len(tokens) == 0 {
+		return nil, nil
+	}
+	var hits []lexicalHit
+	err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
+		var r lobslawv1.EpisodicRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil
+		}
+		if !audience.AllowsEpisodic(&r) {
+			return nil
+		}
+		if tagFilter != "" && !containsString(r.Tags, tagFilter) {
+			return nil
+		}
+		hay := strings.ToLower(r.Event + " " + r.Context)
+		matches := 0
+		for _, tok := range tokens {
+			if strings.Contains(hay, tok) {
+				matches++
+			}
+		}
+		if matches == 0 {
+			return nil
+		}
+		hits = append(hits, lexicalHit{rec: &r, score: matches})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan: %w", err)
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].score != hits[j].score {
+			return hits[i].score > hits[j].score
+		}
+		if hits[i].rec.Importance != hits[j].rec.Importance {
+			return hits[i].rec.Importance > hits[j].rec.Importance
+		}
+		return tsNano(hits[i].rec.Timestamp) > tsNano(hits[j].rec.Timestamp)
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, nil
+}
+
+// tokeniseQuery lowercases + splits on whitespace + drops
+// stopwords and 1-2-char tokens. Preserves original word order
+// (unused today but reserved for phrase-proximity scoring later).
+func tokeniseQuery(query string) []string {
+	fields := strings.Fields(strings.ToLower(query))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		// Strip trailing punctuation the user types casually.
+		f = strings.Trim(f, ".,!?;:'\"()[]")
+		if len(f) <= 2 {
+			continue
+		}
+		if memorySearchStopwords[f] {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func tsNano(ts *timestamppb.Timestamp) int64 {
+	if ts == nil {
+		return 0
+	}
+	return ts.AsTime().UnixNano()
+}
+
+// lexicalHit is a record and how many query tokens it matched.
+type lexicalHit struct {
+	rec   *lobslawv1.EpisodicRecord
+	score int
+}
+
+// runSubstringSearch does tokenised BM25-ish lexical matching —
+// NOT a single-substring match. Splits the query into words,
+// drops noise (2-char and shorter), matches each word against the
+// record's Event+Context lowercase. Score = number of distinct
+// matching words weighted by importance. Rescues the common case
+// where the user's phrasing doesn't literally contain the stored
+// phrase — "where do I live" finds "User lives in Yorkshire" on
+// the word "live" alone.
+func runSubstringSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]byte, int, error) {
+	hits, err := lexicalEpisodicSearch(store, audience, query, tagFilter, limit)
+	if err != nil {
+		return nil, 1, fmt.Errorf("memory_search: %w", err)
+	}
+	results := make([]map[string]any, 0, len(hits))
+	for _, h := range hits {
+		results = append(results, episodicToMap(h.rec, 0))
+	}
+	payload, err := json.Marshal(map[string]any{
+		"query":    query,
+		"results":  results,
+		"strategy": "tokenised-substring",
+	})
+	if err != nil {
+		return nil, 1, err
+	}
+	return payload, 0, nil
+}
+
+func containsString(hay []string, needle string) bool {
+	for _, s := range hay {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// memorySearchStopwords are low-signal words that generate too
+// many hits to be useful. Conservative list — only the absolute
+// worst offenders.
+var memorySearchStopwords = map[string]bool{
+	"the": true, "and": true, "for": true, "but": true, "are": true,
+	"was": true, "were": true, "has": true, "have": true, "had": true,
+	"can": true, "you": true, "your": true, "this": true, "that": true,
+	"what": true, "how": true, "why": true, "when": true, "where": true,
+	"who": true, "which": true, "with": true, "from": true, "there": true,
+	"then": true, "them": true, "they": true, "their": true, "will": true,
+	"would": true, "could": true, "should": true, "about": true, "some": true,
+	"all": true, "any": true, "not": true, "yes": true, "just": true,
+}
+
+func episodicToMap(rec *lobslawv1.EpisodicRecord, score float32) map[string]any {
+	entry := map[string]any{
+		"id":         rec.Id,
+		"event":      rec.Event,
+		"context":    rec.Context,
+		"importance": rec.Importance,
+		"tags":       rec.Tags,
+	}
+	if rec.Timestamp != nil {
+		entry["timestamp"] = rec.Timestamp.AsTime().Format(time.RFC3339)
+	}
+	if score != 0 {
+		entry["score"] = score
+	}
+	return entry
 }

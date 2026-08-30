@@ -248,10 +248,3 @@ func newCouncilReviewHandler(reg *ProviderRegistry) BuiltinFunc {
 		return payload, 0, nil
 	}
 }
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}

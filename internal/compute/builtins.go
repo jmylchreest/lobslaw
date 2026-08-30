@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -139,4 +140,15 @@ func (b *Builtins) TrustFloor() func() types.TrustTier {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.trustFloor
+}
+
+// identityTimezone is the turn's timezone, or empty when the turn has
+// no identity attached (operator tooling, tests). Callers treat empty
+// as UTC.
+func identityTimezone(ctx context.Context) string {
+	identity, ok := turn.IdentityFrom(ctx)
+	if !ok {
+		return ""
+	}
+	return identity.Timezone
 }

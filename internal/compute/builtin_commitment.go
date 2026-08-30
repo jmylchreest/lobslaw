@@ -325,17 +325,6 @@ func parseWhen(when, userTZ string) (time.Time, error) {
 	return time.Now().UTC().Add(d), nil
 }
 
-// identityTimezone is the turn's timezone, or empty when the turn has
-// no identity attached (operator tooling, tests). Callers treat empty
-// as UTC.
-func identityTimezone(ctx context.Context) string {
-	identity, ok := turn.IdentityFrom(ctx)
-	if !ok {
-		return ""
-	}
-	return identity.Timezone
-}
-
 // identityOwner is the canonical principal to stamp on a record the
 // turn is creating. Empty for an anonymous turn, which writes an
 // unowned record — actionable by anyone, exactly like the records that

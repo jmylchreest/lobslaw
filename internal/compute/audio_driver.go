@@ -123,3 +123,22 @@ func checkAudioConfig(cfg AudioDriverConfig) error {
 	}
 	return nil
 }
+
+// audioWhisperTranscribe POSTs multipart/form-data to a
+// Whisper-API-compatible endpoint. Voice notes from Telegram are
+// OPUS-in-OGG; the part Content-Type matters because OpenAI's
+// ffmpeg-side detection trusts it.
+type whisperAudioDriver struct {
+	cfg    AudioDriverConfig
+	client *http.Client
+}
+
+// audioChatMultimodalTranscribe POSTs JSON to OpenRouter's
+// /v1/chat/completions with an input_audio content part. Returns
+// the assistant's content as the transcript. Per OpenRouter's
+// docs, the format field within input_audio expects "wav" / "mp3"
+// / "ogg" — not the MIME type.
+type chatMultimodalAudioDriver struct {
+	cfg    AudioDriverConfig
+	client *http.Client
+}

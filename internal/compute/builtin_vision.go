@@ -199,38 +199,3 @@ func sniffImageMime(path string, data []byte) string {
 }
 
 // --- OpenAI / MiniMax / OpenRouter shape ---
-
-type openAIVisionRequest struct {
-	Model     string                `json:"model"`
-	MaxTokens int                   `json:"max_tokens,omitempty"`
-	Messages  []openAIVisionMessage `json:"messages"`
-}
-type openAIVisionMessage struct {
-	Role    string             `json:"role"`
-	Content []openAIVisionPart `json:"content"`
-}
-type openAIVisionPart struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text,omitempty"`
-	ImageURL *openAIImageURL `json:"image_url,omitempty"`
-}
-type openAIImageURL struct {
-	URL string `json:"url"`
-}
-
-func decodeOpenAIVision(raw []byte) (string, error) {
-	var decoded struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return "", err
-	}
-	if len(decoded.Choices) == 0 {
-		return "", errors.New("no choices")
-	}
-	return decoded.Choices[0].Message.Content, nil
-}

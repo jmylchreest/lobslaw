@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 )
 
@@ -248,4 +249,25 @@ func insideImplicitRoot(raw, root string) (bool, string) {
 // guardReadWithin is guardRead for a tool that carries its own root.
 func guardReadWithin(tool, path, implicitRoot string) (string, []byte, int) {
 	return guardPathWithin(tool, path, MountMode{Read: true}, implicitRoot)
+}
+
+// isInternalPath reports whether a path is hidden from LISTINGS.
+//
+// One list now: policy.CheckPath, the compiled-in floor. There used to
+// be a second — internalExcludes, right here — which overlapped the
+// floor on state.db, *.key and *.pem, missed everything the floor
+// caught (~/.ssh, ~/.aws, /etc/shadow, .env), and blocked .git
+// wholesale because it was written for lobslaw's own data directory.
+//
+// Listing is where a floor becomes a FILTER rather than a refusal:
+// list_files does not fail because a directory contains a key, it
+// just does not show it. That is the only reason this wrapper exists
+// rather than the callers asking CheckPath themselves.
+//
+// PathDenied only, deliberately. A confirm-tier path (~/.ssh/config)
+// is sensitive-but-answerable, and hiding it from a listing would
+// mean the user can never discover the file they would be approving.
+func isInternalPath(path string) bool {
+	verdict, _ := policy.CheckPath(path)
+	return verdict == policy.PathDenied
 }
