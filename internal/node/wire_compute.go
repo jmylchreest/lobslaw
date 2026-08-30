@@ -466,6 +466,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 			Embedder:   n.embedder,
 			CrossOwner: n.crossOwnerAuthz(),
 			Logger:     n.log,
+			MaxRecall:  n.cfg.Compute.MaxRecall,
 		}),
 		Skills:            skillDispatcherOrNil(n.skillAdapter),
 		SkillsProvider:    n.skillIndexProvider(),

@@ -506,6 +506,17 @@ type ComputeConfig struct {
 	// it, matching disabled_tools.
 	CommandClasses map[string]CommandClassConfig `koanf:"command_classes,omitempty"`
 
+	// MaxRecall caps how many memories passive recall injects into a
+	// turn. Zero takes compute.DefaultMaxRecall.
+	//
+	// A dial because context budgets differ by an order of magnitude
+	// between models: a node on a small-context model wants fewer, one
+	// on a large-context model can afford more. Worth raising only
+	// where recall is finding the right things — a bigger budget does
+	// not improve ranking, it admits more of whatever the ranking
+	// already preferred.
+	MaxRecall int `koanf:"max_recall,omitempty"`
+
 	Vision     VisionConfig     `koanf:"vision,omitempty"`
 	Audio      AudioConfig      `koanf:"audio,omitempty"`
 	PDF        PDFConfig        `koanf:"pdf,omitempty"`
