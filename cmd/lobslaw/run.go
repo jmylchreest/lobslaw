@@ -99,6 +99,7 @@ var commandSummaries = map[string]string{
 	"learned":      "what the agent taught itself",
 	"identity":     "principals and channel aliases",
 	"policy":       "rules and pending approvals",
+	"grants":       "standing approvals a conversation gave",
 	"memory":       "browse, search and forget records",
 	"session":      "stored conversations",
 	"init":         "write a starting config",

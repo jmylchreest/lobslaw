@@ -1452,6 +1452,8 @@ const (
 	PolicyService_AddRule_FullMethodName             = "/lobslaw.v1.PolicyService/AddRule"
 	PolicyService_RevokeApprovalRules_FullMethodName = "/lobslaw.v1.PolicyService/RevokeApprovalRules"
 	PolicyService_RequestConfirmation_FullMethodName = "/lobslaw.v1.PolicyService/RequestConfirmation"
+	PolicyService_ListSessionGrants_FullMethodName   = "/lobslaw.v1.PolicyService/ListSessionGrants"
+	PolicyService_RevokeSessionGrants_FullMethodName = "/lobslaw.v1.PolicyService/RevokeSessionGrants"
 )
 
 // PolicyServiceClient is the client API for PolicyService service.
@@ -1474,6 +1476,22 @@ type PolicyServiceClient interface {
 	// like not to have shipped.
 	RevokeApprovalRules(ctx context.Context, in *RevokeApprovalRulesRequest, opts ...grpc.CallOption) (*RevokeApprovalRulesResponse, error)
 	RequestConfirmation(ctx context.Context, in *RequestConfirmationRequest, opts ...grpc.CallOption) (*RequestConfirmationResponse, error)
+	// ListSessionGrants and RevokeSessionGrants are the other half of
+	// "approved for the rest of this conversation".
+	//
+	// The permanent tier has had `lobslaw policy approvals` /
+	// `revoke-approvals` since it shipped, on the argument that without
+	// a way to see and undo a grant, "revocable" is a claim in a doc.
+	// The conversation tier had neither: the only way to undo one was
+	// /new, which also destroys the transcript, and there was no way at
+	// all to see what a conversation had already agreed to.
+	//
+	// That is the wrong way round. The permanent grant is the one
+	// somebody thought hardest about; the conversation grant is the one
+	// given casually, mid-task, to get on with something — and it is the
+	// one with no surface.
+	ListSessionGrants(ctx context.Context, in *ListSessionGrantsRequest, opts ...grpc.CallOption) (*ListSessionGrantsResponse, error)
+	RevokeSessionGrants(ctx context.Context, in *RevokeSessionGrantsRequest, opts ...grpc.CallOption) (*RevokeSessionGrantsResponse, error)
 }
 
 type policyServiceClient struct {
@@ -1534,6 +1552,26 @@ func (c *policyServiceClient) RequestConfirmation(ctx context.Context, in *Reque
 	return out, nil
 }
 
+func (c *policyServiceClient) ListSessionGrants(ctx context.Context, in *ListSessionGrantsRequest, opts ...grpc.CallOption) (*ListSessionGrantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSessionGrantsResponse)
+	err := c.cc.Invoke(ctx, PolicyService_ListSessionGrants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *policyServiceClient) RevokeSessionGrants(ctx context.Context, in *RevokeSessionGrantsRequest, opts ...grpc.CallOption) (*RevokeSessionGrantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeSessionGrantsResponse)
+	err := c.cc.Invoke(ctx, PolicyService_RevokeSessionGrants_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PolicyServiceServer is the server API for PolicyService service.
 // All implementations should embed UnimplementedPolicyServiceServer
 // for forward compatibility.
@@ -1554,6 +1592,22 @@ type PolicyServiceServer interface {
 	// like not to have shipped.
 	RevokeApprovalRules(context.Context, *RevokeApprovalRulesRequest) (*RevokeApprovalRulesResponse, error)
 	RequestConfirmation(context.Context, *RequestConfirmationRequest) (*RequestConfirmationResponse, error)
+	// ListSessionGrants and RevokeSessionGrants are the other half of
+	// "approved for the rest of this conversation".
+	//
+	// The permanent tier has had `lobslaw policy approvals` /
+	// `revoke-approvals` since it shipped, on the argument that without
+	// a way to see and undo a grant, "revocable" is a claim in a doc.
+	// The conversation tier had neither: the only way to undo one was
+	// /new, which also destroys the transcript, and there was no way at
+	// all to see what a conversation had already agreed to.
+	//
+	// That is the wrong way round. The permanent grant is the one
+	// somebody thought hardest about; the conversation grant is the one
+	// given casually, mid-task, to get on with something — and it is the
+	// one with no surface.
+	ListSessionGrants(context.Context, *ListSessionGrantsRequest) (*ListSessionGrantsResponse, error)
+	RevokeSessionGrants(context.Context, *RevokeSessionGrantsRequest) (*RevokeSessionGrantsResponse, error)
 }
 
 // UnimplementedPolicyServiceServer should be embedded to have
@@ -1577,6 +1631,12 @@ func (UnimplementedPolicyServiceServer) RevokeApprovalRules(context.Context, *Re
 }
 func (UnimplementedPolicyServiceServer) RequestConfirmation(context.Context, *RequestConfirmationRequest) (*RequestConfirmationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequestConfirmation not implemented")
+}
+func (UnimplementedPolicyServiceServer) ListSessionGrants(context.Context, *ListSessionGrantsRequest) (*ListSessionGrantsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListSessionGrants not implemented")
+}
+func (UnimplementedPolicyServiceServer) RevokeSessionGrants(context.Context, *RevokeSessionGrantsRequest) (*RevokeSessionGrantsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevokeSessionGrants not implemented")
 }
 func (UnimplementedPolicyServiceServer) testEmbeddedByValue() {}
 
@@ -1688,6 +1748,42 @@ func _PolicyService_RequestConfirmation_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PolicyService_ListSessionGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSessionGrantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PolicyServiceServer).ListSessionGrants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PolicyService_ListSessionGrants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PolicyServiceServer).ListSessionGrants(ctx, req.(*ListSessionGrantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PolicyService_RevokeSessionGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeSessionGrantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PolicyServiceServer).RevokeSessionGrants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PolicyService_RevokeSessionGrants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PolicyServiceServer).RevokeSessionGrants(ctx, req.(*RevokeSessionGrantsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PolicyService_ServiceDesc is the grpc.ServiceDesc for PolicyService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1714,6 +1810,14 @@ var PolicyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestConfirmation",
 			Handler:    _PolicyService_RequestConfirmation_Handler,
+		},
+		{
+			MethodName: "ListSessionGrants",
+			Handler:    _PolicyService_ListSessionGrants_Handler,
+		},
+		{
+			MethodName: "RevokeSessionGrants",
+			Handler:    _PolicyService_RevokeSessionGrants_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

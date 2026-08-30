@@ -42,6 +42,7 @@ lobslaw audit              # the tamper-evident record
   audit query              # read entries
   audit verify             # walk the hash chain
 lobslaw policy             # see and undo "always" approvals
+lobslaw grants             # see and undo per-conversation approvals
   policy approvals         # list the rules an approval minted
   policy revoke-approvals  # delete them, all or by id
 lobslaw memory             # read + edit the memory store
@@ -307,6 +308,33 @@ checked: exiting 0 having verified nothing is the failure this command exists
 to catch. A sink the node does not run is reported as unavailable, not as a
 broken chain — conflating the two sends somebody looking for tampering that
 did not happen.
+
+## `lobslaw grants`
+
+The *conversation* tier of approvals — what "approve for the rest of this
+conversation" recorded. Separate from `lobslaw policy` because the two are
+stored differently, expire differently, and are keyed differently: a permanent
+grant belongs to a **principal**, a conversation grant to a **conversation**.
+
+```bash
+lobslaw grants list --context prod
+lobslaw grants list --context prod --conversation slack:C0123ABC
+lobslaw grants revoke --context prod --conversation slack:C0123ABC --apply
+```
+
+`revoke` is a **dry run unless `--apply`**, and naming nothing is refused —
+pass ids, or `--conversation`.
+
+These expire on their own (24h by default, `[security] session_grant_ttl`), so
+there is no `--offline` form: reading them from a stopped cluster answers a
+question about a moment that has already passed.
+
+Revoking grants leaves the transcript alone. That separation is the point —
+`/new` does both, and "I regret that approval" is not the same request as
+"forget what we discussed".
+
+In a chat, `/grants` shows the same thing for the conversation you are in, and
+`/grants revoke` drops them.
 
 ## `lobslaw policy`
 

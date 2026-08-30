@@ -67,6 +67,13 @@ func (n *Node) wirePrompts() error {
 		n.approvals.SetDurable(grantsAdapter{inner: grants})
 		n.log.Info("session grants: replicated", "ttl", grants.TTL())
 	}
+	// And to the policy service, which serves the listing and the
+	// revoke. Without this the two RPCs report Unimplemented, which is
+	// the honest answer for a node with no replicated store and the
+	// wrong one for a node that has it and forgot to say so.
+	if n.policySvc != nil {
+		n.policySvc.SetSessionGrants(grants)
+	}
 	return nil
 }
 

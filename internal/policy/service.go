@@ -23,6 +23,9 @@ type Service struct {
 
 	raft   *memory.RaftNode
 	engine *Engine
+	// grants is the conversation-grant store, wired after
+	// construction — see SetSessionGrants.
+	grants *memory.SessionGrantStore
 }
 
 // NewService returns a Service backed by raft — every AddRule goes

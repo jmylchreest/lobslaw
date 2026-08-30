@@ -138,6 +138,7 @@ func topLevelDispatchers() []topLevelCommand {
 		{name: "learned", dispatch: dispatchLearned},
 		{name: "identity", dispatch: dispatchIdentity},
 		{name: "policy", dispatch: dispatchPolicy},
+		{name: "grants", dispatch: dispatchGrants},
 		{name: "memory", dispatch: dispatchMemory},
 		{name: "session", dispatch: dispatchSession},
 		{name: "init", dispatch: dispatchInit},

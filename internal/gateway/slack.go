@@ -115,6 +115,11 @@ type SlackConfig struct {
 	HardTimeout      time.Duration
 	Soul             func() *types.SoulConfig
 
+	// SessionGrants backs /grants. Nil leaves the command
+	// unregistered rather than answering "none" on a node that
+	// cannot answer at all.
+	SessionGrants SessionGrants
+
 	// CommandAuthorizer gates slash commands through the policy engine.
 	// Nil refuses every command rather than allowing them: a command
 	// is a privileged operation, and an unwired authorizer is an
@@ -276,6 +281,8 @@ func NewSlackHandler(cfg SlackConfig, agent *compute.Agent) (*SlackHandler, erro
 	}
 	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
 	RegisterBuiltinCommands(h.commands, h.conv)
+	// Nil leaves /grants unregistered — see RegisterGrantCommands.
+	RegisterGrantCommands(h.commands, cfg.SessionGrants)
 	return h, nil
 }
 

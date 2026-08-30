@@ -687,6 +687,53 @@ service PolicyService {
   // like not to have shipped.
   rpc RevokeApprovalRules(RevokeApprovalRulesRequest) returns (RevokeApprovalRulesResponse);
   rpc RequestConfirmation(RequestConfirmationRequest) returns (RequestConfirmationResponse);
+
+  // ListSessionGrants and RevokeSessionGrants are the other half of
+  // "approved for the rest of this conversation".
+  //
+  // The permanent tier has had `lobslaw policy approvals` /
+  // `revoke-approvals` since it shipped, on the argument that without
+  // a way to see and undo a grant, "revocable" is a claim in a doc.
+  // The conversation tier had neither: the only way to undo one was
+  // /new, which also destroys the transcript, and there was no way at
+  // all to see what a conversation had already agreed to.
+  //
+  // That is the wrong way round. The permanent grant is the one
+  // somebody thought hardest about; the conversation grant is the one
+  // given casually, mid-task, to get on with something — and it is the
+  // one with no surface.
+  rpc ListSessionGrants(ListSessionGrantsRequest) returns (ListSessionGrantsResponse);
+  rpc RevokeSessionGrants(RevokeSessionGrantsRequest) returns (RevokeSessionGrantsResponse);
+}
+
+message ListSessionGrantsRequest {
+  // session_id narrows to one conversation, "<channel>:<channel_id>".
+  // Empty lists every conversation's.
+  string session_id = 1;
+}
+message ListSessionGrantsResponse {
+  repeated SessionGrant grants = 1;
+  // ttl_seconds is what a grant is given when recorded, so a listing
+  // can say how long the ones it is showing have left rather than
+  // making the reader look it up.
+  int64 ttl_seconds = 2;
+}
+
+message RevokeSessionGrantsRequest {
+  // Exactly one of ids or session_id. Both empty is an error, for the
+  // same reason RevokeApprovalRules refuses it: nobody should revoke a
+  // set by omitting an argument.
+  repeated string ids = 1;
+  // session_id revokes everything one conversation has agreed to,
+  // WITHOUT touching its transcript. That separation is the point —
+  // /new does both, and "I regret that approval" is not the same
+  // request as "forget what we discussed".
+  string session_id = 2;
+  bool dry_run = 3;
+}
+message RevokeSessionGrantsResponse {
+  repeated string revoked = 1;
+  repeated string not_found = 2;
 }
 
 message PolicyRule {

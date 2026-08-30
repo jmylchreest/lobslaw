@@ -267,6 +267,7 @@ func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.Slack
 		ArtifactOpener:    n.artifactOpener(),
 		IncomingDir:       n.incomingDir(),
 		CommandAuthorizer: n.commandAuthorizerOrNil(),
+		SessionGrants:     n.sessionGrantsView(),
 		Gate:              gate,
 		Logger:            n.log,
 	}, n.agent)
@@ -341,6 +342,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		// approval and leaves the CLI path working.
 		Enrolments:        n.enrolmentDecider(),
 		CommandAuthorizer: n.commandAuthorizerOrNil(),
+		SessionGrants:     n.sessionGrantsView(),
 		Roles:             n.resolveUserRoles,
 		UnknownUserScope:  n.cfg.Gateway.UnknownUserScope,
 		DefaultBudget:     compute.FromComputeConfig(n.cfg.Compute),
