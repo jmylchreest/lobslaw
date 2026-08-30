@@ -79,13 +79,22 @@ func Apply(cmd *exec.Cmd, p *Policy) error {
 
 // needsReexec reports whether the Policy has enforcement fields set
 // that the reexec helper is responsible for — NoNewPrivs, Landlock
-// (AllowedPaths), or Seccomp. Namespaces alone don't require the
-// helper (they're applied via SysProcAttr.Cloneflags by Apply).
+// (Mounts or the legacy AllowedPaths), or Seccomp. Namespaces alone
+// don't require the helper (they're applied via
+// SysProcAttr.Cloneflags by Apply).
+//
+// Mounts is checked as well as AllowedPaths so a policy expressed
+// only in the current vocabulary still reaches the helper. Apply
+// calls Normalise first, which sets NoNewPrivs for any policy with
+// paths, so this was reachable in practice either way — but a
+// predicate that answers "is there filesystem enforcement here" by
+// consulting one of the two fields that can carry it is a trap for
+// the next caller.
 func needsReexec(p *Policy) bool {
 	if p == nil {
 		return false
 	}
-	return p.NoNewPrivs || len(p.AllowedPaths) > 0 || p.Seccomp.HasRules()
+	return p.NoNewPrivs || len(p.AllowedPaths) > 0 || len(p.Mounts) > 0 || p.Seccomp.HasRules()
 }
 
 // rewriteForHelperReexec mutates cmd so it invokes the running

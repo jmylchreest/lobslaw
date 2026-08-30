@@ -306,15 +306,21 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// One resolution, used twice: the tool's policy decides both what
+	// the kernel enforces and which environment variables cross into
+	// the child. Resolving it separately for each would let them
+	// disagree about which policy is in force.
+	policy := e.resolvePolicy(req.ToolName)
+
 	cmd := exec.CommandContext(runCtx, path, argv...)
 	cmd.Dir = e.cfg.WorkDir
-	cmd.Env = buildEnv(e.cfg.EnvWhitelist)
+	cmd.Env = buildEnv(e.envWhitelistFor(policy))
 	// WaitDelay force-closes stdio after context cancel so a child
 	// process that inherited our pipes (e.g. sleep inside a shell)
 	// can't stall Wait().
 	cmd.WaitDelay = 500 * time.Millisecond
 
-	if err := sandbox.Apply(cmd, e.resolvePolicy(req.ToolName)); err != nil {
+	if err := sandbox.Apply(cmd, policy); err != nil {
 		return nil, fmt.Errorf("sandbox: %w", err)
 	}
 
@@ -508,6 +514,22 @@ func substituteArgv(tmpl []string, params map[string]string) ([]string, error) {
 // Only the named variables leak through; default is empty env. This
 // keeps secrets like API keys from accidentally reaching tools that
 // don't need them.
+// envWhitelistFor picks the environment whitelist for a tool: the
+// one on its own policy when it has one, else the fleet-wide default.
+// Same tool-specific → fleet-default chain as resolvePolicy, because
+// it is answering the same question about the same tool.
+//
+// A per-tool list is the whole point. A fleet-wide one is the union of
+// what every tool needs, so the single tool that wants GIT_SSH_COMMAND
+// hands it to every other tool as well — including whichever one is
+// running attacker-influenced input this turn.
+func (e *Executor) envWhitelistFor(p *sandbox.Policy) []string {
+	if p != nil && len(p.EnvWhitelist) > 0 {
+		return p.EnvWhitelist
+	}
+	return e.cfg.EnvWhitelist
+}
+
 func buildEnv(whitelist []string) []string {
 	env := make([]string, 0, len(whitelist))
 	for _, name := range whitelist {

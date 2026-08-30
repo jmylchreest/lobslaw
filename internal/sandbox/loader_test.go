@@ -34,15 +34,51 @@ func TestPolicySpecToPolicyInlinePaths(t *testing.T) {
 	if !p.NoNewPrivs {
 		t.Error("NoNewPrivs didn't transfer")
 	}
-	if !slices.Contains(p.AllowedPaths, "/tmp") {
-		t.Errorf("/tmp should be in AllowedPaths; got %v", p.AllowedPaths)
+	tmp := mountNamed(t, p, "/tmp")
+	if !tmp.Read || !tmp.Write {
+		t.Errorf("/tmp = %+v; :rw should grant read and write", tmp)
 	}
-	if slices.Contains(p.ReadOnlyPaths, "/tmp") {
-		t.Errorf("/tmp is RW; should NOT be in ReadOnlyPaths")
+	if tmp.Exec {
+		t.Error("/tmp = :rw granted execute; only :rx and :rwx ask for it")
 	}
-	if !slices.Contains(p.ReadOnlyPaths, "/usr") {
-		t.Errorf("/usr is RO; should be in ReadOnlyPaths; got %v", p.ReadOnlyPaths)
+	usr := mountNamed(t, p, "/usr")
+	if !usr.Read || usr.Write {
+		t.Errorf("/usr = %+v; :r should grant read alone", usr)
 	}
+	if usr.Exec {
+		t.Error("/usr = :r granted execute; that is what made :r and :rx identical")
+	}
+}
+
+// The exec bit is the whole reason ToPolicy speaks Mounts: the
+// AllowedPaths/ReadOnlyPaths pair could only say "writable or not", so
+// every path it described came out executable.
+func TestPolicySpecToPolicyKeepsTheExecBitDistinct(t *testing.T) {
+	t.Parallel()
+	spec := &PolicySpec{Name: "test", Paths: []string{"/usr:rx", "/etc:r"}}
+	p, err := spec.ToPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mountNamed(t, p, "/usr"); !got.Exec {
+		t.Errorf("/usr = %+v; :rx must grant execute", got)
+	}
+	if got := mountNamed(t, p, "/etc"); got.Exec {
+		t.Errorf("/etc = %+v; :r must not grant execute", got)
+	}
+}
+
+// mountNamed returns the policy's mount for path, failing the test
+// when there isn't one.
+func mountNamed(t *testing.T, p *Policy, path string) PolicyMount {
+	t.Helper()
+	for _, m := range p.Mounts {
+		if m.Path == path {
+			return m
+		}
+	}
+	t.Fatalf("policy has no mount for %s; it has %+v", path, p.Mounts)
+	return PolicyMount{}
 }
 
 func TestPolicySpecSeccompDefaultAppliesDefaultPolicy(t *testing.T) {
@@ -290,8 +326,8 @@ presets = ["`+presetName+`"]
 	if !ok {
 		t.Fatal("mytool policy not loaded")
 	}
-	if !slices.Contains(p.AllowedPaths, "/tmp") {
-		t.Errorf("preset's /tmp should be in tool's AllowedPaths; got %v", p.AllowedPaths)
+	if got := mountNamed(t, p, "/tmp"); !got.Read {
+		t.Errorf("preset's /tmp should reach the tool's mounts; got %+v", got)
 	}
 }
 
@@ -453,8 +489,8 @@ paths = ["/var/tmp:rw"]
 	if !ok {
 		t.Fatal("git policy missing from merged result")
 	}
-	if !slices.Contains(p.AllowedPaths, "/var/tmp") {
-		t.Errorf("expected dirB's /var/tmp in merged policy; got %v", p.AllowedPaths)
+	if got := mountNamed(t, p, "/var/tmp"); !got.Write {
+		t.Errorf("expected dirB's /var/tmp in merged policy; got %+v", got)
 	}
 }
 

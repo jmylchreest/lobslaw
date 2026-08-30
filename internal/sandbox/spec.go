@@ -32,9 +32,19 @@ type PolicySpec struct {
 	Paths []string `koanf:"paths"`
 
 	// NoNewPrivs sets PR_SET_NO_NEW_PRIVS. Required by Landlock; the
-	// helper sets it automatically when AllowedPaths is non-empty but
+	// helper sets it automatically when any path is granted, but
 	// tools without Landlock still benefit from this on its own.
 	NoNewPrivs bool `koanf:"no_new_privs"`
+
+	// EnvWhitelist names the environment variables that cross into
+	// the tool's subprocess. Everything else is dropped — including
+	// PATH, which is not added implicitly.
+	//
+	// Per-tool because that is the only place it means anything: a
+	// fleet-wide list is the union of what every tool needs, so the
+	// one tool needing GIT_SSH_COMMAND hands it to all of them. An
+	// empty list here falls back to the executor's fleet default.
+	EnvWhitelist []string `koanf:"env_whitelist"`
 
 	// NetworkAllowCIDR is the list of egress CIDRs. Passes through to
 	// Policy.NetworkAllowCIDR; enforcement is deferred (see DEFERRED.md
@@ -92,6 +102,7 @@ func (s *PolicySpec) ToPolicy() (*Policy, error) {
 	p := &Policy{
 		NoNewPrivs:       s.NoNewPrivs,
 		NetworkAllowCIDR: s.NetworkAllowCIDR,
+		EnvWhitelist:     s.EnvWhitelist,
 		Namespaces: NamespaceSet{
 			User:    s.Namespaces.User,
 			Mount:   s.Namespaces.Mount,
@@ -102,12 +113,11 @@ func (s *PolicySpec) ToPolicy() (*Policy, error) {
 		},
 	}
 
-	for _, r := range resolved {
-		p.AllowedPaths = append(p.AllowedPaths, r.Path)
-		if !r.Access.Has(AccessW) {
-			p.ReadOnlyPaths = append(p.ReadOnlyPaths, r.Path)
-		}
-	}
+	// Mounts, not the AllowedPaths/ReadOnlyPaths pair: that pair has a
+	// slot for "writable or not" and nowhere to put execute, so every
+	// path it described came out executable and `:r` was indisting-
+	// uishable from `:rx`. A read grant now means read.
+	p.Mounts = mountsFromRules(resolved)
 
 	switch {
 	case len(s.SeccompDeny) > 0 && s.SeccompDefault:

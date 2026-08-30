@@ -222,12 +222,15 @@ A `sandbox.Policy` is a pure value type — no identity, no scope. Where it's at
 
 Every preset is **read-only by default**. Operators compose explicit `path:rw` overrides for paths a tool needs to write to — least-privilege posture means the operator has to say "yes I really want this writable".
 
+Two presets are writable in themselves, and both are named for it in the table below: `tmp` is scratch space, and `devices` covers nodes where read-only access is meaningless (`/dev/null` you cannot write to is not a `/dev/null`). Neither is a boundary anything is protected by. Any preset granting write to a path holding *data* is still the operator's to compose explicitly.
+
 | Preset | Description | Paths |
 |---|---|---|
-| `system-libs` | OS executables + shared libraries (RO) | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` |
+| `system-libs` | OS executables + shared libraries (**RX**) | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` |
 | `system-certs` | TLS CA bundles for HTTPS (RO) | `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki` |
 | `dns` | DNS resolver + hosts file (RO) | `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/hosts` |
 | `tmp` | `/tmp` scratch space (**RW**) | `/tmp` |
+| `devices` | Harmless character devices | `/dev/null` (**RW**), `/dev/full` (**RW**), `/dev/zero`, `/dev/random`, `/dev/urandom` |
 | `home-config` | User config dir (RO) | `~/.config` |
 | `git-config` | Git config + global hooks (RO) | `~/.gitconfig`, `~/.config/git` |
 | `ssh-keys` | SSH keys + known_hosts (RO) | `~/.ssh` |
@@ -236,17 +239,46 @@ Every preset is **read-only by default**. Operators compose explicit `path:rw` o
 
 Defined in code (`internal/sandbox/preset.go` → `BuiltinPresets`). Operators extend/override via `.policy.toml` files in `policy.d/_presets/`.
 
+`devices` covers what ordinary programs assume exists rather than anything
+privileged: `cmd 2>/dev/null` is not an exotic request, and libcrypto seeds
+itself from `/dev/urandom`. A policy without it refuses work nobody thinks of
+as needing permission, and the resulting `Permission denied` reads like a
+broken command rather than a policy decision.
+
+`/dev/tty` is deliberately excluded. A tool running under the agent has no
+controlling terminal, so a command that tries to prompt should fail rather
+than block forever waiting for a human who isn't there.
+
 ### Path access notation: `path[:flags]`
 
-| Suffix | Access | Landlock rule kind |
+| Suffix | Access | Landlock rights |
 |---|---|---|
-| *(none)* | read-only | `RODirs` / `ROFiles` |
-| `:r` | read-only | `RODirs` / `ROFiles` |
-| `:rw` | read + write | `RWDirs` / `RWFiles` |
-| `:rx` | read + execute | `RODirs` (grants exec) |
-| `:rwx` | full access | `RWDirs` (grants exec) |
+| *(none)* | read-only | `read_file` + `read_dir` |
+| `:r` | read-only | `read_file` + `read_dir` |
+| `:rw` | read + write | the above + the write set |
+| `:rx` | read + execute | the above + `execute` |
+| `:rwx` | full access | read + write + `execute` |
 
 Bare `w` or `x` without `r` is rejected — always a typo in practice.
+
+**A read grant means read.** These four used to collapse into two: a resolved
+policy was expressed as `AllowedPaths` plus a `ReadOnlyPaths` subset, which has
+a slot for "writable or not" and nowhere to put execute, so everything went
+through `RODirs`/`RWDirs` and `:r` produced a byte-identical policy to `:rx`.
+Every path an operator granted was executable. Policies now resolve to `Mounts`,
+which carries all three bits, and the distinction the notation always claimed is
+real.
+
+The consequence worth knowing about: a preset or policy that needs to *run*
+something must now say `:rx`. `system-libs` does — it is where the binaries and
+the shared objects the loader maps are. `tmp` deliberately does not, so scratch
+space is no longer executable.
+
+The legacy `AllowedPaths`/`ReadOnlyPaths` pair still works for callers that
+build a Policy in Go, and `Policy.effectiveMounts` converts it — granting
+execute, because that is what `RODirs`/`RWDirs` always did for those paths.
+Both the Landlock install and the in-process `AllowsPath` evaluator read that
+one conversion, so they cannot disagree about a path the operator wrote once.
 
 ### Composition semantics
 
@@ -318,6 +350,12 @@ paths = [
 no_new_privs = true                # strongly recommended
 network_allow_cidr = ["0.0.0.0/0"] # enforcement deferred (nftables)
 
+# Environment variables that cross into this tool's subprocess.
+# Everything else is dropped, PATH included — it is not added
+# implicitly. Omit the key to inherit the executor's fleet-wide
+# default, which is itself usually empty.
+env_whitelist = ["GIT_SSH_COMMAND", "SSH_AUTH_SOCK"]
+
 # Seccomp: either apply DefaultSeccompPolicy...
 seccomp_default = true
 # ...OR specify a custom deny list (mutually exclusive with above)
@@ -328,6 +366,20 @@ user = true
 mount = true
 pid = true
 ```
+
+`env_whitelist` is per-tool because that is the only scope in which it means
+anything. A fleet-wide list is the union of what every tool needs, so the one
+tool that wants `GIT_SSH_COMMAND` hands it to every other tool as well —
+including whichever one is processing attacker-influenced input this turn. The
+executor resolves it on the same tool-specific → fleet-default chain it uses for
+the policy itself.
+
+There is no `dangerous_cmds_deny`. The field existed on `Policy`, was read by
+nothing, and would have been the third place a command could be refused — after
+the compiled floor in `internal/policy` and the per-command approval gate. It
+was an exact-string match against joined argv, which is the same design as the
+shell denylist that was removed for refusing thirteen command shapes with no way
+to say yes. It has been deleted rather than wired up.
 
 ### Preset override / extension schema
 
@@ -381,6 +433,24 @@ w.Start(ctx)  // initial load + fsnotify subscribe
 - Rejected files (perm check fail) log at WARN but don't stop siblings.
 - Only tools the watcher previously loaded are mutated; skill-set policies remain untouched.
 
+The watcher is subscribed by `Node.startSandboxWatcher`, from `Start`, over the
+same directories `applyOperatorPolicies` loaded synchronously during wiring —
+so boot enforces the files and the watcher only keeps them fresh. Both apply
+through one sink (`toolPolicySink`), which is what routes `shell_command` to its
+overlay and everything else to the registry; two paths doing that job is how
+they would come to disagree about which tool gets what.
+
+A reload that cannot be enforced — a policy failing `Validate`, or a
+`shell_command.toml` declaring a control this tool does not implement — is
+logged and **dropped, leaving the previous policy in force**. That is the same
+stance `applyOperatorPolicies` takes at boot: loud, but never a reason to stop
+running. On reload it is also the safe direction, since the alternative is
+widening to nothing because the new file was bad.
+
+Failing to subscribe is not fatal either. Boot already loaded every policy, so
+the node is enforcing what the files said; what is lost is freshness, which
+earns a warning rather than a refusal to start.
+
 Hot reload cannot currently be disabled. `[sandbox] hot_reload_opt_out`
 used to be documented here as the way to get load-once-at-boot behaviour
 for air-gapped deployments and `--read-only` containers — it was parsed,
@@ -433,6 +503,58 @@ presets = ["system-libs", "system-certs", "dns"]
 paths = ["/tmp:rw"]
 network_allow_cidr = ["0.0.0.0/0"]
 ```
+
+### `shell_command` (widening the builtin's floor)
+
+`shell_command` is a builtin: it dispatches in-process and never passes
+through the Executor's exec path, so a policy attached to it via
+`Registry.SetPolicy` is stored and never consulted. Its file is therefore
+read into a dedicated overlay (`tools.SetShellPolicyOverlay`) rather than
+the registry, and it composes differently from every other tool policy.
+
+```toml
+name = "shell_command"
+paths = ["/srv/data:rw", "/opt/toolchain:rx"]
+```
+
+Four things follow from it being a floor plus an overlay:
+
+- **The floor's own entries survive.** Loader and libc, `/usr/bin`, `/bin`,
+  `/etc`, `/tmp`, the `devices` set, and every active storage mount are
+  always present. A file naming one of them again merges to the *most
+  permissive* access rather than replacing it, so `/tmp:r` cannot take away
+  the floor's `/tmp:rw`. A policy that dropped `/lib` would leave a shell
+  that cannot exec `/bin/sh`, which is not a policy anyone means to write.
+- **A nested path can still tighten.** Landlock resolves an access against
+  the *deepest* matching rule, so `/tmp/scratch:r` under the floor's
+  `/tmp:rw` does give a read-only `/tmp/scratch`. That is a real capability
+  and intended; it is the one direction in which a file narrows rather than
+  widens.
+- **`paths` is honoured; seccomp is additive; the rest is not.** Entries in
+  `seccomp_deny` are added to `DefaultSeccompPolicy` rather than replacing
+  it — the opposite of an ordinary tool, where the file describes the whole
+  sandbox and replacing is correct. For the one tool that runs arbitrary
+  commands, a one-line file must not be able to drop `ptrace`, `mount`,
+  `bpf` and `keyctl` as a side effect of adding something. `namespaces` and
+  the `network_*` fields cannot be enforced here at all, and a
+  `shell_command.toml` setting them is **logged and dropped whole** — the
+  tool keeps what it had, rather than running with a control the operator
+  believes is in place.
+- **It is not a way around the command floor.** `internal/policy` refuses
+  commands by what they do (`rm -rf /`, `curl | sh`, reads of `~/.ssh`
+  key material) before any of this runs, and no file switches it off.
+
+**The empty-file escape hatch does not apply to this tool.** For an ordinary
+tool, a `.toml` with no presets, paths or enforcement fields means "explicitly
+unsandboxed" (see the `bash` recipe below). An empty `shell_command.toml`
+instead leaves the floor in place — there is no supported way to turn
+`shell_command`'s sandbox off from a file, and an operator who wants an
+unsandboxed shell should register an unsandboxed tool of their own rather than
+disarm this one.
+
+A path that doesn't exist when the node boots is silently dropped, here as
+everywhere else — the loader won't grant access to something that could
+later appear as a symlink to `/etc/passwd`.
 
 ### Owner-authored `bash` (unsandboxed — "I trust this")
 

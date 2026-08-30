@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"syscall"
 	"time"
 
@@ -93,7 +92,10 @@ func setNoNewPrivs() error {
 // mount with mode "rw" doesn't grant exec.
 //
 // Legacy AllowedPaths/ReadOnlyPaths still work for callers that
-// haven't migrated; both inputs are additive when both populated.
+// haven't migrated; effectiveMounts folds them into the same
+// PolicyMount vocabulary, so there is one loop and one set of rules
+// rather than two paths that drift — and the in-process evaluator in
+// AllowsPath answers from that same list.
 //
 // Uses .BestEffort() so older kernels (5.13+) still benefit from
 // partial enforcement; a kernel without Landlock silently no-ops.
@@ -107,34 +109,94 @@ func installLandlock(p *Policy) error {
 		return nil
 	}
 
-	rules := make([]landlock.Rule, 0, len(p.Mounts)+2)
+	mounts := MergeMounts(p.effectiveMounts())
 
-	for _, m := range p.Mounts {
+	rules := make([]landlock.Rule, 0, len(mounts))
+	for _, m := range mounts {
 		access := mountModeAccessFS(m)
 		if access == 0 {
 			continue
 		}
-		rules = append(rules, landlock.PathAccess(access, m.Path).IgnoreIfMissing())
-	}
-
-	if len(p.AllowedPaths) > 0 {
-		var roDirs, rwDirs []string
-		for _, path := range p.AllowedPaths {
-			if slices.Contains(p.ReadOnlyPaths, path) {
-				roDirs = append(roDirs, path)
-			} else {
-				rwDirs = append(rwDirs, path)
-			}
+		access = accessForPathKind(m.Path, access)
+		rule := landlock.PathAccess(access, m.Path).IgnoreIfMissing()
+		if ioctlSafeDevice(m.Path) {
+			// Without this an ioctl on the granted device fails with
+			// EACCES rather than the ENOTTY callers expect — isatty()
+			// on /dev/null being the common one.
+			rule = rule.WithIoctlDev()
 		}
-		if len(roDirs) > 0 {
-			rules = append(rules, landlock.RODirs(roDirs...).IgnoreIfMissing())
-		}
-		if len(rwDirs) > 0 {
-			rules = append(rules, landlock.RWDirs(rwDirs...).IgnoreIfMissing())
-		}
+		rules = append(rules, rule)
 	}
 
 	return landlock.V5.BestEffort().RestrictPaths(rules...)
+}
+
+// landlockFileAccess is the subset of access rights the kernel accepts
+// on a path that is not a directory.
+//
+// This matters because landlock_add_rule returns EINVAL for a rule
+// asking for directory-only rights (read_dir, make_reg, remove_dir, …)
+// on a file, and IgnoreIfMissing does not cover it — that only swallows
+// ENOENT. So one file entry anywhere in a policy failed the entire
+// install, taking every other path down with it. Any policy naming a
+// file rather than a directory hit this: the `dns` preset names
+// /etc/resolv.conf, `git-config` names ~/.gitconfig, and the device
+// floor names /dev/null.
+//
+// Mirrors go-landlock's own unexported accessFile set, which ROFiles /
+// RWFiles intersect with for exactly this reason.
+const landlockFileAccess = landlock.AccessFSSet(llsyscall.AccessFSExecute |
+	llsyscall.AccessFSWriteFile | llsyscall.AccessFSTruncate |
+	llsyscall.AccessFSReadFile)
+
+// accessForPathKind narrows access to what the kernel will accept for
+// the kind of thing path actually is.
+//
+// A path that can't be stat'd is left alone: it is almost certainly
+// missing, and IgnoreIfMissing drops the rule at install time. Should
+// it exist and be swapped between this stat and the library's open,
+// the mismatch fails the install rather than widening it — dir rights
+// on a file are exactly the EINVAL this function avoids.
+func accessForPathKind(path string, access landlock.AccessFSSet) landlock.AccessFSSet {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return access
+	}
+	return access & landlockFileAccess
+}
+
+// ioctlSafeDevices are the device nodes we will grant LANDLOCK_ACCESS_FS_IOCTL_DEV
+// alongside read/write, because ioctl on them does nothing a caller
+// couldn't do with read and write alone.
+//
+// The grant is an allow-list rather than "any device in the policy"
+// on purpose. Landlock V5 restricts ioctl on device files precisely
+// because device ioctls are where the interesting privileges live —
+// TUNSETIFF on /dev/net/tun, the loop-control and device-mapper
+// interfaces, the block-device ioctls. Handing ioctl to every device
+// an operator granted `:r` would widen the policy past what its author
+// wrote, which is the opposite of what a policy file is for.
+//
+// What this costs on the devices left out: isatty() gets EACCES where
+// it would have got ENOTTY, and callers read both as "not a terminal".
+var ioctlSafeDevices = map[string]struct{}{
+	"/dev/null":    {},
+	"/dev/zero":    {},
+	"/dev/full":    {},
+	"/dev/random":  {},
+	"/dev/urandom": {},
+}
+
+// ioctlSafeDevice reports whether path is one of the known-harmless
+// device nodes AND is actually a device right now — the name alone is
+// not enough, since a policy could name /dev/null on a system where
+// something else lives at that path.
+func ioctlSafeDevice(path string) bool {
+	if _, ok := ioctlSafeDevices[path]; !ok {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode()&os.ModeDevice != 0
 }
 
 // mountModeAccessFS turns a PolicyMount's read/write/exec triple

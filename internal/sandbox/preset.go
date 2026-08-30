@@ -190,14 +190,19 @@ func init() {
 // tool needs to write to. See docs/dev/SANDBOX.md for recipes.
 var BuiltinPresets = []Preset{
 	{
+		// Read AND execute, explicitly. These paths hold the binary a
+		// tool is and the shared objects it loads, and Landlock wants
+		// the execute right for both execve and the loader's
+		// PROT_EXEC mmap. A read-only grant here would admit the
+		// dynamic linker and then refuse to run it.
 		Name:        "system-libs",
-		Description: "OS executables + shared libraries (RO)",
+		Description: "OS executables + shared libraries (RX)",
 		Rules: []PathRule{
-			{"/usr", AccessR},
-			{"/bin", AccessR},
-			{"/sbin", AccessR},
-			{"/lib", AccessR},
-			{"/lib64", AccessR},
+			{"/usr", AccessRX},
+			{"/bin", AccessRX},
+			{"/sbin", AccessRX},
+			{"/lib", AccessRX},
+			{"/lib64", AccessRX},
 		},
 	},
 	{
@@ -223,6 +228,26 @@ var BuiltinPresets = []Preset{
 		Description: "/tmp scratch space (RW)",
 		Rules: []PathRule{
 			{"/tmp", AccessRW},
+		},
+	},
+	{
+		// The devices ordinary programs assume exist. `cmd 2>/dev/null`
+		// is not an exotic request, and libcrypto seeds itself from
+		// /dev/urandom, so a policy without these refuses work nobody
+		// thinks of as privileged.
+		//
+		// /dev/tty is deliberately absent. A tool running under the
+		// agent has no controlling terminal, and a command that wants
+		// to prompt a human should fail rather than block forever
+		// waiting for one who isn't there.
+		Name:        "devices",
+		Description: "Harmless character devices: null, zero, full, random, urandom",
+		Rules: []PathRule{
+			{"/dev/null", AccessRW},
+			{"/dev/zero", AccessR},
+			{"/dev/full", AccessRW},
+			{"/dev/random", AccessR},
+			{"/dev/urandom", AccessR},
 		},
 	},
 	{
@@ -365,11 +390,36 @@ func mergeByRealpath(rules []PathRule) []PathRule {
 	return out
 }
 
+// mountsFromRules turns resolved PathRules into the PolicyMount
+// vocabulary, which is the only one that can carry all three access
+// bits.
+//
+// The AllowedPaths / ReadOnlyPaths pair cannot: it has a slot for
+// "writable or not" and nowhere to put execute, so everything built
+// through it used to come out executable — `:r` and `:rx` produced
+// byte-identical policies, and the notation's own distinction was
+// decorative. A read grant now means read.
+func mountsFromRules(rules []PathRule) []PolicyMount {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]PolicyMount, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, PolicyMount{
+			Path:  r.Path,
+			Read:  r.Access.Has(AccessR),
+			Write: r.Access.Has(AccessW),
+			Exec:  r.Access.Has(AccessX),
+		})
+	}
+	return out
+}
+
 // WithPresets returns a copy of the receiver with the named presets
-// resolved into AllowedPaths / ReadOnlyPaths. Inline rules supplied
-// via Policy.AllowedPaths (treated as RW) and Policy.ReadOnlyPaths
-// (RO) are honoured — they're added as PathRules and composed with
-// the preset rules per the rules in Resolve.
+// resolved into Mounts. Inline rules supplied via Policy.AllowedPaths
+// (treated as RW) and Policy.ReadOnlyPaths (RO) are honoured — they're
+// added as PathRules and composed with the preset rules per the rules
+// in Resolve.
 //
 // Returns the input on resolution error so callers can surface it
 // alongside the policy that was attempted.
@@ -395,11 +445,6 @@ func (p Policy) WithPresets(names ...string) (Policy, error) {
 	out := p
 	out.AllowedPaths = nil
 	out.ReadOnlyPaths = nil
-	for _, r := range resolved {
-		out.AllowedPaths = append(out.AllowedPaths, r.Path)
-		if !r.Access.Has(AccessW) {
-			out.ReadOnlyPaths = append(out.ReadOnlyPaths, r.Path)
-		}
-	}
+	out.Mounts = MergeMounts(append(mountsFromRules(resolved), p.Mounts...))
 	return out, nil
 }

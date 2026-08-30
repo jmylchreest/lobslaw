@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -59,12 +60,22 @@ type Policy struct {
 	// default — operators turn it on per-skill via policy.
 	NetworkAllowDNS bool `json:"network_allow_dns,omitempty"`
 
-	// DangerousCmdsDeny hard deny-list applied before argv
-	// substitution. Exact string match against the joined argv.
-	DangerousCmdsDeny []string `json:"dangerous_cmds_deny,omitempty"`
+	// DangerousCmdsDeny is gone rather than wired up.
+	//
+	// It was an exact-string match against the joined argv, read by
+	// nothing, and it would have been the third place a command could
+	// be refused — after the compiled floor in internal/policy and the
+	// per-command approval gate. A third authority that disagrees with
+	// the other two is how the shell denylist went wrong: it refused
+	// thirteen command shapes with no way to say yes, so the answer to
+	// "let me run this one ssh" was to edit Go. Exact-match argv
+	// filtering is that same design, one layer down.
 
 	// EnvWhitelist names env vars visible to the subprocess. Empty →
-	// empty env. Enforced by the executor's buildEnv, not the sandbox.
+	// the executor's fleet-wide default, which is itself usually
+	// empty. Enforced by the executor's buildEnv, not by the kernel:
+	// the sandbox layers can't see an environment that was never
+	// passed.
 	EnvWhitelist []string `json:"env_whitelist,omitempty"`
 
 	// CPUQuota in millicpus (2000 = 2 cores). 0 = unlimited. Enforced
@@ -100,6 +111,49 @@ type PolicyMount struct {
 	Read  bool   `json:"read,omitempty"`
 	Write bool   `json:"write,omitempty"`
 	Exec  bool   `json:"exec,omitempty"`
+}
+
+// MergeMounts collapses entries naming the same path, OR-ing their
+// access bits, and returns them sorted by path for a deterministic
+// install. This is the "exact realpath duplicates merge to the most
+// permissive access" rule from the composition semantics, applied to
+// the mount vocabulary.
+//
+// It matters beyond tidiness wherever a caller concatenates a floor
+// with something an operator supplied: relying on the kernel to merge
+// two rules for one path would make "the floor survives" a property
+// of Landlock's duplicate handling rather than of our own code.
+// Merging here makes it ours.
+//
+// Note this only defends exact-path duplicates. Landlock resolves a
+// path against the DEEPEST matching rule, so a nested entry still
+// takes precedence over a shallower one — an operator naming
+// /tmp/scratch:r under a /tmp:rw floor gets a read-only /tmp/scratch,
+// by design.
+func MergeMounts(mounts []PolicyMount) []PolicyMount {
+	if len(mounts) < 2 {
+		return mounts
+	}
+	byPath := make(map[string]PolicyMount, len(mounts))
+	order := make([]string, 0, len(mounts))
+	for _, m := range mounts {
+		existing, seen := byPath[m.Path]
+		if !seen {
+			byPath[m.Path] = m
+			order = append(order, m.Path)
+			continue
+		}
+		existing.Read = existing.Read || m.Read
+		existing.Write = existing.Write || m.Write
+		existing.Exec = existing.Exec || m.Exec
+		byPath[m.Path] = existing
+	}
+	slices.Sort(order)
+	out := make([]PolicyMount, 0, len(order))
+	for _, path := range order {
+		out = append(out, byPath[path])
+	}
+	return out
 }
 
 // NamespaceSet selects CLONE_NEW* flags. User namespace is the gate —
@@ -274,12 +328,18 @@ func (p *Policy) effectiveMounts() []PolicyMount {
 	for _, path := range p.ReadOnlyPaths {
 		readOnly[path] = struct{}{}
 	}
+	// Exec, on both branches. The legacy pair was installed through
+	// landlock.RODirs / RWDirs, and both of those grant execute — so
+	// "read-only" in this vocabulary has always meant read+execute,
+	// and a caller that dropped the bit here would be describing a
+	// narrower policy than the kernel actually enforces. Callers who
+	// want read to mean read use Mounts, which can say so.
 	for _, path := range p.AllowedPaths {
 		if _, ro := readOnly[path]; ro {
-			out = append(out, PolicyMount{Path: path, Read: true})
+			out = append(out, PolicyMount{Path: path, Read: true, Exec: true})
 			continue
 		}
-		out = append(out, PolicyMount{Path: path, Read: true, Write: true})
+		out = append(out, PolicyMount{Path: path, Read: true, Write: true, Exec: true})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return len(out[i].Path) > len(out[j].Path)

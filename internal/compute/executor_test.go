@@ -803,3 +803,77 @@ func TestCappedBuffer(t *testing.T) {
 		t.Errorf("buffered = %q, want 0123456789", buf.Bytes())
 	}
 }
+
+// A fleet-wide whitelist is the union of what every tool needs, so the
+// one tool that wants a credential in its environment hands it to
+// every other tool as well. The per-tool list is what makes that
+// avoidable, and it was a Policy field nothing read until now.
+func TestAToolsOwnPolicyDecidesItsEnvironment(t *testing.T) {
+	// Intentionally non-parallel: t.Setenv is incompatible with t.Parallel.
+	t.Setenv("LOBSLAW_TEST_MINE", "visible")
+	t.Setenv("LOBSLAW_TEST_FLEET", "fleet-wide")
+
+	env := newTestEnv(t, func(cfg *ExecutorConfig) {
+		cfg.EnvWhitelist = []string{"LOBSLAW_TEST_FLEET"}
+	})
+	dir := t.TempDir()
+	probe := writeScript(t, dir, "env.sh",
+		`echo "mine=${LOBSLAW_TEST_MINE:-UNSET}"; echo "fleet=${LOBSLAW_TEST_FLEET:-UNSET}"`)
+	if err := env.reg.Register(&types.ToolDef{
+		Name: "scoped-env", Path: probe, ArgvTemplate: []string{},
+		RiskTier: types.RiskReversible,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env.reg.SetPolicy("scoped-env", &sandbox.Policy{
+		EnvWhitelist: []string{"LOBSLAW_TEST_MINE"},
+	})
+
+	res, err := env.executor.Invoke(context.Background(), InvokeRequest{
+		ToolName: "scoped-env", Claims: &types.Claims{UserID: "alice"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(res.Stdout)
+	if !strings.Contains(out, "mine=visible") {
+		t.Errorf("the tool's own whitelist was ignored: %q", out)
+	}
+	if !strings.Contains(out, "fleet=UNSET") {
+		t.Errorf("SECURITY: the fleet-wide var reached a tool that didn't ask for it: %q", out)
+	}
+}
+
+// A tool with a policy that says nothing about env still gets the
+// fleet default — the same tool-specific → fleet-default chain
+// resolvePolicy walks for the sandbox itself.
+func TestAPolicyWithoutAnEnvListFallsBackToTheFleetDefault(t *testing.T) {
+	t.Setenv("LOBSLAW_TEST_FLEET", "fleet-wide")
+
+	env := newTestEnv(t, func(cfg *ExecutorConfig) {
+		cfg.EnvWhitelist = []string{"LOBSLAW_TEST_FLEET"}
+	})
+	dir := t.TempDir()
+	probe := writeScript(t, dir, "env.sh", `echo "fleet=${LOBSLAW_TEST_FLEET:-UNSET}"`)
+	if err := env.reg.Register(&types.ToolDef{
+		Name: "inherit-env", Path: probe, ArgvTemplate: []string{},
+		RiskTier: types.RiskReversible,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The empty non-nil policy — "explicitly unsandboxed" per the
+	// resolvePolicy chain. Enough to prove the tool HAS a policy and
+	// still inherits the fleet env, without dragging the reexec
+	// helper into a test binary that has no sandbox-exec subcommand.
+	env.reg.SetPolicy("inherit-env", &sandbox.Policy{})
+
+	res, err := env.executor.Invoke(context.Background(), InvokeRequest{
+		ToolName: "inherit-env", Claims: &types.Claims{UserID: "alice"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(res.Stdout), "fleet=fleet-wide") {
+		t.Errorf("fleet default was dropped: %q", res.Stdout)
+	}
+}

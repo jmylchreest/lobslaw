@@ -283,10 +283,10 @@ func TestResolveSystemLibsBuiltinProducesRealPaths(t *testing.T) {
 	}
 }
 
-// TestWithPresetsProducesAllowedAndReadOnly confirms the Policy
-// convenience method maps resolved rules back into Policy's native
-// AllowedPaths/ReadOnlyPaths split that sandbox.Apply consumes.
-func TestWithPresetsProducesAllowedAndReadOnly(t *testing.T) {
+// TestWithPresetsProducesMounts confirms the Policy convenience method
+// maps resolved rules into the Mounts vocabulary, which is the only
+// one that can carry read, write and execute independently.
+func TestWithPresetsProducesMounts(t *testing.T) {
 	t.Parallel()
 	p := Policy{
 		AllowedPaths:  []string{"/tmp"},
@@ -296,16 +296,32 @@ func TestWithPresetsProducesAllowedAndReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// system-libs is all RO; /tmp inline is RW.
-	if !slices.Contains(out.AllowedPaths, "/tmp") {
-		t.Error("inline /tmp should survive to AllowedPaths")
+	if len(out.AllowedPaths) != 0 || len(out.ReadOnlyPaths) != 0 {
+		t.Errorf("legacy fields should be cleared; got %v / %v", out.AllowedPaths, out.ReadOnlyPaths)
 	}
-	if slices.Contains(out.ReadOnlyPaths, "/tmp") {
-		t.Error("/tmp should NOT be in ReadOnlyPaths (it's RW inline)")
+	var tmp, usr *PolicyMount
+	for i, m := range out.Mounts {
+		switch m.Path {
+		case "/tmp":
+			tmp = &out.Mounts[i]
+		case "/usr":
+			usr = &out.Mounts[i]
+		}
 	}
-	// At least one system-libs path should surface as RO.
-	if len(out.ReadOnlyPaths) == 0 {
-		t.Errorf("system-libs should produce RO entries; got %+v", out.ReadOnlyPaths)
+	if tmp == nil {
+		t.Fatalf("inline /tmp should survive to Mounts; got %+v", out.Mounts)
+	}
+	if !tmp.Write {
+		t.Error("inline /tmp is RW and should stay writable")
+	}
+	if usr == nil {
+		t.Fatalf("system-libs /usr missing; got %+v", out.Mounts)
+	}
+	if !usr.Exec {
+		t.Error("system-libs must grant execute — it is where the binaries are")
+	}
+	if usr.Write {
+		t.Error("system-libs must not grant write")
 	}
 }
 
@@ -319,5 +335,45 @@ func TestWithPresetsUnknownPresetReturnsOriginal(t *testing.T) {
 	// Original Policy should be returned unmodified (preserving NoNewPrivs).
 	if !got.NoNewPrivs {
 		t.Error("error path should return original Policy (with NoNewPrivs true)")
+	}
+}
+
+// The `devices` preset exists so a tool policy can grant the devices
+// ordinary programs assume without the operator having to know which
+// ones or spell out the access each expects.
+func TestDevicesPresetGrantsWriteToDevNull(t *testing.T) {
+	t.Parallel()
+	p, ok := LookupPreset("devices")
+	if !ok {
+		t.Fatal("no `devices` preset registered")
+	}
+	var found bool
+	for _, r := range p.Rules {
+		if r.Path != "/dev/null" {
+			continue
+		}
+		found = true
+		if !r.Access.Has(AccessW) {
+			t.Errorf("/dev/null access = %s; redirects need write", r.Access)
+		}
+	}
+	if !found {
+		t.Errorf("preset has no /dev/null rule: %+v", p.Rules)
+	}
+	if slices.ContainsFunc(p.Rules, func(r PathRule) bool { return r.Path == "/dev/tty" }) {
+		t.Error("/dev/tty is in the preset; a tool that prompts would hang rather than fail")
+	}
+}
+
+// Resolve drops paths that don't exist, so this also checks the preset
+// names real devices rather than plausible ones.
+func TestDevicesPresetResolvesToRealPaths(t *testing.T) {
+	t.Parallel()
+	rules, err := Resolve([]string{"devices"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(rules, func(r PathRule) bool { return r.Path == "/dev/null" }) {
+		t.Errorf("/dev/null did not survive resolution: %+v", rules)
 	}
 }

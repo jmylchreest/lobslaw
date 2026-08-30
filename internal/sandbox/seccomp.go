@@ -1,5 +1,7 @@
 package sandbox
 
+import "slices"
+
 // SeccompPolicy is a simple deny-list of syscall names. The actual
 // BPF compilation and install (via prctl PR_SET_SECCOMP) happens in
 // Layer B — this type just carries the structure and is what the
@@ -21,6 +23,37 @@ func (s SeccompPolicy) HasRules() bool { return len(s.Deny) > 0 }
 // IsZero reports true for the fully empty policy — distinct from a
 // policy that has an empty Deny slice explicitly.
 func (s SeccompPolicy) IsZero() bool { return s.Deny == nil }
+
+// Union returns a policy denying everything either policy denies,
+// with duplicates collapsed and the result sorted so the installed
+// filter is deterministic.
+//
+// For a tool whose policy REPLACES the baseline — the documented
+// behaviour of a policy.d file's seccomp_deny — this is the wrong
+// operation and callers should not use it. It exists for the case
+// where a caller composes a floor with operator additions and the
+// floor has to survive: a union can only ever deny more, so an
+// operator adding one syscall cannot drop ptrace or mount from the
+// baseline as a side effect.
+func (s SeccompPolicy) Union(other SeccompPolicy) SeccompPolicy {
+	if !s.HasRules() {
+		return other
+	}
+	if !other.HasRules() {
+		return s
+	}
+	seen := make(map[string]struct{}, len(s.Deny)+len(other.Deny))
+	merged := make([]string, 0, len(s.Deny)+len(other.Deny))
+	for _, name := range slices.Concat(s.Deny, other.Deny) {
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		merged = append(merged, name)
+	}
+	slices.Sort(merged)
+	return SeccompPolicy{Deny: merged}
+}
 
 // DefaultSeccompPolicy is the baseline deny-list applied when a
 // sandbox is enabled but operators don't configure a custom

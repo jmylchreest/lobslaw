@@ -62,8 +62,11 @@ func TestOperatorPoliciesLaterDirWins(t *testing.T) {
 	if got == nil {
 		t.Fatal("no policy applied")
 	}
-	if len(got.AllowedPaths) != 1 || got.AllowedPaths[0] != pathB {
-		t.Errorf("allowed paths = %v, want only the later dir's %q", got.AllowedPaths, pathB)
+	// Mounts, not AllowedPaths: a resolved policy carries read, write
+	// and execute independently now, so that `:r` and `:rx` stop
+	// describing the same thing.
+	if len(got.Mounts) != 1 || got.Mounts[0].Path != pathB {
+		t.Errorf("mounts = %+v, want only the later dir's %q", got.Mounts, pathB)
 	}
 }
 

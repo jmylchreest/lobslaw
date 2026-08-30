@@ -622,6 +622,11 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// node loop; the credential-side delete is leader-gated inside.
 	n.startReaper(ctx)
 
+	// Subscribe to policy.d. applyOperatorPolicies already loaded
+	// every policy synchronously during wiring; this only keeps them
+	// fresh.
+	n.startSandboxWatcher(ctx)
+
 	// Dial seeds for peer-registry exchange (Register + GetPeers).
 	// Failures are non-fatal: even if every seed is down, we keep
 	// serving so other nodes can dial us. Membership-join (raft

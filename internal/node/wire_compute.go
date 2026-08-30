@@ -1336,17 +1336,18 @@ func (n *Node) applyOperatorPolicies() {
 		n.log.Debug("sandbox: no operator policies found", "dirs", n.cfg.SandboxPolicyDirs)
 		return
 	}
-	tools := make([]string, 0, len(res.Policies))
+	sink := n.policySink()
+	applied := make([]string, 0, len(res.Policies))
 	for name, policy := range res.Policies {
-		n.toolRegistry.SetPolicy(name, policy)
-		tools = append(tools, name)
+		sink.SetPolicy(name, policy)
+		applied = append(applied, name)
 	}
-	sort.Strings(tools)
+	sort.Strings(applied)
 	// Named, not counted. These policies override what a skill declared
 	// for itself, and an operator reading the log needs to see which
 	// tools that happened to.
 	n.log.Info("sandbox: operator policies applied",
-		"tools", tools, "dirs", n.cfg.SandboxPolicyDirs,
+		"tools", applied, "dirs", n.cfg.SandboxPolicyDirs,
 		"presets", len(res.PresetsLoaded), "overridden_builtins", res.OverriddenBuiltins)
 }
 
