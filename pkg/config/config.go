@@ -1765,6 +1765,25 @@ type RemoteConfig struct {
 	// for the process lifetime and a change mid-run is still refused.
 	KnownHosts string `koanf:"known_hosts,omitempty"`
 
+	// AllowCIDR admits this remote's address through the egress
+	// filter. Empty resolves Host to a /32 at ACL-generation time.
+	//
+	// Needed because the ACL and the address check are separate
+	// layers: naming the host in the role's allowlist says "this role
+	// may talk to that name", and smokescreen still refuses the
+	// resolved IP if it is RFC1918. Nearly every remote worth having
+	// is — a devbox, a box on the LAN — so without this the honest
+	// operator's only route is security.egress_allow_private_ranges,
+	// which turns the proxy into an SSRF gateway for their whole
+	// network. A /32 for the one host they declared is the narrow
+	// version of that.
+	//
+	// Declared rather than only resolved because a lease change moves
+	// the address and the generated /32 would stop matching, with the
+	// failure landing as a refused dial that looks like the host being
+	// down.
+	AllowCIDR string `koanf:"allow_cidr,omitempty"`
+
 	// DefaultTimeoutSecs bounds a call that does not ask for one.
 	// Builds are slow, so this is minutes rather than the seconds
 	// shell_command allows. Zero takes the built-in default.

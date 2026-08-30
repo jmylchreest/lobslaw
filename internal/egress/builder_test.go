@@ -375,3 +375,41 @@ func TestTheHuggingFaceAllowanceDoesNotLeakToOtherHosts(t *testing.T) {
 		}
 	}
 }
+
+// remote_ssh dialled straight out before this, so the one tool whose
+// purpose is reaching off the box was the one the ACL never saw.
+//
+// One role per remote, not a shared one: a session for web01 must not
+// be dialleable at db02's address, which is most of the property worth
+// having.
+func TestEachRemoteGetsItsOwnRoleAndHost(t *testing.T) {
+	t.Parallel()
+
+	rules := Build(ACLInputs{
+		Remotes: []config.RemoteConfig{
+			{Name: "go", Host: "devbox-go.lan"},
+			{Name: "rust", Host: "devbox-rust.lan"},
+			{Name: "", Host: "nameless.lan"}, // skipped
+			{Name: "hostless", Host: ""},     // skipped
+		},
+	})
+
+	if got := rules.Roles["remote/go"]; len(got) != 1 || got[0] != "devbox-go.lan" {
+		t.Errorf(`Roles["remote/go"] = %v, want [devbox-go.lan]`, got)
+	}
+	if got := rules.Roles["remote/rust"]; len(got) != 1 || got[0] != "devbox-rust.lan" {
+		t.Errorf(`Roles["remote/rust"] = %v, want [devbox-rust.lan]`, got)
+	}
+	// The point of per-remote roles: go's role cannot reach rust's host.
+	for _, h := range rules.Roles["remote/go"] {
+		if h == "devbox-rust.lan" {
+			t.Error("remote/go may reach rust's host; the roles are not separated")
+		}
+	}
+	if _, ok := rules.Roles["remote/"]; ok {
+		t.Error("a remote with no name produced a role")
+	}
+	if _, ok := rules.Roles["remote/hostless"]; ok {
+		t.Error("a remote with no host produced a role with an empty allowlist")
+	}
+}

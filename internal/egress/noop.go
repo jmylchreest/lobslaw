@@ -1,6 +1,8 @@
 package egress
 
 import (
+	"context"
+	"net"
 	"net/http"
 )
 
@@ -34,3 +36,12 @@ type noopClient struct {
 
 func (c *noopClient) HTTPClient() *http.Client { return c.client }
 func (c *noopClient) Role() string             { return c.role }
+
+// DialContext dials straight out. The noop provider is the "no egress
+// filter configured" mode, so there is no proxy to tunnel through and
+// nothing to enforce — same posture as its HTTPClient, which carries
+// no proxy either.
+func (c *noopClient) DialContext(ctx context.Context, addr string) (net.Conn, error) {
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", addr)
+}

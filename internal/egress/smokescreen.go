@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -242,17 +243,17 @@ func (p *SmokescreenProvider) For(role string) Client {
 	c, ok := p.clients[role]
 	p.clientsMu.RUnlock()
 	if ok {
-		return &smokeClient{client: c, role: role}
+		return &smokeClient{client: c, role: role, bindAddr: p.bindAddr}
 	}
 
 	p.clientsMu.Lock()
 	defer p.clientsMu.Unlock()
 	if c, ok := p.clients[role]; ok {
-		return &smokeClient{client: c, role: role}
+		return &smokeClient{client: c, role: role, bindAddr: p.bindAddr}
 	}
 	c = p.buildClient(role)
 	p.clients[role] = c
-	return &smokeClient{client: c, role: role}
+	return &smokeClient{client: c, role: role, bindAddr: p.bindAddr}
 }
 
 // SetACL replaces the live ACL atomically. Used by Phase E.6 to
@@ -341,6 +342,10 @@ func (r *roleInjector) RoundTrip(req *http.Request) (*http.Response, error) {
 type smokeClient struct {
 	client *http.Client
 	role   string
+	// bindAddr is where the proxy listens. Held rather than reached
+	// for through the provider so a client stays usable after the
+	// provider it came from has been replaced by a hot reload.
+	bindAddr string
 }
 
 func (c *smokeClient) HTTPClient() *http.Client { return c.client }
@@ -538,4 +543,76 @@ func logrusBridge() *logrus.Logger {
 	l := logrus.New()
 	l.SetLevel(logrus.WarnLevel)
 	return l
+}
+
+// DialContext opens a TCP tunnel to addr through the proxy, so a
+// non-HTTP protocol is filtered by the same per-role ACL as everything
+// else.
+//
+// The role travels as a header on the CONNECT preamble, matching what
+// buildClient does through ProxyConnectHeader — smokescreen reads the
+// role from the same place either way, so one ACL governs the HTTP and
+// the raw-TCP paths without a second code path to keep in step.
+func (c *smokeClient) DialContext(ctx context.Context, addr string) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", c.bindAddr)
+	if err != nil {
+		return nil, fmt.Errorf("egress: dial proxy: %w", err)
+	}
+	// A deadline on the handshake specifically: a proxy that accepts
+	// the connection and then says nothing would otherwise hang the
+	// caller for as long as its own timeout allows.
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	}
+	req := &http.Request{
+		Method: http.MethodConnect,
+		URL:    &url.URL{Opaque: addr},
+		Host:   addr,
+		Header: http.Header{roleHeader: []string{c.role}},
+	}
+	if err := req.Write(conn); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("egress: write CONNECT %s: %w", addr, err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("egress: read CONNECT response for %s: %w", addr, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		_ = conn.Close()
+		// The proxy's own status is the actionable part: a refusal by
+		// ACL and a proxy that is not running look identical from the
+		// caller otherwise.
+		return nil, fmt.Errorf("egress: proxy refused CONNECT %s for role %q: %s", addr, c.role, resp.Status)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	// Anything the reader buffered past the response header belongs to
+	// the tunnel. Dropping it would corrupt the first bytes of a
+	// protocol whose server speaks first — which SSH does, with its
+	// version banner.
+	if n := br.Buffered(); n > 0 {
+		head, _ := br.Peek(n)
+		return &prefixedConn{Conn: conn, head: head}, nil
+	}
+	return conn, nil
+}
+
+// prefixedConn replays bytes already read off the wire before handing
+// over to the real connection.
+type prefixedConn struct {
+	net.Conn
+	head []byte
+}
+
+func (p *prefixedConn) Read(b []byte) (int, error) {
+	if len(p.head) > 0 {
+		n := copy(b, p.head)
+		p.head = p.head[n:]
+		return n, nil
+	}
+	return p.Conn.Read(b)
 }

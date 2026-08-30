@@ -1,6 +1,8 @@
 package egress
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -23,6 +25,20 @@ type Client interface {
 	// (e.g. "llm", "skill/gws-workspace", "fetch_url"). Exposed for
 	// callers that want to log or audit the outbound role.
 	Role() string
+
+	// DialContext opens a raw TCP connection to addr through the same
+	// ACL the HTTP client obeys, tunnelled with an HTTP CONNECT.
+	//
+	// For the protocols that are not HTTP. remote_ssh dialled straight
+	// out with a bare net.Dialer, which meant the one tool whose whole
+	// purpose is reaching off the box was the one the egress filter
+	// never saw. CONNECT carries anything once the tunnel is up, so
+	// SSH rides it unchanged.
+	//
+	// TCP only, and that is a property of CONNECT rather than a gap
+	// here: the method has no UDP semantics, so a UDP protocol cannot
+	// be filtered this way at all.
+	DialContext(ctx context.Context, addr string) (net.Conn, error)
 }
 
 // Provider builds Clients on demand. Implementations:

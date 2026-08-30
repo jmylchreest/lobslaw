@@ -27,6 +27,11 @@ type ACLInputs struct {
 	// per-channel upstreams.
 	Channels []config.GatewayChannelConfig
 
+	// Remotes is [[remote]]. Each declared remote becomes role
+	// "remote/<name>" allowed to reach exactly that remote's host, so
+	// a session aimed anywhere else is refused by the proxy.
+	Remotes []config.RemoteConfig
+
 	// CallbackHosts are the hosts of every operator-declared callback
 	// address in [[user]].channels. Derived, never written by hand.
 	//
@@ -122,6 +127,20 @@ func Build(in ACLInputs) Rules {
 	// LLM provider endpoints — collected under "llm" (broad), plus
 	// per-label "llm/<label>" for future fine-grained restriction.
 	llmHosts := uniqueHosts{}
+
+	// One role per declared remote, allowed to reach that remote's
+	// host and nothing else. A shared "remote" role would let a
+	// session for one host be dialled at another's, which is most of
+	// the property worth having.
+	for _, r := range in.Remotes {
+		name := strings.TrimSpace(r.Name)
+		host := strings.TrimSpace(r.Host)
+		if name == "" || host == "" {
+			continue
+		}
+		rules.Roles["remote/"+name] = []string{host}
+	}
+
 	for _, p := range in.Providers {
 		host := hostOf(p.Endpoint)
 		if host == "" {
