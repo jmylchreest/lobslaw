@@ -174,7 +174,7 @@ func TestPromptContractPrecedesTheInstructionsItGoverns(t *testing.T) {
 
 func TestBuildSafetyMentionsUntrustedDelimiters(t *testing.T) {
 	t.Parallel()
-	s := BuildSafety()
+	s := BuildSafety(nil)
 	if !strings.Contains(s.Body, "<untrusted>") {
 		t.Error("safety block should teach the model about <untrusted> delimiters")
 	}
@@ -189,8 +189,8 @@ func TestBuildSafetyIsStable(t *testing.T) {
 	// section is static so the cache layer can rely on it. Each call
 	// is captured to a local first (staticcheck flags a.B != a.B as
 	// a pointless comparison if inlined).
-	first := BuildSafety().Body
-	second := BuildSafety().Body
+	first := BuildSafety(nil).Body
+	second := BuildSafety(nil).Body
 	if first != second {
 		t.Error("safety block must be deterministic")
 	}
