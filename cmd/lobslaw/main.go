@@ -500,16 +500,16 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 
 	listen := cfg.Cluster.ListenAddr
 	if listen == "" {
-		listen = ":7443"
+		listen = config.DefaultClusterListenAddr
 	}
 
 	bcastPort := cfg.Discovery.BroadcastPort
 	if bcastPort == 0 {
-		bcastPort = 7445
+		bcastPort = config.DefaultDiscoveryBroadcastPort
 	}
 	bcastAddr := cfg.Discovery.BroadcastAddress
 	if bcastAddr == "" {
-		bcastAddr = "255.255.255.255"
+		bcastAddr = config.DefaultDiscoveryBroadcastAddress
 	}
 
 	// Resolved before the node config is built, so the node receives a
