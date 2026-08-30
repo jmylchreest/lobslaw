@@ -10,7 +10,7 @@ Buckets persisted through Raft:
 - **EpisodicRecords** — structured events with tags, importance, timestamps. Dream/REM consolidation source.
 - **Sessions / SessionMessages** — durable conversation transcripts. See [Sessions](#sessions) below.
 
-Every operation distinguishes **deterministic primitives** (cheap math — Search, FindClusters, Forget) from **LLM interpretation** (Summarizer, and the planned Adjudicator and Reranker — see below; only Summarizer is built). Callers compose the two layers into workflows. The memory service never calls an LLM directly; the LLM layer never writes to the store directly. Hard boundary.
+Every operation distinguishes **deterministic primitives** (cheap math — Search, FindClusters, Forget) from **LLM interpretation**. Summarizer is the only one of those built. Adjudicator and Reranker were designed and their scaffolding removed in 2026-08 — see the note under each — because scaffolding that never runs reads as a feature to anyone grepping for it. Callers compose the two layers into workflows. The memory service never calls an LLM directly; the LLM layer never writes to the store directly. Hard boundary.
 
 ## Architectural split
 
@@ -97,7 +97,21 @@ type Summarizer interface {
 
 Consolidates a batch of episodic records into a narrative. Called during Dream's consolidation phase. `nil` makes Dream skip summarisation.
 
-### Adjudicator
+### Adjudicator (design; scaffolding removed 2026-08)
+
+The interface, the `AlwaysKeepDistinctAdjudicator` stub, `mergePhase` and
+the cluster tagging were removed. Nothing installed a real Adjudicator,
+so every Dream run clustered the corpus and then discarded each verdict
+as `KeepDistinct` — a similarity pass over long-term memory, nightly,
+for no effect. The `conflict-cluster` and `supersedes-chain` tags it
+wrote were read by nothing.
+
+`BucketConsolidations`, its FSM case and `lobslaw memory consolidations`
+were KEPT: they read records already written, and dropping a replicated
+bucket is a migration rather than a cleanup.
+
+The design below is retained as the intended shape, not a description
+of code that exists.
 
 ```go
 type Adjudicator interface {
@@ -114,7 +128,7 @@ Decides what to do with a near-duplicate cluster. Four verdicts:
 | `Conflict` | Tag `metadata[conflict-cluster] = <id>`, preserve all | No |
 | `Supersedes` | Tag `metadata[supersedes-chain] = <id>`, preserve all | No |
 
-**Critical invariant: on error, callers treat the cluster as `KeepDistinct`**. False-merge is irreversible; false-no-merge is just bloat. The `AlwaysKeepDistinctAdjudicator` stub is the boot-default — nothing merges at runtime until Phase 5 plugs in a real Adjudicator via `DreamRunner.SetAdjudicator`.
+**Critical invariant, when this is built: on error, callers treat the cluster as `KeepDistinct`**. False-merge is irreversible; false-no-merge is just bloat.
 
 ### Reranker (Phase 5)
 

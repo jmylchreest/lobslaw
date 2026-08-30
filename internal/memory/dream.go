@@ -61,10 +61,9 @@ type DreamConfig struct {
 // DreamRunner encapsulates the state needed to run a Dream pass.
 // Writes go through raft.Apply; reads hit the local store directly.
 type DreamRunner struct {
-	store       *Store
-	raft        *RaftNode
-	summarizer  Summarizer  // may be nil until Phase 5
-	adjudicator Adjudicator // defaults to AlwaysKeepDistinct — safe no-op
+	store      *Store
+	raft       *RaftNode
+	summarizer Summarizer // may be nil until Phase 5
 	// pinned is the always-on memory store. Nil disables the pinned
 	// consolidation pass entirely, which is what a node without one
 	// should do — not guess at a block it cannot read.
@@ -77,17 +76,6 @@ type DreamRunner struct {
 // Intended for Phase 5 to call after constructing the Provider
 // Resolver. Safe to call while the runner is idle.
 func (d *DreamRunner) SetSummarizer(s Summarizer) { d.summarizer = s }
-
-// SetAdjudicator swaps in the merge-layer adjudicator. nil is
-// normalised to the AlwaysKeepDistinct stub so the merge phase
-// always has a non-nil Adjudicator to call (and defaults to
-// no-op on startup before Phase 5's LLM module wires in a real one).
-func (d *DreamRunner) SetAdjudicator(a Adjudicator) {
-	if a == nil {
-		a = AlwaysKeepDistinctAdjudicator{}
-	}
-	d.adjudicator = a
-}
 
 // NewDreamRunner constructs a runner. summarizer may be nil — Phase 5
 // supplies the real one. The Adjudicator defaults to the always-
@@ -114,12 +102,11 @@ func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg Dre
 		cfg.Now = time.Now
 	}
 	return &DreamRunner{
-		store:       store,
-		raft:        raft,
-		summarizer:  summarizer,
-		adjudicator: AlwaysKeepDistinctAdjudicator{},
-		cfg:         cfg,
-		logger:      logger,
+		store:      store,
+		raft:       raft,
+		summarizer: summarizer,
+		cfg:        cfg,
+		logger:     logger,
 	}
 }
 
@@ -131,7 +118,6 @@ type DreamResult struct {
 	// Merge is the outcome of the Phase 2 near-duplicate consolidation
 	// pass. Zero values are expected before Phase 5 lands — the default
 	// AlwaysKeepDistinct Adjudicator never takes destructive action.
-	Merge MergeResult
 	// Pinned is the outcome of the pinned-memory consolidation pass.
 	// Zero values are expected on a node with no Summarizer, which
 	// never rewrites anything.
@@ -215,13 +201,6 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 	// matter long-term. LLM failures are non-fatal — the stub
 	// Adjudicator is safe, and a real one that errors out just
 	// preserves the cluster for next run's retry.
-	mergeResult, err := d.mergePhase(ctx)
-	if err != nil {
-		// Don't fail the whole Run — log and keep the summary/prune
-		// results. Next run's mergePhase retries from scratch.
-		d.logger.Warn("dream: merge phase failed", "err", err)
-	}
-
 	// Pinned consolidation: tidy blocks that are near their cap, so
 	// the pressure produces curation in the background rather than a
 	// write failure the user sees. Non-fatal for the same reason as
@@ -255,7 +234,6 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		Consolidated:        consolidated,
 		Pruned:              pruned,
 		Candidates:          ids,
-		Merge:               mergeResult,
 		Pinned:              pinnedResult,
 		CommitmentsDigested: digested,
 		CommitmentDigests:   digests,
@@ -264,9 +242,6 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		"candidates", len(ids),
 		"consolidated", consolidated,
 		"pruned", pruned,
-		"merged", mergeResult.Merged,
-		"conflicts", mergeResult.Conflicts,
-		"supersedes", mergeResult.Supersedes,
 		"commitments_digested", digested,
 		"commitment_digests", digests,
 		"pinned_considered", pinnedResult.Considered,
