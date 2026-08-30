@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -175,53 +174,20 @@ func (h *SlackHandler) handleInteraction(ctx context.Context, in slackInteractio
 	// only ever grows, keyed by prompts that will never be tapped again.
 	defer h.takePendingScope(promptID)
 
-	var decision PromptDecision
-	var scope PromptScope
-	var reply string
-	switch verb {
-	case "approve":
-		decision, scope = PromptApproved, PromptScopeOnce
-		reply = "Approved."
-	case "approve-session":
-		decision, scope = PromptApproved, PromptScopeSession
-		// Recorded before Resolve so the resumed turn already sees the
-		// grant; resolving first lets the resume race it and prompt a
-		// second time for the same operation.
-		granted := h.grantForSession(ctx, promptID, grantSession)
-		if granted == "" {
-			decision, scope = PromptApproved, PromptScopeOnce
-			reply = "Approved."
-		} else {
-			reply = sessionGrantReply(granted, "conversation")
-		}
-	case "approve-always":
-		decision, scope = PromptApproved, PromptScopeAlways
-		granted := h.grantAlways(ctx, promptID)
-		if granted == "" {
-			decision, scope = PromptApproved, PromptScopeOnce
-			reply = "Approved."
-		} else {
-			reply = alwaysGrantReply(granted)
-		}
-	case "deny":
-		decision, scope = PromptDenied, PromptScopeOnce
-		reply = "Denied."
-	default:
+	outcome, ok := resolvePromptVerb(verb, grantFns{
+		session: func() string { return h.grantForSession(ctx, promptID, grantSession) },
+		always:  func() string { return h.grantAlways(ctx, promptID) },
+		noun:    "conversation",
+	})
+	if !ok {
 		h.log.Debug("slack: unknown prompt verb", "verb", verb)
 		return
 	}
+	decision, scope, reply := outcome.Decision, outcome.Scope, outcome.Reply
 
 	if err := h.cfg.Prompts.Resolve(promptID, decision, scope); err != nil {
-		switch {
-		case errors.Is(err, ErrPromptNotFound):
-			reply = "That prompt no longer exists."
-		case errors.Is(err, ErrPromptResolved):
-			reply = "That prompt was already resolved."
-		default:
-			h.log.Error("slack: resolve failed", "err", err, "id", promptID)
-			reply = "Couldn't process the response."
-		}
-		h.sendText(ctx, channel, thread, reply)
+		h.log.Error("slack: resolve failed", "err", err, "id", promptID)
+		h.sendText(ctx, channel, thread, resolveFailureReply(err))
 		return
 	}
 	h.sendText(ctx, channel, thread, reply)

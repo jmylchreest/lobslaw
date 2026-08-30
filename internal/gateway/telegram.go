@@ -859,57 +859,24 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 
 	var decision PromptDecision
 	var scope PromptScope
-	var reply string
-	switch verb {
-	case "approve":
-		decision, scope = PromptApproved, PromptScopeOnce
-		reply = "Approved."
-	case "approve-session":
-		decision, scope = PromptApproved, PromptScopeSession
-		// Recorded before Resolve, so the resumed turn already sees
-		// the grant. Resolving first would let the resume race the
-		// grant and prompt a second time for the same operation.
-		granted := h.grantForSession(ctx, promptID, q)
-		if granted == "" {
-			decision, scope = PromptApproved, PromptScopeOnce
-			reply = "Approved."
-		} else {
-			reply = sessionGrantReply(granted, "chat")
-		}
-	case "approve-always":
-		decision, scope = PromptApproved, PromptScopeAlways
-		// Recorded before Resolve, for the same reason as the session
-		// grant: resolving first lets the resumed turn race the rule
-		// and prompt a second time for the same operation.
-		granted := h.grantAlways(ctx, promptID, q)
-		if granted == "" {
-			decision, scope = PromptApproved, PromptScopeOnce
-			reply = "Approved."
-		} else {
-			reply = alwaysGrantReply(granted)
-		}
-	case "deny":
-		decision, scope = PromptDenied, PromptScopeOnce
-		reply = "Denied."
-	default:
+	outcome, ok := resolvePromptVerb(verb, grantFns{
+		session: func() string { return h.grantForSession(ctx, promptID, q) },
+		always:  func() string { return h.grantAlways(ctx, promptID, q) },
+		noun:    "chat",
+	})
+	if !ok {
 		h.log.Debug("telegram: unknown prompt verb", "verb", verb, "data", q.Data)
 		return
 	}
+	decision, scope, reply := outcome.Decision, outcome.Scope, outcome.Reply
 
 	// Read before resolving. Resolve is a CAS that can lose to another
 	// node, and the loser must not consume the turn it did not win.
 	prompt, getErr := h.cfg.Prompts.Get(promptID)
 
 	if err := h.cfg.Prompts.Resolve(promptID, decision, scope); err != nil {
-		switch {
-		case errors.Is(err, ErrPromptNotFound):
-			reply = "That prompt no longer exists."
-		case errors.Is(err, ErrPromptResolved):
-			reply = "That prompt was already resolved."
-		default:
-			h.log.Error("telegram: resolve failed", "err", err, "id", promptID)
-			reply = "Couldn't process the response."
-		}
+		h.log.Error("telegram: resolve failed", "err", err, "id", promptID)
+		reply = resolveFailureReply(err)
 		if q.Message != nil {
 			h.sendText(q.Message.Chat.ID, reply)
 		}
