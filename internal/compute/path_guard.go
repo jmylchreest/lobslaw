@@ -19,17 +19,16 @@ import (
 // and a step gets dropped when a rule lives in a convention rather than
 // in a function. So it lives in a function.
 //
-// The chain, in order, and the order is the design:
+// Three questions, in order, and the order is the design:
 //
-//  1. mount resolver   — is this inside a declared mount, in this mode
-//  2. absolute         — a relative path resolves against a cwd nobody chose
-//  3. internal path    — Raft snapshots, TLS keys, the memory key
-//  4. hardline floor   — the compiled-in refusals
-//  5. policy.d         — the operator's per-tool confinement
+//  1. mount resolver  — does this path exist to the agent, in this
+//                       mode? (absoluteness falls out of this step)
+//  2. hardline floor  — policy.CheckPath. Allow, confirm, or deny.
+//  3. policy.d        — may THIS tool touch it?
 //
-// policy.d is LAST, and that is the whole safety argument. Steps 1-4
-// are floors: no file on disk can lift them. Step 5 can only narrow
-// what they already permitted.
+// Steps 1 and 2 grant and refuse respectively; step 3 can only narrow
+// what step 1 already permitted, and that is the whole safety
+// argument.
 //
 // The direction matters more than it looks. policy.d is a directory of
 // hot-reloaded files, and one of its search paths is under the
@@ -114,8 +113,9 @@ func guardPathWithin(tool, path string, need MountMode, implicitRoot string) (re
 		}
 	}
 
-	// 2. Absolute. After resolution, because the mount form is
-	//    legitimately relative and only becomes absolute here.
+	//    Absoluteness is a postcondition of this step, not a gate of
+	//    its own: the mount-label form is legitimately relative and
+	//    only becomes absolute once the resolver has expanded it.
 	if !filepath.IsAbs(resolved) {
 		p, e, _ := marshalToolError("relative_path",
 			"path must be absolute OR mount-scoped (e.g. 'workspace/notes.md')",
@@ -123,21 +123,17 @@ func guardPathWithin(tool, path string, need MountMode, implicitRoot string) (re
 		return "", p, e
 	}
 
-	// 3. Cluster-internal state. A floor: there is no mount
-	//    configuration and no policy file that makes this reachable.
-	if isInternalPath(resolved) {
-		p, e, _ := marshalToolError("internal_path",
-			resolved+" is cluster-internal and cannot be "+accessVerb(need),
-			"this path holds private state (Raft snapshot, TLS key, memory key). There is no configuration that permits it; do not look for another path to the same file")
-		return "", p, e
-	}
-
-	// 4. The compiled-in hardline floor.
+	// 2. The compiled-in floor. One list — see policy.protectedPaths.
+	//    There used to be a separate isInternalPath step in front of
+	//    this, over a second list that overlapped it on state.db,
+	//    *.key and *.pem while disagreeing about why. It also ran
+	//    first and was a flat deny, so on every shared pattern this
+	//    file's three-verdict model could never take effect.
 	if p, e, refused := hardlinePathRefusal(resolved, accessVerb(need)); refused {
 		return "", p, e
 	}
 
-	// 5. The operator's policy for THIS tool. Narrowing only.
+	// 3. The operator's policy for THIS tool. Narrowing only.
 	if pol := activePathGuard.policyFor(tool); pol != nil {
 		if !pol.AllowsPath(resolved, sandboxAccess(need)) {
 			p, e, _ := marshalToolError("policy_denied",

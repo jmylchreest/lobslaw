@@ -220,6 +220,30 @@ var protectedPaths = []protectedPath{
 	{name: "cluster-state", base: "state.db*", why: "this is lobslaw's own replicated state"},
 	{name: "tls-material", base: "*.key", why: "this is private key material"},
 	{name: "tls-material", base: "*.pem", why: "this is private key material"},
+
+	// lobslaw's own on-disk state. These used to live in a SECOND
+	// list — internalExcludes, over in the fs builtins — which
+	// overlapped this one on state.db, *.key and *.pem while
+	// disagreeing about why: it called a key in somebody's home
+	// directory "cluster-internal". Two lists claiming the same files
+	// is one list and a drift.
+	//
+	// The merge also un-masks this file's verdict model. The fs list
+	// was a flat deny and ran FIRST, so on every shared pattern a
+	// carveOut here could never take effect — latent rather than live,
+	// because none of the shared entries has one yet, and exactly the
+	// kind of thing that is discovered by someone adding one.
+	{name: "raft-log", dir: ".raft", why: "this is lobslaw's own Raft log"},
+	{name: "raft-snapshot", dir: ".snapshot", why: "this is a Raft snapshot"},
+	{name: "bearer-token", base: "*.jwt", why: "this is a bearer token"},
+
+	// NOT ".git". It was in the fs list, where it was written for
+	// lobslaw's own data directory and caught every repository on the
+	// box — including .git/config, which reading a remote or a branch
+	// legitimately needs and which holds no secret. If the worry is a
+	// stored credential that is .git-credentials, below, and not the
+	// directory around it.
+	{name: "git-credentials", base: ".git-credentials", why: "this holds git push credentials"},
 }
 
 // CheckPath classifies a filesystem path against the floor.

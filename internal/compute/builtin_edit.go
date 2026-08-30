@@ -109,10 +109,6 @@ func writeFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
 			"use '/abs/path' or 'mount-label/subpath' where the mount is writable")
 	}
-	if isInternalPath(path) {
-		return marshalToolError("internal_path", path+" is cluster-internal and cannot be written",
-			"pick a path inside a writable storage mount")
-	}
 	if payload, exit, refused := hardlinePathRefusal(path, "written"); refused {
 		return payload, exit, nil
 	}
@@ -165,9 +161,6 @@ func editFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 	}
 	if !filepath.IsAbs(path) {
 		return marshalToolError("relative_path", "path must be absolute OR mount-scoped", "use '/abs/path' or 'mount-label/subpath' where the mount is writable")
-	}
-	if isInternalPath(path) {
-		return marshalToolError("internal_path", path+" is cluster-internal and cannot be edited", "")
 	}
 	if payload, exit, refused := hardlinePathRefusal(path, "edited"); refused {
 		return payload, exit, nil

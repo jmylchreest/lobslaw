@@ -437,8 +437,8 @@ func TestRemoteSCPRefusesInternalPathsBothWays(t *testing.T) {
 		if code == 0 {
 			t.Errorf("%s of a cluster-internal path was allowed", dir)
 		}
-		if !strings.Contains(string(out), "internal_path") {
-			t.Errorf("%s: expected an internal_path refusal, got %s", dir, out)
+		if !strings.Contains(string(out), "hardline_refused") {
+			t.Errorf("%s: expected a hardline refusal, got %s", dir, out)
 		}
 	}
 }

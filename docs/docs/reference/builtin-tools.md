@@ -171,17 +171,15 @@ The gate sits on the tool registry, which is the only place builtins, skill mani
 
 ## Path guards
 
-Every builtin that takes a filesystem path runs the same five-step chain, in this order:
+Every builtin that takes a filesystem path asks the same three questions, in this order:
 
-1. **mount resolver** — is the path inside a declared `[[storage.mounts]]`, in the mode being asked for
-2. **absolute** — after mount-label expansion
-3. **cluster-internal** — Raft snapshots, TLS keys, the memory key
-4. **hardline floor** — the compiled-in refusals
-5. **`policy.d/<tool>.toml`** — the operator's per-tool confinement
+1. **mount resolver** — does this path exist to the agent, in this mode? Declared by `[[storage.mounts]]`. Absoluteness falls out of this step, because the mount-label form (`workspace/notes.md`) is legitimately relative until it expands.
+2. **hardline floor** — `policy.CheckPath`. Three verdicts: allow, **confirm**, deny. No configuration reaches it.
+3. **`policy.d/<tool>.toml`** — may *this tool* touch it? Narrowing only.
 
-Steps 1–4 are floors: no configuration lifts them. Step 5 can only narrow what they already permitted — see [the sandbox notes](https://github.com/jmylchreest/lobslaw/blob/main/docs/dev/SANDBOX.md) for why that direction is load-bearing.
+Step 1 grants, step 2 refuses, step 3 subtracts. That `policy.d` can never widen is load-bearing rather than stylistic — see [the sandbox notes](https://github.com/jmylchreest/lobslaw/blob/main/docs/dev/SANDBOX.md).
 
-`list_files` and `glob` return names rather than content and stop after step 3. `shell_command` takes a command string rather than a path and uses `policy.CheckCommandPaths` instead.
+`list_files` and `glob` return names rather than content: they run steps 1 and 2 on the directory, then filter individual entries against the floor rather than failing. `shell_command` has a command string rather than a path and tokenises it through `policy.CheckCommandPaths`, which refuses a *confirm* verdict outright because a shell has nowhere to ask.
 
 ## Naming convention
 

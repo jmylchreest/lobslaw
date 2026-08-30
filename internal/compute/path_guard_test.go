@@ -42,8 +42,8 @@ func TestPolicyCannotWidenPastTheFloors(t *testing.T) {
 		if exit == 0 {
 			t.Errorf("a policy granting / reached %s", path)
 		}
-		if !strings.Contains(string(payload), "internal_path") {
-			t.Errorf("%s: expected an internal_path refusal, got %s", path, payload)
+		if !strings.Contains(string(payload), "hardline_refused") {
+			t.Errorf("%s: expected a hardline refusal, got %s", path, payload)
 		}
 	}
 }
@@ -204,8 +204,8 @@ func TestImplicitRootDoesNotBypassTheFloors(t *testing.T) {
 	if exit == 0 {
 		t.Fatal("AllowedRoot let a modality tool reach cluster-internal state")
 	}
-	if !strings.Contains(string(payload), "internal_path") {
-		t.Errorf("expected an internal_path refusal, got %s", payload)
+	if !strings.Contains(string(payload), "hardline_refused") {
+		t.Errorf("expected a hardline refusal, got %s", payload)
 	}
 }
 

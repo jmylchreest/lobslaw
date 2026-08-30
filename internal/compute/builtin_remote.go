@@ -203,10 +203,6 @@ func remoteUpload(ctx context.Context, box *Remote, localRaw, remotePath string)
 		return marshalToolError("relative_path", "local_path must be absolute OR mount-scoped (e.g. 'workspace/out.log')",
 			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
 	}
-	if isInternalPath(local) {
-		return marshalToolError("internal_path", local+" is cluster-internal and cannot leave this node",
-			"this file holds private state (Raft snapshot, TLS key, memory key). There is no version of this request that is allowed; do not look for another path to the same file")
-	}
 	if payload, exit, refused := hardlinePathRefusal(local, "sent to a remote"); refused {
 		return payload, exit, nil
 	}
@@ -235,10 +231,6 @@ func remoteDownload(ctx context.Context, box *Remote, localRaw, remotePath strin
 	if !filepath.IsAbs(local) {
 		return marshalToolError("relative_path", "local_path must be absolute OR mount-scoped (e.g. 'workspace/out.log')",
 			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
-	}
-	if isInternalPath(local) {
-		return marshalToolError("internal_path", local+" is cluster-internal and cannot be overwritten",
-			"this path holds private state; writing to it from a remote would let that machine choose what this node reads back")
 	}
 	if payload, exit, refused := hardlinePathRefusal(local, "overwritten from a remote"); refused {
 		return payload, exit, nil

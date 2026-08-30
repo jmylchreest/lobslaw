@@ -65,15 +65,17 @@ That left the builtins deriving filesystem reach themselves, in four different w
 
 `Policy.AllowsPath(path, Access)` closes that. It evaluates the **same struct** Landlock consumes, in Go, so the kernel check and the in-process check cannot disagree about what a policy said. `compute.guardPath` runs it as the last of five steps:
 
-| # | step | can a policy file lift it? |
+| # | step | who decides |
 |---|---|---|
-| 1 | mount resolver — inside a declared mount, in this mode | no |
-| 2 | absolute path | no |
-| 3 | cluster-internal — Raft snapshots, TLS keys, the memory key | no |
-| 4 | hardline floor | no |
-| 5 | **`policy.d/<tool>.toml`** | this is the policy |
+| 1 | **mount resolver** — is this inside a declared `[[storage.mounts]]`, in this mode (absoluteness falls out of it) | operator, at boot |
+| 2 | **hardline floor** — `policy.CheckPath`: allow / confirm / deny | nobody; compiled in |
+| 3 | **`policy.d/<tool>.toml`** — may *this tool* touch it | operator, hot-reloaded |
 
-**`policy.d` may only subtract.** Steps 1–4 are floors; step 5 narrows what they already permitted and can never widen it.
+**`policy.d` may only subtract.** Steps 1–2 grant and refuse; step 3 narrows what step 1 already permitted and can never widen it.
+
+There used to be a fourth step — an `internalExcludes` list in the fs builtins — sitting in front of the floor. It overlapped `protectedPaths` on `state.db`, `*.key` and `*.pem` while disagreeing about *why* (it called a key in somebody's home directory "cluster-internal"), missed everything the floor caught (`~/.ssh`, `~/.aws`, `/etc/shadow`, `.env`), and blocked `.git` wholesale because it was written for lobslaw's own data directory. Merged into the floor: `.raft`, `.snapshot` and `*.jwt` moved across, `.git` was dropped in favour of `.git-credentials`.
+
+The merge also un-masks the floor's verdict model. The fs list was a flat deny that ran *first*, so on every shared pattern a `carveOut` could never take effect — latent rather than live, because none of the shared entries has one yet.
 
 That direction is the safety argument, not a stylistic choice. `policy.d` is a set of hot-reloaded files under search paths that include one inside the operator's home — and the agent runs as that user. If a policy file could *grant* reach, an agent that talks somebody into running a shell would have a supported, documented, auto-reloading route to the memory key. Subtract-only means the worst a hostile policy file achieves is a broken tool: noisy, and recoverable.
 

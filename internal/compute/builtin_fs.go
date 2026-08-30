@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/jmylchreest/lobslaw/internal/policy"
 )
 
 // readFileLineCap prevents a malicious or overeager tool call from
@@ -27,22 +29,6 @@ const (
 	listFilesMaxLimit     = 1000
 	globMaxMatches        = 500
 )
-
-// internalExcludes are directory/glob patterns the fs builtins must
-// never expose. These guard cluster-private state (Raft snapshots,
-// encrypted bbolt store, TLS keys) even when the operator configures
-// a mount that overlaps with the data dir. Matched against the path
-// basename OR any path segment.
-var internalExcludes = []string{
-	".snapshot",
-	".git",
-	".raft",
-	"state.db",
-	"state.db.lock",
-	"*.key",
-	"*.pem",
-	"*.jwt",
-}
 
 // toolError is the structured failure shape fs/exec builtins emit
 // on error. Mirrors opencode's pattern: every failure carries a
@@ -72,22 +58,25 @@ func marshalToolError(errType, msg, suggestion string) ([]byte, int, error) {
 	return payload, 1, nil
 }
 
-// isInternalPath returns true when path should be hidden from fs
-// builtins (listed, read, or written). Match is on the basename and
-// each intermediate segment — any hit wins.
+// isInternalPath reports whether a path is hidden from LISTINGS.
+//
+// One list now: policy.CheckPath, the compiled-in floor. There used to
+// be a second — internalExcludes, right here — which overlapped the
+// floor on state.db, *.key and *.pem, missed everything the floor
+// caught (~/.ssh, ~/.aws, /etc/shadow, .env), and blocked .git
+// wholesale because it was written for lobslaw's own data directory.
+//
+// Listing is where a floor becomes a FILTER rather than a refusal:
+// list_files does not fail because a directory contains a key, it
+// just does not show it. That is the only reason this wrapper exists
+// rather than the callers asking CheckPath themselves.
+//
+// PathDenied only, deliberately. A confirm-tier path (~/.ssh/config)
+// is sensitive-but-answerable, and hiding it from a listing would
+// mean the user can never discover the file they would be approving.
 func isInternalPath(path string) bool {
-	segments := strings.Split(filepath.ToSlash(path), "/")
-	for _, seg := range segments {
-		if seg == "" {
-			continue
-		}
-		for _, pat := range internalExcludes {
-			if ok, _ := filepath.Match(pat, seg); ok {
-				return true
-			}
-		}
-	}
-	return false
+	verdict, _ := policy.CheckPath(path)
+	return verdict == policy.PathDenied
 }
 
 // readFileBuiltin streams a text file with offset/limit paging.
@@ -109,10 +98,6 @@ func readFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 	if !filepath.IsAbs(path) {
 		return marshalToolError("relative_path", "path must be absolute OR mount-scoped (e.g. 'workspace/notes.md')",
 			"prefix with / for absolute, or use a mount label (see debug_storage for known mounts)")
-	}
-	if isInternalPath(path) {
-		return marshalToolError("internal_path", path+" is cluster-internal and cannot be read",
-			"this file holds private state (Raft snapshot, TLS key, etc.). Try a different path; workspace mounts are the typical target")
 	}
 	if payload, exit, refused := hardlinePathRefusal(path, "read"); refused {
 		return payload, exit, nil
@@ -211,9 +196,12 @@ func listFilesBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
 			"use '/abs/path' or 'mount-label/subpath' (see debug_storage for mounts)")
 	}
-	if isInternalPath(path) {
-		return marshalToolError("internal_path", path+" is a cluster-internal path",
-			"try a user-facing directory like a configured storage mount")
+	// The floor, on the directory being listed. It used to be an
+	// isInternalPath check against a list that did not know about
+	// ~/.ssh, so listing it was permitted and only the entry filter
+	// below stood between the caller and the names inside.
+	if payload, exit, refused := hardlinePathRefusal(path, "listed"); refused {
+		return payload, exit, nil
 	}
 	limit := listFilesDefaultLimit
 	if raw, ok := args["limit"]; ok && raw != "" {
@@ -254,7 +242,11 @@ func listFilesBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 	out := make([]entry, 0, len(entries))
 	truncated := false
 	for _, e := range entries {
-		if isInternalPath(e.Name()) {
+		// Joined with the directory, not the bare name. A basename
+		// carries no context, so an entry filter given "id_rsa" cannot
+		// know it is looking inside ~/.ssh — every directory-scoped
+		// rule in the floor was invisible here.
+		if isInternalPath(filepath.Join(path, e.Name())) {
 			continue
 		}
 		if len(out) >= limit {
@@ -313,8 +305,8 @@ func globBuiltin(ctx context.Context, args map[string]string) ([]byte, int, erro
 		return marshalToolError("relative_path", "path must be absolute OR mount-scoped",
 			"use '/abs/path' or 'mount-label/subpath'")
 	}
-	if isInternalPath(root) {
-		return marshalToolError("internal_path", root+" is a cluster-internal path", "")
+	if payload, exit, refused := hardlinePathRefusal(root, "walked"); refused {
+		return payload, exit, nil
 	}
 	if _, err := os.Stat(root); err != nil {
 		if os.IsNotExist(err) {
