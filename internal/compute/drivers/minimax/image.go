@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // DriverName is what config names in `driver = "..."`.
@@ -123,7 +124,7 @@ func (d *ImageDriver) Generate(ctx context.Context, req compute.ImageRequest) (*
 	if resp.StatusCode >= 400 {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("minimax image: HTTP %d: %s", resp.StatusCode, truncate(raw)),
+			Err:   fmt.Errorf("minimax image: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
 		}
 	}
 
@@ -164,15 +165,4 @@ func classifyStatus(b baseResp) error {
 	default:
 		return compute.Permanent(err)
 	}
-}
-
-// truncate bounds a vendor body before it reaches a log or an error.
-// Same shape as the other driver packages: a provider that answers
-// with a page of HTML should not put a page of HTML in an error.
-func truncate(b []byte) string {
-	const max = 512
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "…[truncated]"
 }

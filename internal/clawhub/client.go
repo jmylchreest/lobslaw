@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // SkillEntry is the catalog metadata for one publishable skill at
@@ -99,7 +100,7 @@ func (c *Client) GetSkill(ctx context.Context, name, version string) (*SkillEntr
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("clawhub: GET %s HTTP %d: %s",
-			endpoint, resp.StatusCode, truncate(body, 256))
+			endpoint, resp.StatusCode, textutil.Truncate(string(body), "…", 256))
 	}
 	var entry SkillEntry
 	if err := json.Unmarshal(body, &entry); err != nil {
@@ -209,11 +210,4 @@ func validateSkillIdentifier(s string) error {
 		return fmt.Errorf("identifier %q contains forbidden characters", s)
 	}
 	return nil
-}
-
-func truncate(b []byte, n int) string {
-	if len(b) <= n {
-		return string(b)
-	}
-	return string(b[:n]) + "…"
 }

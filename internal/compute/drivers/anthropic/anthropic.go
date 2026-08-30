@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // DefaultEndpoint is the Messages API.
@@ -157,16 +158,16 @@ func (d *Driver) Chat(ctx context.Context, req compute.ChatRequest) (*compute.Ch
 
 	if resp.StatusCode >= 400 {
 		d.log.Warn("anthropic: response error",
-			"status", resp.StatusCode, "model", model, "body", truncate(raw))
+			"status", resp.StatusCode, "model", model, "body", textutil.Truncate(string(raw), "…[truncated]", 512))
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, truncate(raw)),
+			Err:   fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
 		}
 	}
 
 	var out wireResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, compute.Permanent(fmt.Errorf("anthropic: malformed response: %w (body: %s)", err, truncate(raw)))
+		return nil, compute.Permanent(fmt.Errorf("anthropic: malformed response: %w (body: %s)", err, textutil.Truncate(string(raw), "…[truncated]", 512)))
 	}
 	return out.toChatResponse(), nil
 }
@@ -366,12 +367,4 @@ func normaliseStop(s string) string {
 		// flattening it would hide a refusal as a normal answer.
 		return s
 	}
-}
-
-func truncate(b []byte) string {
-	const max = 512
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "…[truncated]"
 }

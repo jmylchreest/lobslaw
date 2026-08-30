@@ -15,6 +15,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // memoryUsage is printed for a bare `lobslaw memory` and for an
@@ -671,7 +672,7 @@ func episodicLine(e *lobslawv1.EpisodicRecord) string {
 		line += " session=" + e.SessionRef
 	}
 	if e.Event != "" {
-		line += "\n             event: " + truncate(collapse(e.Event), 120)
+		line += "\n             event: " + textutil.Truncate(collapse(e.Event), "…", 120)
 	}
 	return line
 }
@@ -785,14 +786,3 @@ func shownOf(shown, total int) string {
 // collapse flattens whitespace so a multi-line field stays on one
 // line in list output.
 func collapse(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-// truncate cuts at a rune boundary — byte slicing a UTF-8 string
-// mid-rune produces mojibake in the middle of otherwise readable
-// output.
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}

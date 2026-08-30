@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 const (
@@ -145,7 +146,7 @@ func (d *Driver) Speak(ctx context.Context, req compute.SpeakRequest) (*compute.
 	if resp.StatusCode >= 400 {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("elevenlabs: HTTP %d: %s", resp.StatusCode, truncate(raw)),
+			Err:   fmt.Errorf("elevenlabs: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
 		}
 	}
 	if len(raw) == 0 {
@@ -188,12 +189,4 @@ func mimeForOutputFormat(f string) string {
 	default:
 		return "audio/mpeg"
 	}
-}
-
-func truncate(b []byte) string {
-	const max = 512
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "…[truncated]"
 }

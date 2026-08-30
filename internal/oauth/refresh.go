@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // ErrInvalidGrant is returned when the IdP rejects the refresh token
@@ -75,7 +76,7 @@ func RefreshToken(ctx context.Context, p ProviderConfig, refreshToken string) (*
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("oauth: refresh HTTP %d: %s",
-			resp.StatusCode, truncate(body, 256))
+			resp.StatusCode, textutil.Truncate(string(body), "…", 256))
 	}
 	if out.AccessToken == "" {
 		return nil, errors.New("oauth: refresh response missing access_token")

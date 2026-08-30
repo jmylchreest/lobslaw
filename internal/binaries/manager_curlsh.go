@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // MaxScriptSize caps a curl-sh install script at 10 MiB. Anything
@@ -112,16 +114,16 @@ func (m curlShManager) Install(ctx context.Context, spec InstallSpec, runner Pro
 		}
 		out, err := runner.Run(ctx, "sudo", append([]string{"-n", "/bin/sh"}, args...), env)
 		if err != nil {
-			return fmt.Errorf("curl-sh: sudo sh: %w (output: %s)", err, truncate(out, 512))
+			return fmt.Errorf("curl-sh: sudo sh: %w (output: %s)", err, textutil.Truncate(out, "…", 512))
 		}
-		log.Info("binaries: curl-sh ok", "output", truncate(out, 256))
+		log.Info("binaries: curl-sh ok", "output", textutil.Truncate(out, "…", 256))
 		return nil
 	}
 	out, err := runner.Run(ctx, "/bin/sh", args, env)
 	if err != nil {
-		return fmt.Errorf("curl-sh: sh: %w (output: %s)", err, truncate(out, 512))
+		return fmt.Errorf("curl-sh: sh: %w (output: %s)", err, textutil.Truncate(out, "…", 512))
 	}
-	log.Info("binaries: curl-sh ok", "output", truncate(out, 256))
+	log.Info("binaries: curl-sh ok", "output", textutil.Truncate(out, "…", 256))
 	return nil
 }
 

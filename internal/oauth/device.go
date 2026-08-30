@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // DeviceAuthResponse is the IdP's reply to the initial device-code
@@ -110,7 +111,7 @@ func StartDeviceAuth(ctx context.Context, p ProviderConfig, scopes []string) (*D
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("oauth: device auth HTTP %d: %s",
-			resp.StatusCode, truncate(body, 256))
+			resp.StatusCode, textutil.Truncate(string(body), "…", 256))
 	}
 	var out DeviceAuthResponse
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -180,7 +181,7 @@ func PollToken(ctx context.Context, p ProviderConfig, deviceCode string) (*Token
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("oauth: token HTTP %d: %s",
-			resp.StatusCode, truncate(body, 256))
+			resp.StatusCode, textutil.Truncate(string(body), "…", 256))
 	}
 	if out.AccessToken == "" {
 		return nil, errors.New("oauth: token response missing access_token")
@@ -233,11 +234,4 @@ func PollUntilGrant(ctx context.Context, p ProviderConfig, da *DeviceAuthRespons
 			return nil, err
 		}
 	}
-}
-
-func truncate(b []byte, n int) string {
-	if len(b) <= n {
-		return string(b)
-	}
-	return string(b[:n]) + "…"
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // FetchSubject calls the provider's UserInfoEndpoint with the just-
@@ -56,7 +57,7 @@ func FetchSubject(ctx context.Context, p ProviderConfig, tok *TokenResponse) (st
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("oauth: userinfo HTTP %d: %s",
-			resp.StatusCode, truncate(body, 256))
+			resp.StatusCode, textutil.Truncate(string(body), "…", 256))
 	}
 	var fields map[string]any
 	if err := json.Unmarshal(body, &fields); err != nil {

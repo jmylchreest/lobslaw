@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // DefaultImageEndpoint is the synchronous multimodal-generation path.
@@ -146,7 +147,7 @@ func (d *ImageDriver) Generate(ctx context.Context, req compute.ImageRequest) (*
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
 			Err: fmt.Errorf("dashscope image: HTTP %d: %s",
-				resp.StatusCode, truncate(raw)),
+				resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
 		}
 	}
 

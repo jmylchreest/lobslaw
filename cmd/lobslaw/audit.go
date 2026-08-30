@@ -16,6 +16,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/audit"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -467,7 +468,7 @@ func renderAuditEntries(w io.Writer, entries []types.AuditEntry, source string, 
 	for _, e := range entries {
 		_, _ = fmt.Fprintf(w, "  %s  %-16s %-24s %s\n",
 			e.Timestamp.Format("2006-01-02 15:04:05"),
-			truncate(e.ActorScope, 16), truncate(e.Action, 24), e.Target)
+			textutil.Truncate(e.ActorScope, "…", 16), textutil.Truncate(e.Action, "…", 24), e.Target)
 		if e.Effect != "" || e.PolicyRule != "" {
 			_, _ = fmt.Fprintf(w, "      effect=%s rule=%s\n", e.Effect, e.PolicyRule)
 		}

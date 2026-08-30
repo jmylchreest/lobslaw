@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // sessionUsage carries the stopped-node constraint for the group, the
@@ -227,7 +228,7 @@ func loadMessages(store *memory.Store, id string) ([]*lobslawv1.SessionMessage, 
 func messageLine(m *lobslawv1.SessionMessage, trunc int) string {
 	text := collapse(m.Content)
 	if trunc > 0 {
-		text = truncate(text, trunc)
+		text = textutil.Truncate(text, "…", trunc)
 	}
 	line := fmt.Sprintf("  [%03d] %-9s %s", m.Seq, m.Role, text)
 	for _, tc := range m.ToolCalls {
@@ -242,7 +243,7 @@ func messageLine(m *lobslawv1.SessionMessage, trunc int) string {
 func messageFields(m *lobslawv1.SessionMessage, trunc int) map[string]any {
 	content := m.Content
 	if trunc > 0 {
-		content = truncate(content, trunc)
+		content = textutil.Truncate(content, "…", trunc)
 	}
 	calls := make([]map[string]any, 0, len(m.ToolCalls))
 	for _, tc := range m.ToolCalls {

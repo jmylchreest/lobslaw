@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 const DriverName = "imagen"
@@ -130,7 +131,7 @@ func (d *Driver) Generate(ctx context.Context, req compute.ImageRequest) (*compu
 	if resp.StatusCode >= 400 {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("imagen: HTTP %d: %s", resp.StatusCode, truncate(raw)),
+			Err:   fmt.Errorf("imagen: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
 		}
 	}
 
@@ -205,12 +206,4 @@ func splitSize(s string) (w, h int, ok bool) {
 		}
 	}
 	return 0, 0, false
-}
-
-func truncate(b []byte) string {
-	const max = 512
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "…[truncated]"
 }

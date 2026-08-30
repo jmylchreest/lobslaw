@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // DefaultSpeakEndpoint is the text-to-audio path.
@@ -176,7 +177,7 @@ func (d *SpeakDriver) Speak(ctx context.Context, req compute.SpeakRequest) (*com
 	if resp.StatusCode >= 400 {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("minimax speak: HTTP %d: %s", resp.StatusCode, truncate(raw)),
+			Err:   fmt.Errorf("minimax speak: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
 		}
 	}
 

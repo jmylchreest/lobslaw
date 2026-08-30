@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // Manager installs a binary using one specific package-manager-style
@@ -124,9 +126,9 @@ func runManagerCmdEnv(ctx context.Context, runner ProcessRunner, log *slog.Logge
 	if err != nil {
 		log.Error("binaries: install failed",
 			"manager", managerName, "err", err, "output", out)
-		return fmt.Errorf("%s install: %w (output: %s)", managerName, err, truncate(out, 512))
+		return fmt.Errorf("%s install: %w (output: %s)", managerName, err, textutil.Truncate(out, "…", 512))
 	}
-	log.Info("binaries: install ok", "manager", managerName, "output", truncate(out, 256))
+	log.Info("binaries: install ok", "manager", managerName, "output", textutil.Truncate(out, "…", 256))
 	return nil
 }
 
@@ -136,14 +138,7 @@ func runManagerCmdEnv(ctx context.Context, runner ProcessRunner, log *slog.Logge
 func ensureSudoAllowed(ctx context.Context, runner ProcessRunner) error {
 	out, err := runner.Run(ctx, "sudo", []string{"-n", "true"}, nil)
 	if err != nil {
-		return fmt.Errorf("%w: sudo -n probe: %v (output: %s)", errSudoNotAllowed, err, truncate(out, 256))
+		return fmt.Errorf("%w: sudo -n probe: %v (output: %s)", errSudoNotAllowed, err, textutil.Truncate(out, "…", 256))
 	}
 	return nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }
