@@ -27,6 +27,11 @@ import (
 // output for the failures worth translating. Matched loosely on
 // purpose: the exact wording changes between versions and a missed
 // match degrades to the raw stderr, which is no worse than before.
+// defaultSecretField is the field read from a vendor CLI's item when
+// the reference names none. Every supported vendor calls the primary
+// secret "password", whatever the item actually holds.
+const defaultSecretField = "password"
+
 const (
 	bwLockedHint = "run `bw unlock`, then export BW_SESSION (or set it in the provider's env block)"
 	opAuthHint   = "run `op signin`, or set OP_SERVICE_ACCOUNT_TOKEN in the provider's env block"
@@ -46,7 +51,7 @@ func BitwardenFactory(cfg ProviderConfig) (Provider, error) {
 	}
 	field := option(cfg.Options, "field")
 	if field == "" {
-		field = "password"
+		field = defaultSecretField
 	}
 	// An operator-supplied command wins, so a wrapper script that
 	// unlocks first is possible without a new driver.

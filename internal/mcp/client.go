@@ -15,6 +15,14 @@ import (
 // Transport is the wire between client and server. Production uses
 // StdioTransport over an exec.Cmd; tests inject an in-memory fake
 // that captures sent frames + emits canned responses.
+// Identity sent to an MCP server in the initialize handshake when the
+// caller supplies none. Servers log and sometimes gate on it, so an
+// unnamed client is one an operator cannot find in a server's logs.
+const (
+	defaultClientName    = "lobslaw"
+	defaultClientVersion = "dev"
+)
+
 type Transport interface {
 	Send(ctx context.Context, frame []byte) error
 	Recv(ctx context.Context) ([]byte, error)
@@ -51,10 +59,10 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	info := cfg.ClientInfo
 	if info.Name == "" {
-		info.Name = "lobslaw"
+		info.Name = defaultClientName
 	}
 	if info.Version == "" {
-		info.Version = "dev"
+		info.Version = defaultClientVersion
 	}
 	return &Client{transport: cfg.Transport, info: info}, nil
 }

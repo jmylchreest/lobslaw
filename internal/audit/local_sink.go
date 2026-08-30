@@ -23,6 +23,16 @@ import (
 // file remains the PrevHash for the first entry in the new file.
 // VerifyChain walks every rotated generation in timestamp order so
 // a break at the boundary is detectable.
+// Rotation defaults for the local audit sink. A hundred megabytes is
+// large enough that rotation is rare on a quiet node and small enough
+// to move; ten files is roughly a gigabyte of retained audit, which is
+// the point where keeping more should be the operator's decision
+// rather than ours.
+const (
+	defaultMaxSizeMB = 100
+	defaultMaxFiles  = 10
+)
+
 type LocalSink struct {
 	path string
 
@@ -48,10 +58,10 @@ func NewLocalSink(cfg LocalConfig) (*LocalSink, error) {
 		return nil, errors.New("audit.LocalSink: Path required")
 	}
 	if cfg.MaxSizeMB == 0 {
-		cfg.MaxSizeMB = 100
+		cfg.MaxSizeMB = defaultMaxSizeMB
 	}
 	if cfg.MaxFiles == 0 {
-		cfg.MaxFiles = 10
+		cfg.MaxFiles = defaultMaxFiles
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
 		return nil, fmt.Errorf("audit.LocalSink: mkdir parent: %w", err)

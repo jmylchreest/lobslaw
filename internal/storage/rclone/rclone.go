@@ -30,6 +30,11 @@ import (
 // SecretResolver translates a "ref" string (e.g. env:AWS_KEY,
 // file:/etc/secrets/bucket.key) into the concrete secret. Injected
 // to keep this package free of a direct pkg/config dependency.
+// defaultVFSCacheMode is rclone's caching mode when the operator
+// names none. "full" because the agent reads and writes whole files
+// through this mount and the partial modes cannot serve a seek.
+const defaultVFSCacheMode = "full"
+
 type SecretResolver func(ref string) (string, error)
 
 // Runner abstracts subprocess execution. Production uses ExecRunner;
@@ -98,10 +103,10 @@ func NewWithRunner(cfg Config, runner Runner) (*Mount, error) {
 		return nil, errors.New("rclone: Remote is required")
 	}
 	if cfg.MountRoot == "" {
-		cfg.MountRoot = "/cluster/store"
+		cfg.MountRoot = storage.DefaultMountRoot
 	}
 	if cfg.VFSCacheMode == "" {
-		cfg.VFSCacheMode = "full"
+		cfg.VFSCacheMode = defaultVFSCacheMode
 	}
 	if cfg.VFSCachePoll <= 0 {
 		cfg.VFSCachePoll = time.Minute

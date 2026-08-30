@@ -20,6 +20,12 @@ import (
 //
 // Auth is shared-secret via Authorization: Bearer <secret>. Operators
 // rotate the secret by redeploying — no token renewal dance.
+// defaultWebhookScope is the JWT scope assigned to a turn arriving on
+// an inbound webhook that declares none. Named rather than blank: an
+// unscoped turn owns nothing and is owned by nobody, which the
+// ownership model has no answer for.
+const defaultWebhookScope = "webhook"
+
 type WebhookConfig struct {
 	// Name is the webhook's logical name; part of the default
 	// mount path (/webhook/<Name>). Keep short and URL-safe.
@@ -63,7 +69,7 @@ func NewWebhookHandler(cfg WebhookConfig, agent *compute.Agent) (*WebhookHandler
 		return nil, errWebhookNoSecret
 	}
 	if cfg.Scope == "" {
-		cfg.Scope = "webhook"
+		cfg.Scope = defaultWebhookScope
 	}
 	logger := cfg.Logger
 	if logger == nil {

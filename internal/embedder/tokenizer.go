@@ -28,6 +28,15 @@ import (
 // unkPenalty is K_UNK_PENALTY from sentencepiece's unigram_model.cc.
 // An unknown piece scores minScore - 10, making it a last resort the
 // Viterbi will route around wherever any real segmentation exists.
+// WordPiece protocol constants, used when the tokenizer.json omits
+// them. Both are BERT conventions rather than choices of ours: a model
+// trained with these expects exactly these strings, so a different
+// value silently changes how text is split.
+const (
+	defaultContinuationPrefix = "##"
+	defaultUnknownToken       = "[UNK]"
+)
+
 const unkPenalty = 10.0
 
 // metaspace is U+2581 LOWER ONE EIGHTH BLOCK, SentencePiece's stand-in
@@ -261,11 +270,11 @@ func loadWordPiece(raw []byte, meta tokenizerJSON) (*Tokenizer, error) {
 		wp.maxWordLen = *doc.Model.MaxWordChars
 	}
 	if wp.prefix == "" {
-		wp.prefix = "##"
+		wp.prefix = defaultContinuationPrefix
 	}
 	unk := doc.Model.UnkToken
 	if unk == "" {
-		unk = "[UNK]"
+		unk = defaultUnknownToken
 	}
 	id, ok := wp.vocab[unk]
 	if !ok {

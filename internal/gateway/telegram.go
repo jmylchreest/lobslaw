@@ -29,6 +29,12 @@ import (
 // API, no public HTTPS endpoint required. Webhook mode is still
 // supported for public cloud deployments where setWebhook is
 // operationally preferable.
+// defaultTelegramAPIBase is Telegram's public Bot API host. Overridable
+// because a local Bot API server is the supported way to lift the
+// 20MB download limit, which is the difference between receiving a
+// video attachment and refusing it.
+const defaultTelegramAPIBase = "https://api.telegram.org"
+
 type TelegramMode string
 
 const (
@@ -408,7 +414,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	}
 	base := cfg.APIBase
 	if base == "" {
-		base = "https://api.telegram.org"
+		base = defaultTelegramAPIBase
 	}
 	logger := cfg.Logger
 	if logger == nil {

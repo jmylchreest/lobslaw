@@ -150,3 +150,12 @@ func (m *Manager) StopAll(ctx context.Context) []error {
 	}
 	return errs
 }
+
+// DefaultMountRoot is the local directory network storage backends
+// mount labels beneath when the operator names no root.
+//
+// Shared by the NFS and rclone backends, which each spelled it
+// themselves. Two backends disagreeing about where mounts live is a
+// node that finds its data under one driver and not the other, so the
+// value is declared once in the package both belong to.
+const DefaultMountRoot = "/cluster/store"
