@@ -1131,7 +1131,7 @@ func (n *Node) resolveOAuthProviders() (map[string]oauth.ProviderConfig, error) 
 func (n *Node) resolveUserTimezone(userID string) string {
 	clusterDefault := strings.TrimSpace(n.cfg.Gateway.DefaultTimezone)
 	if clusterDefault == "" {
-		clusterDefault = "UTC"
+		clusterDefault = config.DefaultTimezone
 	}
 	if userID == "" || n.userPrefsSvc == nil {
 		return clusterDefault

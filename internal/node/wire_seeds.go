@@ -325,7 +325,7 @@ func (n *Node) seedDreamTask(ctx context.Context) error {
 	}
 	schedule := strings.TrimSpace(n.cfg.MemoryDream.Schedule)
 	if schedule == "" {
-		schedule = "0 2 * * *"
+		schedule = defaultDreamSchedule
 	}
 	task := &lobslawv1.ScheduledTaskRecord{
 		Id:         dreamTaskID,

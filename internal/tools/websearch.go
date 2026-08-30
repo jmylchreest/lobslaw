@@ -149,7 +149,7 @@ func newWebSearchHandler(driver compute.SearchDriver, provider string) compute.B
 		}
 		searchType := args["type"]
 		if searchType == "" {
-			searchType = "auto"
+			searchType = DefaultWebSearchType
 		}
 
 		results, err := driver.Search(ctx, compute.SearchRequest{

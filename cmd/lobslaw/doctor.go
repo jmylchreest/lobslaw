@@ -319,7 +319,7 @@ func (d doctorEnv) checkSkillMounts() (string, error) {
 	if d.cfg.Security.ClawhubBaseURL != "" {
 		target := d.cfg.Security.ClawhubInstallMount
 		if target == "" {
-			target = "skill-tools"
+			target = config.DefaultSkillMountLabel
 		}
 		if !labels[target] {
 			return "", fmt.Errorf("clawhub install mount %q not in [[storage.mounts]]", target)

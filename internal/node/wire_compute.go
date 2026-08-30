@@ -670,7 +670,7 @@ func (n *Node) endpointFromProvider(modality string, p config.ProviderConfig, vi
 	}
 	format := p.Format
 	if format == "" {
-		format = "openai"
+		format = defaultProviderFormat
 	}
 	return &llmEndpoint{
 		endpoint: p.Endpoint,
@@ -944,7 +944,7 @@ func (n *Node) seedSessionPruneTask(ctx context.Context) error {
 	}
 	schedule := strings.TrimSpace(n.cfg.MemorySession.Schedule)
 	if schedule == "" {
-		schedule = "@hourly"
+		schedule = defaultSessionSummarySchedule
 	}
 	task := &lobslawv1.ScheduledTaskRecord{
 		Id:         taskID,
@@ -1244,7 +1244,7 @@ func serverToolsFromConfig(in []config.ServerToolSpec) []compute.ServerTool {
 
 func (n *Node) schedulerClaims(creator string) *types.Claims {
 	if creator == "" {
-		creator = "scheduler"
+		creator = defaultSchedulerCreator
 	}
 	return &types.Claims{
 		UserID: creator,
