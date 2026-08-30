@@ -9,10 +9,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 )
 
@@ -348,15 +350,30 @@ enabled = true
 # written out rather than left implicit: a default nobody can read is
 # a default nobody revisits.
 #
-#   []                        nothing disabled
-#   ["remote_*"]              the default — no tool that runs commands
-#                             off this machine
-#   ["remote_*", "shell_command"]  also no local shell
+# THIS LIST REPLACES THE DEFAULT — it is not added to it. There is no
+# allowlist and no "also disable" syntax: whatever is written here is
+# the whole denylist. That is what makes the next line work.
+#
+# You ENABLE a family by REMOVING it from the list:
+#
+#   ["remote_*", "debug_*"]   the default, as written below
+#   ["remote_*"]              debug_* ON — the 11 operator introspection
+#                             tools (debug_soul, debug_policy, ...)
+#   ["debug_*"]               remote_* ON — see [[remote]] below, which
+#                             also has to name a host before the tools
+#                             have anywhere to go
+#   []                        nothing disabled, including both families
+#
+# and you disable something EXTRA by restating the defaults alongside
+# it, because they are not inherited:
+#
+#   ["remote_*", "debug_*", "shell_command"]   the defaults, plus no
+#                                              local shell
 #
 # Deleting the line is NOT the same as setting it to []. An absent key
-# means "I have not decided", and takes the default below; an empty
-# list means "I have decided: all of them".
-disabled_tools = ["remote_*"]
+# means "I have not decided", and takes the default; an empty list
+# means "I have decided: all of them".
+disabled_tools = {{.DisabledTools}}
 
 [[compute.providers]]
 label       = "{{.ProviderLabel}}"
@@ -396,6 +413,17 @@ enabled = true
 broadcast = false
 `
 
+// tomlStringList renders a []string as a TOML array literal, so a
+// compiled-in default can be written into the generated config as the
+// operator would have typed it.
+func tomlStringList(items []string) string {
+	quoted := make([]string, 0, len(items))
+	for _, s := range items {
+		quoted = append(quoted, strconv.Quote(s))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
 func writeConfigTOML(path string, ans initAnswers, dataDir, auditDir, caCert, nodeCert, nodeKey, providerKeyVar string) error {
 	tmpl, err := template.New("config").Parse(configTemplate)
 	if err != nil {
@@ -417,6 +445,14 @@ func writeConfigTOML(path string, ans initAnswers, dataDir, auditDir, caCert, no
 		"ProviderModel":    ans.ProviderModel,
 		"ProviderKeyVar":   providerKeyVar,
 		"SoulPath":         filepath.Join(ans.Dir, "SOUL.md"),
+		// Rendered from the compiled-in default rather than typed
+		// into the template. The template used to carry its own copy,
+		// and when debug_* was added to the default the copy was not
+		// updated — so `lobslaw init` would have written a config that
+		// silently switched the family back on. A value the code
+		// already owns has no business being restated in a string
+		// literal three hundred lines away from it.
+		"DisabledTools": tomlStringList(tools.DefaultDisabledTools),
 	}); err != nil {
 		return fmt.Errorf("write %q: %w", path, err)
 	}

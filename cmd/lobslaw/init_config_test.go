@@ -3,9 +3,12 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -55,6 +58,13 @@ func TestInitConfigLoads(t *testing.T) {
 // only holds if it survives a round trip as an EXPLICIT value: nil
 // would mean the template said nothing and the compiled-in default is
 // doing the work invisibly, which is the thing this exists to stop.
+//
+// Asserted against tools.DefaultDisabledTools rather than a literal.
+// The literal version of this test passed while debug_* was added to
+// the default and the template was not, which is the whole failure it
+// was supposed to catch: a fresh `lobslaw init` would have written a
+// config that silently switched a family back on. A test that pins the
+// template to itself only proves the template has not changed.
 func TestInitConfigStatesTheToolPostureExplicitly(t *testing.T) {
 	t.Parallel()
 	_, path := renderInitConfig(t)
@@ -63,8 +73,14 @@ func TestInitConfigStatesTheToolPostureExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `disabled_tools = ["remote_*"]`) {
-		t.Error("the generated config should state disabled_tools, not inherit it silently")
+
+	quoted := make([]string, 0, len(tools.DefaultDisabledTools))
+	for _, p := range tools.DefaultDisabledTools {
+		quoted = append(quoted, strconv.Quote(p))
+	}
+	want := "disabled_tools = [" + strings.Join(quoted, ", ") + "]"
+	if !strings.Contains(string(raw), want) {
+		t.Errorf("the generated config should state the compiled-in default verbatim;\nwant the line: %s", want)
 	}
 
 	cfg, err := config.Load(config.LoadOptions{Path: path, SkipEnv: true})
@@ -74,8 +90,8 @@ func TestInitConfigStatesTheToolPostureExplicitly(t *testing.T) {
 	if cfg.Compute.DisabledTools == nil {
 		t.Fatal("disabled_tools round-tripped as nil; the operator's choice was lost")
 	}
-	if got := *cfg.Compute.DisabledTools; len(got) != 1 || got[0] != "remote_*" {
-		t.Errorf("disabled_tools = %v, want [remote_*]", got)
+	if got := *cfg.Compute.DisabledTools; !slices.Equal(got, tools.DefaultDisabledTools) {
+		t.Errorf("disabled_tools = %v, want %v (the compiled-in default)", got, tools.DefaultDisabledTools)
 	}
 }
 
