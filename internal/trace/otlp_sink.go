@@ -36,6 +36,11 @@ import (
 // Short, because a trace an operator is watching for is one they are
 // watching for now. The batch also flushes on size, so a busy node
 // does not wait on the timer.
+// defaultServiceName labels spans when the operator sets no service
+// name. Matches the binary, so traces from an unconfigured node still
+// group with the rest rather than arriving anonymous.
+const defaultServiceName = "lobslaw"
+
 const DefaultOTLPFlush = 2 * time.Second
 
 // DefaultOTLPBatch is how many spans accumulate before a flush.
@@ -143,7 +148,7 @@ func NewOTLPSink(cfg OTLPConfig) (*OTLPSink, error) {
 func otlpResource(cfg OTLPConfig) *resourcepb.Resource {
 	service := cfg.ServiceName
 	if service == "" {
-		service = "lobslaw"
+		service = defaultServiceName
 	}
 	attrs := []*commonpb.KeyValue{stringAttr("service.name", service)}
 	if cfg.NodeID != "" {

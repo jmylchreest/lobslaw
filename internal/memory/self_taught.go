@@ -31,6 +31,11 @@ import (
 // wrong shape for a security-first product: "on" and "off" leaves no
 // room for "write it down but do not act on it until I have looked",
 // which is the setting most people actually want.
+// defaultRefineRationale explains a refinement whose proposer gave no
+// reason. Every refinement records why it happened, and "the artefact
+// already existed" is a real reason worth stating rather than a blank.
+const defaultRefineRationale = "re-proposed under the same name"
+
 type SelfLearningMode string
 
 const (
@@ -274,7 +279,7 @@ func (s *SelfTaughtStore) Propose(ctx context.Context, rec *lobslawv1.SelfTaught
 	if _, err := s.Get(out.Id); err == nil {
 		intent.Refines = out.Id
 		if intent.Rationale == "" {
-			intent.Rationale = "re-proposed under the same name"
+			intent.Rationale = defaultRefineRationale
 		}
 		return s.refine(ctx, rec, intent)
 	}

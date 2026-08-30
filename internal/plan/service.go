@@ -20,6 +20,11 @@ import (
 
 // DefaultWindow is the look-ahead window used when GetPlanRequest.Window
 // is unset or zero. 24h matches the "what's your plan today?" framing.
+// defaultStepStatus is the state a plan step is created in. Every
+// step starts unstarted; a blank status would be a fourth state
+// nothing knows how to render.
+const defaultStepStatus = "pending"
+
 const DefaultWindow = 24 * time.Hour
 
 // Service implements lobslawv1.PlanServiceServer. All writes go
@@ -101,7 +106,7 @@ func (s *Service) AddCommitment(_ context.Context, req *lobslawv1.AddCommitmentR
 		c.Id = id
 	}
 	if c.Status == "" {
-		c.Status = "pending"
+		c.Status = defaultStepStatus
 	}
 	if c.DueAt == nil {
 		return nil, status.Error(codes.InvalidArgument, "due_at is required")

@@ -21,6 +21,10 @@ import (
 // conversation is a replicated mutation with its own path; browsing
 // what was said does not need one that can also delete it.
 
+// placeholderSessionTitle stands in for a session the titler has not
+// named yet, so a live listing shows a row rather than a gap.
+const placeholderSessionTitle = "(untitled)"
+
 func sessionClient(node *liveNode) (lobslawv1.SessionServiceClient, func(), error) {
 	conn, err := node.dial()
 	if err != nil {
@@ -225,7 +229,7 @@ func renderSessionHits(w io.Writer, hits []*lobslawv1.SessionSearchHitProto,
 	for _, h := range hits {
 		title := h.GetSession().GetTitle()
 		if title == "" {
-			title = "(untitled)"
+			title = placeholderSessionTitle
 		}
 		// The total match count, not the snippet count: it is what tells
 		// a passing mention from a thread about the thing.

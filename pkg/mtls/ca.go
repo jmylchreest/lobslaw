@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// DefaultCACommonName names a cluster CA generated without one. It
+// appears in every certificate the cluster issues, so it identifies
+// the CA in an openssl dump rather than leaving the field empty.
+const DefaultCACommonName = "Lobslaw Cluster CA"
+
 // CAOpts configures CA generation.
 type CAOpts struct {
 	CommonName string
@@ -23,7 +28,7 @@ type CAOpts struct {
 // Returns PEM-encoded cert and key bytes. Callers write them to disk.
 func GenerateCA(opts CAOpts) (certPEM, keyPEM []byte, err error) {
 	if opts.CommonName == "" {
-		opts.CommonName = "Lobslaw Cluster CA"
+		opts.CommonName = DefaultCACommonName
 	}
 	if opts.ValidFor == 0 {
 		opts.ValidFor = 10 * 365 * 24 * time.Hour

@@ -27,6 +27,10 @@ import (
 // fall back to a synthetic subject if the operator hasn't configured
 // a UserInfoEndpoint or the IdP rejects the token. The credential
 // still persists, just with a less-stable key.
+// defaultTokenPrefix is the scheme a bearer token is sent under when
+// the provider names none, per RFC 6750.
+const defaultTokenPrefix = "Bearer"
+
 func FetchSubject(ctx context.Context, p ProviderConfig, tok *TokenResponse) (string, error) {
 	if p.UserInfoEndpoint == "" {
 		return "", errors.New("oauth: UserInfoEndpoint not configured for provider " + p.Name)
@@ -90,7 +94,7 @@ func FetchSubject(ctx context.Context, p ProviderConfig, tok *TokenResponse) (st
 func bearerHeader(tok *TokenResponse) string {
 	prefix := strings.TrimSpace(tok.TokenType)
 	if prefix == "" {
-		prefix = "Bearer"
+		prefix = defaultTokenPrefix
 	}
 	return prefix + " " + tok.AccessToken
 }

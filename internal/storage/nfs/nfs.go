@@ -85,7 +85,7 @@ func NewWithRunner(cfg Config, runner Runner) (*Mount, error) {
 		return nil, errors.New("nfs: Export is required")
 	}
 	if cfg.MountRoot == "" {
-		cfg.MountRoot = "/cluster/store"
+		cfg.MountRoot = storage.DefaultMountRoot
 	}
 	if runner == nil {
 		return nil, errors.New("nfs: Runner is required")

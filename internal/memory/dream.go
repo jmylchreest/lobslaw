@@ -22,6 +22,11 @@ import (
 // ships no real implementation — wiring waits for Phase 5's
 // Provider Resolver. A nil Summarizer makes Dream skip the
 // consolidation step while still running score + prune.
+// placeholderCommitmentLabel stands in for a commitment with no label
+// when consolidation renders one. Consolidation output is read by a
+// person, and a blank line item cannot be recognised or acted on.
+const placeholderCommitmentLabel = "(unlabelled commitment)"
+
 type Summarizer interface {
 	Summarize(ctx context.Context, events []string) (summary string, embedding []float32, err error)
 }
@@ -541,7 +546,7 @@ func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
 				label = truncatePrompt(e.prompt, 80)
 			}
 			if label == "" {
-				label = "(unlabelled commitment)"
+				label = placeholderCommitmentLabel
 			}
 			fmt.Fprintf(&lines, "- %s — %s\n", e.due.UTC().Format("15:04"), label)
 		}

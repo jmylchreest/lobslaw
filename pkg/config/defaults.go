@@ -33,6 +33,13 @@ const (
 	// own segment rather than to somebody else's network.
 	DefaultDiscoveryBroadcastAddress = "255.255.255.255"
 
+	// DefaultBinaryInstallPrefix is where binary_install places tools
+	// when SecurityConfig.BinaryInstallPrefix is empty. Inside the
+	// node's own tree rather than a system path, so an installed
+	// binary is removable with the deployment and cannot shadow one
+	// the host already provides.
+	DefaultBinaryInstallPrefix = "/lobslaw/usr/local"
+
 	// DefaultTimezone is the cluster-wide IANA zone used to render
 	// stored UTC times when GatewayConfig.DefaultTimezone is empty and
 	// the user has bound no zone of their own. UTC rather than the

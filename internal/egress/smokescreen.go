@@ -25,6 +25,12 @@ import (
 // caller. Set by every Client this provider produces — both on
 // regular HTTP requests and (via ProxyConnectHeader) on the CONNECT
 // preamble for HTTPS.
+// defaultProxyBindAddr binds the egress proxy to loopback on a
+// kernel-assigned port. Loopback is the security property: the proxy
+// enforces the egress ACL, and one reachable from off the box is a
+// filter somebody else can route through.
+const defaultProxyBindAddr = "127.0.0.1:0"
+
 const roleHeader = "X-Lobslaw-Role"
 
 // SmokescreenConfig configures the embedded forward-proxy provider.
@@ -133,7 +139,7 @@ type SmokescreenProvider struct {
 // invoke Stop during shutdown to drain the listener cleanly.
 func NewSmokescreenProvider(cfg SmokescreenConfig) (*SmokescreenProvider, error) {
 	if cfg.BindAddr == "" {
-		cfg.BindAddr = "127.0.0.1:0"
+		cfg.BindAddr = defaultProxyBindAddr
 	}
 	logger := cfg.Logger
 	if logger == nil {
