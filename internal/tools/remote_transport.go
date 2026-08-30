@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -458,6 +459,15 @@ func (r *Remote) Exec(ctx context.Context, command, cwd string, timeout time.Dur
 	}, nil
 }
 
+// RemoteEgressRole is the egress ACL role for one declared remote.
+//
+// Per-remote rather than one shared "remote" role: the ACL is
+// generated from [[remote]], so a session aimed at web01 is allowed to
+// reach web01 and nothing else. A single role would let any remote be
+// dialled at any other remote's host, which is most of the property
+// worth having.
+func RemoteEgressRole(name string) string { return "remote/" + name }
+
 func (r *Remote) dial(ctx context.Context) (*ssh.Client, error) {
 	cfg := &ssh.ClientConfig{
 		User:            r.user,
@@ -465,10 +475,19 @@ func (r *Remote) dial(ctx context.Context) (*ssh.Client, error) {
 		HostKeyCallback: r.hostKeys,
 		Timeout:         remoteDialTimeout,
 	}
-	// Dialled through a context-aware net.Dialer so a cancelled turn
-	// does not leave a connect attempt running to its own deadline.
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", r.addr)
+	// Through the egress filter, not straight out.
+	//
+	// This used to be a bare net.Dialer, which made remote_ssh the one
+	// tool whose entire purpose is reaching off the box and the one
+	// the egress ACL never saw. A role of "remote/<name>" means the
+	// hosts this remote may be dialled at are the ones the operator
+	// declared for it in [[remote]] — so an agent talked into aiming a
+	// session somewhere else is refused by the proxy rather than by
+	// our own good intentions.
+	//
+	// The client is context-aware, so a cancelled turn does not leave
+	// a connect attempt running to its own deadline.
+	conn, err := egress.For(RemoteEgressRole(r.Name)).DialContext(ctx, r.addr)
 	if err != nil {
 		return nil, fmt.Errorf("remote %s: dial %s: %w", r.Name, r.addr, err)
 	}

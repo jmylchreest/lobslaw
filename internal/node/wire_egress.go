@@ -1,6 +1,7 @@
 package node
 
 import (
+	"fmt"
 	"net"
 	"sort"
 	"strings"
@@ -33,7 +34,7 @@ func (n *Node) wireEgress() error {
 	prov, err := egress.NewSmokescreenProvider(egress.SmokescreenConfig{
 		ACL:                rules,
 		AllowPrivateRanges: n.cfg.Security.EgressAllowPrivateRanges,
-		AllowRanges:        n.cfg.Security.EgressAllowRanges,
+		AllowRanges:        append(remoteAllowRanges(n), n.cfg.Security.EgressAllowRanges...),
 		UpstreamProxy:      n.cfg.Security.EgressUpstreamProxy,
 		UDSPath:            n.cfg.Security.EgressUDSPath,
 		Logger:             n.log,
@@ -107,6 +108,7 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		ClawhubBaseURL:     n.cfg.Security.ClawhubBaseURL,
 		ClawhubBinaryHosts: n.cfg.Security.ClawhubBinaryHosts,
 		FetchURLAllowHosts: n.cfg.Security.FetchURLAllowHosts,
+		Remotes:            n.cfg.Remotes,
 	}
 	// "binaries-install" egress role is pre-populated at boot with
 	// the union of bootstrap-installer hosts (raw.githubusercontent.com,
@@ -314,4 +316,49 @@ func callbackEgressHosts(n *Node) []string {
 		}
 	}
 	return hosts
+}
+
+// remoteAllowRanges turns each declared remote into a CIDR the proxy
+// will admit.
+//
+// The role allowlist and the address check are separate layers in
+// smokescreen: classifyAddr consults AllowRanges before it consults
+// the RFC1918 blocklist, so an explicit range is what lets a private
+// remote through WITHOUT egress_allow_private_ranges — which would
+// open the whole local network rather than the one host declared.
+//
+// An operator-declared allow_cidr wins. Otherwise the host is
+// resolved to a /32 (or /128), which is right until the address moves
+// and is why declaring it is the better answer for anything on DHCP.
+// A name that will not resolve at boot is skipped with a warning
+// rather than failing the node: the remote may simply be down, and
+// refusing to start over a host that is asleep is worse than a dial
+// that fails later with a clear reason.
+func remoteAllowRanges(n *Node) []string {
+	out := make([]string, 0, len(n.cfg.Remotes))
+	for _, r := range n.cfg.Remotes {
+		if cidr := strings.TrimSpace(r.AllowCIDR); cidr != "" {
+			out = append(out, cidr)
+			continue
+		}
+		host := strings.TrimSpace(r.Host)
+		if host == "" {
+			continue
+		}
+		ips, err := net.LookupIP(host)
+		if err != nil || len(ips) == 0 {
+			n.log.Warn("egress: remote host did not resolve; its dials will be refused by the proxy "+
+				"until it does or allow_cidr is set",
+				"remote", r.Name, "host", host, "err", err)
+			continue
+		}
+		for _, ip := range ips {
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			out = append(out, fmt.Sprintf("%s/%d", ip.String(), bits))
+		}
+	}
+	return out
 }
