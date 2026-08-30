@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/promptguard"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
@@ -169,6 +170,25 @@ func (c *Compactor) MaybeCompact(ctx context.Context, key turn.SessionKey) (bool
 		return false, errors.New("compact: summariser returned nothing")
 	}
 	summary = truncateToTokens(summary, c.maxSummaryTokens)
+
+	// Scanned before it is stored, because a summary is replayed into
+	// every later turn of this conversation.
+	//
+	// The inputs are delimited and neutralised now, and the summariser
+	// is told what the delimiters mean — but it is a model, and a
+	// model can be talked round. This is the last point where a
+	// summary that absorbed an instruction is still one object we can
+	// look at, rather than something the next fifty turns read as
+	// history. Logged rather than refused: dropping the summary loses
+	// the conversation, and an operator who can see the finding can
+	// act on it.
+	if f, ok := promptguard.Suspicious(summary); ok {
+		c.log.Warn("compact: the summary looks like it absorbed an injection; "+
+			"it is stored, and every later turn of this conversation will read it",
+			"channel", key.Channel,
+			"channel_id", key.ChannelID,
+			"finding", f.String())
+	}
 
 	if err := c.store.PutSummary(ctx, key, summary, boundary); err != nil {
 		return false, fmt.Errorf("compact: store summary: %w", err)
