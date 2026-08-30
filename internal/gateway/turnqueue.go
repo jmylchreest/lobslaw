@@ -330,7 +330,13 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 		// is the entire latency cost of these modes, and a session
 		// that has never bursted should not pay it.
 		if (g.mode == QueueDebounce || g.mode == QueueSmart) && window > 0 {
-			return g.foldWindow(ctx, key, turnID, text, window), Admitted
+			// Disposition comes from foldWindow, not from here. It used
+			// to be a hardcoded Admitted, which was a lie the moment a
+			// leaser refused: mint returns (nil, Dropped) when another
+			// node holds the conversation, foldWindow passed the nil
+			// lease up, and the caller — told Admitted — dereferenced
+			// lease.Batch and panicked.
+			return g.foldWindow(ctx, key, turnID, text, window)
 		}
 		return g.mint(ctx, key, turnID, []string{text}, 0)
 	}
@@ -468,7 +474,19 @@ func (g *TurnGate) wait(ctx context.Context, key string, w *waiter) (*Lease, Dis
 
 // foldWindow holds an idle-session turn open for the debounce window
 // so fragments typed straight after the first join the same turn.
-func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string, window time.Duration) *Lease {
+//
+// Returns mint's disposition rather than swallowing it. The lease is
+// nil when the cluster leaser refused — another node owns this
+// conversation — and a caller handed a nil lease with Admitted beside
+// it will dereference it. That path panicked; see Acquire.
+//
+// Note what a Dropped here costs: the waiters folded below have
+// already been told Folded, meaning "your text joined the turn in
+// flight", and that turn now never runs. Their messages are lost.
+// That is the same loss the non-folding path takes when mint drops —
+// the leaser exists to make the OTHER node the one that answers — but
+// it is worth seeing, because the fold told them otherwise first.
+func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string, window time.Duration) (*Lease, Disposition) {
 	timer := time.NewTimer(window)
 	defer timer.Stop()
 	select {
@@ -515,8 +533,7 @@ func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string, win
 		}
 	}
 	g.mu.Unlock()
-	l, _ := g.mint(ctx, key, turnID, batch, 0)
-	return l
+	return g.mint(ctx, key, turnID, batch, 0)
 }
 
 // release hands the session to the next waiter, or marks it idle.
