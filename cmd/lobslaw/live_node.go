@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"time"
 
 	"google.golang.org/grpc"
@@ -145,7 +146,7 @@ func (l *liveNode) resolve() (addr, ca, cert, key string, err error) {
 			// is a bind address and not somewhere to connect.
 			addr = cfg.Cluster.AdvertiseAddr
 			if addr == "" {
-				addr = cfg.Cluster.ListenAddr
+				addr = dialableListenAddr(cfg.Cluster.ListenAddr)
 			}
 		}
 		if ca == "" {
@@ -173,4 +174,29 @@ func (l *liveNode) resolve() (addr, ca, cert, key string, err error) {
 			missing)
 	}
 	return addr, ca, cert, key, nil
+}
+
+// dialableListenAddr turns a bind address into one a client on this
+// host can connect to.
+//
+// The fallback used ListenAddr verbatim, which is 0.0.0.0:7443 on
+// every stock deployment — neither `lobslaw init` nor the shipped
+// podman config sets advertise_addr. Dialling it failed the TLS
+// handshake with "certificate is valid for 127.0.0.1, not 0.0.0.0",
+// which reads as a certificate problem rather than as the client
+// having aimed at a wildcard.
+//
+// Loopback is both correct and what the node's own certificate names:
+// a CLI reaching a node bound to every interface is reaching the one
+// on this machine.
+func dialableListenAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+	return listen
 }

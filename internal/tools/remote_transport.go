@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -208,6 +209,17 @@ func newRemote(c config.RemoteConfig, secrets SecretResolver) (*Remote, error) {
 	signer, err := loadDevboxKey(c, secrets)
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(c.KnownHosts) == "" {
+		// Verification is still on — the key is pinned for this
+		// process and a change mid-run is refused. What is missing is
+		// PERSISTENCE, so every restart trusts on first connect again,
+		// and the window TOFU is weak in reopens each time instead of
+		// closing for good.
+		slog.Default().Warn("remote: no known_hosts path; the host key is pinned for this process only, "+
+			"so a restart re-trusts on first connect",
+			"remote", c.Name, "host", c.Host,
+			"fix", "set known_hosts to a writable path in the [[remote]] block")
 	}
 	hostKeys, err := remoteHostKeyCallback(c.KnownHosts)
 	if err != nil {

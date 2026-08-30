@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -123,6 +124,17 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		}
 		seedTargets = append(seedTargets, td)
 	}
+	// Every id the builtin pass would legitimately write, so the
+	// reconcile below can tell a live seed from one left behind by a
+	// tool that is no longer registered.
+	seedIDs := make(map[string]bool, len(seedTargets)*2)
+	for _, td := range seedTargets {
+		seedIDs["lobslaw-builtin-"+td.Name] = true
+		if defaultDenyBuiltins[td.Name] {
+			seedIDs["lobslaw-builtin-deny-"+td.Name] = true
+		}
+	}
+
 	seeded := []string{}
 	for _, td := range seedTargets {
 		effect := "allow"
@@ -133,22 +145,23 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 			priority = 10
 			ruleID = "lobslaw-builtin-deny-" + td.Name
 		}
-		if _, err := n.store.Get(memory.BucketPolicyRules, ruleID); err == nil {
-			// Already present (prior boot seeded it, or operator
-			// wrote a rule with this ID explicitly). Skip.
+		want := &lobslawv1.PolicyRule{
+			Id:        ruleID,
+			CreatedBy: policy.RuleSourceSeed,
+			Subject:   "*",
+			Action:    "tool:exec",
+			Resource:  td.Name,
+			Effect:    effect,
+			Priority:  priority,
+		}
+		// Rewritten when it differs, which on the boot that introduces
+		// provenance means every existing seed gets stamped. Skipping
+		// on presence would leave them unprovenanced forever, and a
+		// rule nothing claims is one the reconcile below cannot judge.
+		if cur, err := storedRule(n, ruleID); err == nil && sameRule(cur, want) {
 			continue
 		}
-		_, err := n.policySvc.AddRule(ctx, &lobslawv1.AddRuleRequest{
-			Rule: &lobslawv1.PolicyRule{
-				Id:       ruleID,
-				Subject:  "*",
-				Action:   "tool:exec",
-				Resource: td.Name,
-				Effect:   effect,
-				Priority: priority,
-			},
-		})
-		if err != nil {
+		if _, err := n.policySvc.AddRule(ctx, &lobslawv1.AddRuleRequest{Rule: want}); err != nil {
 			return fmt.Errorf("seed %q: %w", ruleID, err)
 		}
 		n.log.Debug("policy: seeded default builtin rule",
@@ -205,32 +218,130 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	// repeat boots because we skip when the bucket already has the
 	// rule. Operator-edited rules requires explicit re-apply (delete
 	// the rule first, restart) to avoid silently overwriting.
+	configIDs := make(map[string]bool, len(n.cfg.Policy.Rules))
 	for _, r := range n.cfg.Policy.Rules {
 		if r.ID == "" {
 			n.log.Warn("policy: skipping operator rule without id")
 			continue
 		}
-		if _, err := n.store.Get(memory.BucketPolicyRules, r.ID); err == nil {
+		configIDs[r.ID] = true
+		want := &lobslawv1.PolicyRule{
+			Id:        r.ID,
+			CreatedBy: policy.RuleSourceConfig,
+			Subject:   r.Subject,
+			Action:    r.Action,
+			Resource:  r.Resource,
+			Effect:    r.Effect,
+			Priority:  r.Priority,
+		}
+		// Written every boot when it differs, rather than skipped when
+		// present. Skipping meant an operator who changed a rule's
+		// resource in config saw nothing happen and no reason why —
+		// the file said one thing and the engine enforced another.
+		if cur, err := storedRule(n, r.ID); err == nil && sameRule(cur, want) {
 			continue
 		}
-		_, err := n.policySvc.AddRule(ctx, &lobslawv1.AddRuleRequest{
-			Rule: &lobslawv1.PolicyRule{
-				Id:       r.ID,
-				Subject:  r.Subject,
-				Action:   r.Action,
-				Resource: r.Resource,
-				Effect:   r.Effect,
-				Priority: r.Priority,
-			},
-		})
-		if err != nil {
+		if _, err := n.policySvc.AddRule(ctx, &lobslawv1.AddRuleRequest{Rule: want}); err != nil {
 			return fmt.Errorf("seed operator rule %q: %w", r.ID, err)
 		}
 		n.log.Info("policy: seeded operator rule",
 			"id", r.ID, "subject", r.Subject, "action", r.Action,
 			"resource", r.Resource, "effect", r.Effect, "priority", r.Priority)
 	}
+
+	n.reconcilePolicyRules(configIDs, seedIDs, gcRule)
 	return nil
+}
+
+// storedRule reads one rule back out of the store.
+func storedRule(n *Node, id string) (*lobslawv1.PolicyRule, error) {
+	raw, err := n.store.Get(memory.BucketPolicyRules, id)
+	if err != nil {
+		return nil, err
+	}
+	var r lobslawv1.PolicyRule
+	if err := proto.Unmarshal(raw, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// sameRule reports whether the stored rule already says what config
+// says, provenance included — an adopted rule differs from an
+// unstamped one even when every other field matches.
+func sameRule(a, b *lobslawv1.PolicyRule) bool {
+	return a.GetId() == b.GetId() &&
+		a.GetCreatedBy() == b.GetCreatedBy() &&
+		a.GetSubject() == b.GetSubject() &&
+		a.GetAction() == b.GetAction() &&
+		a.GetResource() == b.GetResource() &&
+		a.GetEffect() == b.GetEffect() &&
+		a.GetPriority() == b.GetPriority()
+}
+
+// shouldRemoveRule reports whether a rule's reason for existing has
+// gone.
+//
+// Kept separate from the walk so the decision can be tested without a
+// store, a raft and a node behind it — the judgement is the part worth
+// pinning, and it is the part that deletes things.
+func shouldRemoveRule(r *lobslawv1.PolicyRule, configIDs, seedIDs map[string]bool) bool {
+	switch {
+	case strings.HasPrefix(r.GetCreatedBy(), policy.ApprovalRulePrefix):
+		// A person tapped "always". Only they revoke it.
+		return false
+	case configIDs[r.GetId()] || seedIDs[r.GetId()]:
+		// Still justified by config or by a registered tool. Also the
+		// adoption case: an unstamped rule whose id we recognise is
+		// one we wrote before provenance existed.
+		return false
+	default:
+		return true
+	}
+}
+
+// reconcilePolicyRules removes rules whose reason for existing has
+// gone.
+//
+// Three provenances survive unconditionally: an approval a person
+// tapped, a config rule still in config, and a seed for a tool still
+// registered. Everything else is a rule nothing in this process would
+// write today.
+//
+// Unstamped rules are ADOPTED first, not deleted. On the boot that
+// introduces provenance every existing rule is unstamped, including
+// every builtin's tool:exec allow — deleting on that basis would take
+// the agent's whole toolset out. A rule whose id matches config or a
+// seed target is demonstrably ours, so it is stamped and kept; what
+// remains after that is genuinely foreign.
+func (n *Node) reconcilePolicyRules(configIDs, seedIDs map[string]bool, gcRule func(string)) {
+	type orphan struct{ id, createdBy string }
+	var orphans []orphan
+
+	_ = n.store.ForEach(memory.BucketPolicyRules, func(id string, raw []byte) error {
+		var r lobslawv1.PolicyRule
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil
+		}
+		if shouldRemoveRule(&r, configIDs, seedIDs) {
+			orphans = append(orphans, orphan{id: id, createdBy: r.CreatedBy})
+		}
+		return nil
+	})
+
+	for _, o := range orphans {
+		switch o.createdBy {
+		case policy.RuleSourceConfig:
+			n.log.Info("policy: removing rule deleted from config", "id", o.id)
+		case policy.RuleSourceSeed:
+			n.log.Info("policy: removing seed for a tool that is no longer registered", "id", o.id)
+		default:
+			n.log.Warn("policy: removing a rule nothing here wrote; "+
+				"if this was added by hand, put it in [[policy.rules]] to keep it",
+				"id", o.id)
+		}
+		gcRule(o.id)
+	}
 }
 
 // seedUserPrefsFromConfig writes one BucketUserPrefs record per

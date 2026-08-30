@@ -320,3 +320,23 @@ tracing_exporter = "stdout"
 [config]
 watch       = true
 debounce_ms = 1500
+
+# Remote build/exec hosts for remote_ssh and remote_scp. Disabled by
+# default via compute.disabled_tools above; naming a host here is not
+# enough to switch the tools on.
+#
+# [[remote]]
+# name        = "go"
+# description = "golang toolchain devbox"
+# host        = "devbox.lan"
+# port        = 2222
+# user        = "builder"
+# key_ref     = "file:/etc/lobslaw/remote_key"
+# # Where the host key is pinned. Without it verification still
+# # happens, but only for the life of the process — every restart
+# # trusts on first connect again.
+# known_hosts = "/etc/lobslaw/known_hosts"
+# # Admits this host through the egress filter. The role allowlist and
+# # the address check are separate layers, and a private address is
+# # refused by the second one unless a range names it.
+# allow_cidr  = "10.0.0.7/32"

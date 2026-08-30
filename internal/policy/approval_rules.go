@@ -32,6 +32,27 @@ import (
 // The full value is ApprovalRulePrefix + the prompt id.
 const ApprovalRulePrefix = "approval:"
 
+// Provenance for the rules lobslaw writes itself.
+//
+// Every automatic writer stamps one of these, so a rule carrying
+// neither them nor ApprovalRulePrefix is one nothing in this process
+// created — which is what makes it safe to remove a rule whose reason
+// for existing has gone. Before these existed, a config-seeded rule
+// and a builtin's tool:exec allow were indistinguishable from each
+// other and from anything a person had put there by hand, so nothing
+// could be reconciled and a rule deleted from config stayed in force
+// for the life of the store.
+const (
+	// RuleSourceConfig marks a rule seeded from [[policy.rules]].
+	// Reconciled against config on every boot: edited there, edited
+	// here; removed there, removed here.
+	RuleSourceConfig = "config"
+
+	// RuleSourceSeed marks a default lobslaw writes for a registered
+	// tool. Removed when the tool it is about stops being registered.
+	RuleSourceSeed = "seed"
+)
+
 // ErrHardlineRule is returned when an approval would mint a rule for
 // something the floor refuses.
 var ErrHardlineRule = errors.New("policy: an approval cannot grant what the hardline floor denies")

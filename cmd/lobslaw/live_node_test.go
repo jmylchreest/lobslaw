@@ -200,3 +200,27 @@ func TestTheApproverDefaultsToAPerson(t *testing.T) {
 		t.Errorf("approver = %q; that is not a person", got)
 	}
 }
+
+// The CLI used ListenAddr verbatim when advertise_addr was unset,
+// which is 0.0.0.0:7443 on every stock deployment. The handshake then
+// failed with "certificate is valid for 127.0.0.1, not 0.0.0.0" —
+// which reads as a certificate problem rather than as the client
+// having dialled a wildcard.
+func TestABindAddressIsNotSomewhereToDial(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct{ listen, want string }{
+		{"0.0.0.0:7443", "127.0.0.1:7443"},
+		{":7443", "127.0.0.1:7443"},
+		{"[::]:7443", "127.0.0.1:7443"},
+		// An address that names a host is already dialable; leave it.
+		{"10.0.0.5:7443", "10.0.0.5:7443"},
+		{"node.internal:7443", "node.internal:7443"},
+		// Not host:port at all — hand it back rather than guessing.
+		{"garbage", "garbage"},
+	} {
+		if got := dialableListenAddr(c.listen); got != c.want {
+			t.Errorf("dialableListenAddr(%q) = %q, want %q", c.listen, got, c.want)
+		}
+	}
+}
