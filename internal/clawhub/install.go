@@ -153,28 +153,14 @@ func (i *Installer) installFromBody(ctx context.Context, entry *SkillEntry, targ
 	if target.MountLabel == "" {
 		return nil, errors.New("clawhub: install target requires MountLabel")
 	}
-	mountRoot, err := i.storage.Resolve(target.MountLabel)
+	installDir, err := i.resolveInstallDir(target)
 	if err != nil {
-		return nil, fmt.Errorf("clawhub: mount %q: %w", target.MountLabel, err)
-	}
-	installDir := filepath.Join(mountRoot, target.Subpath)
-	if !strings.HasPrefix(filepath.Clean(installDir)+string(os.PathSeparator), filepath.Clean(mountRoot)+string(os.PathSeparator)) {
-		return nil, fmt.Errorf("clawhub: install dir %q escapes mount root %q", installDir, mountRoot)
+		return nil, err
 	}
 
-	bundleBytes, err := io.ReadAll(io.LimitReader(body, MaxBundleSize+1))
+	bundleBytes, err := readAndVerifyBundle(body, expectedSHA)
 	if err != nil {
-		return nil, fmt.Errorf("clawhub: read bundle body: %w", err)
-	}
-	if int64(len(bundleBytes)) > MaxBundleSize {
-		return nil, fmt.Errorf("clawhub: bundle exceeds %d bytes", MaxBundleSize)
-	}
-	if expectedSHA != "" {
-		hasher := sha256.New()
-		hasher.Write(bundleBytes)
-		if err := verifyDigest(hasher, expectedSHA); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	stage, err := os.MkdirTemp(filepath.Dir(installDir), "."+target.Subpath+".part-*")
@@ -262,13 +248,9 @@ func (i *Installer) Install(ctx context.Context, entry *SkillEntry, target Insta
 	if err := validateSkillIdentifier(target.Subpath); err != nil {
 		return nil, fmt.Errorf("clawhub: subpath %w", err)
 	}
-	mountRoot, err := i.storage.Resolve(target.MountLabel)
+	installDir, err := i.resolveInstallDir(target)
 	if err != nil {
-		return nil, fmt.Errorf("clawhub: mount %q: %w", target.MountLabel, err)
-	}
-	installDir := filepath.Join(mountRoot, target.Subpath)
-	if !strings.HasPrefix(filepath.Clean(installDir)+string(os.PathSeparator), filepath.Clean(mountRoot)+string(os.PathSeparator)) {
-		return nil, fmt.Errorf("clawhub: install dir %q escapes mount root %q", installDir, mountRoot)
+		return nil, err
 	}
 
 	body, err := i.client.DownloadBundle(ctx, entry)
@@ -277,19 +259,9 @@ func (i *Installer) Install(ctx context.Context, entry *SkillEntry, target Insta
 	}
 	defer func() { _ = body.Close() }()
 
-	bundleBytes, err := io.ReadAll(io.LimitReader(body, MaxBundleSize+1))
+	bundleBytes, err := readAndVerifyBundle(body, entry.BundleSHA256)
 	if err != nil {
-		return nil, fmt.Errorf("clawhub: read bundle body: %w", err)
-	}
-	if int64(len(bundleBytes)) > MaxBundleSize {
-		return nil, fmt.Errorf("clawhub: bundle exceeds %d bytes", MaxBundleSize)
-	}
-	if entry.BundleSHA256 != "" {
-		hasher := sha256.New()
-		hasher.Write(bundleBytes)
-		if err := verifyDigest(hasher, entry.BundleSHA256); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	stage, err := os.MkdirTemp(filepath.Dir(installDir), "."+target.Subpath+".part-*")
@@ -430,4 +402,55 @@ func verifyDigest(h hash.Hash, expectedHex string) error {
 		return fmt.Errorf("clawhub: bundle SHA-256 mismatch: got %s, want %s", got, expectedHex)
 	}
 	return nil
+}
+
+// resolveInstallDir turns an install target into the directory the
+// bundle lands in, and refuses one that escapes its mount.
+//
+// Extracted because the containment check was written twice, in
+// Install and installFromBody. A SECURITY check with two copies is
+// the worst kind of duplication: a fix lands in one, the other keeps
+// the hole, and both still compile and pass.
+//
+// The separator suffix on both sides is what makes the prefix test
+// sound — without it a mount at /srv/skills would accept an install
+// dir at /srv/skills-evil.
+func (i *Installer) resolveInstallDir(target InstallTarget) (string, error) {
+	mountRoot, err := i.storage.Resolve(target.MountLabel)
+	if err != nil {
+		return "", fmt.Errorf("clawhub: mount %q: %w", target.MountLabel, err)
+	}
+	installDir := filepath.Join(mountRoot, target.Subpath)
+	if !strings.HasPrefix(filepath.Clean(installDir)+string(os.PathSeparator),
+		filepath.Clean(mountRoot)+string(os.PathSeparator)) {
+		return "", fmt.Errorf("clawhub: install dir %q escapes mount root %q", installDir, mountRoot)
+	}
+	return installDir, nil
+}
+
+// readAndVerifyBundle reads a bundle under the size cap and checks it
+// against a declared digest.
+//
+// One byte over the cap, so a bundle exactly AT the limit reads whole
+// and only a genuinely oversized one trips it.
+//
+// An empty expectedSHA skips the check rather than failing: the two
+// callers differ on whether a digest is available, and refusing here
+// would move that decision away from the caller that knows.
+func readAndVerifyBundle(body io.Reader, expectedSHA string) ([]byte, error) {
+	bundleBytes, err := io.ReadAll(io.LimitReader(body, MaxBundleSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("clawhub: read bundle body: %w", err)
+	}
+	if int64(len(bundleBytes)) > MaxBundleSize {
+		return nil, fmt.Errorf("clawhub: bundle exceeds %d bytes", MaxBundleSize)
+	}
+	if expectedSHA != "" {
+		hasher := sha256.New()
+		hasher.Write(bundleBytes)
+		if err := verifyDigest(hasher, expectedSHA); err != nil {
+			return nil, err
+		}
+	}
+	return bundleBytes, nil
 }
