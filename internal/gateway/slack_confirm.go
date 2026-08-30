@@ -7,6 +7,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // sendConfirmationBlocks renders a paused turn as a Block Kit message.
@@ -278,7 +279,7 @@ func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID str
 			"prompt", promptID)
 		return ""
 	}
-	grantCtx := compute.WithTurnIdentity(ctx, compute.TurnIdentity{
+	grantCtx := turn.WithIdentity(ctx, turn.Identity{
 		Channel:   ChannelSlack,
 		ChannelID: convID,
 	})

@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // fakeBrowser stands in for the transcript store. It honours the
@@ -16,14 +18,14 @@ type fakeBrowser struct {
 	hits             []SessionBrowseHit
 	infos            []SessionBrowseInfo
 	msgs             []Message
-	perSession       map[SessionKey][]Message
+	perSession       map[turn.SessionKey][]Message
 	ignoreVisibility bool
 
 	lastQuery SessionBrowseQuery
 	lastLimit int
 	lastFrom  uint64
-	lastKey   SessionKey
-	reads     []SessionKey
+	lastKey   turn.SessionKey
+	reads     []turn.SessionKey
 }
 
 func (f *fakeBrowser) Search(_ context.Context, q SessionBrowseQuery) ([]SessionBrowseHit, error) {
@@ -54,7 +56,7 @@ func (f *fakeBrowser) Recent(_ context.Context, limit int, visible SessionVisibl
 	return out, nil
 }
 
-func (f *fakeBrowser) Read(_ context.Context, key SessionKey, fromSeq uint64, limit int) ([]Message, error) {
+func (f *fakeBrowser) Read(_ context.Context, key turn.SessionKey, fromSeq uint64, limit int) ([]Message, error) {
 	f.lastFrom = fromSeq
 	f.lastLimit = limit
 	f.lastKey = key
@@ -65,7 +67,7 @@ func (f *fakeBrowser) Read(_ context.Context, key SessionKey, fromSeq uint64, li
 	return f.msgs, nil
 }
 
-func (f *fakeBrowser) Info(_ context.Context, key SessionKey) (SessionBrowseInfo, bool, error) {
+func (f *fakeBrowser) Info(_ context.Context, key turn.SessionKey) (SessionBrowseInfo, bool, error) {
 	for _, i := range f.all() {
 		if i.Channel == key.Channel && i.ChannelID == key.ChannelID {
 			return i, true, nil
@@ -122,7 +124,7 @@ func callTool(t *testing.T, b *Builtins, name string, args map[string]string) st
 
 // scopedCtx is a turn's context: user U talking in channel:chatID.
 func scopedCtx(user, channel, chatID string) context.Context {
-	return WithTurnIdentity(context.Background(), TurnIdentity{
+	return turn.WithIdentity(context.Background(), turn.Identity{
 		UserID:    user,
 		Channel:   channel,
 		ChannelID: chatID,

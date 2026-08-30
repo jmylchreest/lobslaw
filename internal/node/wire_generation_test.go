@@ -12,6 +12,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -296,13 +297,13 @@ func TestAnUnknownLabelYieldsNoRatesRatherThanFailing(t *testing.T) {
 // UserID "anon" and principal "user:anon", so commitment_list answered
 // "count: 0" while the scheduler was polling the job every 15s.
 func TestGenerationOwnerIsThePrincipal(t *testing.T) {
-	ctx := compute.WithTurnIdentity(context.Background(), compute.TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		UserID:    "anon",
 		Principal: identity.User("anon"),
 		Channel:   "rest",
 		ChannelID: "c1",
 	})
-	turn, _ := compute.TurnIdentityFrom(ctx)
+	turn, _ := turn.IdentityFrom(ctx)
 
 	c, err := NewGenerationCommitment("gen-1", compute.JobHandle{Driver: "dashscope", Raw: "t"},
 		0, turn.Principal.String(), turn.Channel, turn.ChannelID, "a cube", "qwen-video")

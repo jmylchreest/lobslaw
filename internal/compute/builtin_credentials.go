@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/oauth"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -167,7 +168,7 @@ func newOAuthStartHandler(cfg CredentialsConfig) BuiltinFunc {
 		// all — so the scope prefix on this field could only ever have
 		// been supplied by the model. An audit trail the subject can
 		// write is not an audit trail.
-		identity, _ := TurnIdentityFrom(ctx)
+		identity, _ := turn.IdentityFrom(ctx)
 		initiatedBy := identity.AttributedTo()
 		flow, err := cfg.Tracker.Start(ctx, p, scopes, initiatedBy, makePersistCallback(cfg))
 		if err != nil {

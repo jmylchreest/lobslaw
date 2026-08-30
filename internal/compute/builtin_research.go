@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -82,7 +83,7 @@ func newResearchStartHandler(raft memoryRaftApplier) BuiltinFunc {
 
 		// Delivery address comes from the turn, not the model: this is
 		// where the finished research gets posted.
-		identity, _ := TurnIdentityFrom(ctx)
+		identity, _ := turn.IdentityFrom(ctx)
 		channel := identity.Channel
 		chatID := identity.ChannelID
 

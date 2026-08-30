@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // Every confirmation was one-shot: PromptDecision was approved or
@@ -104,7 +106,7 @@ func (s *SessionApprovals) Grant(ctx context.Context, action, resource string) b
 	s.mu.Unlock()
 
 	if durable != nil {
-		id, _ := TurnIdentityFrom(ctx)
+		id, _ := turn.IdentityFrom(ctx)
 		// Best-effort, and the local grant above is why that is
 		// acceptable: a failed replication degrades this to the
 		// process-local behaviour it had before rather than losing the
@@ -125,7 +127,7 @@ func (s *SessionApprovals) DurableGrantErr(ctx context.Context, action, resource
 	if durable == nil {
 		return nil
 	}
-	id, ok := TurnIdentityFrom(ctx)
+	id, ok := turn.IdentityFrom(ctx)
 	if !ok {
 		return nil
 	}
@@ -138,7 +140,7 @@ func (s *SessionApprovals) DurableGrantErr(ctx context.Context, action, resource
 // uses, so a conversation's grants can be dropped alongside its
 // transcript rather than by a second convention somebody has to
 // remember to keep in step.
-func sessionKeyOf(id TurnIdentity) string {
+func sessionKeyOf(id turn.Identity) string {
 	if id.Channel == "" || id.ChannelID == "" {
 		return ""
 	}
@@ -170,7 +172,7 @@ func (s *SessionApprovals) Granted(ctx context.Context, action, resource string)
 	if durable == nil {
 		return false
 	}
-	id, _ := TurnIdentityFrom(ctx)
+	id, _ := turn.IdentityFrom(ctx)
 	return durable.Granted(sessionKeyOf(id), action, resource)
 }
 
@@ -181,7 +183,7 @@ func (s *SessionApprovals) Granted(ctx context.Context, action, resource string)
 // key the model could influence would let a prompt injection claim a
 // grant belonging to a different conversation.
 func approvalKey(ctx context.Context, action, resource string) (string, bool) {
-	id, ok := TurnIdentityFrom(ctx)
+	id, ok := turn.IdentityFrom(ctx)
 	if !ok || id.Channel == "" || id.ChannelID == "" {
 		return "", false
 	}

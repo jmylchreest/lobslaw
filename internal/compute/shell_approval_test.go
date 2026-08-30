@@ -13,6 +13,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -162,7 +163,7 @@ func TestAnOperatorGlobCoversAClass(t *testing.T) {
 func TestASessionGrantSatisfiesTheShellGate(t *testing.T) {
 	t.Parallel()
 	e, approvals := shellGatedExecutor(t)
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 
@@ -291,7 +292,7 @@ func TestAnUngatedToolIsNotShellChecked(t *testing.T) {
 func TestApprovingOnceIsHonouredForTheRestOfTheTurn(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t)
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 
@@ -318,7 +319,7 @@ func TestATurnApprovalDoesNotCoverAnotherCommand(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t)
 	ctx := WithTurnApproval(
-		WithTurnIdentity(context.Background(), TurnIdentity{
+		turn.WithIdentity(context.Background(), turn.Identity{
 			Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 		}),
 		ShellAction, "git status --short")
@@ -334,7 +335,7 @@ func TestATurnApprovalDoesNotCoverAnotherCommand(t *testing.T) {
 func TestATurnApprovalDoesNotOutliveItsTurn(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t)
-	base := WithTurnIdentity(context.Background(), TurnIdentity{
+	base := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 	approved := WithTurnApproval(base, ShellAction, "git status --short")
@@ -353,7 +354,7 @@ func TestAnEmptyApprovalGrantsNothing(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t)
 	ctx := WithTurnApproval(
-		WithTurnIdentity(context.Background(), TurnIdentity{
+		turn.WithIdentity(context.Background(), turn.Identity{
 			Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 		}), "", "")
 
@@ -371,7 +372,7 @@ func TestAnEmptyApprovalGrantsNothing(t *testing.T) {
 func TestApprovingAnUngrantableCommandOnceStillRuns(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t)
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 
@@ -399,7 +400,7 @@ func TestApprovingAnUngrantableCommandOnceStillRuns(t *testing.T) {
 func TestATurnApprovalIsSpentOnce(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t)
-	base := WithTurnIdentity(context.Background(), TurnIdentity{
+	base := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 	ctx := WithTurnApproval(base, ShellAction, ShellUnclassified)
@@ -417,7 +418,7 @@ func TestATurnApprovalIsSpentOnce(t *testing.T) {
 func TestASpentApprovalDoesNotCoverARepeatOfTheSameCommand(t *testing.T) {
 	t.Parallel()
 	e, _ := shellGatedExecutor(t)
-	base := WithTurnIdentity(context.Background(), TurnIdentity{
+	base := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 	ctx := WithTurnApproval(base, ShellAction, "git status --short")

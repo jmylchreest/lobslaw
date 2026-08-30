@@ -16,6 +16,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/promptguard"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -235,7 +236,7 @@ func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider, cro
 		// tool was really a filter on deployments that had an embedder
 		// configured — and the fallback it silently degrades to on an
 		// embedding outage returned everyone's records.
-		turn, _ := TurnIdentityFrom(ctx)
+		turn, _ := turn.IdentityFrom(ctx)
 		audience := readAudience(ctx, turn, crossOwner)
 
 		if embedder != nil {
@@ -652,7 +653,7 @@ func newDreamRecapHandler(store *memory.Store, authz CrossOwnerAuthorizer) Built
 		// memories. Dream only clusters within an owner, which means
 		// each consolidation has exactly one — filtering here is
 		// sufficient, and does not need to walk the sources.
-		turn, _ := TurnIdentityFrom(ctx)
+		turn, _ := turn.IdentityFrom(ctx)
 		audience := readAudience(ctx, turn, authz)
 		limit := 10
 		if raw, ok := args["limit"]; ok && raw != "" {
@@ -759,7 +760,7 @@ func newMemoryForgetHandler(svc memoryForgetter, crossOwner CrossOwnerAuthorizer
 		// tidying up after someone who has left needs exactly that,
 		// and refusing it outright is what pushes them to the
 		// unauthenticated CLI where nothing records who did it.
-		turn, _ := TurnIdentityFrom(ctx)
+		turn, _ := turn.IdentityFrom(ctx)
 		req := &lobslawv1.ForgetRequest{
 			Query:     query,
 			Ids:       ids,
@@ -827,7 +828,7 @@ func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter, 
 
 		// Step 2: forget the original. Any consolidations containing
 		// the old id are also swept (privacy-safe).
-		turn, _ := TurnIdentityFrom(ctx)
+		turn, _ := turn.IdentityFrom(ctx)
 		forgetReq := &lobslawv1.ForgetRequest{
 			Ids:       []string{oldID},
 			Requester: forgetRequester(ctx, turn, crossOwner),
@@ -883,7 +884,7 @@ func newMemoryRecentHandler(store *memory.Store, authz CrossOwnerAuthorizer) Bui
 		// here. This is the same leak the substring path had: scoping
 		// the vector index does not scope a reader that never touches
 		// it.
-		turn, _ := TurnIdentityFrom(ctx)
+		turn, _ := turn.IdentityFrom(ctx)
 		audience := readAudience(ctx, turn, authz)
 		limit := 20
 		if raw, ok := args["limit"]; ok && raw != "" {

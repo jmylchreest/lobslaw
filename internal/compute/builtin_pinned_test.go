@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // The cap is a hard error, which makes "you are full, consolidate" a
@@ -88,7 +90,7 @@ func (f *fakePinnedStore) Usage(kind, userID string) (int, int, error) {
 }
 
 func pinnedCtx(turnID, userID string) context.Context {
-	return WithTurnIdentity(context.Background(), TurnIdentity{
+	return turn.WithIdentity(context.Background(), turn.Identity{
 		TurnID: turnID, UserID: userID,
 	})
 }

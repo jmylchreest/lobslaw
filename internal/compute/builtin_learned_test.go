@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -109,11 +110,11 @@ func TestTheDescriptionSaysWhereTheseDoNotAppear(t *testing.T) {
 // builtin exists to fix.
 func TestTheOwnerFilterMatchesWhatTheReviewForkStamps(t *testing.T) {
 	t.Parallel()
-	got := learnedOwner(TurnIdentity{UserID: "anon"})
+	got := learnedOwner(turn.Identity{UserID: "anon"})
 	if got != "user:anon" {
 		t.Errorf("owner filter = %q, want the form ownerOf writes (%q)", got, "user:anon")
 	}
-	if got := learnedOwner(TurnIdentity{UserID: "tg-@alice"}); got != "user:tg-@alice" {
+	if got := learnedOwner(turn.Identity{UserID: "tg-@alice"}); got != "user:tg-@alice" {
 		t.Errorf("owner filter = %q", got)
 	}
 }
@@ -123,7 +124,7 @@ func TestTheOwnerFilterMatchesWhatTheReviewForkStamps(t *testing.T) {
 // filter", not "match the empty owner".
 func TestAnIdentitylessTurnDoesNotFilterToNothing(t *testing.T) {
 	t.Parallel()
-	if got := learnedOwner(TurnIdentity{}); got != "" {
+	if got := learnedOwner(turn.Identity{}); got != "" {
 		t.Errorf("owner filter = %q, want empty so the store does not filter", got)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -154,9 +155,9 @@ func TestFormatTimeForUserHonoursTurnTimezone(t *testing.T) {
 	}{
 		{"no identity → UTC", context.Background(), "Z"},
 		{"london zone → +01:00 (BST)",
-			WithTurnIdentity(context.Background(), TurnIdentity{Timezone: "Europe/London"}), "+01:00"},
+			turn.WithIdentity(context.Background(), turn.Identity{Timezone: "Europe/London"}), "+01:00"},
 		{"bad zone → fallback to UTC",
-			WithTurnIdentity(context.Background(), TurnIdentity{Timezone: "Not/Real"}), "Z"},
+			turn.WithIdentity(context.Background(), turn.Identity{Timezone: "Not/Real"}), "Z"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -170,7 +171,7 @@ func TestFormatTimeForUserHonoursTurnTimezone(t *testing.T) {
 
 func TestCurrentTimeBuiltinIncludesUserZone(t *testing.T) {
 	t.Parallel()
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{Timezone: "Europe/London"})
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{Timezone: "Europe/London"})
 	stdout, _, err := currentTimeBuiltin(ctx, nil)
 	if err != nil {
 		t.Fatal(err)

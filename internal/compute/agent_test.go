@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -526,11 +527,11 @@ func TestRunToolCallLoopKeepsIdentityOutOfToolArgs(t *testing.T) {
 		MockResponse{Content: "done"},
 	)
 	var seen map[string]string
-	var seenIdentity TurnIdentity
+	var seenIdentity turn.Identity
 	b := NewBuiltins()
 	if err := b.Register("whoami", func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		seen = args
-		seenIdentity, _ = TurnIdentityFrom(ctx)
+		seenIdentity, _ = turn.IdentityFrom(ctx)
 		return nil, 0, nil
 	}); err != nil {
 		t.Fatal(err)

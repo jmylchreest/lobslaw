@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -43,7 +44,7 @@ type CrossOwnerAuthorizer interface {
 // operators, and reading silence as universal read would turn an
 // incomplete wiring into a data breach that nothing in the logs
 // distinguishes from normal traffic.
-func readAudience(ctx context.Context, turn TurnIdentity, authz CrossOwnerAuthorizer) memory.Audience {
+func readAudience(ctx context.Context, turn turn.Identity, authz CrossOwnerAuthorizer) memory.Audience {
 	if authz != nil && authz.AllowsAny(ctx, turn.Claims()) {
 		return memory.Everyone()
 	}
@@ -69,7 +70,7 @@ func readAudience(ctx context.Context, turn TurnIdentity, authz CrossOwnerAuthor
 // authorizer names it in the audit event before this returns, which
 // is where a destructive cross-owner operation needed to be recorded
 // anyway.
-func forgetRequester(ctx context.Context, turn TurnIdentity, authz CrossOwnerAuthorizer) string {
+func forgetRequester(ctx context.Context, turn turn.Identity, authz CrossOwnerAuthorizer) string {
 	if authz != nil && authz.AllowsAny(ctx, turn.Claims()) {
 		return ""
 	}

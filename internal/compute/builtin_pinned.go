@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -146,7 +147,7 @@ func pinnedForgetHandler(store PinnedMemoryStore, failures *pinnedFailures) Buil
 // supply, and writing into somebody else's always-on block would put
 // attacker text in their system prompt on every future turn.
 func pinnedContext(ctx context.Context, args map[string]string) (turnID, userID, kind string, err error) {
-	id, ok := TurnIdentityFrom(ctx)
+	id, ok := turn.IdentityFrom(ctx)
 	if !ok || id.UserID == "" {
 		return "", "", "", errors.New(
 			"pinned memory: this turn has no identified user, so there is nobody to remember for")

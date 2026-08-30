@@ -4,13 +4,14 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // Two mechanisms decide what a turn in a shared conversation may see,
 // and they have to agree or the narrower one is decoration:
 //
 //   - passive recall, via memory.Audience (the ForConversation rule);
-//   - the session_* tools, via TurnIdentity.Visible.
+//   - the session_* tools, via turn.Identity.Visible.
 //
 // Both must grant "this conversation" and "the speaker's own", and
 // neither must let a Slack channel become a way to read somebody's DM.
@@ -20,7 +21,7 @@ func TestSlackSharedChannelVisibility(t *testing.T) {
 	t.Parallel()
 
 	// Bob speaking in a Slack channel.
-	turn := TurnIdentity{
+	speaker := turn.Identity{
 		UserID:    "slack-T0-U0BOB",
 		Principal: identity.User("bob"),
 		Channel:   "slack",
@@ -31,7 +32,7 @@ func TestSlackSharedChannelVisibility(t *testing.T) {
 	// Clause 1: the conversation the turn is in, whoever opened it.
 	// Alice spoke first, so the record is hers — and refusing Bob would
 	// refuse him the conversation he is visibly having.
-	if !turn.Visible(SessionBrowseInfo{
+	if !sessionVisibleTo(speaker, SessionBrowseInfo{
 		Channel: "slack", ChannelID: "C0GENERAL",
 		Owner: identity.User("alice").String(), UserID: "slack-T0-U0ALICE",
 	}) {
@@ -39,7 +40,7 @@ func TestSlackSharedChannelVisibility(t *testing.T) {
 	}
 
 	// Clause 2: alice's DM is not bob's to read, from anywhere.
-	if turn.Visible(SessionBrowseInfo{
+	if sessionVisibleTo(speaker, SessionBrowseInfo{
 		Channel: "slack", ChannelID: "D0ALICE",
 		Owner: identity.User("alice").String(), UserID: "slack-T0-U0ALICE",
 	}) {
@@ -48,7 +49,7 @@ func TestSlackSharedChannelVisibility(t *testing.T) {
 
 	// Bob's own DM stays readable — the rule scopes by conversation, it
 	// does not disown people.
-	if !turn.Visible(SessionBrowseInfo{
+	if !sessionVisibleTo(speaker, SessionBrowseInfo{
 		Channel: "slack", ChannelID: "D0BOB",
 		Owner: identity.User("bob").String(), UserID: "slack-T0-U0BOB",
 	}) {
@@ -57,7 +58,7 @@ func TestSlackSharedChannelVisibility(t *testing.T) {
 
 	// A thread is a distinct conversation, so another thread in the
 	// same channel is ownership-gated like anything else.
-	if turn.Visible(SessionBrowseInfo{
+	if sessionVisibleTo(speaker, SessionBrowseInfo{
 		Channel: "slack", ChannelID: "C0GENERAL/1700000000.000100",
 		Owner: identity.User("alice").String(), UserID: "slack-T0-U0ALICE",
 	}) {
@@ -70,17 +71,17 @@ func TestSlackSharedChannelVisibility(t *testing.T) {
 func TestSlackDMVisibilityUnchanged(t *testing.T) {
 	t.Parallel()
 
-	turn := TurnIdentity{
+	speaker := turn.Identity{
 		UserID:    "slack-T0-U0BOB",
 		Principal: identity.User("bob"),
 		Channel:   "slack",
 		ChannelID: "D0BOB",
 		Shared:    false,
 	}
-	if !turn.Visible(SessionBrowseInfo{Channel: "slack", ChannelID: "D0BOB", Owner: "user:alice"}) {
+	if !sessionVisibleTo(speaker, SessionBrowseInfo{Channel: "slack", ChannelID: "D0BOB", Owner: "user:alice"}) {
 		t.Error("the turn's own conversation was refused")
 	}
-	if turn.Visible(SessionBrowseInfo{Channel: "slack", ChannelID: "C0GENERAL", Owner: "user:alice"}) {
+	if sessionVisibleTo(speaker, SessionBrowseInfo{Channel: "slack", ChannelID: "C0GENERAL", Owner: "user:alice"}) {
 		t.Error("a channel bob is not in was readable from his DM")
 	}
 }

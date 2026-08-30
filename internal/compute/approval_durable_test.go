@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // The cluster half of "approved for the rest of this conversation".
@@ -39,7 +40,7 @@ func (f *fakeGrants) Granted(sessionID, action, resource string) bool {
 }
 
 func turnCtx(channel, channelID string) context.Context {
-	return WithTurnIdentity(context.Background(), TurnIdentity{
+	return turn.WithIdentity(context.Background(), turn.Identity{
 		UserID:    "tg-alice",
 		Principal: identity.Principal("user:alice"),
 		Channel:   channel,

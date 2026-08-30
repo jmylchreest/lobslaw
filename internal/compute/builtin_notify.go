@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/notify"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -66,7 +67,7 @@ func NotifyToolDefs() []*types.ToolDef {
 
 func newNotifyHandler(svc Notifier) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
-		identity, _ := TurnIdentityFrom(ctx)
+		identity, _ := turn.IdentityFrom(ctx)
 		// An explicit user_id is a routing argument the model may
 		// legitimately set — "tell alice her build finished". Falling
 		// back to the turn's caller is the common case. The fallback

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -69,8 +70,8 @@ func TestSessionBrowserRecentFiltersBeforeLimiting(t *testing.T) {
 	}
 	browser := seededBrowser(t, recs...)
 
-	scope := compute.TurnIdentity{UserID: "alice"}
-	got, err := browser.Recent(context.Background(), 2, scope.Visible)
+	scope := turn.Identity{UserID: "alice"}
+	got, err := browser.Recent(context.Background(), 2, compute.SessionVisibilityFor(scope))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestSessionBrowserInfoReportsOwnerAndAbsence(t *testing.T) {
 	browser := seededBrowser(t, sessionRec("telegram", "-300", "alice", "Weekend plans", 1))
 
 	info, found, err := browser.Info(context.Background(),
-		compute.SessionKey{Channel: "telegram", ChannelID: "-300"})
+		turn.SessionKey{Channel: "telegram", ChannelID: "-300"})
 	if err != nil || !found {
 		t.Fatalf("found=%v err=%v", found, err)
 	}
@@ -95,7 +96,7 @@ func TestSessionBrowserInfoReportsOwnerAndAbsence(t *testing.T) {
 	// session_read's gate turns "not found" into a refusal, so this
 	// must not come back as an error the tool would report verbatim.
 	if _, found, err := browser.Info(context.Background(),
-		compute.SessionKey{Channel: "telegram", ChannelID: "404"}); found || err != nil {
+		turn.SessionKey{Channel: "telegram", ChannelID: "404"}); found || err != nil {
 		t.Errorf("absent session: found=%v err=%v", found, err)
 	}
 }

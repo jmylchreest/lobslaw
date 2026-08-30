@@ -1,4 +1,15 @@
-package compute
+// Package turn carries who a turn came from and where it arrived.
+//
+// Its own package because it is a FACT ABOUT A CALLER, not a compute
+// concern. It lived in internal/compute for as long as compute was
+// the only thing that read it; once the tools moved out, compute
+// importing tools and tools importing compute for this one type would
+// have been a cycle over a struct with no behaviour of its own.
+//
+// A leaf: pkg/types, internal/identity, and the standard library.
+// Nothing here should ever import a subsystem, because everything
+// that authorises or attributes anything needs to import this.
+package turn
 
 import (
 	"context"
@@ -7,7 +18,7 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// TurnIdentity is who a turn came from and where it arrived — the
+// Identity is who a turn came from and where it arrived — the
 // facts an authorisation or attribution decision needs.
 //
 // It travels on the context, and deliberately not in the tool-argument
@@ -33,7 +44,7 @@ import (
 // convention that the next contributor has no way to discover. A
 // context value cannot be reached from inside the model's output at
 // all, which makes the guarantee structural rather than procedural.
-type TurnIdentity struct {
+type Identity struct {
 	// UserID is the caller as this channel names them — "tg-@alice", a
 	// REST subject. Kept for audit and display, where what the user
 	// actually arrived as is what matters. Empty for an anonymous turn.
@@ -99,14 +110,14 @@ type TurnIdentity struct {
 
 // SessionKey is the conversation this turn is in, as the session store
 // addresses it. Zero when the turn has no channel origin.
-func (t TurnIdentity) SessionKey() SessionKey {
+func (t Identity) SessionKey() SessionKey {
 	return SessionKey{Channel: t.Channel, ChannelID: t.ChannelID}
 }
 
 // AttributedTo renders the caller for an audit field, keeping the
 // "scope:user" shape the OAuth tracker documents. Empty when there is
 // no caller to name — better than a bare separator implying one.
-func (t TurnIdentity) AttributedTo() string {
+func (t Identity) AttributedTo() string {
 	switch {
 	case t.Scope != "" && t.UserID != "":
 		return t.Scope + ":" + t.UserID
@@ -121,7 +132,7 @@ func (t TurnIdentity) AttributedTo() string {
 // projection, not the original token: the turn kept only the fields
 // an authorisation decision reads, and expiry was checked once at the
 // door.
-func (t TurnIdentity) Claims() *types.Claims {
+func (t Identity) Claims() *types.Claims {
 	return &types.Claims{
 		UserID: t.UserID,
 		Scope:  t.Scope,
@@ -129,21 +140,37 @@ func (t TurnIdentity) Claims() *types.Claims {
 	}
 }
 
-type turnIdentityKey struct{}
+type identityKey struct{}
 
-// WithTurnIdentity attaches a turn's identity for builtins to find.
+// WithIdentity attaches a turn's identity for builtins to find.
 // Agent.runLoop calls this once per turn; any other driver of the
 // builtins that knows its caller must do the same, and one that does
 // not should attach nothing rather than guess.
-func WithTurnIdentity(ctx context.Context, t TurnIdentity) context.Context {
-	return context.WithValue(ctx, turnIdentityKey{}, t)
+func WithIdentity(ctx context.Context, t Identity) context.Context {
+	return context.WithValue(ctx, identityKey{}, t)
 }
 
-// TurnIdentityFrom returns the turn's identity. ok is false when
+// IdentityFrom returns the turn's identity. ok is false when
 // nothing attached one — an operator CLI or a test driving a builtin
 // directly. Callers decide what absence means for them; there is no
 // single right answer, so this does not invent one.
-func TurnIdentityFrom(ctx context.Context) (TurnIdentity, bool) {
-	t, ok := ctx.Value(turnIdentityKey{}).(TurnIdentity)
+func IdentityFrom(ctx context.Context) (Identity, bool) {
+	t, ok := ctx.Value(identityKey{}).(Identity)
 	return t, ok
+}
+
+// SessionKey identifies one conversation, as the session store
+// addresses it.
+//
+// It lived in internal/compute and was duplicated by the gateway and
+// memory packages to avoid an import cycle — the comment on the old
+// declaration said so. Here it is a leaf, so those copies now have
+// somewhere to converge on rather than a reason to exist.
+//
+// Moved with Identity because Identity.SessionKey returns one, and
+// leaving it behind would have made this package import the thing it
+// was extracted to stop importing.
+type SessionKey struct {
+	Channel   string
+	ChannelID string
 }

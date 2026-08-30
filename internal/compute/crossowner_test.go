@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -89,7 +90,7 @@ func seedTwoOwners(t *testing.T, store *memory.Store) {
 // operatorTurn is alice arriving with role:operator declared. The
 // role alone is what the naive implementation would have keyed on.
 func operatorTurn(ctx context.Context) context.Context {
-	return WithTurnIdentity(ctx, TurnIdentity{
+	return turn.WithIdentity(ctx, turn.Identity{
 		UserID:    "alice",
 		Principal: identity.User("alice"),
 		Scope:     "default",
@@ -213,7 +214,7 @@ func TestMemorySearchNonOperatorUnaffected(t *testing.T) {
 		t.Fatal(err)
 	}
 	fn, _ := b.Get("memory_search")
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		UserID: "alice", Principal: identity.User("alice"), Scope: "default",
 	})
 	out, _, err := fn(ctx, map[string]string{"query": "starter"})

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -16,18 +17,18 @@ import (
 // prompt is exactly where identity is deliberately absent.
 type turnIdentitySpy struct {
 	mu   sync.Mutex
-	seen compute.TurnIdentity
+	seen turn.Identity
 	ok   bool
 }
 
 func (s *turnIdentitySpy) Dispatch(ctx context.Context, _ types.HookEvent, _ map[string]any) (*compute.HookResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.seen, s.ok = compute.TurnIdentityFrom(ctx)
+	s.seen, s.ok = turn.IdentityFrom(ctx)
 	return nil, nil
 }
 
-func (s *turnIdentitySpy) identity(t *testing.T) compute.TurnIdentity {
+func (s *turnIdentitySpy) identity(t *testing.T) turn.Identity {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()

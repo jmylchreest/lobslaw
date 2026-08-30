@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -34,7 +35,7 @@ func twoUserBrowser() *fakeBrowser {
 			{Info: group, Matches: 1, Snippets: []SessionBrowseSnippet{
 				{Seq: 8, Role: "user", Text: "the pub at 7 then"}}},
 		},
-		perSession: map[SessionKey][]Message{
+		perSession: map[turn.SessionKey][]Message{
 			{Channel: "telegram", ChannelID: "100"}:  {{Role: "user", Content: "the deposit is 25000"}},
 			{Channel: "telegram", ChannelID: "200"}:  {{Role: "user", Content: "the settlement figure is 40000"}},
 			{Channel: "telegram", ChannelID: "-300"}: {{Role: "user", Content: "the pub at 7 then"}},
@@ -183,7 +184,7 @@ func TestSessionToolsRecheckBrowserThatIgnoresVisibility(t *testing.T) {
 func TestTurnIdentityAnonymousTurnIsStillScoped(t *testing.T) {
 	t.Parallel()
 	b := newTestSessionTools(t, twoUserBrowser(), SessionToolConfig{})
-	ctx := WithTurnIdentity(context.Background(), (&Agent{}).turnIdentityFor(ProcessMessageRequest{
+	ctx := turn.WithIdentity(context.Background(), (&Agent{}).turnIdentityFor(ProcessMessageRequest{
 		Channel:   "telegram",
 		ChannelID: "-300",
 	}))
@@ -291,7 +292,7 @@ func TestTwoUsersDrivingTurnsCannotReachEachOther(t *testing.T) {
 func TestTurnIdentityChannellessTurnFallsBackToOwnership(t *testing.T) {
 	t.Parallel()
 	b := newTestSessionTools(t, twoUserBrowser(), SessionToolConfig{})
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{UserID: "tg-@bob"})
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{UserID: "tg-@bob"})
 
 	out := callToolCtx(ctx, t, b, "session_list", nil)
 	if !strings.Contains(out, "Bob's divorce") {

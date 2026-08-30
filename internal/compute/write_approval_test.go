@@ -13,6 +13,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -143,7 +144,7 @@ func TestAnAlwaysAllowRulePassesTheGate(t *testing.T) {
 func TestASessionGrantSatisfiesTheGate(t *testing.T) {
 	t.Parallel()
 	e, approvals := gatedExecutor(t)
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 
@@ -163,10 +164,10 @@ func TestASessionGrantSatisfiesTheGate(t *testing.T) {
 func TestAGrantDoesNotCoverAnotherConversation(t *testing.T) {
 	t.Parallel()
 	e, approvals := gatedExecutor(t)
-	granted := WithTurnIdentity(context.Background(), TurnIdentity{
+	granted := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
-	other := WithTurnIdentity(context.Background(), TurnIdentity{
+	other := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "99",
 	})
 	approvals.Grant(granted, ApprovalAction, "episodic")

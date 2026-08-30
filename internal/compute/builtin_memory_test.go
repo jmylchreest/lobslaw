@@ -13,6 +13,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -297,7 +298,7 @@ func TestDreamNapSkippedWhenDreamerNil(t *testing.T) {
 // Production always has one; a bare context is an anonymous caller,
 // which now correctly sees nothing owned.
 func memTurn() context.Context {
-	return WithTurnIdentity(context.Background(), TurnIdentity{
+	return turn.WithIdentity(context.Background(), turn.Identity{
 		UserID:    "alice",
 		Principal: identity.User("alice"),
 	})

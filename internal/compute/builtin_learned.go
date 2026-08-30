@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -108,7 +109,7 @@ func newLearnedListHandler(store LearnedLister) BuiltinFunc {
 		// naming whose artefacts to list is a parameter the model can
 		// be talked into changing, and the tool takes no arguments at
 		// all for that reason.
-		turn, _ := TurnIdentityFrom(ctx)
+		turn, _ := turn.IdentityFrom(ctx)
 		items, err := store.ListForAgent(ctx, learnedOwner(turn))
 		if err != nil {
 			return nil, 1, fmt.Errorf("learned_list: %w", err)
@@ -136,7 +137,7 @@ func newLearnedListHandler(store LearnedLister) BuiltinFunc {
 // not filter" rather than "match the empty owner": an anonymous turn
 // asking what the assistant has learned should see the assistant's
 // artefacts, not an empty list.
-func learnedOwner(turn TurnIdentity) string {
+func learnedOwner(turn turn.Identity) string {
 	if turn.UserID == "" {
 		return ""
 	}

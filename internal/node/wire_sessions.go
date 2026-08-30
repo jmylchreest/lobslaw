@@ -11,6 +11,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -170,7 +171,7 @@ type compactorAdapter struct {
 }
 
 func (a *compactorAdapter) MaybeCompact(ctx context.Context, ref gateway.SessionRef) (bool, error) {
-	ok, err := a.inner.MaybeCompact(ctx, compute.SessionKey{
+	ok, err := a.inner.MaybeCompact(ctx, turn.SessionKey{
 		Channel:   ref.Channel,
 		ChannelID: ref.ChannelID,
 	})
@@ -184,11 +185,11 @@ type sessionSummaryAdapter struct {
 	inner *memory.SessionService
 }
 
-func toMemoryKey(k compute.SessionKey) memory.SessionRef {
+func toMemoryKey(k turn.SessionKey) memory.SessionRef {
 	return memory.SessionRef{Channel: k.Channel, ChannelID: k.ChannelID}
 }
 
-func (a *sessionSummaryAdapter) Pending(ctx context.Context, k compute.SessionKey) (string, uint64, uint64, error) {
+func (a *sessionSummaryAdapter) Pending(ctx context.Context, k turn.SessionKey) (string, uint64, uint64, error) {
 	t, err := a.inner.LoadTranscript(ctx, toMemoryKey(k))
 	if err != nil {
 		return "", 0, 0, err
@@ -196,7 +197,7 @@ func (a *sessionSummaryAdapter) Pending(ctx context.Context, k compute.SessionKe
 	return t.Summary, t.SummaryThroughSeq, t.NextSeq, nil
 }
 
-func (a *sessionSummaryAdapter) Range(ctx context.Context, k compute.SessionKey, after, through uint64) ([]compute.Message, error) {
+func (a *sessionSummaryAdapter) Range(ctx context.Context, k turn.SessionKey, after, through uint64) ([]compute.Message, error) {
 	msgs, err := a.inner.LoadRange(ctx, toMemoryKey(k), after, through)
 	if err != nil {
 		return nil, err
@@ -204,11 +205,11 @@ func (a *sessionSummaryAdapter) Range(ctx context.Context, k compute.SessionKey,
 	return toComputeMessages(msgs), nil
 }
 
-func (a *sessionSummaryAdapter) PutSummary(ctx context.Context, k compute.SessionKey, summary string, through uint64) error {
+func (a *sessionSummaryAdapter) PutSummary(ctx context.Context, k turn.SessionKey, summary string, through uint64) error {
 	return a.inner.PutSummary(ctx, toMemoryKey(k), summary, through)
 }
 
-func (a *sessionSummaryAdapter) Title(ctx context.Context, k compute.SessionKey) (string, error) {
+func (a *sessionSummaryAdapter) Title(ctx context.Context, k turn.SessionKey) (string, error) {
 	t, err := a.inner.LoadTranscript(ctx, toMemoryKey(k))
 	if err != nil {
 		return "", err
@@ -216,7 +217,7 @@ func (a *sessionSummaryAdapter) Title(ctx context.Context, k compute.SessionKey)
 	return t.Title, nil
 }
 
-func (a *sessionSummaryAdapter) PutTitle(ctx context.Context, k compute.SessionKey, title string) error {
+func (a *sessionSummaryAdapter) PutTitle(ctx context.Context, k turn.SessionKey, title string) error {
 	return a.inner.PutTitle(ctx, toMemoryKey(k), title)
 }
 
@@ -280,7 +281,7 @@ func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int, visible c
 	return out, nil
 }
 
-func (a *sessionBrowserAdapter) Info(ctx context.Context, k compute.SessionKey) (compute.SessionBrowseInfo, bool, error) {
+func (a *sessionBrowserAdapter) Info(ctx context.Context, k turn.SessionKey) (compute.SessionBrowseInfo, bool, error) {
 	rec, err := a.inner.Describe(ctx, toMemoryKey(k))
 	if err != nil || rec == nil {
 		return compute.SessionBrowseInfo{}, false, err
@@ -299,7 +300,7 @@ func toRecordPredicate(res *identity.Resolver, visible compute.SessionVisibleFun
 	return func(r *lobslawv1.SessionRecord) bool { return visible(toBrowseInfo(res, r)) }
 }
 
-func (a *sessionBrowserAdapter) Read(ctx context.Context, k compute.SessionKey, fromSeq uint64, limit int) ([]compute.Message, error) {
+func (a *sessionBrowserAdapter) Read(ctx context.Context, k turn.SessionKey, fromSeq uint64, limit int) ([]compute.Message, error) {
 	// LoadRange is exclusive of its lower bound, so reading "from
 	// seq N" means asking for everything after N-1.
 	after := uint64(0)

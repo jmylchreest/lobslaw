@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -25,10 +26,10 @@ type SessionBrowser interface {
 	// is consulted before the limit is applied.
 	Recent(ctx context.Context, limit int, visible SessionVisibleFunc) ([]SessionBrowseInfo, error)
 	// Read returns a window of one conversation's transcript.
-	Read(ctx context.Context, key SessionKey, fromSeq uint64, limit int) ([]Message, error)
+	Read(ctx context.Context, key turn.SessionKey, fromSeq uint64, limit int) ([]Message, error)
 	// Info returns one conversation's index entry. found is false for
 	// a conversation that doesn't exist, which is not an error.
-	Info(ctx context.Context, key SessionKey) (info SessionBrowseInfo, found bool, err error)
+	Info(ctx context.Context, key turn.SessionKey) (info SessionBrowseInfo, found bool, err error)
 }
 
 // SessionVisibleFunc reports whether one stored conversation may be
@@ -95,8 +96,13 @@ type SessionBrowseSnippet struct {
 // threads from the other. Cross-identity aliasing is a mapping we
 // don't have yet, and inventing one here would mean guessing; a false
 // negative costs recall, a false positive is the bug this fixes.
-func (t TurnIdentity) Visible(i SessionBrowseInfo) bool {
-	if t.isCurrent(i.Channel, i.ChannelID) {
+// A function rather than a method, now that Identity lives in its own
+// package — but it reads better this way regardless. Visible takes a
+// SessionBrowseInfo, so it was never a fact about the identity: it is
+// the SESSION that is visible, and hanging it off Identity had the
+// sentence backwards.
+func sessionVisibleTo(t turn.Identity, i SessionBrowseInfo) bool {
+	if identityIsCurrent(t, i.Channel, i.ChannelID) {
 		return true
 	}
 	// Compared as principals, not as channel ids. The record stores the
@@ -117,7 +123,7 @@ func (t TurnIdentity) Visible(i SessionBrowseInfo) bool {
 // Both halves must be set: a scheduler turn has no channel, and an
 // empty address must not match the sessions that predate the UserID
 // being recorded.
-func (t TurnIdentity) isCurrent(channel, channelID string) bool {
+func identityIsCurrent(t turn.Identity, channel, channelID string) bool {
 	if t.Channel == "" || t.ChannelID == "" {
 		return false
 	}
@@ -142,11 +148,22 @@ func (t TurnIdentity) isCurrent(channel, channelID string) bool {
 // is the common case; the guard is the agent-loop test that asserts
 // the scope is attached, not a runtime error here.
 func sessionVisibility(ctx context.Context) SessionVisibleFunc {
-	identity, ok := TurnIdentityFrom(ctx)
+	identity, ok := turn.IdentityFrom(ctx)
 	if !ok {
 		return nil
 	}
-	return identity.Visible
+	return SessionVisibilityFor(identity)
+}
+
+// SessionVisibilityFor builds the predicate for one identity.
+//
+// Exported because callers outside this package construct an identity
+// directly rather than pulling one off a context — the node's session
+// store adapter and its tests do exactly that. Before Identity moved
+// to its own package they reached for a METHOD on it, which is not a
+// thing an identity should have: what is visible is the session.
+func SessionVisibilityFor(t turn.Identity) SessionVisibleFunc {
+	return func(i SessionBrowseInfo) bool { return sessionVisibleTo(t, i) }
 }
 
 // SessionToolConfig bounds what the session tools may return. Every
@@ -267,7 +284,7 @@ func newSessionReadHandler(cfg SessionToolConfig) BuiltinFunc {
 			fromSeq = n
 		}
 		limit := clampArg(args["limit"], cfg.MaxReadMessages, cfg.MaxReadMessages)
-		key := SessionKey{Channel: channel, ChannelID: channelID}
+		key := turn.SessionKey{Channel: channel, ChannelID: channelID}
 		if err := authorizeSessionRead(ctx, cfg.Browser, key); err != nil {
 			return nil, 1, err
 		}
@@ -298,19 +315,19 @@ var errSessionNotVisible = errors.New("no conversation with that channel and cha
 // current conversation short-circuits without touching the store —
 // it's readable by definition, and a brand-new session has no index
 // record yet.
-func authorizeSessionRead(ctx context.Context, browser SessionBrowser, key SessionKey) error {
-	identity, ok := TurnIdentityFrom(ctx)
+func authorizeSessionRead(ctx context.Context, browser SessionBrowser, key turn.SessionKey) error {
+	identity, ok := turn.IdentityFrom(ctx)
 	if !ok {
 		return nil
 	}
-	if identity.isCurrent(key.Channel, key.ChannelID) {
+	if identityIsCurrent(identity, key.Channel, key.ChannelID) {
 		return nil
 	}
 	info, found, err := browser.Info(ctx, key)
 	if err != nil {
 		return err
 	}
-	if !found || !identity.Visible(info) {
+	if !found || !sessionVisibleTo(identity, info) {
 		return errSessionNotVisible
 	}
 	return nil

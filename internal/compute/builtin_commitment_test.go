@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -224,7 +225,7 @@ func seedOwnedCommitment(t *testing.T, store *memory.Store, id, owner string) {
 }
 
 func turnAs(user string) context.Context {
-	return WithTurnIdentity(context.Background(), TurnIdentity{
+	return turn.WithIdentity(context.Background(), turn.Identity{
 		UserID:    user,
 		Principal: identity.User(user),
 	})

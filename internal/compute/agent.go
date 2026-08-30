@@ -14,6 +14,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/promptguard"
 	"github.com/jmylchreest/lobslaw/internal/trace"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -546,7 +547,7 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// where the ContextEngine runs its passive recall, and that recall
 	// needs to know whose memories it may read. Getting this order wrong
 	// is how the recall came to be unscoped in the first place.
-	ctx = WithTurnIdentity(ctx, a.turnIdentityFor(req))
+	ctx = turn.WithIdentity(ctx, a.turnIdentityFor(req))
 	// Attached once, at the top, so anything downstream can emit a
 	// span without every intermediate signature growing a parameter.
 	// A nil recorder leaves the context untouched, which is what a
@@ -668,7 +669,7 @@ func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, 
 	// tier — so every episodic record was tagged "channel:admin"
 	// rather than "channel:telegram", and ChatID was never set at all,
 	// leaving the chat tag off entirely.
-	turn := EpisodicTurn{
+	episode := EpisodicTurn{
 		Channel:     req.Channel,
 		ChatID:      req.ChannelID,
 		UserMessage: req.Message,
@@ -677,15 +678,15 @@ func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, 
 		CompletedAt: time.Now(),
 	}
 	if req.Claims != nil {
-		turn.UserID = req.Claims.UserID
+		episode.UserID = req.Claims.UserID
 	}
-	if id, ok := TurnIdentityFrom(ctx); ok {
-		turn.Owner = id.Principal.String()
+	if id, ok := turn.IdentityFrom(ctx); ok {
+		episode.Owner = id.Principal.String()
 	}
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := a.cfg.EpisodicIngester.IngestTurn(bgCtx, turn); err != nil {
+		if err := a.cfg.EpisodicIngester.IngestTurn(bgCtx, episode); err != nil {
 			a.cfg.Logger.Warn("agent: episodic ingest failed; turn still succeeded",
 				"turn_id", req.TurnID, "err", err)
 		}
@@ -740,7 +741,7 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
-	ctx = WithTurnIdentity(ctx, a.turnIdentityFor(req))
+	ctx = turn.WithIdentity(ctx, a.turnIdentityFor(req))
 	a.fillDefaults(ctx, &req)
 	msgs := make([]Message, len(priorMessages))
 	copy(msgs, priorMessages)
@@ -1516,8 +1517,8 @@ func isRetryableProviderError(ctx context.Context, err error) bool {
 // scheduler and research turns leave them empty and fall back to pure
 // ownership, which is right — they carry the claims of the person the
 // work is being done for (see Node.schedulerClaims), not of a chat.
-func (a *Agent) turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
-	t := TurnIdentity{
+func (a *Agent) turnIdentityFor(req ProcessMessageRequest) turn.Identity {
+	t := turn.Identity{
 		TurnID:    req.TurnID,
 		Channel:   req.Channel,
 		ChannelID: req.ChannelID,
@@ -1584,7 +1585,7 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		params = make(map[string]string)
 	}
 	// Identity is NOT passed here. It travels on the context as a
-	// TurnIdentity, because this map is built from the model's own JSON
+	// turn.Identity, because this map is built from the model's own JSON
 	// and anything placed in it is a value the model can also supply.
 	// The synthetic "__" keys that used to carry it are stripped rather
 	// than trusted — nothing reads them any more, and a leftover one

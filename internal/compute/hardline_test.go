@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -109,7 +110,7 @@ func TestSessionGrantCannotReachTheFloor(t *testing.T) {
 	approvals := NewSessionApprovals()
 	env.executor.SetSessionApprovals(approvals)
 
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Channel: "telegram", ChannelID: "-100",
 	})
 	if !approvals.Grant(ctx, "tool:exec", "run") {

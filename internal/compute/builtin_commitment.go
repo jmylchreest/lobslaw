@@ -15,6 +15,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -128,7 +129,7 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 		// From the context, not the args: a commitment records who it
 		// is for and which chat it fires into, and a model that picks
 		// those schedules work in someone else's name.
-		identity, _ := TurnIdentityFrom(ctx)
+		identity, _ := turn.IdentityFrom(ctx)
 		channel := identity.Channel
 		chatID := identity.ChannelID
 		userID := identity.UserID
@@ -328,7 +329,7 @@ func parseWhen(when, userTZ string) (time.Time, error) {
 // no identity attached (operator tooling, tests). Callers treat empty
 // as UTC.
 func identityTimezone(ctx context.Context) string {
-	identity, ok := TurnIdentityFrom(ctx)
+	identity, ok := turn.IdentityFrom(ctx)
 	if !ok {
 		return ""
 	}
@@ -340,7 +341,7 @@ func identityTimezone(ctx context.Context) string {
 // unowned record — actionable by anyone, exactly like the records that
 // predate ownership.
 func identityOwner(ctx context.Context) string {
-	turn, _ := TurnIdentityFrom(ctx)
+	turn, _ := turn.IdentityFrom(ctx)
 	return turn.Principal.String()
 }
 
@@ -357,7 +358,7 @@ func ownedByCaller(ctx context.Context, owner string) bool {
 	if owner == "" {
 		return false
 	}
-	turn, ok := TurnIdentityFrom(ctx)
+	turn, ok := turn.IdentityFrom(ctx)
 	if !ok || turn.Principal.IsZero() {
 		return false
 	}

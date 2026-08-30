@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // Compaction defaults.
@@ -45,24 +47,16 @@ type SessionSummaryStore interface {
 	// Pending reports what is eligible for compaction: the existing
 	// summary, the sequence it covers through, and the highest
 	// sequence currently stored.
-	Pending(ctx context.Context, ref SessionKey) (summary string, throughSeq, nextSeq uint64, err error)
+	Pending(ctx context.Context, ref turn.SessionKey) (summary string, throughSeq, nextSeq uint64, err error)
 	// Range returns messages in (afterSeq, throughSeq].
-	Range(ctx context.Context, ref SessionKey, afterSeq, throughSeq uint64) ([]Message, error)
+	Range(ctx context.Context, ref turn.SessionKey, afterSeq, throughSeq uint64) ([]Message, error)
 	// PutSummary stores a compaction result.
-	PutSummary(ctx context.Context, ref SessionKey, summary string, throughSeq uint64) error
+	PutSummary(ctx context.Context, ref turn.SessionKey, summary string, throughSeq uint64) error
 	// Title reports the session's current label, and PutTitle sets
 	// it. Titles are derived from the summary, so they ride along
 	// with compaction rather than needing their own trigger.
-	Title(ctx context.Context, ref SessionKey) (string, error)
-	PutTitle(ctx context.Context, ref SessionKey, title string) error
-}
-
-// SessionKey identifies a conversation to the summary store. Mirrors
-// the gateway and memory session refs; duplicated here for the same
-// import-cycle reason TranscriptMessage is.
-type SessionKey struct {
-	Channel   string
-	ChannelID string
+	Title(ctx context.Context, ref turn.SessionKey) (string, error)
+	PutTitle(ctx context.Context, ref turn.SessionKey, title string) error
 }
 
 // CompactorConfig tunes when and how hard compaction runs.
@@ -132,7 +126,7 @@ func NewCompactor(store SessionSummaryStore, summarizer ConversationSummarizer, 
 // every turn; most calls do nothing.
 //
 // Returns true when a compaction actually ran.
-func (c *Compactor) MaybeCompact(ctx context.Context, key SessionKey) (bool, error) {
+func (c *Compactor) MaybeCompact(ctx context.Context, key turn.SessionKey) (bool, error) {
 	if c == nil {
 		return false, nil
 	}
@@ -201,7 +195,7 @@ func (c *Compactor) MaybeCompact(ctx context.Context, key SessionKey) (bool, err
 //
 // Failure is logged and swallowed: an untitled session is a cosmetic
 // loss, and the compaction that preceded it already succeeded.
-func (c *Compactor) maybeTitle(ctx context.Context, key SessionKey, summary string) {
+func (c *Compactor) maybeTitle(ctx context.Context, key turn.SessionKey, summary string) {
 	if c.titler == nil {
 		return
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -179,7 +180,7 @@ func TestAToolLevelConfirmationStillCarriesToolExec(t *testing.T) {
 func TestAGrantIsHonouredAfterwards(t *testing.T) {
 	t.Parallel()
 	a, _, approvals := gatedAgent(t)
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 

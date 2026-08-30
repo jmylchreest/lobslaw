@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -137,7 +138,7 @@ func currentTimeBuiltin(ctx context.Context, args map[string]string) ([]byte, in
 		"unix":        now.Unix(),
 	}
 
-	if identity, ok := TurnIdentityFrom(ctx); ok && identity.Timezone != "" {
+	if identity, ok := turn.IdentityFrom(ctx); ok && identity.Timezone != "" {
 		userTZ := identity.Timezone
 		if loc, err := time.LoadLocation(userTZ); err == nil {
 			inZone := now.In(loc)

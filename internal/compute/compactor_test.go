@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 type fakeSummaryStore struct {
@@ -34,13 +36,13 @@ func (f *fakeSummaryStore) add(msgs ...Message) {
 	}
 }
 
-func (f *fakeSummaryStore) Pending(context.Context, SessionKey) (string, uint64, uint64, error) {
+func (f *fakeSummaryStore) Pending(context.Context, turn.SessionKey) (string, uint64, uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.summary, f.through, f.nextSeq, nil
 }
 
-func (f *fakeSummaryStore) Range(_ context.Context, _ SessionKey, after, through uint64) ([]Message, error) {
+func (f *fakeSummaryStore) Range(_ context.Context, _ turn.SessionKey, after, through uint64) ([]Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []Message
@@ -52,20 +54,20 @@ func (f *fakeSummaryStore) Range(_ context.Context, _ SessionKey, after, through
 	return out, nil
 }
 
-func (f *fakeSummaryStore) Title(context.Context, SessionKey) (string, error) {
+func (f *fakeSummaryStore) Title(context.Context, turn.SessionKey) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.title, nil
 }
 
-func (f *fakeSummaryStore) PutTitle(_ context.Context, _ SessionKey, title string) error {
+func (f *fakeSummaryStore) PutTitle(_ context.Context, _ turn.SessionKey, title string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.title = title
 	return nil
 }
 
-func (f *fakeSummaryStore) PutSummary(_ context.Context, _ SessionKey, summary string, through uint64) error {
+func (f *fakeSummaryStore) PutSummary(_ context.Context, _ turn.SessionKey, summary string, through uint64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.putErr != nil {
@@ -117,7 +119,7 @@ func TestCompactorNoopWhenNothingHasAgedOut(t *testing.T) {
 	sum := &fakeSummarizer{}
 	c := testCompactor(store, sum, 40, 100)
 
-	ran, err := c.MaybeCompact(context.Background(), SessionKey{Channel: "rest", ChannelID: "1"})
+	ran, err := c.MaybeCompact(context.Background(), turn.SessionKey{Channel: "rest", ChannelID: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +139,7 @@ func TestCompactorWaitsForTriggerThreshold(t *testing.T) {
 	sum := &fakeSummarizer{}
 	c := testCompactor(store, sum, 2, 100_000)
 
-	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
+	ran, err := c.MaybeCompact(context.Background(), turn.SessionKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +157,7 @@ func TestCompactorFoldsAgedOutMessages(t *testing.T) {
 	sum := &fakeSummarizer{out: "the user discussed things"}
 	c := testCompactor(store, sum, 5, 500)
 
-	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
+	ran, err := c.MaybeCompact(context.Background(), turn.SessionKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +192,7 @@ func TestCompactorNeverFoldsTheKeepWindow(t *testing.T) {
 	keep := 10
 	c := testCompactor(store, sum, keep, 100)
 
-	if _, err := c.MaybeCompact(context.Background(), SessionKey{}); err != nil {
+	if _, err := c.MaybeCompact(context.Background(), turn.SessionKey{}); err != nil {
 		t.Fatal(err)
 	}
 	remaining := store.nextSeq - 1 - store.through
@@ -215,7 +217,7 @@ func TestCompactionIsIncremental(t *testing.T) {
 			msgNo++
 			store.add(fatMessage(fmt.Sprintf("msg-%03d", msgNo)))
 		}
-		if _, err := c.MaybeCompact(ctx, SessionKey{}); err != nil {
+		if _, err := c.MaybeCompact(ctx, turn.SessionKey{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -254,7 +256,7 @@ func TestCompactorPropagatesSummarizerFailure(t *testing.T) {
 	boom := errors.New("provider exploded")
 	c := testCompactor(store, &fakeSummarizer{err: boom}, 5, 100)
 
-	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
+	ran, err := c.MaybeCompact(context.Background(), turn.SessionKey{})
 	if ran || !errors.Is(err, boom) {
 		t.Errorf("ran=%v err=%v; want failure surfaced", ran, err)
 	}
@@ -270,7 +272,7 @@ func TestCompactorRejectsEmptySummary(t *testing.T) {
 		store.add(fatMessage("x"))
 	}
 	c := testCompactor(store, &fakeSummarizer{out: "   "}, 5, 100)
-	if _, err := c.MaybeCompact(context.Background(), SessionKey{}); err == nil {
+	if _, err := c.MaybeCompact(context.Background(), turn.SessionKey{}); err == nil {
 		t.Error("empty summary should be an error, not stored")
 	}
 	if store.puts != 0 {
@@ -290,7 +292,7 @@ func TestCompactorCapsSummaryLength(t *testing.T) {
 	c := NewCompactor(store, &fakeSummarizer{out: huge},
 		CompactorConfig{KeepMessages: 5, TriggerTokens: 100, MaxSummaryTokens: 100})
 
-	if _, err := c.MaybeCompact(context.Background(), SessionKey{}); err != nil {
+	if _, err := c.MaybeCompact(context.Background(), turn.SessionKey{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.summary) > 100*4+8 {
@@ -316,7 +318,7 @@ func TestNewCompactorNilWithoutDependencies(t *testing.T) {
 func TestNilCompactorIsSafeToCall(t *testing.T) {
 	t.Parallel()
 	var c *Compactor
-	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
+	ran, err := c.MaybeCompact(context.Background(), turn.SessionKey{})
 	if ran || err != nil {
 		t.Errorf("ran=%v err=%v; want a silent no-op", ran, err)
 	}
@@ -352,7 +354,7 @@ func TestCompactorTitlesOnFirstCompaction(t *testing.T) {
 	c := NewCompactor(store, &fakeSummarizer{},
 		CompactorConfig{KeepMessages: 5, TriggerTokens: 100, Titler: titler})
 
-	if _, err := c.MaybeCompact(context.Background(), SessionKey{}); err != nil {
+	if _, err := c.MaybeCompact(context.Background(), turn.SessionKey{}); err != nil {
 		t.Fatal(err)
 	}
 	if store.title != "raft snapshot corruption" {
@@ -374,7 +376,7 @@ func TestCompactorTitlesOnlyOnce(t *testing.T) {
 		for range 6 {
 			store.add(fatMessage("x"))
 		}
-		if _, err := c.MaybeCompact(ctx, SessionKey{}); err != nil {
+		if _, err := c.MaybeCompact(ctx, turn.SessionKey{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -395,7 +397,7 @@ func TestCompactorSurvivesTitlerFailure(t *testing.T) {
 		CompactorConfig{KeepMessages: 5, TriggerTokens: 100,
 			Titler: &fakeTitler{err: errors.New("model down")}})
 
-	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
+	ran, err := c.MaybeCompact(context.Background(), turn.SessionKey{})
 	if !ran || err != nil {
 		t.Errorf("ran=%v err=%v; a titling failure must not fail the compaction", ran, err)
 	}
@@ -411,7 +413,7 @@ func TestCompactorWithoutTitlerLeavesSessionsUntitled(t *testing.T) {
 		store.add(fatMessage("x"))
 	}
 	c := testCompactor(store, &fakeSummarizer{}, 5, 100)
-	if _, err := c.MaybeCompact(context.Background(), SessionKey{}); err != nil {
+	if _, err := c.MaybeCompact(context.Background(), turn.SessionKey{}); err != nil {
 		t.Fatal(err)
 	}
 	if store.title != "" {

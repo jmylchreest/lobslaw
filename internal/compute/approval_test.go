@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -48,10 +49,10 @@ func TestSessionApprovalScopedToOneConversation(t *testing.T) {
 	t.Parallel()
 	store := NewSessionApprovals()
 
-	alice := WithTurnIdentity(context.Background(), TurnIdentity{
+	alice := turn.WithIdentity(context.Background(), turn.Identity{
 		Channel: "telegram", ChannelID: "-100", UserID: "alice",
 	})
-	other := WithTurnIdentity(context.Background(), TurnIdentity{
+	other := turn.WithIdentity(context.Background(), turn.Identity{
 		Channel: "telegram", ChannelID: "-200", UserID: "alice",
 	})
 
@@ -97,7 +98,7 @@ func TestSessionApprovalRefusesAnonymousTurns(t *testing.T) {
 func TestNilApprovalStoreGrantsNothing(t *testing.T) {
 	t.Parallel()
 	var store *SessionApprovals
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{Channel: "rest", ChannelID: "s"})
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{Channel: "rest", ChannelID: "s"})
 	if store.Granted(ctx, "tool:exec", "anything") {
 		t.Error("a nil store granted an approval")
 	}
@@ -116,7 +117,7 @@ func TestRequireConfirmationReachesTheCaller(t *testing.T) {
 		// Higher priority than the permissive default seeded above.
 	})
 
-	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Channel: "telegram", ChannelID: "-100", UserID: "alice",
 	})
 	claims := &types.Claims{UserID: "alice", Scope: "default"}
@@ -141,7 +142,7 @@ func TestRequireConfirmationReachesTheCaller(t *testing.T) {
 	}
 
 	// A different conversation still gets asked.
-	elsewhere := WithTurnIdentity(context.Background(), TurnIdentity{
+	elsewhere := turn.WithIdentity(context.Background(), turn.Identity{
 		Channel: "telegram", ChannelID: "-200", UserID: "alice",
 	})
 	if err := env.executor.CheckPolicy(elsewhere, claims, "tool:exec", "shell_command"); !errors.Is(err, ErrRequireConfirm) {

@@ -17,6 +17,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -500,7 +501,7 @@ func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, prov
 		return "", fmt.Errorf("no raft on this node; a generation job cannot be recorded")
 	}
 	id := "gen-" + ids.New()
-	turn, _ := compute.TurnIdentityFrom(ctx)
+	turn, _ := turn.IdentityFrom(ctx)
 	// Owner is the PRINCIPAL, not the channel's own id for the caller.
 	// ownedByCaller compares against turn.Principal.String(), and the
 	// two are different strings by construction: an unauthenticated

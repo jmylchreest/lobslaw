@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -22,7 +23,7 @@ func otherRecord(owner, sessionRef string) *lobslawv1.EpisodicRecord {
 func TestReadAudienceDMIsOwnershipOnly(t *testing.T) {
 	t.Parallel()
 
-	turn := TurnIdentity{
+	turn := turn.Identity{
 		Principal: identity.User("bob"),
 		Channel:   "slack",
 		ChannelID: "D0BOB",
@@ -43,7 +44,7 @@ func TestReadAudienceDMIsOwnershipOnly(t *testing.T) {
 func TestReadAudienceSharedChannelScopesToConversation(t *testing.T) {
 	t.Parallel()
 
-	turn := TurnIdentity{
+	turn := turn.Identity{
 		Principal: identity.User("bob"),
 		Channel:   "slack",
 		ChannelID: "C0GENERAL",
@@ -68,7 +69,7 @@ func TestReadAudienceSharedChannelScopesToConversation(t *testing.T) {
 func TestReadAudienceSharedWithoutAddressDoesNotWiden(t *testing.T) {
 	t.Parallel()
 
-	turn := TurnIdentity{
+	turn := turn.Identity{
 		Principal: identity.User("bob"),
 		Shared:    true,
 	}
@@ -87,7 +88,7 @@ func TestReadAudienceSharedWithoutAddressDoesNotWiden(t *testing.T) {
 func TestReadAudienceCrossOwnerStillWidensInSharedChannel(t *testing.T) {
 	t.Parallel()
 
-	turn := TurnIdentity{
+	turn := turn.Identity{
 		Principal: identity.User("bob"),
 		Channel:   "slack",
 		ChannelID: "C0GENERAL",

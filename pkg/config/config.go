@@ -1699,7 +1699,7 @@ type LogFilterConfig struct {
 // The whole point of this block is that the AGENT CANNOT WRITE IT. A
 // remote_ssh call names a remote; it does not supply a host, a port, a
 // user or a key. Those are facts about the deployment, and the same
-// reasoning applies as for compute.TurnIdentity: a value the model can
+// reasoning applies as for turn.Identity: a value the model can
 // choose is a request, not a fact, and the two must not share a channel.
 // Without that split, "run this command over SSH" is a tool that dials
 // anywhere, and the operator's only control is the prose in a prompt.

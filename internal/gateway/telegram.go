@@ -19,6 +19,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -1696,7 +1697,7 @@ func (h *TelegramHandler) grantForSession(ctx context.Context, promptID string, 
 	// The grant is scoped by the conversation on the context, not by
 	// anything in the callback payload — the same rule ownership
 	// follows, because a callback is attacker-shaped input.
-	grantCtx := compute.WithTurnIdentity(ctx, compute.TurnIdentity{
+	grantCtx := turn.WithIdentity(ctx, turn.Identity{
 		Channel:   "telegram",
 		ChannelID: strconv.FormatInt(q.Message.Chat.ID, 10),
 	})

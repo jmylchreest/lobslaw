@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 
 	"google.golang.org/protobuf/proto"
@@ -124,7 +125,7 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	// A caller policy has granted cross-owner read widens to
 	// Everyone(); nothing else does, including a caller who merely
 	// holds role:operator.
-	turn, _ := TurnIdentityFrom(ctx)
+	turn, _ := turn.IdentityFrom(ctx)
 	audience := readAudience(ctx, turn, e.crossOwner)
 
 	entries, strategy := e.recall(ctx, audience, userMessage)
