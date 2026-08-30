@@ -684,7 +684,13 @@ func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, 
 		episode.Owner = id.Principal.String()
 	}
 	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// WithoutCancel, not Background: the turn's context is about to
+		// be cancelled — the reply has already gone — but the values on
+		// it are still true. The identity this function reads by hand
+		// five lines above travels with it, as does any trace span, so
+		// an ingest failure is attributable to the turn that caused it
+		// rather than appearing from nowhere.
+		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		if err := a.cfg.EpisodicIngester.IngestTurn(bgCtx, episode); err != nil {
 			a.cfg.Logger.Warn("agent: episodic ingest failed; turn still succeeded",

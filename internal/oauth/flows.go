@@ -168,7 +168,12 @@ func (t *Tracker) pollLoop(ctx context.Context, flow *Flow, da *DeviceAuthRespon
 		return
 	}
 	// Success path — invoke the callback to persist the credential.
-	persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// WithoutCancel: the poll context may already be cancelled — the
+	// tracker shutting down, the flow's own deadline passing — and the
+	// user has by then completed the authorisation. Persisting has to
+	// outlive the loop that was waiting for it, or somebody approves a
+	// credential the node never stores.
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer persistCancel()
 	if err := onComplete(persistCtx, flow, tok); err != nil {
 		t.markOutcome(flow, "error", fmt.Errorf("persist: %w", err))
