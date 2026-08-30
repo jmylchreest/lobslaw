@@ -276,19 +276,52 @@ func patternMatches(pattern, value string) bool {
 	if pattern == "" || pattern == "*" {
 		return true
 	}
-	starPrefix := strings.HasPrefix(pattern, "*")
-	starSuffix := strings.HasSuffix(pattern, "*")
-	switch {
-	case starPrefix && starSuffix:
-		mid := strings.TrimPrefix(strings.TrimSuffix(pattern, "*"), "*")
-		return strings.Contains(value, mid)
-	case starPrefix:
-		return strings.HasSuffix(value, strings.TrimPrefix(pattern, "*"))
-	case starSuffix:
-		return strings.HasPrefix(value, strings.TrimSuffix(pattern, "*"))
-	default:
-		return pattern == value
+	// Split on the wildcards and walk the literal segments in order.
+	//
+	// A strict superset of what this used to do, which special-cased
+	// only a leading and a trailing star: "foo*" was HasPrefix, "*foo"
+	// HasSuffix, "*foo*" Contains, and a star anywhere else was matched
+	// as the literal character. Every one of those shapes still gives
+	// the same answer here; "a*b" is the case that changes, and it used
+	// to be a rule that silently matched nothing.
+	//
+	// Deliberately not filepath.Match. Its star stops at a separator,
+	// so a shipped rule like write_file:/etc/* would quietly narrow
+	// from "anything under /etc" to "one level under /etc" — tightening
+	// an operator's rule without telling them. Resources here are
+	// commands and grant keys, not paths; a separator has no meaning.
+	segments := strings.Split(pattern, "*")
+	if len(segments) == 1 {
+		return pattern == value // no wildcard at all
 	}
+	// Anchored at the front unless the pattern opens with a star.
+	if head := segments[0]; head != "" {
+		if !strings.HasPrefix(value, head) {
+			return false
+		}
+		value = value[len(head):]
+	}
+	// Anchored at the back unless it closes with one. Length-checked
+	// first: the head may already have eaten the characters the tail
+	// wants, and "ab*ab" must not match "ab" by counting them twice.
+	if tail := segments[len(segments)-1]; tail != "" {
+		if len(value) < len(tail) || !strings.HasSuffix(value, tail) {
+			return false
+		}
+		value = value[:len(value)-len(tail)]
+	}
+	// The rest must appear in order, each after the last.
+	for _, seg := range segments[1 : len(segments)-1] {
+		if seg == "" {
+			continue // "**" is just "*"
+		}
+		i := strings.Index(value, seg)
+		if i < 0 {
+			return false
+		}
+		value = value[i+len(seg):]
+	}
+	return true
 }
 
 // protoToRule converts the proto-wire PolicyRule into the typed
