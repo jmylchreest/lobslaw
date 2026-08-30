@@ -107,13 +107,23 @@ func TestRecallSitsJustBeforeTheUserMessage(t *testing.T) {
 	if len(msgs) < 2 {
 		t.Fatalf("expected several messages, got %d", len(msgs))
 	}
+	// One user message, recall first and the user's own words last, so
+	// the turn ends on the question rather than on what was
+	// remembered about it. Two messages meant the turn shipped words
+	// the user never said in a role that says they did, with the split
+	// implying a boundary the <untrusted> wrapper is supposed to own.
 	last := msgs[len(msgs)-1]
-	prev := msgs[len(msgs)-2]
-	if last.Content != "current question" {
-		t.Errorf("last message = %q, want the user's own message", last.Content)
+	if last.Role != "user" {
+		t.Errorf("last message role = %q, want user", last.Role)
 	}
-	if !strings.Contains(prev.Content, "remembered fact") {
-		t.Errorf("recall is not immediately before the user message; got %q", prev.Content)
+	if !strings.Contains(last.Content, "remembered fact") {
+		t.Errorf("recall is not in the user's turn; got %q", last.Content)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(last.Content), "current question") {
+		t.Errorf("the turn does not end on the user's own words; got %q", last.Content)
+	}
+	if prev := msgs[len(msgs)-2]; strings.Contains(prev.Content, "remembered fact") {
+		t.Errorf("recall is still in its own message; the wrapper should be the only boundary")
 	}
 	// History must still precede it, or the cache argument fails.
 	if !strings.Contains(msgs[1].Content, "earlier question") {
@@ -136,5 +146,51 @@ func TestNoRecallAddsNothing(t *testing.T) {
 	}
 	if (ContextAssembly{}).Rendered() != "" {
 		t.Error("an empty assembly rendered a non-empty block")
+	}
+}
+
+// The turn must never ship two consecutive user messages, one of
+// which the user did not write.
+//
+// Providers are free to concatenate adjacent same-role turns before
+// rendering. Any that does erases the message boundary, leaving the
+// <untrusted> wrapper to separate recalled text from what the user
+// actually typed — which is what it is for, but it should be the only
+// thing claiming that job rather than a second line of defence behind
+// a split that may not survive.
+func TestRecallDoesNotArriveAsASecondUserTurn(t *testing.T) {
+	t.Parallel()
+	a := &Agent{cfg: AgentConfig{ContextBudget: DefaultContextBudget()}}
+
+	msgs := a.seedMessages(ProcessMessageRequest{
+		SystemPrompt:    "sys",
+		RecalledContext: recallAssembly("remembered fact").Rendered(),
+		Message:         "current question",
+	})
+
+	userRuns := 0
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i].Role == "user" && msgs[i-1].Role == "user" {
+			userRuns++
+		}
+	}
+	if userRuns > 0 {
+		t.Errorf("the turn ships %d adjacent user messages; a provider that merges them "+
+			"erases the boundary between recall and what the user said", userRuns)
+	}
+}
+
+// Recall alone still produces something the model can answer, rather
+// than leaving the request ending on system scaffolding.
+func TestRecallWithNoUserTextStillEndsOnAUserTurn(t *testing.T) {
+	t.Parallel()
+	a := &Agent{cfg: AgentConfig{ContextBudget: DefaultContextBudget()}}
+
+	msgs := a.seedMessages(ProcessMessageRequest{
+		SystemPrompt:    "sys",
+		RecalledContext: recallAssembly("remembered fact").Rendered(),
+	})
+	if last := msgs[len(msgs)-1]; last.Role != "user" {
+		t.Errorf("last message role = %q, want user", last.Role)
 	}
 }
