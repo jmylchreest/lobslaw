@@ -2,6 +2,7 @@ package minimax
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -128,15 +129,15 @@ func (d *SpeakDriver) Speak(ctx context.Context, req compute.SpeakRequest) (*com
 	if text == "" {
 		return nil, compute.Permanent(fmt.Errorf("minimax speak: text required"))
 	}
-	format := firstNonEmpty(req.Format, d.cfg.Format, "mp3")
+	format := cmp.Or(req.Format, d.cfg.Format, "mp3")
 	body, err := json.Marshal(speakRequest{
-		Model:         firstNonEmpty(req.Model, d.cfg.Model),
+		Model:         cmp.Or(req.Model, d.cfg.Model),
 		Text:          text,
 		Stream:        false,
 		OutputFormat:  "hex",
 		LanguageBoost: "auto",
 		VoiceSetting: voiceSetting{
-			VoiceID: firstNonEmpty(req.Voice, d.cfg.Voice, defaultVoice),
+			VoiceID: cmp.Or(req.Voice, d.cfg.Voice, defaultVoice),
 			Speed:   clampSpeed(req.Speed),
 			Vol:     defaultVolume,
 		},
@@ -213,15 +214,6 @@ func mimeForFormat(format string) string {
 	default:
 		return "audio/mpeg"
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // clampSpeed keeps the multiplier inside what the vendor accepts.

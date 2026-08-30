@@ -16,6 +16,7 @@ package elevenlabs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -113,7 +114,7 @@ func (d *Driver) Speak(ctx context.Context, req compute.SpeakRequest) (*compute.
 	// the model chose, and a value containing a slash would otherwise
 	// address a different endpoint entirely.
 	endpoint := d.cfg.BaseURL + url.PathEscape(voice)
-	outputFormat := elevenFormat(firstNonEmpty(req.Format, d.cfg.Format))
+	outputFormat := elevenFormat(cmp.Or(req.Format, d.cfg.Format))
 	if outputFormat != "" {
 		endpoint += "?output_format=" + url.QueryEscape(outputFormat)
 	}
@@ -187,13 +188,6 @@ func mimeForOutputFormat(f string) string {
 	default:
 		return "audio/mpeg"
 	}
-}
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func truncate(b []byte) string {

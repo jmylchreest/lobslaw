@@ -16,6 +16,7 @@ package imagen
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -97,7 +98,7 @@ func (d *Driver) Generate(ctx context.Context, req compute.ImageRequest) (*compu
 		Instances: []instance{{Prompt: prompt}},
 		Parameters: parameters{
 			SampleCount: 1,
-			AspectRatio: aspectRatio(firstNonEmpty(req.Size, d.cfg.Size)),
+			AspectRatio: aspectRatio(cmp.Or(req.Size, d.cfg.Size)),
 		},
 	})
 	if err != nil {
@@ -204,13 +205,6 @@ func splitSize(s string) (w, h int, ok bool) {
 		}
 	}
 	return 0, 0, false
-}
-
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 func truncate(b []byte) string {

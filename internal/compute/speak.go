@@ -2,6 +2,7 @@ package compute
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -108,11 +109,11 @@ func (d *OpenAISpeakDriver) Speak(ctx context.Context, req SpeakRequest) (*Artif
 		return nil, Permanent(fmt.Errorf("speak: nothing to say"))
 	}
 
-	format := firstNonEmpty(req.Format, firstNonEmpty(d.cfg.Format, DefaultSpeakFormat))
+	format := cmp.Or(req.Format, d.cfg.Format, DefaultSpeakFormat)
 	body, err := json.Marshal(speakWire{
-		Model:          firstNonEmpty(req.Model, d.cfg.Model),
+		Model:          cmp.Or(req.Model, d.cfg.Model),
 		Input:          text,
-		Voice:          firstNonEmpty(req.Voice, d.cfg.Voice),
+		Voice:          cmp.Or(req.Voice, d.cfg.Voice),
 		ResponseFormat: format,
 		Speed:          req.Speed,
 	})

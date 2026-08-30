@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -209,7 +210,7 @@ func newCouncilReviewHandler(reg *ProviderRegistry) BuiltinFunc {
 			var peerSummary strings.Builder
 			peerSummary.WriteString("Round 1 answers from the council:\n\n")
 			for _, r := range responses {
-				fmt.Fprintf(&peerSummary, "--- %s ---\n%s\n\n", r.Label, firstNonEmpty(r.Content, r.Error))
+				fmt.Fprintf(&peerSummary, "--- %s ---\n%s\n\n", r.Label, cmp.Or(r.Content, r.Error))
 			}
 			round2 := make([]response, len(targets))
 			var wg2 sync.WaitGroup

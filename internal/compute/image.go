@@ -2,6 +2,7 @@ package compute
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -99,11 +100,11 @@ func (d *OpenAIImageDriver) Generate(ctx context.Context, req ImageRequest) (*Ar
 		format = "url"
 	}
 	body, err := json.Marshal(imageWire{
-		Model:          firstNonEmpty(req.Model, d.cfg.Model),
+		Model:          cmp.Or(req.Model, d.cfg.Model),
 		Prompt:         prompt,
 		N:              1,
-		Size:           firstNonEmpty(req.Size, d.cfg.Size),
-		Quality:        firstNonEmpty(req.Quality, d.cfg.Quality),
+		Size:           cmp.Or(req.Size, d.cfg.Size),
+		Quality:        cmp.Or(req.Quality, d.cfg.Quality),
 		ResponseFormat: format,
 	})
 	if err != nil {
