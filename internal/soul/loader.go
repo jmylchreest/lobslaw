@@ -156,22 +156,22 @@ func splitFrontmatter(raw []byte) ([]byte, []byte, error) {
 // SOUL.md doesn't require the operator to spell out every field.
 func applyDefaults(cfg *types.SoulConfig) {
 	if cfg.Scope == "" {
-		cfg.Scope = "default"
+		cfg.Scope = DefaultScope
 	}
 	if cfg.Language.Default == "" {
-		cfg.Language.Default = "en"
+		cfg.Language.Default = DefaultLanguage
 	}
 	if cfg.EmotiveStyle.EmojiUsage == "" {
-		cfg.EmotiveStyle.EmojiUsage = "minimal"
+		cfg.EmotiveStyle.EmojiUsage = DefaultEmojiUsage
 	}
 	if cfg.Adjustments.FeedbackCoefficient == 0 {
-		cfg.Adjustments.FeedbackCoefficient = 0.15
+		cfg.Adjustments.FeedbackCoefficient = DefaultFeedbackCoefficient
 	}
 	if cfg.Adjustments.CooldownPeriod == 0 {
-		cfg.Adjustments.CooldownPeriod = 24 * 3600 * 1_000_000_000 // 24h in ns
+		cfg.Adjustments.CooldownPeriod = DefaultCooldownPeriod
 	}
 	if cfg.Feedback.Classifier == "" {
-		cfg.Feedback.Classifier = "llm"
+		cfg.Feedback.Classifier = DefaultFeedbackClassifier
 	}
 }
 
