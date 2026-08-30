@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -144,5 +145,43 @@ enabled = true
 				t.Errorf("disabled_tools = %v, want %v", *got, *tc.want)
 			}
 		})
+	}
+}
+
+// The ports in the generated config must be the compiled-in ones.
+//
+// Same failure as disabled_tools, one layer down: the template used to
+// spell 7443 and 8443 itself, so changing either constant would have
+// left `lobslaw init` writing a config that pointed at the old port
+// while the binary listened on the new one — a node that starts, looks
+// healthy, and is unreachable.
+//
+// Parsed through the real loader rather than string-matched, because
+// what matters is the value an operator's node ends up with, not the
+// characters in the file.
+func TestInitConfigUsesTheCompiledInPorts(t *testing.T) {
+	t.Parallel()
+	_, path := renderInitConfig(t)
+
+	cfg, err := config.Load(config.LoadOptions{Path: path, SkipEnv: true})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	_, port, err := net.SplitHostPort(cfg.Cluster.ListenAddr)
+	if err != nil {
+		t.Fatalf("generated listen_addr %q is not host:port: %v", cfg.Cluster.ListenAddr, err)
+	}
+	_, wantPort, err := net.SplitHostPort(config.DefaultClusterListenAddr)
+	if err != nil {
+		t.Fatalf("DefaultClusterListenAddr %q is not host:port: %v", config.DefaultClusterListenAddr, err)
+	}
+	if port != wantPort {
+		t.Errorf("generated cluster port = %s, want %s (config.DefaultClusterListenAddr)", port, wantPort)
+	}
+
+	if cfg.Gateway.HTTPPort != config.DefaultGatewayHTTPPort {
+		t.Errorf("generated http_port = %d, want %d (config.DefaultGatewayHTTPPort)",
+			cfg.Gateway.HTTPPort, config.DefaultGatewayHTTPPort)
 	}
 }

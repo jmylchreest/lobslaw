@@ -22,6 +22,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -64,7 +65,8 @@ type RESTConfig struct {
 	// on Telegram. Nil emits them for any client that asked to stream.
 	Soul func() *types.SoulConfig
 
-	// Addr is the host:port to bind. Empty → ":8443" by default.
+	// Addr is the host:port to bind. Empty → the compiled-in
+	// [config.DefaultGatewayHTTPPort] on every interface.
 	Addr string
 
 	// TLSCert / TLSKey enable HTTPS. Both empty = plaintext HTTP
@@ -180,7 +182,7 @@ type Server struct {
 // endpoints for load-balancer probes.
 func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 	if cfg.Addr == "" {
-		cfg.Addr = ":8443"
+		cfg.Addr = fmt.Sprintf(":%d", config.DefaultGatewayHTTPPort)
 	}
 	if cfg.ReadTimeout <= 0 {
 		cfg.ReadTimeout = 30 * time.Second
