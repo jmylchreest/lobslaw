@@ -144,3 +144,27 @@ func TestNoPrincipleIsLeftHalfFinished(t *testing.T) {
 		}
 	}
 }
+
+// A tool can be taken away as well as granted, and the prompt used to
+// say only the second.
+//
+// The asymmetry mattered because episodic recall replays memories of
+// using tools that may since have been disabled. "A tool that was
+// missing earlier may be available now" then reads as encouragement to
+// retry something that is gone, and the recalled memory is exactly the
+// "when in doubt" trigger. Both directions now, and the tool list is
+// named as the arbiter.
+func TestStateChangeIsStatedInBothDirections(t *testing.T) {
+	t.Parallel()
+
+	body := BuildSafety([]ToolInfo{{Name: "shell_command"}}).Body
+	for _, want := range []string{
+		"may be available now",   // gaining one
+		"may be gone",            // losing one
+		"not evidence you still", // a memory is not a capability
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the state-change principle does not say %q", want)
+		}
+	}
+}
