@@ -31,6 +31,11 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
+// defaultImageMIME is what Imagen returns when the response omits a
+// type. Imagen's own default output format, so assuming anything else
+// would mislabel the bytes we were actually handed.
+const defaultImageMIME = "image/png"
+
 const DriverName = "imagen"
 
 type Config struct {
@@ -162,7 +167,7 @@ func (d *Driver) Generate(ctx context.Context, req compute.ImageRequest) (*compu
 
 	mime := p.MIMEType
 	if mime == "" {
-		mime = "image/png"
+		mime = defaultImageMIME
 	}
 	return &compute.Artifact{Kind: compute.ArtifactInline, Bytes: decoded, MIME: mime}, nil
 }

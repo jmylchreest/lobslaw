@@ -89,7 +89,7 @@ func TemplateSearchFactory(cfg SearchDriverConfig) (SearchDriver, error) {
 
 	queryParam := option(cfg.Options, "query_param")
 	if queryParam == "" {
-		queryParam = "q"
+		queryParam = DefaultSearchQueryParam
 	}
 	fields := make(map[string]string, len(templateResponseFields))
 	for k, def := range templateResponseFields {

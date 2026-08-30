@@ -24,6 +24,11 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
+// errTaskFailedNoReason stands in when DashScope reports a failure
+// with neither a code nor a message. An empty error reads as success
+// to everything downstream, which is the one thing it must not do.
+const errTaskFailedNoReason = "task failed without a reason"
+
 const (
 	// DefaultSubmitEndpoint is the text-to-video synthesis path.
 	DefaultSubmitEndpoint = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
@@ -239,7 +244,7 @@ func (d *Driver) Poll(ctx context.Context, h compute.JobHandle) (compute.JobStat
 	case compute.JobFailed:
 		st.Err = strings.TrimSpace(out.Output.Code + " " + out.Output.Message)
 		if st.Err == "" {
-			st.Err = "task failed without a reason"
+			st.Err = errTaskFailedNoReason
 		}
 	}
 	return st, nil

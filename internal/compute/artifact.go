@@ -235,7 +235,7 @@ func safeArtifactName(name, mime string) string {
 	base := filepath.Base(filepath.Clean("/" + strings.ReplaceAll(name, `\`, "/")))
 	base = strings.TrimSpace(base)
 	if base == "" || base == "." || base == "/" || base == ".." {
-		base = "artifact"
+		base = DefaultArtifactBaseName
 	}
 	// Trailing dots are trimmed before asking whether there is an
 	// extension. A name ending in "." — which a prompt-derived name

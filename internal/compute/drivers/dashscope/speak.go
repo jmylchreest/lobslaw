@@ -31,6 +31,11 @@ import (
 // back the assembled bytes. Nothing above it needs to know.
 
 // DefaultSpeakEndpoint is the DashScope inference socket.
+// errTaskFailedNoMessage stands in when the synthesis stream reports a
+// failure with an empty message, for the same reason as
+// errTaskFailedNoReason: an empty error reads as success.
+const errTaskFailedNoMessage = "task failed with no message"
+
 const DefaultSpeakEndpoint = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference"
 
 // defaultSpeakVoice is a system voice for qwen-audio-3.0-tts-plus.
@@ -321,7 +326,7 @@ func (d *SpeakDriver) collect(
 func (d *SpeakDriver) taskFailure(ev taskEvent) error {
 	msg := strings.TrimSpace(ev.Header.ErrorMessage)
 	if msg == "" {
-		msg = "task failed with no message"
+		msg = errTaskFailedNoMessage
 	}
 	err := fmt.Errorf("dashscope speak: %s: %s", ev.Header.ErrorCode, msg)
 	if ev.Header.ErrorCode == "InvalidParameter" {

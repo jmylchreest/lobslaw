@@ -355,7 +355,7 @@ func (c *StaticCredential) Apply(_ context.Context, req *http.Request) error {
 	}
 	h := c.Header
 	if h == "" {
-		h = "Authorization"
+		h = DefaultAuthHeader
 	}
 	req.Header.Set(h, c.Prefix+c.Value)
 	return nil

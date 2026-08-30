@@ -61,7 +61,7 @@ func FromConfig(cfg config.BudgetsConfig) BudgetCaps {
 func FromLimits(cfg config.LimitsConfig) BudgetCaps {
 	cap := cfg.MaxToolCallsPerTurn
 	if cap == 0 {
-		cap = 30
+		cap = DefaultMaxToolCallsPerTurn
 	}
 	return BudgetCaps{MaxToolCalls: cap}
 }
