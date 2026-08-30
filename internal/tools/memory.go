@@ -89,7 +89,7 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 		if err := b.Register("memory_forget", newMemoryForgetHandler(cfg.Forgetter, cfg.CrossOwner)); err != nil {
 			return err
 		}
-		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Raft, cfg.Forgetter, cfg.CrossOwner)); err != nil {
+		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Store, cfg.Raft, cfg.Forgetter, cfg.CrossOwner)); err != nil {
 			return err
 		}
 	}
@@ -412,6 +412,28 @@ func annotateEmbeddingFailure(payload []byte, err error) []byte {
 // EpisodicRecord via Raft. The ID is auto-generated (UUID) so the
 // model doesn't need to synthesise one. Tags come in as a
 // JSON-encoded string array from the LLM's tool-call arguments.
+// memoryOwnership derives who a written memory belongs to and which
+// conversation it came from.
+//
+// Refuses rather than writing an ownerless record, matching the ingest
+// path. Every Claims construction in the tree yields a principal —
+// "anon" for unauthenticated REST, "webhook:<name>", "scheduler", the
+// channel identity — so an empty one here means a turn was built
+// without identity, and the honest outcome is an error the operator
+// can see rather than a memory that reports success and disappears.
+func memoryOwnership(ctx context.Context) (owner, sessionRef string, err error) {
+	id, _ := turn.IdentityFrom(ctx)
+	owner = id.Principal.String()
+	if owner == "" {
+		return "", "", errors.New("this turn carries no identity, and a record nobody owns " +
+			"is a record nobody can read; refusing rather than storing something unreachable")
+	}
+	if id.Channel != "" && id.ChannelID != "" {
+		sessionRef = id.Channel + ":" + id.ChannelID
+	}
+	return owner, sessionRef, nil
+}
+
 func newMemoryWriteHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		event := strings.TrimSpace(args["event"])
@@ -439,6 +461,23 @@ func newMemoryWriteHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 			tags = append(tags, promptguard.Tag(f))
 		}
 
+		// Owned, because an unowned record is one nobody can read.
+		//
+		// visibility.go states the rule and its reasoning: an unowned
+		// record "is readable by nobody but Everyone()", and being
+		// invisible is how an upstream bug surfaces. This was that
+		// bug. Every memory written here went in without an owner, so
+		// passive recall and memory_search both filtered it out the
+		// moment it was stored — the model was told it had remembered
+		// something and could never retrieve it. The ingest path
+		// refuses an ownerless turn outright; this one had no
+		// equivalent, so the same mistake was loud in one place and
+		// silent in the other.
+		owner, sessionRef, oerr := memoryOwnership(ctx)
+		if oerr != nil {
+			return nil, 1, fmt.Errorf("memory_write: %w", oerr)
+		}
+
 		id := ids.New()
 		rec := &lobslawv1.EpisodicRecord{
 			Id:         id,
@@ -448,6 +487,9 @@ func newMemoryWriteHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 			Tags:       tags,
 			Timestamp:  timestamppb.Now(),
 			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
+			Owner:      owner,
+			Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE,
+			SessionRef: sessionRef,
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -621,11 +663,73 @@ func newMemoryForgetHandler(svc memoryForgetter, crossOwner compute.CrossOwnerAu
 	}
 }
 
+// priorEpisodic reads the record being corrected, or nil.
+//
+// Best-effort by design. A correction whose original has already been
+// forgotten is still a correction worth writing, so a miss here
+// degrades the metadata rather than failing the call.
+func priorEpisodic(store *memory.Store, id string) *lobslawv1.EpisodicRecord {
+	if store == nil || id == "" {
+		return nil
+	}
+	raw, err := store.Get(memory.BucketEpisodicRecords, id)
+	if err != nil {
+		return nil
+	}
+	var rec lobslawv1.EpisodicRecord
+	if err := proto.Unmarshal(raw, &rec); err != nil {
+		return nil
+	}
+	return &rec
+}
+
+// correctedImportance keeps the original's importance unless the
+// caller supplies one. A correction is a restatement of the same fact,
+// so it is as important as what it replaces.
+func correctedImportance(args map[string]string, prior *lobslawv1.EpisodicRecord) int32 {
+	if raw, ok := args["importance"]; ok && raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 10 {
+			return int32(n)
+		}
+	}
+	if prior != nil && prior.Importance > 0 {
+		return prior.Importance
+	}
+	return 5
+}
+
+// correctedTags keeps the original's tags and adds the corrects
+// marker, rather than replacing them with it. The old tags are how the
+// memory was findable; a correction should not cost that.
+func correctedTags(prior *lobslawv1.EpisodicRecord, oldID string) []string {
+	out := []string{"corrects:" + oldID}
+	if prior == nil {
+		return out
+	}
+	for _, t := range prior.Tags {
+		if strings.HasPrefix(t, "corrects:") {
+			continue // not a chain of every ancestor
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// correctedRetention keeps the original's retention tier. Forcing
+// long-term promoted a short-term memory the operator had scoped
+// deliberately.
+func correctedRetention(prior *lobslawv1.EpisodicRecord) lobslawv1.Retention {
+	if prior != nil && prior.Retention != lobslawv1.Retention_RETENTION_UNSPECIFIED {
+		return prior.Retention
+	}
+	return lobslawv1.Retention_RETENTION_LONG_TERM
+}
+
 // newMemoryCorrectHandler writes a new memory with superseded
 // metadata, then forgets the original by id. Two-step operation
 // but single transactional intent: audit log retains both the new
 // write and the forget, preserving the correction trail.
-func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter, crossOwner compute.CrossOwnerAuthorizer) compute.BuiltinFunc {
+func newMemoryCorrectHandler(store *memory.Store, raft memoryRaftApplier, forgetter memoryForgetter, crossOwner compute.CrossOwnerAuthorizer) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		oldID := strings.TrimSpace(args["id"])
 		if oldID == "" {
@@ -637,17 +741,41 @@ func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter, 
 		}
 		newContext := args["new_context"]
 
+		// The record being corrected, read for its metadata. Absent or
+		// unreadable is not fatal: the correction still stands, it
+		// just carries defaults rather than the original's importance
+		// and tags.
+		prior := priorEpisodic(store, oldID)
+
+		// Owned, for the reason memory_write is. An unowned correction
+		// is unreadable, and the forget below is scoped to the caller
+		// — so a correction that nobody owns replaces a readable
+		// memory with an invisible one and reports success.
+		owner, sessionRef, oerr := memoryOwnership(ctx)
+		if oerr != nil {
+			return nil, 1, fmt.Errorf("memory_correct: %w", oerr)
+		}
+
 		// Step 1: write the correction as a new memory with a
 		// "corrects:<old_id>" tag so the audit trail is queryable.
 		newID := ids.New()
 		newRec := &lobslawv1.EpisodicRecord{
-			Id:         newID,
-			Event:      newEvent,
-			Context:    newContext,
-			Importance: 5,
-			Tags:       []string{"corrects:" + oldID},
+			Id:      newID,
+			Event:   newEvent,
+			Context: newContext,
+			// Carried from the original where the caller did not say
+			// otherwise. Hardcoding importance 5 silently demoted a
+			// correction to an importance-9 memory, and replacing the
+			// tag list dropped every topic tag the old record was
+			// findable by — a correction that makes a memory harder to
+			// find has undone more than it fixed.
+			Importance: correctedImportance(args, prior),
+			Tags:       correctedTags(prior, oldID),
 			Timestamp:  timestamppb.Now(),
-			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
+			Retention:  correctedRetention(prior),
+			Owner:      owner,
+			Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE,
+			SessionRef: sessionRef,
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
