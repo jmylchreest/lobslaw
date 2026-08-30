@@ -23,7 +23,7 @@ var memoryBuckets = map[string]bool{
 var audienceMarkers = map[string]bool{
 	"AllowsEpisodic": true,
 	"AllowsVector":   true,
-	"readAudience":   true,
+	"ReadAudience":   true,
 	"For":            true,
 	"Everyone":       true,
 }
@@ -33,7 +33,7 @@ var audienceMarkers = map[string]bool{
 //
 // v1 asserted that every call to VectorSearch passed an Audience. It
 // passed for a week while memory_search leaked every owner's records
-// through runSubstringSearch, which walks the episodic bucket directly
+// through RunSubstringSearch, which walks the episodic bucket directly
 // and never calls VectorSearch at all.
 //
 // v2 widened to the bucket but checked per FILE — does a file that

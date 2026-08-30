@@ -11,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/tools"
+
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -25,7 +26,7 @@ import (
 // constant, so on a host install MkdirAll under it failed for an
 // unprivileged process and an inbound photograph could not be
 // received at all.
-const DefaultIncomingDownloadDir = compute.DefaultIncomingDir
+const DefaultIncomingDownloadDir = tools.DefaultIncomingDir
 
 // incomingDir is the configured directory, or the default.
 func (h *TelegramHandler) incomingDir() string {

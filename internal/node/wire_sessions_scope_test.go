@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/tools"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -71,7 +72,7 @@ func TestSessionBrowserRecentFiltersBeforeLimiting(t *testing.T) {
 	browser := seededBrowser(t, recs...)
 
 	scope := turn.Identity{UserID: "alice"}
-	got, err := browser.Recent(context.Background(), 2, compute.SessionVisibilityFor(scope))
+	got, err := browser.Recent(context.Background(), 2, tools.SessionVisibilityFor(scope))
 	if err != nil {
 		t.Fatal(err)
 	}

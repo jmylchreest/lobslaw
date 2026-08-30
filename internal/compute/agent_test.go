@@ -528,7 +528,7 @@ func TestRunToolCallLoopKeepsIdentityOutOfToolArgs(t *testing.T) {
 	)
 	var seen map[string]string
 	var seenIdentity turn.Identity
-	b := NewBuiltins()
+	b := newTestDispatcher()
 	if err := b.Register("whoami", func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		seen = args
 		seenIdentity, _ = turn.IdentityFrom(ctx)

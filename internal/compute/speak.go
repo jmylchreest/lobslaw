@@ -146,7 +146,7 @@ func (d *OpenAISpeakDriver) Speak(ctx context.Context, req SpeakRequest) (*Artif
 	if resp.StatusCode >= 400 {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("speak: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("speak: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
 		}
 	}
 	if len(raw) == 0 {

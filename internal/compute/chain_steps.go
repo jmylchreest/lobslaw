@@ -134,7 +134,7 @@ func (a *Agent) runChainStep(
 	if req.Budget != nil {
 		req.Budget.RecordCostUSD(resp.cost)
 	}
-	return stripReasoningTags(resp.Content), nil
+	return StripReasoningTags(resp.Content), nil
 }
 
 // renderStepPrompt renders a step's template.

@@ -100,14 +100,14 @@ func (e *Executor) approvalFor(tool string) (gatedTool, bool) {
 	return g, ok
 }
 
-// checkGate runs the extra gate, if the tool has one.
+// CheckGate runs the extra gate, if the tool has one.
 //
 // Returns ErrRequireConfirm carrying a summary of WHAT is about to
 // happen, because the decision is about the content and a prompt that
 // withholds it cannot be answered — and carrying the gate's own action
 // and resource, because the channel has to record the answer against
 // the operation that was actually asked about.
-func (e *Executor) checkGate(ctx context.Context, claims *types.Claims, tool string, params map[string]string) error {
+func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool string, params map[string]string) error {
 	gate, ok := e.approvalFor(tool)
 	if !ok {
 		return nil
@@ -116,7 +116,7 @@ func (e *Executor) checkGate(ctx context.Context, claims *types.Claims, tool str
 	if gate.resolve != nil {
 		resource, grantable = gate.resolve(params)
 	}
-	err := e.policyAllow(ctx, claims, gate.action, resource)
+	err := e.PolicyAllow(ctx, claims, gate.action, resource)
 	if err == nil {
 		return nil
 	}

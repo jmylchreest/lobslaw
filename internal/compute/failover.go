@@ -8,7 +8,22 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// failoverBuiltin turns an ordered list of handlers for one modality
+// FailoverHandler pairs a handler with the provider label its health
+// is tracked under. The label is what makes a demotion shared: a
+// provider that failed for the image modality is the same endpoint the
+// speak modality would reach, and rediscovering that separately per
+// modality is the waste this exists to avoid.
+type FailoverHandler struct {
+	Label string
+	// Tier is the provider's declared trust tier, checked against the
+	// soul floor before the handler runs. A modality provider is not a
+	// lesser recipient of content — a vision provider is handed the
+	// user's image, and a speak provider the text of the reply.
+	Tier types.TrustTier
+	Fn   BuiltinFunc
+}
+
+// FailoverBuiltin turns an ordered list of handlers for one modality
 // into a single handler that walks them.
 //
 // The ordering is not invented here. Operators already express it —
@@ -28,22 +43,7 @@ import (
 // required field fails before any HTTP call, is unclassified, and so
 // classifies permanent — the chain stops on the first handler rather
 // than re-validating the same bad input against every provider.
-// failoverHandler pairs a handler with the provider label its health
-// is tracked under. The label is what makes a demotion shared: a
-// provider that failed for the image modality is the same endpoint the
-// speak modality would reach, and rediscovering that separately per
-// modality is the waste this exists to avoid.
-type failoverHandler struct {
-	label string
-	// tier is the provider's declared trust tier, checked against the
-	// soul floor before the handler runs. A modality provider is not a
-	// lesser recipient of content — a vision provider is handed the
-	// user's image, and a speak provider the text of the reply.
-	tier types.TrustTier
-	fn   BuiltinFunc
-}
-
-func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, floor func() types.TrustTier, handlers ...failoverHandler) BuiltinFunc {
+func FailoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, floor func() types.TrustTier, handlers ...FailoverHandler) BuiltinFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -62,38 +62,38 @@ func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, 
 		)
 		want := trustFloorOf(floor)
 		for i, h := range handlers {
-			considered = append(considered, TrustCandidate{Label: h.label, Tier: h.tier})
-			if !MeetsFloor(want, h.tier) {
+			considered = append(considered, TrustCandidate{Label: h.Label, Tier: h.Tier})
+			if !MeetsFloor(want, h.Tier) {
 				belowFloor++
 				log.Warn("compute: provider excluded by the trust floor",
-					"modality", modality, "label", h.label,
-					"trust_tier", h.tier, "min_trust_tier", want)
+					"modality", modality, "label", h.Label,
+					"trust_tier", h.Tier, "min_trust_tier", want)
 				continue
 			}
-			if !health.Available(h.label) {
+			if !health.Available(h.Label) {
 				skipped++
 				log.Debug("compute: skipping demoted provider",
-					"modality", modality, "label", h.label,
-					"cooldown_remaining", health.CooldownRemaining(h.label))
+					"modality", modality, "label", h.Label,
+					"cooldown_remaining", health.CooldownRemaining(h.Label))
 				continue
 			}
-			out, code, err := h.fn(ctx, args)
+			out, code, err := h.Fn(ctx, args)
 			if err == nil {
-				health.RecordSuccess(h.label)
+				health.RecordSuccess(h.Label)
 				if i > 0 || skipped > 0 {
 					log.Info("compute: modality backup succeeded",
 						"modality", modality, "provider_index", i,
 						"skipped_demoted", skipped,
-						"prior_error", errText(lastErr))
+						"prior_error", ErrorText(lastErr))
 				}
 				return out, code, nil
 			}
-			if !isRetryableProviderError(ctx, err) {
+			if !IsRetryableProviderError(ctx, err) {
 				return out, code, err
 			}
-			health.RecordFailure(h.label, ClassifyFailure(err))
-			logProviderFailure(log, err, "modality", modality,
-				"provider_index", i, "label", h.label)
+			health.RecordFailure(h.Label, ClassifyFailure(err))
+			LogProviderFailure(log, err, "modality", modality,
+				"provider_index", i, "label", h.Label)
 			lastOut, lastCode, lastErr = out, code, err
 		}
 		if lastErr == nil && belowFloor > 0 && belowFloor+skipped == len(handlers) {

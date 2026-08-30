@@ -12,6 +12,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -144,13 +145,13 @@ func (n *Node) registerSlackTools(sl *gateway.SlackHandler) {
 	if sl == nil || n.builtinsRegistry == nil || n.toolRegistry == nil {
 		return
 	}
-	if err := compute.RegisterSlackBuiltins(n.builtinsRegistry, compute.SlackToolConfig{
+	if err := tools.RegisterSlackBuiltins(n.builtinsRegistry, tools.SlackToolConfig{
 		Reader: sl,
 	}); err != nil {
 		n.log.Warn("slack: read tools not registered", "err", err)
 		return
 	}
-	for _, td := range compute.SlackToolDefs() {
+	for _, td := range tools.SlackToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			n.log.Warn("slack: tool def register failed", "name", td.Name, "err", err)
 		}
@@ -193,13 +194,13 @@ func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHan
 	}
 	n.notifySvc = notifySvc
 
-	if err := compute.RegisterNotifyBuiltins(n.builtinsRegistry, compute.NotifyConfig{
+	if err := tools.RegisterNotifyBuiltins(n.builtinsRegistry, tools.NotifyConfig{
 		Service: notifySvc,
 	}); err != nil {
 		n.log.Warn("notify: builtin register failed", "err", err)
 		return
 	}
-	for _, td := range compute.NotifyToolDefs() {
+	for _, td := range tools.NotifyToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
 		}
@@ -391,7 +392,7 @@ func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig) (*gateway.Web
 // Secret refs resolve via the channel resolver (same one Telegram
 // uses). Plugin-provided MCP manifests still work independently.
 // registerMCPToolsWithCompute adds each live MCP tool's ToolDef
-// into the compute.Registry so the LLM sees them in its function
+// into the tools.Registry so the LLM sees them in its function
 // list. Also chains the Loader into the agent's SkillDispatcher so
 // tool calls with mcp-registered names dispatch through it.
 // Called once after startMCPFromConfig; safe to call with zero
@@ -421,12 +422,12 @@ func (n *Node) registerMCPToolsWithCompute() {
 	}
 
 	if n.builtinsRegistry != nil && n.toolRegistry != nil {
-		if err := compute.RegisterMCPManagementBuiltins(n.builtinsRegistry, compute.MCPManagementConfig{
+		if err := tools.RegisterMCPManagementBuiltins(n.builtinsRegistry, tools.MCPManagementConfig{
 			Registry: n.mcpLoader,
 		}); err != nil {
 			n.log.Warn("mcp: register management builtins failed", "err", err)
 		} else {
-			for _, td := range compute.MCPManagementToolDefs() {
+			for _, td := range tools.MCPManagementToolDefs() {
 				if err := n.toolRegistry.Register(td); err != nil {
 					n.log.Warn("mcp: register management tool def failed",
 						"name", td.Name, "err", err)

@@ -50,19 +50,19 @@ func hardlineCheck(params map[string]string) error {
 	return nil
 }
 
-// hardlinePathRefusal returns the structured tool error for a path the
+// HardlinePathRefusal returns the structured tool error for a path the
 // floor denies, or ok=false when it has no objection.
 //
 // The fs builtins call this themselves as well as being covered by the
 // executor, for the same reason the shell builtin does: the executor
 // check cannot be bypassed by a new caller, and this one still fires
 // if some future path reaches the builtin directly.
-func hardlinePathRefusal(path, verb string) (payload []byte, exit int, ok bool) {
+func HardlinePathRefusal(path, verb string) (payload []byte, exit int, ok bool) {
 	verdict, err := policy.CheckPath(path)
 	if verdict != policy.PathDenied {
 		return nil, 0, false
 	}
-	p, e, _ := marshalToolError("hardline_refused",
+	p, e, _ := MarshalToolError("hardline_refused",
 		path+" cannot be "+verb+": "+err.Error(),
 		"this refusal is compiled in and there is no configuration that permits it; do not retry, and do not look for another way to reach the same file")
 	return p, e, true

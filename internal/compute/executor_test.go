@@ -24,7 +24,7 @@ import (
 // hook dispatcher, the Executor, plus the memory.Store so tests can
 // seed policy rules directly.
 type testEnv struct {
-	reg      *Registry
+	reg      *testCatalogue
 	policy   *policy.Engine
 	store    *memory.Store
 	hooks    *hooks.Dispatcher
@@ -52,7 +52,7 @@ func newTestEnv(t *testing.T, opts ...func(*ExecutorConfig)) *testEnv {
 	seedAllowAll(t, store)
 
 	eng := policy.NewEngine(store, nil)
-	reg := NewRegistry()
+	reg := newTestCatalogue()
 
 	cfg := ExecutorConfig{}
 	for _, opt := range opts {
@@ -788,7 +788,7 @@ func TestExecutorResolvePolicyEmptyToolPolicyShortCircuitsFleet(t *testing.T) {
 
 func TestCappedBuffer(t *testing.T) {
 	t.Parallel()
-	buf := &cappedBuffer{cap: 10}
+	buf := &CappedBuffer{cap: 10}
 	n, err := buf.Write([]byte("0123456789abcdef"))
 	if err != nil {
 		t.Fatal(err)

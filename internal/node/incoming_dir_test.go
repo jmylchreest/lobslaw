@@ -5,7 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/tools"
+
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -18,8 +19,8 @@ import (
 func TestTheIncomingDirDefaultsToTheContainerPath(t *testing.T) {
 	t.Parallel()
 	n := &Node{cfg: Config{}}
-	if got := n.incomingDir(); got != compute.DefaultIncomingDir {
-		t.Errorf("incomingDir() = %q, want the default %q", got, compute.DefaultIncomingDir)
+	if got := n.incomingDir(); got != tools.DefaultIncomingDir {
+		t.Errorf("incomingDir() = %q, want the default %q", got, tools.DefaultIncomingDir)
 	}
 }
 

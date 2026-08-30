@@ -93,7 +93,7 @@ func (s *llmSummarizer) SummarizeConversation(ctx context.Context, prior string,
 	}
 	b.WriteString("New messages to fold in:\n")
 	for _, m := range msgs {
-		b.WriteString(renderForSummary(m, s.cfg.ToolResultBytes))
+		b.WriteString(RenderForSummary(m, s.cfg.ToolResultBytes))
 	}
 
 	system := summarizerSystemPrompt
@@ -119,14 +119,14 @@ func (s *llmSummarizer) SummarizeConversation(ctx context.Context, prior string,
 	return strings.TrimSpace(resp.Content), nil
 }
 
-// renderForSummary flattens one message into the transcript the
+// RenderForSummary flattens one message into the transcript the
 // summariser reads.
 //
 // Tool results are truncated hard. The summariser is being asked what
 // mattered about an exchange, and 10 MB of grep output does not help
 // it answer that — it just costs tokens on a call whose entire
 // purpose is to save them.
-func renderForSummary(m Message, maxToolResultBytes int) string {
+func RenderForSummary(m Message, maxToolResultBytes int) string {
 	var b strings.Builder
 	switch m.Role {
 	case "tool":

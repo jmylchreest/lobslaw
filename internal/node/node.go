@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
@@ -330,7 +331,7 @@ type Node struct {
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
-	toolRegistry *compute.Registry
+	toolRegistry *tools.Registry
 	hooksDisp    *hooks.Dispatcher
 	policyEngine *policy.Engine
 	resolver     *compute.Resolver
@@ -405,8 +406,8 @@ type Node struct {
 	providerRegistry *compute.ProviderRegistry
 	mcpLoader        *mcp.Loader
 	webhookHandlers  []*gateway.WebhookHandler
-	mountResolver    *compute.MountResolver
-	builtinsRegistry *compute.Builtins
+	mountResolver    *tools.MountResolver
+	builtinsRegistry *tools.Builtins
 
 	// egressProvider is the in-process smokescreen-backed forward
 	// proxy. Constructed early in boot via wireEgress; every later

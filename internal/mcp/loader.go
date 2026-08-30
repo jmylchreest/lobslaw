@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/tools"
+
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -391,10 +393,10 @@ func (l *Loader) ListTools() []Tool {
 // tools map; healthy is stubbed to true today (MCP doesn't have a
 // cheap liveness probe — reachability is only confirmed when the
 // next CallTool runs).
-func (l *Loader) ListServers() []compute.MCPServerView {
+func (l *Loader) ListServers() []tools.MCPServerView {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	out := make([]compute.MCPServerView, 0, len(l.servers))
+	out := make([]tools.MCPServerView, 0, len(l.servers))
 	for name, srv := range l.servers {
 		count := 0
 		for _, t := range l.tools {
@@ -402,7 +404,7 @@ func (l *Loader) ListServers() []compute.MCPServerView {
 				count++
 			}
 		}
-		out = append(out, compute.MCPServerView{
+		out = append(out, tools.MCPServerView{
 			Name:      name,
 			Command:   srv.command,
 			Args:      srv.args,

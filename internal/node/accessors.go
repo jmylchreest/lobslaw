@@ -12,6 +12,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/internal/storage"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 )
 
@@ -27,7 +28,7 @@ func (n *Node) Policy() *policy.Service          { return n.policySvc }
 func (n *Node) Memory() *memory.Service          { return n.memorySvc }
 func (n *Node) Raft() *memory.RaftNode           { return n.raft }
 func (n *Node) Agent() *compute.Agent            { return n.agent }
-func (n *Node) ToolRegistry() *compute.Registry  { return n.toolRegistry }
+func (n *Node) ToolRegistry() *tools.Registry    { return n.toolRegistry }
 func (n *Node) Resolver() *compute.Resolver      { return n.resolver }
 func (n *Node) Gateway() *gateway.Server         { return n.gatewaySrv }
 func (n *Node) Plan() *plan.Service              { return n.planSvc }

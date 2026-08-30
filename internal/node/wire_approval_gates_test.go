@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/tools"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
@@ -37,9 +39,9 @@ func approvalGateNode(t *testing.T, memoryWrite, withShell bool) (*Node, *policy
 
 	log := slog.New(slog.DiscardHandler)
 	eng := policy.NewEngine(store, log)
-	reg := compute.NewRegistry()
+	reg := tools.NewRegistry()
 	if withShell {
-		if err := reg.Register(compute.ShellToolDef()); err != nil {
+		if err := reg.Register(tools.ShellToolDef()); err != nil {
 			t.Fatal(err)
 		}
 	}

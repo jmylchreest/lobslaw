@@ -97,7 +97,7 @@ type AgentConfig struct {
 	// this — the agent pulls its own tool list at turn start. Nil
 	// → no tools are advertised (model runs without function-
 	// calling unless the caller populates req.Tools manually).
-	Registry *Registry
+	Registry ToolCatalogue
 
 	// Soul returns the current SoulConfig on each turn. Agent
 	// assembles the system prompt via promptgen so channels stay
@@ -547,7 +547,7 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// where the ContextEngine runs its passive recall, and that recall
 	// needs to know whose memories it may read. Getting this order wrong
 	// is how the recall came to be unscoped in the first place.
-	ctx = turn.WithIdentity(ctx, a.turnIdentityFor(req))
+	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
 	// Attached once, at the top, so anything downstream can emit a
 	// span without every intermediate signature growing a parameter.
 	// A nil recorder leaves the context untouched, which is what a
@@ -747,7 +747,7 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
-	ctx = turn.WithIdentity(ctx, a.turnIdentityFor(req))
+	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
 	a.fillDefaults(ctx, &req)
 	msgs := make([]Message, len(priorMessages))
 	copy(msgs, priorMessages)
@@ -895,7 +895,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// look something up. A no-op unless a multi-step chain
 			// routed this turn.
 			final := a.runChainSteps(ctx, req, chatResp.Content)
-			resp.Reply = stripReasoningTags(final)
+			resp.Reply = StripReasoningTags(final)
 			resp.Messages = messages
 			resp.BudgetState = req.Budget.State()
 			// Fire-and-forget episodic ingest: the model
@@ -1027,7 +1027,7 @@ func (a *Agent) forceSummaryReply(
 		req.Budget.RecordCostUSD(chatResp.cost)
 		resp.BudgetState = req.Budget.State()
 	}
-	resp.Reply = stripReasoningTags(chatResp.Content)
+	resp.Reply = StripReasoningTags(chatResp.Content)
 	messages = append(messages, Message{Role: "assistant", Content: chatResp.Content})
 	resp.Messages = messages
 	a.maybeIngestTurn(ctx, req, chatResp.Content)
@@ -1248,19 +1248,10 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 	return &chatWithCost{ChatResponse: chatResp, cost: cost, pricing: dispatched.entry.Pricing}, nil
 }
 
-// dispatchWithBackup calls the primary LLM provider; on a hard
-// failure (rate-limit, 5xx, timeout, network refused) walks the
-// ProviderRegistry backup chain and retries on each subsequent
-// provider. Same-turn transparent fallback — the user sees one
-// reply from whichever provider succeeds.
-//
-// Soft errors (context cancellation, 4xx other than 429) bubble
-// immediately; they're not indicators of provider failure and
-// retrying wouldn't help.
-// errText renders an error for a log attribute without panicking on
+// ErrorText renders an error for a log attribute without panicking on
 // nil — the backup-succeeded line fires when the only prior events
 // were skips.
-func errText(err error) string {
+func ErrorText(err error) string {
 	if err == nil {
 		return ""
 	}
@@ -1342,6 +1333,15 @@ type dispatchResult struct {
 	entry ProviderEntry
 }
 
+// dispatchWithBackup calls the primary LLM provider; on a hard
+// failure (rate-limit, 5xx, timeout, network refused) walks the
+// ProviderRegistry backup chain and retries on each subsequent
+// provider. Same-turn transparent fallback — the user sees one
+// reply from whichever provider succeeds.
+//
+// Soft errors (context cancellation, 4xx other than 429) bubble
+// immediately; they're not indicators of provider failure and
+// retrying wouldn't help.
 func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispatchResult, error) {
 	// Single-provider mode: no registry wired, no chain to walk. The
 	// floor cannot be enforced here — there is no tier to read, only a
@@ -1415,17 +1415,17 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 				a.cfg.Logger.Info("agent: provider backup succeeded",
 					"used_label", entry.Label,
 					"skipped_demoted", skipped,
-					"prior_error", errText(lastErr))
+					"prior_error", ErrorText(lastErr))
 			}
 			return &dispatchResult{resp: resp, entry: entry}, nil
 		}
-		if !isRetryableProviderError(ctx, err) {
+		if !IsRetryableProviderError(ctx, err) {
 			rec.Record(attemptSpan(turnID, entry, elapsed, started, attempt,
 				trace.OutcomeAborted, nil, err))
 			return nil, err
 		}
 		a.cfg.Health.RecordFailure(entry.Label, ClassifyFailure(err))
-		logProviderFailure(a.cfg.Logger, err, "failed_label", entry.Label)
+		LogProviderFailure(a.cfg.Logger, err, "failed_label", entry.Label)
 		rec.Record(attemptSpan(turnID, entry, elapsed, started, attempt,
 			trace.OutcomeAdvanced, nil, err))
 		attempt++
@@ -1450,7 +1450,7 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 	return nil, fmt.Errorf("agent: all providers in chain failed; last error: %w", lastErr)
 }
 
-// isRetryableProviderError decides whether to walk to the next
+// IsRetryableProviderError decides whether to walk to the next
 // provider in the chain. Context-cancelled errors are NOT retryable —
 // the user intent has changed or the hard-timeout fired, and retrying
 // on a backup inside the same cancelled context spends the backup's
@@ -1464,7 +1464,7 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 // otherwise never fail over. The scan stays for providers that do not
 // wrap their errors yet — removing it would turn their transient
 // failures permanent — but classified errors must never reach it.
-func isRetryableProviderError(ctx context.Context, err error) bool {
+func IsRetryableProviderError(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
@@ -1518,12 +1518,12 @@ func isRetryableProviderError(ctx context.Context, err error) bool {
 	return false
 }
 
-// turnIdentityFor derives the caller identity from the request.
+// TurnIdentityFor derives the caller identity from the request.
 // Channel + ChannelID are the conversation the user is already in;
 // scheduler and research turns leave them empty and fall back to pure
 // ownership, which is right — they carry the claims of the person the
 // work is being done for (see Node.schedulerClaims), not of a chat.
-func (a *Agent) turnIdentityFor(req ProcessMessageRequest) turn.Identity {
+func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	t := turn.Identity{
 		TurnID:    req.TurnID,
 		Channel:   req.Channel,

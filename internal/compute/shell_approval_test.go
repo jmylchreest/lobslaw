@@ -67,7 +67,7 @@ func shellGatedExecutor(t *testing.T, rules ...*lobslawv1.PolicyRule) (*Executor
 	eng.SetDefaults([]types.PolicyRule{ShellApprovalDefault()})
 
 	approvals := NewSessionApprovals()
-	e := NewExecutor(NewRegistry(), eng, nil, ExecutorConfig{}, slog.New(slog.DiscardHandler))
+	e := NewExecutor(newTestCatalogue(), eng, nil, ExecutorConfig{}, slog.New(slog.DiscardHandler))
 	e.SetSessionApprovals(approvals)
 	e.RequireCommandApproval("shell_command", ShellGrantResource, ShellCommandSummary)
 	return e, approvals
@@ -79,7 +79,7 @@ func shellParams(cmd string) map[string]string {
 
 func checkShell(ctx context.Context, t *testing.T, e *Executor, cmd string) error {
 	t.Helper()
-	return e.checkGate(ctx, &types.Claims{UserID: "alice"}, "shell_command", shellParams(cmd))
+	return e.CheckGate(ctx, &types.Claims{UserID: "alice"}, "shell_command", shellParams(cmd))
 }
 
 // The default: a command the operator has not spoken about is asked
@@ -273,9 +273,9 @@ func TestAnUngatedToolIsNotShellChecked(t *testing.T) {
 	// No policy engine at all: if the gate consulted one for a tool it
 	// was not registered against, this fails with ErrNoPolicyEngine
 	// rather than passing.
-	e := NewExecutor(NewRegistry(), nil, nil, ExecutorConfig{}, slog.New(slog.DiscardHandler))
+	e := NewExecutor(newTestCatalogue(), nil, nil, ExecutorConfig{}, slog.New(slog.DiscardHandler))
 
-	if err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
+	if err := e.CheckGate(context.Background(), &types.Claims{UserID: "alice"},
 		"read_file", shellParams("git status")); err != nil {
 		t.Fatalf("an ungated tool was checked: %v", err)
 	}

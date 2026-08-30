@@ -169,7 +169,7 @@ func doEmbeddingRequest(
 	if resp.StatusCode != http.StatusOK {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("embed: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 256)),
+			Err:   fmt.Errorf("embed: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 256)),
 		}
 	}
 	return raw, nil

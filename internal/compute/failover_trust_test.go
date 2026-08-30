@@ -151,12 +151,12 @@ func failHandler(label string, calls *[]string, err error) BuiltinFunc {
 func TestAModalityChainHonoursTheFloor(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	fn := failoverBuiltin("read_image", slog.New(slog.NewTextHandler(io.Discard, nil)),
+	fn := FailoverBuiltin("read_image", slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewProviderHealth(),
 		func() types.TrustTier { return types.TrustPrivate },
-		failoverHandler{label: "a", tier: types.TrustPrivate,
-			fn: failHandler("a", calls, Transient(errors.New("429")))},
-		failoverHandler{label: "b", tier: types.TrustPublic, fn: okHandler("b", calls)},
+		FailoverHandler{Label: "a", Tier: types.TrustPrivate,
+			Fn: failHandler("a", calls, Transient(errors.New("429")))},
+		FailoverHandler{Label: "b", Tier: types.TrustPublic, Fn: okHandler("b", calls)},
 	)
 
 	_, _, err := fn(context.Background(), nil)
@@ -176,10 +176,10 @@ func TestAModalityChainHonoursTheFloor(t *testing.T) {
 func TestASingleModalityProviderIsStillChecked(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	fn := failoverBuiltin("speak", slog.New(slog.NewTextHandler(io.Discard, nil)),
+	fn := FailoverBuiltin("speak", slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewProviderHealth(),
 		func() types.TrustTier { return types.TrustLocal },
-		failoverHandler{label: "only", tier: types.TrustPublic, fn: okHandler("only", calls)},
+		FailoverHandler{Label: "only", Tier: types.TrustPublic, Fn: okHandler("only", calls)},
 	)
 
 	if _, _, err := fn(context.Background(), nil); err == nil {
@@ -193,10 +193,10 @@ func TestASingleModalityProviderIsStillChecked(t *testing.T) {
 func TestASingleQualifyingModalityProviderStillRuns(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	fn := failoverBuiltin("speak", slog.New(slog.NewTextHandler(io.Discard, nil)),
+	fn := FailoverBuiltin("speak", slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewProviderHealth(),
 		func() types.TrustTier { return types.TrustLocal },
-		failoverHandler{label: "only", tier: types.TrustLocal, fn: okHandler("only", calls)},
+		FailoverHandler{Label: "only", Tier: types.TrustLocal, Fn: okHandler("only", calls)},
 	)
 
 	out, _, err := fn(context.Background(), nil)
@@ -213,9 +213,9 @@ func TestASingleQualifyingModalityProviderStillRuns(t *testing.T) {
 func TestANilFloorAccessorPermitsEverything(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	fn := failoverBuiltin("speak", slog.New(slog.NewTextHandler(io.Discard, nil)),
+	fn := FailoverBuiltin("speak", slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewProviderHealth(), nil,
-		failoverHandler{label: "only", tier: types.TrustPublic, fn: okHandler("only", calls)},
+		FailoverHandler{Label: "only", Tier: types.TrustPublic, Fn: okHandler("only", calls)},
 	)
 	if _, _, err := fn(context.Background(), nil); err != nil {
 		t.Errorf("a nil accessor refused a provider: %v", err)

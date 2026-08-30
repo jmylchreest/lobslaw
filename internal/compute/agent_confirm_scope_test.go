@@ -67,7 +67,7 @@ func gatedAgent(t *testing.T, rules ...*lobslawv1.PolicyRule) (*Agent, *Executor
 	eng := policy.NewEngine(store, slog.New(slog.DiscardHandler))
 	eng.SetDefaults([]types.PolicyRule{WriteApprovalDefault()})
 
-	reg := NewRegistry()
+	reg := newTestCatalogue()
 	if err := reg.Register(&types.ToolDef{
 		Name:     "memory_write",
 		Path:     BuiltinScheme + "memory_write",

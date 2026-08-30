@@ -29,7 +29,7 @@ func TestReadAudienceDMIsOwnershipOnly(t *testing.T) {
 		ChannelID: "D0BOB",
 		Shared:    false,
 	}
-	aud := readAudience(context.Background(), turn, nil)
+	aud := ReadAudience(context.Background(), turn, nil)
 
 	// Even a record from this very conversation is only readable
 	// because bob owns it — a DM never widens by conversation.
@@ -50,7 +50,7 @@ func TestReadAudienceSharedChannelScopesToConversation(t *testing.T) {
 		ChannelID: "C0GENERAL",
 		Shared:    true,
 	}
-	aud := readAudience(context.Background(), turn, nil)
+	aud := ReadAudience(context.Background(), turn, nil)
 
 	if !aud.AllowsEpisodic(otherRecord("user:alice", "slack:C0GENERAL")) {
 		t.Error("a record from this shared channel was not readable in it")
@@ -73,7 +73,7 @@ func TestReadAudienceSharedWithoutAddressDoesNotWiden(t *testing.T) {
 		Principal: identity.User("bob"),
 		Shared:    true,
 	}
-	aud := readAudience(context.Background(), turn, nil)
+	aud := ReadAudience(context.Background(), turn, nil)
 
 	if aud.AllowsEpisodic(otherRecord("user:alice", "")) {
 		t.Fatal("a shared turn with no conversation address read another principal's record")
@@ -94,7 +94,7 @@ func TestReadAudienceCrossOwnerStillWidensInSharedChannel(t *testing.T) {
 		ChannelID: "C0GENERAL",
 		Shared:    true,
 	}
-	aud := readAudience(context.Background(), turn, allowAllCrossOwner{})
+	aud := ReadAudience(context.Background(), turn, allowAllCrossOwner{})
 
 	if !aud.AllowsEpisodic(otherRecord("user:alice", "slack:D0ALICE")) {
 		t.Fatal("an authorised cross-owner read was narrowed by the conversation scope")

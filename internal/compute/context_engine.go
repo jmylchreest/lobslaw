@@ -53,7 +53,7 @@ type ContextEngineConfig struct {
 	Logger   *slog.Logger
 
 	// CrossOwner decides whether this turn's caller may recall across
-	// owners. Nil never widens — see readAudience. Passive recall is
+	// owners. Nil never widens — see ReadAudience. Passive recall is
 	// the most dangerous place to get this wrong, because it runs with
 	// no tool call in front of it and its output lands in the system
 	// prompt rather than anywhere the user can see it.
@@ -130,7 +130,7 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	// Everyone(); nothing else does, including a caller who merely
 	// holds role:operator.
 	turn, _ := turn.IdentityFrom(ctx)
-	audience := readAudience(ctx, turn, e.crossOwner)
+	audience := ReadAudience(ctx, turn, e.crossOwner)
 
 	entries, strategy := e.recall(ctx, audience, userMessage)
 	if len(entries) == 0 {
@@ -147,7 +147,7 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 		if entries[i].rec.Importance != entries[j].rec.Importance {
 			return entries[i].rec.Importance > entries[j].rec.Importance
 		}
-		return tsNano(entries[i].rec.Timestamp) > tsNano(entries[j].rec.Timestamp)
+		return TSNano(entries[i].rec.Timestamp) > TSNano(entries[j].rec.Timestamp)
 	})
 
 	ids := make([]string, 0, len(entries))
@@ -298,7 +298,7 @@ func (e *ContextEngine) lexicalRecall(audience memory.Audience, userMessage stri
 		e.log.Warn("context-engine: lexical recall failed", "err", err)
 		return nil
 	}
-	tokens := len(tokeniseQuery(userMessage))
+	tokens := len(TokeniseQuery(userMessage))
 	if tokens == 0 {
 		return nil
 	}
@@ -353,13 +353,13 @@ func truncateContext(s string, max int) string {
 // with no recall at all and only ever sees a memory the model went
 // looking for.
 //
-// Deliberately does NOT filter quarantined records. runSubstringSearch
+// Deliberately does NOT filter quarantined records. RunSubstringSearch
 // never did, and the two callers want different things: a model that
 // explicitly asks for a record may see a flagged one, but passive
 // recall replays it into every later prompt unasked. The context
 // engine applies that filter itself, exactly as its vector path does.
 func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]lexicalHit, error) {
-	tokens := tokeniseQuery(query)
+	tokens := TokeniseQuery(query)
 	if len(tokens) == 0 {
 		return nil, nil
 	}
@@ -398,7 +398,7 @@ func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query,
 		if hits[i].rec.Importance != hits[j].rec.Importance {
 			return hits[i].rec.Importance > hits[j].rec.Importance
 		}
-		return tsNano(hits[i].rec.Timestamp) > tsNano(hits[j].rec.Timestamp)
+		return TSNano(hits[i].rec.Timestamp) > TSNano(hits[j].rec.Timestamp)
 	})
 	if len(hits) > limit {
 		hits = hits[:limit]
@@ -406,10 +406,10 @@ func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query,
 	return hits, nil
 }
 
-// tokeniseQuery lowercases + splits on whitespace + drops
+// TokeniseQuery lowercases + splits on whitespace + drops
 // stopwords and 1-2-char tokens. Preserves original word order
 // (unused today but reserved for phrase-proximity scoring later).
-func tokeniseQuery(query string) []string {
+func TokeniseQuery(query string) []string {
 	fields := strings.Fields(strings.ToLower(query))
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
@@ -426,7 +426,7 @@ func tokeniseQuery(query string) []string {
 	return out
 }
 
-func tsNano(ts *timestamppb.Timestamp) int64 {
+func TSNano(ts *timestamppb.Timestamp) int64 {
 	if ts == nil {
 		return 0
 	}
@@ -439,7 +439,7 @@ type lexicalHit struct {
 	score int
 }
 
-// runSubstringSearch does tokenised BM25-ish lexical matching —
+// RunSubstringSearch does tokenised BM25-ish lexical matching —
 // NOT a single-substring match. Splits the query into words,
 // drops noise (2-char and shorter), matches each word against the
 // record's Event+Context lowercase. Score = number of distinct
@@ -447,14 +447,14 @@ type lexicalHit struct {
 // where the user's phrasing doesn't literally contain the stored
 // phrase — "where do I live" finds "User lives in Yorkshire" on
 // the word "live" alone.
-func runSubstringSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]byte, int, error) {
+func RunSubstringSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]byte, int, error) {
 	hits, err := lexicalEpisodicSearch(store, audience, query, tagFilter, limit)
 	if err != nil {
 		return nil, 1, fmt.Errorf("memory_search: %w", err)
 	}
 	results := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
-		results = append(results, episodicToMap(h.rec, 0))
+		results = append(results, EpisodicToMap(h.rec, 0))
 	}
 	payload, err := json.Marshal(map[string]any{
 		"query":    query,
@@ -481,7 +481,7 @@ var memorySearchStopwords = map[string]bool{
 	"all": true, "any": true, "not": true, "yes": true, "just": true,
 }
 
-func episodicToMap(rec *lobslawv1.EpisodicRecord, score float32) map[string]any {
+func EpisodicToMap(rec *lobslawv1.EpisodicRecord, score float32) map[string]any {
 	entry := map[string]any{
 		"id":         rec.Id,
 		"event":      rec.Event,

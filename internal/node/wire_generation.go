@@ -17,6 +17,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -363,7 +364,7 @@ func (n *Node) resolveSpeakEndpoints() []*llmEndpoint {
 // provider for synthesis, and then have nowhere to land the result —
 // so the honest behaviour is to not offer the tool and let the agent
 // say it cannot do it.
-func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
+func (n *Node) wireSpeakTools(builtins *tools.Builtins) error {
 	eps := n.resolveSpeakEndpoints()
 	if len(eps) == 0 {
 		return nil
@@ -375,7 +376,7 @@ func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
 		return nil
 	}
 
-	cfgs := make([]compute.SpeakConfig, 0, len(eps))
+	cfgs := make([]tools.SpeakConfig, 0, len(eps))
 	for _, ep := range eps {
 		d, err := n.drivers().Speak(ep.driver, compute.SpeakDriverConfig{
 			Endpoint:   ep.endpoint,
@@ -388,17 +389,17 @@ func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
 			n.log.Warn("compute: speak provider skipped", "via", ep.via, "err", err)
 			continue
 		}
-		cfgs = append(cfgs, compute.SpeakConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver,
+		cfgs = append(cfgs, tools.SpeakConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver,
 			Model: ep.model, Pricing: ep.pricing})
 	}
 	if len(cfgs) == 0 {
 		return nil
 	}
 
-	if err := compute.RegisterSpeakBuiltin(builtins, cfgs...); err != nil {
+	if err := tools.RegisterSpeakBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register speak: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.SpeakToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.SpeakToolDef()); err != nil {
 		return fmt.Errorf("register speak tool def: %w", err)
 	}
 	n.log.Debug("compute: speak registered",
@@ -446,7 +447,7 @@ func (n *Node) resolveImageEndpoints() []*llmEndpoint {
 // wireImageTools registers generate_image. Skipped when there is
 // nowhere to write, for the same reason as speak: generating an image
 // the agent cannot hand over bills for nothing.
-func (n *Node) wireImageTools(builtins *compute.Builtins) error {
+func (n *Node) wireImageTools(builtins *tools.Builtins) error {
 	eps := n.resolveImageEndpoints()
 	if len(eps) == 0 {
 		return nil
@@ -458,7 +459,7 @@ func (n *Node) wireImageTools(builtins *compute.Builtins) error {
 		return nil
 	}
 
-	cfgs := make([]compute.ImageConfig, 0, len(eps))
+	cfgs := make([]tools.ImageConfig, 0, len(eps))
 	for _, ep := range eps {
 		d, err := n.drivers().Image(ep.driver, compute.ImageDriverConfig{
 			Endpoint:   ep.endpoint,
@@ -471,16 +472,16 @@ func (n *Node) wireImageTools(builtins *compute.Builtins) error {
 			n.log.Warn("compute: image provider skipped", "via", ep.via, "err", err)
 			continue
 		}
-		cfgs = append(cfgs, compute.ImageConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver,
+		cfgs = append(cfgs, tools.ImageConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver,
 			Model: ep.model, Pricing: ep.pricing})
 	}
 	if len(cfgs) == 0 {
 		return nil
 	}
-	if err := compute.RegisterImageBuiltin(builtins, cfgs...); err != nil {
+	if err := tools.RegisterImageBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register generate_image: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.ImageToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.ImageToolDef()); err != nil {
 		return fmt.Errorf("register generate_image tool def: %w", err)
 	}
 	n.log.Debug("compute: generate_image registered",
@@ -540,7 +541,7 @@ func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, prov
 // polls it. Both are needed: the handle records a driver NAME, and a
 // node that can submit but has not registered the driver under that
 // name cannot poll its own jobs after a restart.
-func (n *Node) wireVideoTools(builtins *compute.Builtins) error {
+func (n *Node) wireVideoTools(builtins *tools.Builtins) error {
 	eps := n.resolveVideoEndpoints()
 	if len(eps) == 0 {
 		return nil
@@ -574,14 +575,14 @@ func (n *Node) wireVideoTools(builtins *compute.Builtins) error {
 	// restart.
 	n.RegisterJobDriver(strings.ToLower(strings.TrimSpace(ep.driver)), d)
 
-	if err := compute.RegisterVideoBuiltin(builtins, compute.VideoConfig{
+	if err := tools.RegisterVideoBuiltin(builtins, tools.VideoConfig{
 		Driver: d,
 		Start:  n.startGenerationJob,
 		Label:  ep.label,
 	}); err != nil {
 		return fmt.Errorf("register generate_video: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.VideoToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.VideoToolDef()); err != nil {
 		return fmt.Errorf("register generate_video tool def: %w", err)
 	}
 	n.log.Debug("compute: generate_video registered", "model", ep.model, "via", ep.via)

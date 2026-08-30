@@ -14,13 +14,13 @@ import (
 //
 // So the level and the wording come from the class.
 
-// logProviderFailure records one failed attempt, at a level and with
+// LogProviderFailure records one failed attempt, at a level and with
 // wording chosen by what actually went wrong.
 //
 // attrs are appended verbatim so each call site can add its own
 // identifiers ("modality", "provider_index", "failed_label") without
 // this having to know about either chain's shape.
-func logProviderFailure(log *slog.Logger, err error, attrs ...any) {
+func LogProviderFailure(log *slog.Logger, err error, attrs ...any) {
 	if log == nil {
 		log = slog.Default()
 	}

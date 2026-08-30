@@ -136,7 +136,7 @@ func (d *OpenAIImageDriver) Generate(ctx context.Context, req ImageRequest) (*Ar
 	if resp.StatusCode >= 400 {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("image: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("image: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
 		}
 	}
 

@@ -93,10 +93,10 @@ type ExecutorConfig struct {
 // No Linux-namespace sandboxing in this layer — Phase 4.5 wraps the
 // exec.Cmd with namespaces + seccomp + cgroups.
 type Executor struct {
-	registry *Registry
+	registry ToolCatalogue
 	policy   *policy.Engine
 	hooks    *hooks.Dispatcher
-	builtins *Builtins
+	builtins BuiltinDispatcher
 	cfg      ExecutorConfig
 	logger   *slog.Logger
 
@@ -121,7 +121,7 @@ func (e *Executor) SetSessionApprovals(a *SessionApprovals) { e.approvals = a }
 // NewExecutor wires the dependencies. hooks may be nil; cfg zero
 // fields take defaults. policy may be nil on nodes without it, in
 // which case Invoke returns codes.Unimplemented-equivalent errors.
-func NewExecutor(r *Registry, p *policy.Engine, h *hooks.Dispatcher, cfg ExecutorConfig, logger *slog.Logger) *Executor {
+func NewExecutor(r ToolCatalogue, p *policy.Engine, h *hooks.Dispatcher, cfg ExecutorConfig, logger *slog.Logger) *Executor {
 	if cfg.MaxOutputBytes <= 0 {
 		cfg.MaxOutputBytes = 10 * 1024 * 1024
 	}
@@ -141,7 +141,7 @@ func NewExecutor(r *Registry, p *policy.Engine, h *hooks.Dispatcher, cfg Executo
 // Path starts with "builtin:" dispatch through this registry
 // instead of exec.CommandContext. Nil disables builtin dispatch
 // (any builtin: tool invocation becomes ErrToolPathInvalid).
-func (e *Executor) SetBuiltins(b *Builtins) { e.builtins = b }
+func (e *Executor) SetBuiltins(b BuiltinDispatcher) { e.builtins = b }
 
 // Sentinel errors surfaced by Invoke so callers can branch.
 var (
@@ -182,11 +182,11 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	// and subprocess tools — the dispatch target differs, but the
 	// authorization and hook surface stays uniform so rtk-style
 	// hooks see every invocation.
-	if err := e.policyAllow(ctx, req.Claims, "tool:exec", tool.Name); err != nil {
+	if err := e.PolicyAllow(ctx, req.Claims, "tool:exec", tool.Name); err != nil {
 		return nil, err
 	}
 	// A sensitive-but-not-secret path escalates a policy allow to a
-	// confirmation. After policyAllow, so a path the operator's rules
+	// confirmation. After PolicyAllow, so a path the operator's rules
 	// already deny is refused rather than prompted about.
 	// Honours the turn approval for the same reason policy does: this
 	// is an escalate-to-human verdict, and the human just answered it.
@@ -209,7 +209,7 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	// error into an InvokeResult and returns nil, so a confirmation
 	// raised inside the builtin would become tool output the model
 	// reads and the user never sees.
-	if err := e.checkGate(ctx, req.Claims, tool.Name, req.Params); err != nil {
+	if err := e.CheckGate(ctx, req.Claims, tool.Name, req.Params); err != nil {
 		return nil, err
 	}
 	if e.hooks != nil {
@@ -318,8 +318,8 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 		return nil, fmt.Errorf("sandbox: %w", err)
 	}
 
-	stdout := &cappedBuffer{cap: e.cfg.MaxOutputBytes}
-	stderr := &cappedBuffer{cap: e.cfg.MaxOutputBytes}
+	stdout := NewCappedBuffer(e.cfg.MaxOutputBytes)
+	stderr := NewCappedBuffer(e.cfg.MaxOutputBytes)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -363,16 +363,16 @@ func (e *Executor) resolvePolicy(toolName string) *sandbox.Policy {
 // MCP dispatch (which doesn't go through the executor) so skills
 // are subject to the same tool:exec policy as builtins. Returns
 // ErrPolicyDenied / ErrRequireConfirm / nil identically to the
-// internal policyAllow.
+// internal PolicyAllow.
 func (e *Executor) CheckPolicy(ctx context.Context, claims *types.Claims, action, resource string) error {
-	return e.policyAllow(ctx, claims, action, resource)
+	return e.PolicyAllow(ctx, claims, action, resource)
 }
 
-// policyAllow returns nil when policy allows the invocation. Returns
+// PolicyAllow returns nil when policy allows the invocation. Returns
 // ErrPolicyDenied for deny and ErrRequireConfirm for require_confirmation
 // — callers in Phase 6 will convert ErrRequireConfirm into a
 // Channel.Prompt flow.
-func (e *Executor) policyAllow(ctx context.Context, claims *types.Claims, action, resource string) error {
+func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action, resource string) error {
 	if e.policy == nil {
 		return ErrNoPolicyEngine
 	}
@@ -526,17 +526,25 @@ func capBytes(b []byte, n int) []byte {
 	return b[:n]
 }
 
-// cappedBuffer is a bytes.Buffer that stops writing once cap is hit
+// CappedBuffer is a bytes.Buffer that stops writing once cap is hit
 // and flags itself as truncated. Writes that exceed cap still return
 // nil error so the subprocess isn't killed by a "broken pipe" — we
 // just drop the tail.
-type cappedBuffer struct {
+type CappedBuffer struct {
 	buf       bytes.Buffer
 	cap       int64
 	truncated bool
 }
 
-func (c *cappedBuffer) Write(p []byte) (int, error) {
+// NewCappedBuffer returns a buffer that discards anything past
+// limit bytes and remembers that it did.
+func NewCappedBuffer(limit int64) *CappedBuffer { return &CappedBuffer{cap: limit} }
+
+// Truncated reports whether any write was discarded because the cap
+// was reached.
+func (c *CappedBuffer) Truncated() bool { return c.truncated }
+
+func (c *CappedBuffer) Write(p []byte) (int, error) {
 	remaining := c.cap - int64(c.buf.Len())
 	if remaining <= 0 {
 		c.truncated = true
@@ -552,7 +560,7 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 
 // Bytes returns the captured bytes. Caller must not retain across
 // further writes (Buffer reuses its backing array).
-func (c *cappedBuffer) Bytes() []byte { return c.buf.Bytes() }
+func (c *CappedBuffer) Bytes() []byte { return c.buf.Bytes() }
 
 // scopeOf returns the JWT scope for logging/audit attribution, or
 // empty when claims are missing.

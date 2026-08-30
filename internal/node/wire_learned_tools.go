@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -24,14 +24,14 @@ type learnedLister struct{ store *memory.SelfTaughtStore }
 // Never the archive. An archived artefact is a decision already taken,
 // and re-surfacing it to the thing that proposed it invites
 // re-proposing the same idea.
-func (l learnedLister) ListForAgent(_ context.Context, owner string) ([]compute.LearnedSummary, error) {
+func (l learnedLister) ListForAgent(_ context.Context, owner string) ([]tools.LearnedSummary, error) {
 	recs, err := l.store.List(memory.SelfTaughtQuery{Owner: owner})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]compute.LearnedSummary, 0, len(recs))
+	out := make([]tools.LearnedSummary, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, compute.LearnedSummary{
+		out = append(out, tools.LearnedSummary{
 			ID:          r.GetId(),
 			Kind:        kindName(r.GetKind()),
 			Name:        r.GetName(),
@@ -63,16 +63,16 @@ func stateName(s lobslawv1.SelfTaughtState) string {
 // wireLearnedTools registers learned_list when there is a store to
 // read. Absent otherwise — a tool that answers "not configured" reads
 // to the model as a transient failure worth retrying.
-func (n *Node) wireLearnedTools(builtins *compute.Builtins) error {
+func (n *Node) wireLearnedTools(builtins *tools.Builtins) error {
 	if n.selfTaught == nil || n.toolRegistry == nil {
 		return nil
 	}
-	if err := compute.RegisterLearnedBuiltins(builtins, compute.LearnedConfig{
+	if err := tools.RegisterLearnedBuiltins(builtins, tools.LearnedConfig{
 		Store: learnedLister{store: n.selfTaught},
 	}); err != nil {
 		return fmt.Errorf("register learned builtins: %w", err)
 	}
-	for _, td := range compute.LearnedToolDefs() {
+	for _, td := range tools.LearnedToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register learned tool %q: %w", td.Name, err)
 		}

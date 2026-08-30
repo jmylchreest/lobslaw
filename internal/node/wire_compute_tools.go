@@ -11,6 +11,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/gemini"
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 )
 
@@ -25,7 +26,7 @@ import (
 // capability and would otherwise only see what the operator declared
 // by hand; and the whole pass must precede Agent construction, which
 // snapshots the tool registry.
-func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.EmbeddingProvider) (func() []promptgen.BinaryInfo, error) {
+func (n *Node) registerAgentTools(builtins *tools.Builtins, embedder compute.EmbeddingProvider) (func() []promptgen.BinaryInfo, error) {
 	var binariesProvider func() []promptgen.BinaryInfo
 
 	// Everything in this block persists through Raft and reads back
@@ -126,8 +127,8 @@ func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.E
 // in the Builtins registry, ToolDefs in the exec Registry so the LLM
 // sees them in its function-calling list. Failures here are config
 // bugs, not runtime — bubble up.
-func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
-	builtins := compute.NewBuiltins()
+func (n *Node) wireStdlibTools() (*tools.Builtins, error) {
+	builtins := tools.NewBuiltins()
 	// Before any modality registers: failoverBuiltin reads the tracker
 	// off the registry at Register time, so wiring it after would give
 	// every chain a nil one.
@@ -137,12 +138,12 @@ func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 	// register would give every chain a nil floor — which permits
 	// everything, and would be the failure mode hardest to notice.
 	builtins.SetTrustFloor(n.trustFloorAccessor())
-	if err := compute.RegisterStdlibBuiltins(builtins); err != nil {
+	if err := tools.RegisterStdlibBuiltins(builtins); err != nil {
 		return nil, fmt.Errorf("builtins: %w", err)
 	}
 	n.executor.SetBuiltins(builtins)
 	n.builtinsRegistry = builtins
-	for _, t := range compute.StdlibToolDefs() {
+	for _, t := range tools.StdlibToolDefs() {
 		if err := n.toolRegistry.Register(t); err != nil {
 			return nil, fmt.Errorf("register stdlib tool %q: %w", t.Name, err)
 		}
@@ -153,10 +154,10 @@ func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 	// advertised tool that always errors teaches the model it has a
 	// capability it does not.
 	if n.pinnedStore != nil {
-		if err := compute.RegisterPinnedBuiltins(builtins, pinnedStoreAdapter{inner: n.pinnedStore}); err != nil {
+		if err := tools.RegisterPinnedBuiltins(builtins, pinnedStoreAdapter{inner: n.pinnedStore}); err != nil {
 			return nil, fmt.Errorf("pinned builtins: %w", err)
 		}
-		for _, t := range compute.PinnedToolDefs() {
+		for _, t := range tools.PinnedToolDefs() {
 			if err := n.toolRegistry.Register(t); err != nil {
 				return nil, fmt.Errorf("register pinned tool %q: %w", t.Name, err)
 			}
@@ -225,8 +226,8 @@ func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 // plus the conversation-transcript tools. The latter are distinct from
 // memory_search, which answers "what do I know about X" semantically;
 // these find literal text in a specific thread.
-func (n *Node) wireMemoryTools(builtins *compute.Builtins, embedder compute.EmbeddingProvider) error {
-	if err := compute.RegisterMemoryBuiltins(builtins, compute.MemoryConfig{
+func (n *Node) wireMemoryTools(builtins *tools.Builtins, embedder compute.EmbeddingProvider) error {
+	if err := tools.RegisterMemoryBuiltins(builtins, tools.MemoryConfig{
 		Store:      n.store,
 		Raft:       n.raft,
 		Forgetter:  n.memorySvc,
@@ -236,7 +237,7 @@ func (n *Node) wireMemoryTools(builtins *compute.Builtins, embedder compute.Embe
 	}); err != nil {
 		return fmt.Errorf("register memory builtins: %w", err)
 	}
-	for _, td := range compute.MemoryToolDefs() {
+	for _, td := range tools.MemoryToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register memory tool %q: %w", td.Name, err)
 		}
@@ -249,14 +250,14 @@ func (n *Node) wireMemoryTools(builtins *compute.Builtins, embedder compute.Embe
 // wireScheduleTools registers schedule_create / list / get / delete.
 // The agent-turn handler for the actual dispatch is registered
 // separately via registerAgentTurnHandlers().
-func (n *Node) wireScheduleTools(builtins *compute.Builtins) error {
-	if err := compute.RegisterScheduleBuiltins(builtins, compute.ScheduleConfig{
+func (n *Node) wireScheduleTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterScheduleBuiltins(builtins, tools.ScheduleConfig{
 		Store: n.store,
 		Raft:  n.raft,
 	}); err != nil {
 		return fmt.Errorf("register schedule builtins: %w", err)
 	}
-	for _, td := range compute.ScheduleToolDefs() {
+	for _, td := range tools.ScheduleToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register schedule tool %q: %w", td.Name, err)
 		}
@@ -269,14 +270,14 @@ func (n *Node) wireScheduleTools(builtins *compute.Builtins) error {
 // right primitive for "in 2 minutes message me". Same Store + Raft
 // pattern as schedules; dispatches through the existing
 // runCommitmentAsAgentTurn handler.
-func (n *Node) wireCommitmentTools(builtins *compute.Builtins) error {
-	if err := compute.RegisterCommitmentBuiltins(builtins, compute.CommitmentConfig{
+func (n *Node) wireCommitmentTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterCommitmentBuiltins(builtins, tools.CommitmentConfig{
 		Store: n.store,
 		Raft:  n.raft,
 	}); err != nil {
 		return fmt.Errorf("register commitment builtins: %w", err)
 	}
-	for _, td := range compute.CommitmentToolDefs() {
+	for _, td := range tools.CommitmentToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register commitment tool %q: %w", td.Name, err)
 		}
@@ -291,18 +292,18 @@ func (n *Node) wireCommitmentTools(builtins *compute.Builtins) error {
 // [security.oauth.<name>]. Empty Providers is fine — oauth_start
 // surfaces "not configured" at call time. Default-deny policy seed
 // gates these to scope:owner.
-func (n *Node) wireCredentialsTools(builtins *compute.Builtins) error {
+func (n *Node) wireCredentialsTools(builtins *tools.Builtins) error {
 	if n.credentialSvc == nil || n.oauthTracker == nil {
 		return nil
 	}
-	if err := compute.RegisterCredentialsBuiltins(builtins, compute.CredentialsConfig{
+	if err := tools.RegisterCredentialsBuiltins(builtins, tools.CredentialsConfig{
 		Tracker:   n.oauthTracker,
 		Service:   n.credentialSvc,
 		Providers: n.oauthProviders,
 	}); err != nil {
 		return fmt.Errorf("register credentials builtins: %w", err)
 	}
-	for _, td := range compute.CredentialsToolDefs() {
+	for _, td := range tools.CredentialsToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register credentials tool %q: %w", td.Name, err)
 		}
@@ -323,7 +324,7 @@ func (n *Node) wireCredentialsTools(builtins *compute.Builtins) error {
 // catalogue in its system prompt; nil when no [[binary]] is declared,
 // because only this block has the declarations and satisfier needed to
 // build one.
-func (n *Node) wireBinariesTools(builtins *compute.Builtins) (func() []promptgen.BinaryInfo, error) {
+func (n *Node) wireBinariesTools(builtins *tools.Builtins) (func() []promptgen.BinaryInfo, error) {
 	if len(n.cfg.Binaries) == 0 {
 		return nil, nil
 	}
@@ -332,7 +333,7 @@ func (n *Node) wireBinariesTools(builtins *compute.Builtins) (func() []promptgen
 		Logger:        n.log,
 		InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
 	})
-	decls := make(map[string]compute.BinaryDeclaration, len(n.cfg.Binaries))
+	decls := make(map[string]tools.BinaryDeclaration, len(n.cfg.Binaries))
 	for _, b := range n.cfg.Binaries {
 		install := make([]binaries.InstallSpec, 0, len(b.Install))
 		for _, in := range b.Install {
@@ -343,7 +344,7 @@ func (n *Node) wireBinariesTools(builtins *compute.Builtins) (func() []promptgen
 				Sudo: in.Sudo, Args: in.Args,
 			})
 		}
-		decls[b.Name] = compute.BinaryDeclaration{
+		decls[b.Name] = tools.BinaryDeclaration{
 			Name:        b.Name,
 			Description: b.Description,
 			Detect:      b.Detect,
@@ -354,14 +355,14 @@ func (n *Node) wireBinariesTools(builtins *compute.Builtins) (func() []promptgen
 			Env:         b.Env,
 		}
 	}
-	if err := compute.RegisterBinariesBuiltins(builtins, compute.BinariesConfig{
+	if err := tools.RegisterBinariesBuiltins(builtins, tools.BinariesConfig{
 		Satisfier:     satisfier,
 		Declarations:  decls,
 		InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
 	}); err != nil {
 		return nil, fmt.Errorf("register binaries builtins: %w", err)
 	}
-	for _, td := range compute.BinariesToolDefs() {
+	for _, td := range tools.BinariesToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return nil, fmt.Errorf("register binaries tool %q: %w", td.Name, err)
 		}
@@ -409,7 +410,7 @@ func (n *Node) wireBinariesTools(builtins *compute.Builtins) (func() []promptgen
 // run upstream curl-sh installers (brew, uv, bun) without explicit
 // operator consent. Bundles requiring those need the operator to call
 // binary_install with bootstrap_managers=true.
-func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, decl compute.BinaryDeclaration) {
+func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, decl tools.BinaryDeclaration) {
 	defer func() {
 		if r := recover(); r != nil {
 			n.log.Error("binary: auto-install panicked",
@@ -538,11 +539,11 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 // registered when the operator configured a clawhub base URL (i.e.
 // wireClawhub built an installer). Default-deny — owner-only via the
 // noSeed list.
-func (n *Node) wireClawhubTools(builtins *compute.Builtins) error {
+func (n *Node) wireClawhubTools(builtins *tools.Builtins) error {
 	if n.clawhubInstaller == nil {
 		return nil
 	}
-	if err := compute.RegisterClawhubBuiltin(builtins, compute.ClawhubConfig{
+	if err := tools.RegisterClawhubBuiltin(builtins, tools.ClawhubConfig{
 		Installer:            n.clawhubInstaller,
 		DefaultMount:         n.cfg.Security.ClawhubInstallMount,
 		AutoEmitInstallRules: n.cfg.Security.ClawhubAutoEmitInstallRules,
@@ -551,7 +552,7 @@ func (n *Node) wireClawhubTools(builtins *compute.Builtins) error {
 	}); err != nil {
 		return fmt.Errorf("register clawhub builtin: %w", err)
 	}
-	for _, td := range compute.ClawhubToolDefs() {
+	for _, td := range tools.ClawhubToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register clawhub tool %q: %w", td.Name, err)
 		}
@@ -564,13 +565,13 @@ func (n *Node) wireClawhubTools(builtins *compute.Builtins) error {
 // (research_start). Default-allow at the policy seed layer like other
 // builtins; operators add an explicit deny rule when they want the
 // agent's async research runs gated.
-func (n *Node) wireResearchTools(builtins *compute.Builtins) error {
-	if err := compute.RegisterResearchBuiltins(builtins, compute.ResearchConfig{
+func (n *Node) wireResearchTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterResearchBuiltins(builtins, tools.ResearchConfig{
 		Raft: n.raft,
 	}); err != nil {
 		return fmt.Errorf("register research builtins: %w", err)
 	}
-	for _, td := range compute.ResearchToolDefs() {
+	for _, td := range tools.ResearchToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register research tool %q: %w", td.Name, err)
 		}
@@ -582,17 +583,17 @@ func (n *Node) wireResearchTools(builtins *compute.Builtins) error {
 // wireCouncilTools registers list_providers + council_review. Only
 // wired when multiple providers are registered — a single-provider
 // deployment has nothing to council.
-func (n *Node) wireCouncilTools(builtins *compute.Builtins) error {
+func (n *Node) wireCouncilTools(builtins *tools.Builtins) error {
 	if n.providerRegistry == nil || len(n.providerRegistry.List()) <= 1 {
 		return nil
 	}
-	if err := compute.RegisterCouncilBuiltins(builtins, compute.CouncilConfig{
+	if err := tools.RegisterCouncilBuiltins(builtins, tools.CouncilConfig{
 		Registry: n.providerRegistry,
 		Roles:    n.roleMap,
 	}); err != nil {
 		return fmt.Errorf("register council builtins: %w", err)
 	}
-	for _, td := range compute.CouncilToolDefs() {
+	for _, td := range tools.CouncilToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register council tool %q: %w", td.Name, err)
 		}
@@ -606,11 +607,11 @@ func (n *Node) wireCouncilTools(builtins *compute.Builtins) error {
 // required, the SSRF guard blocks private addresses by default.
 // Operators who want to disable it write a deny rule against the
 // fetch_url tool name.
-func (n *Node) wireFetchTools(builtins *compute.Builtins) error {
-	if err := compute.RegisterFetchBuiltin(builtins, compute.FetchConfig{}); err != nil {
+func (n *Node) wireFetchTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterFetchBuiltin(builtins, tools.FetchConfig{}); err != nil {
 		return fmt.Errorf("register fetch_url: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.FetchToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.FetchToolDef()); err != nil {
 		return fmt.Errorf("register fetch_url tool def: %w", err)
 	}
 	n.log.Debug("compute: fetch_url registered")
@@ -621,14 +622,14 @@ func (n *Node) wireFetchTools(builtins *compute.Builtins) error {
 // they register with RiskIrreversible. Default policy seeding adds an
 // allow rule but operators who want confirmation-on-every-write
 // override with a higher-priority require_confirmation rule.
-func (n *Node) wireWriteEditTools(builtins *compute.Builtins) error {
-	if err := compute.RegisterWriteEditBuiltins(builtins); err != nil {
+func (n *Node) wireWriteEditTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterWriteEditBuiltins(builtins); err != nil {
 		return fmt.Errorf("register write/edit: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.WriteToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.WriteToolDef()); err != nil {
 		return fmt.Errorf("register write_file tool def: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.EditToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.EditToolDef()); err != nil {
 		return fmt.Errorf("register edit_file tool def: %w", err)
 	}
 	n.log.Debug("compute: write_file + edit_file registered")
@@ -641,11 +642,11 @@ func (n *Node) wireWriteEditTools(builtins *compute.Builtins) error {
 // leader" directly. Scope-level gating is the operator's policy
 // responsibility — a deny rule against debug_* for non-owner scopes
 // keeps strangers out without needing a separate config toggle.
-func (n *Node) wireDebugTools(builtins *compute.Builtins) error {
-	if err := compute.RegisterDebugBuiltins(builtins, &debugInspector{n: n}); err != nil {
+func (n *Node) wireDebugTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterDebugBuiltins(builtins, &debugInspector{n: n}); err != nil {
 		return fmt.Errorf("register debug builtins: %w", err)
 	}
-	for _, td := range compute.DebugToolDefs() {
+	for _, td := range tools.DebugToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register debug tool %q: %w", td.Name, err)
 		}
@@ -660,11 +661,11 @@ func (n *Node) wireDebugTools(builtins *compute.Builtins) error {
 // is remembered against that command), the compiled-in hardline floor,
 // a Landlock sandbox derived from the active mounts, and a 30s default
 // timeout.
-func (n *Node) wireShellTools(builtins *compute.Builtins) error {
-	if err := compute.RegisterShellBuiltin(builtins); err != nil {
+func (n *Node) wireShellTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterShellBuiltin(builtins); err != nil {
 		return fmt.Errorf("register shell_command: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.ShellToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.ShellToolDef()); err != nil {
 		return fmt.Errorf("register shell_command tool def: %w", err)
 	}
 	n.log.Debug("compute: shell_command registered")
@@ -680,7 +681,7 @@ func (n *Node) wireShellTools(builtins *compute.Builtins) error {
 // unreadable key or a bad host is a configuration error the operator
 // needs at start-up, not a tool error surfacing mid-turn hours later
 // and reading like a model fault.
-func (n *Node) wireRemoteTools(builtins *compute.Builtins) error {
+func (n *Node) wireRemoteTools(builtins *tools.Builtins) error {
 	if len(n.cfg.Remotes) == 0 {
 		return nil
 	}
@@ -697,14 +698,14 @@ func (n *Node) wireRemoteTools(builtins *compute.Builtins) error {
 			"the [[remote]] blocks are not wired")
 		return nil
 	}
-	set, err := compute.NewRemoteSet(n.cfg.Remotes, secretResolverFunc(n.resolveAPIKey))
+	set, err := tools.NewRemoteSet(n.cfg.Remotes, secretResolverFunc(n.resolveAPIKey))
 	if err != nil {
 		return err
 	}
-	if err := compute.RegisterRemoteBuiltins(builtins, set); err != nil {
+	if err := tools.RegisterRemoteBuiltins(builtins, set); err != nil {
 		return fmt.Errorf("register remote tools: %w", err)
 	}
-	for _, td := range compute.RemoteToolDefs(set) {
+	for _, td := range tools.RemoteToolDefs(set) {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register %s tool def: %w", td.Name, err)
 		}
@@ -728,12 +729,12 @@ func (f secretResolverFunc) Resolve(ref string) (string, error) { return f(ref) 
 // a template mapping missing its required fields is a configuration
 // error the operator should see on start-up, not the first time
 // somebody asks what the news is.
-func (n *Node) wireWebSearchTools(builtins *compute.Builtins) error {
+func (n *Node) wireWebSearchTools(builtins *tools.Builtins) error {
 	providers := resolvedSearchProviders(n.cfg.Compute)
 	if len(providers) == 0 {
 		return nil
 	}
-	cfgs := make([]compute.WebSearchConfig, 0, len(providers))
+	cfgs := make([]tools.WebSearchConfig, 0, len(providers))
 	for _, p := range providers {
 		apiKey, err := n.resolveAPIKey(p.APIKeyRef)
 		if err != nil {
@@ -757,20 +758,20 @@ func (n *Node) wireWebSearchTools(builtins *compute.Builtins) error {
 		if err != nil {
 			return fmt.Errorf("web_search: provider %q: %w", p.Label, err)
 		}
-		cfgs = append(cfgs, compute.WebSearchConfig{
+		cfgs = append(cfgs, tools.WebSearchConfig{
 			Driver:    driver,
 			Label:     p.Label,
 			TrustTier: p.TrustTier,
 		})
 	}
-	if err := compute.RegisterWebSearchBuiltin(builtins, cfgs...); err != nil {
+	if err := tools.RegisterWebSearchBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register web_search: %w", err)
 	}
 	labels := make([]string, 0, len(providers))
 	for _, p := range providers {
 		labels = append(labels, p.Label)
 	}
-	if err := n.toolRegistry.Register(compute.WebSearchToolDef(labels...)); err != nil {
+	if err := n.toolRegistry.Register(tools.WebSearchToolDef(labels...)); err != nil {
 		return fmt.Errorf("register web_search tool def: %w", err)
 	}
 	n.log.Debug("compute: web_search registered",
@@ -826,12 +827,12 @@ func searchEgressClient(timeout time.Duration) *http.Client {
 //  2. inline endpoint+api_key_ref → use directly.
 //  3. neither → builtin not registered; agent honestly tells the user
 //     it can't view images.
-func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
+func (n *Node) wireVisionTools(builtins *tools.Builtins) error {
 	eps := n.resolveVisionEndpoints()
 	if len(eps) == 0 {
 		return nil
 	}
-	cfgs := make([]compute.VisionConfig, 0, len(eps))
+	cfgs := make([]tools.VisionConfig, 0, len(eps))
 	for _, ep := range eps {
 		// Resolved at BOOT, not per call. An endpoint naming a driver
 		// this node cannot build is a configuration error the operator
@@ -847,7 +848,7 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 		if err != nil {
 			return fmt.Errorf("read_image: provider %q: %w", ep.label, err)
 		}
-		cfgs = append(cfgs, compute.VisionConfig{
+		cfgs = append(cfgs, tools.VisionConfig{
 			Label:       ep.label,
 			TrustTier:   ep.trustTier,
 			Endpoint:    ep.endpoint,
@@ -857,10 +858,10 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 			AllowedRoot: n.incomingDir(),
 		})
 	}
-	if err := compute.RegisterVisionBuiltin(builtins, cfgs...); err != nil {
+	if err := tools.RegisterVisionBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register read_image: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.VisionToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.VisionToolDef()); err != nil {
 		return fmt.Errorf("register read_image tool def: %w", err)
 	}
 	n.log.Debug("compute: read_image registered",
@@ -874,7 +875,7 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 // POST regardless of whether the endpoint is OpenAI, MiniMax, or a
 // self-hosted faster-whisper / parakeet sidecar exposing the same
 // surface.
-func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
+func (n *Node) wireAudioTools(builtins *tools.Builtins) error {
 	eps := n.resolveAudioEndpoints()
 	if len(eps) == 0 {
 		return nil
@@ -883,7 +884,7 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 	// different capabilities, so a chain can legitimately mix a Whisper
 	// endpoint with a chat-multimodal one and each must be spoken to in
 	// its own protocol.
-	cfgs := make([]compute.AudioConfig, 0, len(eps))
+	cfgs := make([]tools.AudioConfig, 0, len(eps))
 	for _, ep := range eps {
 		// The driver follows the matched CAPABILITY rather than the
 		// provider's `driver` key, which is what lets one chain mix the
@@ -903,7 +904,7 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 		if err != nil {
 			return fmt.Errorf("read_audio: provider %q: %w", ep.label, err)
 		}
-		cfgs = append(cfgs, compute.AudioConfig{
+		cfgs = append(cfgs, tools.AudioConfig{
 			Label:       ep.label,
 			TrustTier:   ep.trustTier,
 			Endpoint:    ep.endpoint,
@@ -913,10 +914,10 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 			AllowedRoot: n.incomingDir(),
 		})
 	}
-	if err := compute.RegisterAudioBuiltin(builtins, cfgs...); err != nil {
+	if err := tools.RegisterAudioBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register read_audio: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.AudioToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.AudioToolDef()); err != nil {
 		return fmt.Errorf("register read_audio tool def: %w", err)
 	}
 	n.log.Debug("compute: read_audio registered",
@@ -930,16 +931,16 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 // owner's chat can mutate the agent's identity. soul_get is also
 // default-deny by virtue of being in the soul_* namespace;
 // tighten/loosen per scope as needed.
-func (n *Node) wireSoulTools(builtins *compute.Builtins) error {
+func (n *Node) wireSoulTools(builtins *tools.Builtins) error {
 	if n.soulAdjuster == nil {
 		return nil
 	}
-	if err := compute.RegisterSoulBuiltins(builtins, compute.SoulBuiltinsConfig{
+	if err := tools.RegisterSoulBuiltins(builtins, tools.SoulBuiltinsConfig{
 		Mutator: n.soulAdjuster,
 	}); err != nil {
 		return fmt.Errorf("register soul builtins: %w", err)
 	}
-	for _, td := range compute.SoulToolDefs() {
+	for _, td := range tools.SoulToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register soul tool def %q: %w", td.Name, err)
 		}
@@ -952,14 +953,14 @@ func (n *Node) wireSoulTools(builtins *compute.Builtins) error {
 // chat-completions shape as audio-multimodal — content part
 // {type:"file"} with base64 PDF data. OpenRouter is the easy on-ramp;
 // Anthropic native PDF and Gemini PDF can land as additional formats.
-func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
+func (n *Node) wirePDFTools(builtins *tools.Builtins) error {
 	eps := n.resolvePDFEndpoints()
 	if len(eps) == 0 {
 		return nil
 	}
-	cfgs := make([]compute.PDFConfig, 0, len(eps))
+	cfgs := make([]tools.PDFConfig, 0, len(eps))
 	for _, ep := range eps {
-		cfgs = append(cfgs, compute.PDFConfig{
+		cfgs = append(cfgs, tools.PDFConfig{
 			Label:       ep.label,
 			TrustTier:   ep.trustTier,
 			Endpoint:    ep.endpoint,
@@ -968,10 +969,10 @@ func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
 			AllowedRoot: n.incomingDir(),
 		})
 	}
-	if err := compute.RegisterPDFBuiltin(builtins, cfgs...); err != nil {
+	if err := tools.RegisterPDFBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register read_pdf: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.PDFToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.PDFToolDef()); err != nil {
 		return fmt.Errorf("register read_pdf tool def: %w", err)
 	}
 	n.log.Debug("compute: read_pdf registered",
@@ -1006,15 +1007,15 @@ func visionCredential(driver, apiKey string) compute.Credential {
 // Not registered when there is no skill registry: a node with no
 // skills would advertise a tool that can only ever say "no skill named
 // that is installed", which teaches the model to stop asking.
-func (n *Node) wireSkillViewTool(builtins *compute.Builtins) error {
+func (n *Node) wireSkillViewTool(builtins *tools.Builtins) error {
 	docs := n.skillDocs()
 	if docs == nil {
 		return nil
 	}
-	if err := compute.RegisterSkillViewBuiltin(builtins, compute.SkillViewConfig{Docs: docs}); err != nil {
+	if err := tools.RegisterSkillViewBuiltin(builtins, tools.SkillViewConfig{Docs: docs}); err != nil {
 		return fmt.Errorf("register skill_view: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.SkillViewToolDef()); err != nil {
+	if err := n.toolRegistry.Register(tools.SkillViewToolDef()); err != nil {
 		return fmt.Errorf("register skill_view tool def: %w", err)
 	}
 	return nil
@@ -1032,5 +1033,5 @@ func (n *Node) incomingDir() string {
 	if d := n.cfg.Gateway.IncomingDir; d != "" {
 		return d
 	}
-	return compute.DefaultIncomingDir
+	return tools.DefaultIncomingDir
 }

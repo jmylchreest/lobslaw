@@ -14,9 +14,9 @@ func TestStripReasoningTags(t *testing.T) {
 		"no tags at all":                                "no tags at all",
 	}
 	for in, want := range cases {
-		got := stripReasoningTags(in)
+		got := StripReasoningTags(in)
 		if got != want {
-			t.Errorf("stripReasoningTags(%q) = %q; want %q", in, got, want)
+			t.Errorf("StripReasoningTags(%q) = %q; want %q", in, got, want)
 		}
 	}
 }

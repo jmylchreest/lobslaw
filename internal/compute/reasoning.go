@@ -12,12 +12,12 @@ import (
 // multiple blocks strip correctly.
 var reasoningTagRe = regexp.MustCompile(`(?is)<(think|thinking)>.*?</(think|thinking)>`)
 
-// stripReasoningTags removes reasoning-model chain-of-thought
+// StripReasoningTags removes reasoning-model chain-of-thought
 // wrappers from a user-facing reply. Whitespace around the
 // removed blocks is collapsed so the reply doesn't end up with
 // trailing newlines where thinking used to live. Idempotent — a
 // reply with no tags passes through unchanged.
-func stripReasoningTags(s string) string {
+func StripReasoningTags(s string) string {
 	cleaned := reasoningTagRe.ReplaceAllString(s, "")
 	// Collapse runs of 3+ newlines (thinking block removal often
 	// leaves gaps) and trim surrounding whitespace.

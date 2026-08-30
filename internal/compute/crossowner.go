@@ -37,14 +37,14 @@ type CrossOwnerAuthorizer interface {
 	AllowsAny(ctx context.Context, claims *types.Claims) bool
 }
 
-// readAudience is the single place a read decides who it is for.
+// ReadAudience is the single place a read decides who it is for.
 //
 // A nil authorizer never widens. This is the load-bearing default: a
 // deployment that has not wired one is not making a statement about
 // operators, and reading silence as universal read would turn an
 // incomplete wiring into a data breach that nothing in the logs
 // distinguishes from normal traffic.
-func readAudience(ctx context.Context, turn turn.Identity, authz CrossOwnerAuthorizer) memory.Audience {
+func ReadAudience(ctx context.Context, turn turn.Identity, authz CrossOwnerAuthorizer) memory.Audience {
 	if authz != nil && authz.AllowsAny(ctx, turn.Claims()) {
 		return memory.Everyone()
 	}
@@ -60,7 +60,7 @@ func readAudience(ctx context.Context, turn turn.Identity, authz CrossOwnerAutho
 	return memory.For(turn.Principal)
 }
 
-// forgetRequester renders the principal a Forget runs on behalf of.
+// ForgetRequester renders the principal a Forget runs on behalf of.
 //
 // A widened caller resolves to the empty requester, which is the
 // unrestricted path memory.Service already reserves for callers that
@@ -70,7 +70,7 @@ func readAudience(ctx context.Context, turn turn.Identity, authz CrossOwnerAutho
 // authorizer names it in the audit event before this returns, which
 // is where a destructive cross-owner operation needed to be recorded
 // anyway.
-func forgetRequester(ctx context.Context, turn turn.Identity, authz CrossOwnerAuthorizer) string {
+func ForgetRequester(ctx context.Context, turn turn.Identity, authz CrossOwnerAuthorizer) string {
 	if authz != nil && authz.AllowsAny(ctx, turn.Claims()) {
 		return ""
 	}

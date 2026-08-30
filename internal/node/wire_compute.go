@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -65,13 +66,13 @@ func (n *Node) wireCompute() error {
 	// waste this exists to remove.
 	n.providerHealth = compute.NewProviderHealth()
 
-	n.toolRegistry = compute.NewRegistry()
+	n.toolRegistry = tools.NewRegistry()
 	// The fs guard consults per-tool policies, which live on the
 	// registry. Wired here rather than beside the mount resolver
 	// because the registry is what it needs and the registry is born
 	// on this line — storage wiring runs earlier and has no registry
 	// to hand it.
-	compute.SetPathGuardRegistry(n.toolRegistry)
+	tools.SetPathGuardRegistry(n.toolRegistry)
 	// Before anything registers. SetDisabled does not evict what is
 	// already present, deliberately — a tool the agent has already
 	// listed and then loses mid-run is worse than one that was never
@@ -999,7 +1000,7 @@ func (n *Node) registerResearchHandler() {
 	if n.agent == nil || n.memorySvc == nil || n.scheduler == nil || n.toolRegistry == nil {
 		return
 	}
-	_ = n.scheduler.Handlers().RegisterCommitment(compute.ResearchHandlerRef, n.runResearchCommitment)
+	_ = n.scheduler.Handlers().RegisterCommitment(tools.ResearchHandlerRef, n.runResearchCommitment)
 }
 
 // runResearchCommitment unpacks the commitment params + dispatches
@@ -1041,7 +1042,7 @@ func (n *Node) runResearchCommitment(ctx context.Context, c *lobslawv1.AgentComm
 // shell_command — research workers should fetch + summarise, not
 // mutate the workspace. Future: an explicit `[research] allow_tools`
 // config to override this.
-func buildResearchToolList(reg *compute.Registry) []compute.Tool {
+func buildResearchToolList(reg *tools.Registry) []compute.Tool {
 	allowed := map[string]bool{
 		"web_search":     true,
 		"fetch_url":      true,
@@ -1358,7 +1359,7 @@ func (n *Node) applyOperatorPolicies() {
 // two apart; see config.ComputeConfig.DisabledTools.
 func disabledToolPatterns(configured *[]string) []string {
 	if configured == nil {
-		return compute.DefaultDisabledTools
+		return tools.DefaultDisabledTools
 	}
 	return *configured
 }

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 )
 
 // Reading Slack as a knowledge source.
@@ -68,7 +68,7 @@ var ErrSlackChannelNotAllowed = errors.New("slack: conversation not in allowed_c
 // the implementation of compute.SlackReader, and two structurally
 // identical types would not satisfy that interface. The direction is
 // the constraint — gateway may import compute, never the reverse.
-type SlackTranscriptMessage = compute.SlackTranscriptMessage
+type SlackTranscriptMessage = tools.SlackTranscriptMessage
 
 // channelCache memoises name→id so a model writing "#general" does not
 // cost a full conversations.list walk per call.

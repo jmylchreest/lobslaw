@@ -125,7 +125,7 @@ func (d *searxngDriver) Search(ctx context.Context, req SearchRequest) ([]Search
 		}
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("searxng search: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("searxng search: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
 		}
 	}
 	if !looksLikeJSON(raw) {

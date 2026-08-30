@@ -3,6 +3,8 @@ package compute
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,10 +31,10 @@ func TestChainSkipsADemotedProvider(t *testing.T) {
 	health := NewProviderHealth()
 	var primary, backup atomic.Int32
 
-	h := failoverBuiltin("read_image", quietLog(), health, nil,
-		failoverHandler{label: "openai", fn: countingHandler(
+	h := FailoverBuiltin("read_image", quietLog(), health, nil,
+		FailoverHandler{Label: "openai", Fn: countingHandler(
 			CredentialRejected(errors.New("401 bad key")), &primary)},
-		failoverHandler{label: "anthropic", fn: countingHandler(nil, &backup)},
+		FailoverHandler{Label: "anthropic", Fn: countingHandler(nil, &backup)},
 	)
 
 	// First call discovers the bad key the expensive way.
@@ -69,9 +71,9 @@ func TestChainRetriesAfterTheCooldown(t *testing.T) {
 
 	var primary, backup atomic.Int32
 	primaryErr := Transient(errors.New("503"))
-	h := failoverBuiltin("read_image", quietLog(), health, nil,
-		failoverHandler{label: "openai", fn: countingHandler(primaryErr, &primary)},
-		failoverHandler{label: "anthropic", fn: countingHandler(nil, &backup)},
+	h := FailoverBuiltin("read_image", quietLog(), health, nil,
+		FailoverHandler{Label: "openai", Fn: countingHandler(primaryErr, &primary)},
+		FailoverHandler{Label: "anthropic", Fn: countingHandler(nil, &backup)},
 	)
 
 	if _, _, err := h(context.Background(), nil); err != nil {
@@ -104,9 +106,9 @@ func TestFullyDemotedChainSaysWhy(t *testing.T) {
 	health.RecordFailure("anthropic", FailureCredential)
 
 	var a, b atomic.Int32
-	h := failoverBuiltin("read_image", quietLog(), health, nil,
-		failoverHandler{label: "openai", fn: countingHandler(nil, &a)},
-		failoverHandler{label: "anthropic", fn: countingHandler(nil, &b)},
+	h := FailoverBuiltin("read_image", quietLog(), health, nil,
+		FailoverHandler{Label: "openai", Fn: countingHandler(nil, &a)},
+		FailoverHandler{Label: "anthropic", Fn: countingHandler(nil, &b)},
 	)
 
 	_, _, err := h(context.Background(), nil)
@@ -134,9 +136,9 @@ func TestRecoveryRestoresTheProvider(t *testing.T) {
 	health.RecordSuccess("openai")
 
 	var primary atomic.Int32
-	h := failoverBuiltin("read_image", quietLog(), health, nil,
-		failoverHandler{label: "openai", fn: countingHandler(nil, &primary)},
-		failoverHandler{label: "anthropic", fn: countingHandler(nil, new(atomic.Int32))},
+	h := FailoverBuiltin("read_image", quietLog(), health, nil,
+		FailoverHandler{Label: "openai", Fn: countingHandler(nil, &primary)},
+		FailoverHandler{Label: "anthropic", Fn: countingHandler(nil, new(atomic.Int32))},
 	)
 	if _, _, err := h(context.Background(), nil); err != nil {
 		t.Fatal(err)
@@ -145,3 +147,5 @@ func TestRecoveryRestoresTheProvider(t *testing.T) {
 		t.Error("a recovered provider is still being skipped")
 	}
 }
+
+func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

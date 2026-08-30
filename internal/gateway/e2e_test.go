@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/tools"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -42,7 +44,7 @@ func ensureEchoBinary(t *testing.T) string {
 //
 // Returns (agent, registry, mockProvider) so tests can script
 // responses AND verify the agent's call log.
-func buildTestAgentStack(t *testing.T, responses ...compute.MockResponse) (*compute.Agent, *compute.Registry, *compute.MockProvider) {
+func buildTestAgentStack(t *testing.T, responses ...compute.MockResponse) (*compute.Agent, *tools.Registry, *compute.MockProvider) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -71,7 +73,7 @@ func buildTestAgentStack(t *testing.T, responses ...compute.MockResponse) (*comp
 	}
 
 	policyEngine := policy.NewEngine(store, nil)
-	registry := compute.NewRegistry()
+	registry := tools.NewRegistry()
 	hooksDisp := hooks.NewDispatcher(nil, nil)
 	executor := compute.NewExecutor(registry, policyEngine, hooksDisp, compute.ExecutorConfig{}, nil)
 

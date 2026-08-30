@@ -96,7 +96,7 @@ func (d *exaSearchDriver) Search(ctx context.Context, req SearchRequest) ([]Sear
 	if resp.StatusCode != http.StatusOK {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("exa search: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("exa search: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
 		}
 	}
 	var decoded exaSearchResponse
@@ -145,12 +145,12 @@ type exaResult struct {
 	Score         float64 `json:"score,omitempty"`
 }
 
-// truncateBodyFor caps an error body. Local to the search drivers
+// TruncateBodyFor caps an error body. Local to the search drivers
 // because llmclient.go has its own with a different cap.
 //
 // Runes, via textutil, for the same reason the snippet cap is: this
 // string reaches a prompt and a Telegram message, and a search engine's
 // error page is exactly the sort of prose that is not ASCII.
-func truncateBodyFor(body []byte, max int) string {
+func TruncateBodyFor(body []byte, max int) string {
 	return textutil.Truncate(string(body), "…[truncated]", max)
 }

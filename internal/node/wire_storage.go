@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -53,21 +53,21 @@ func (n *Node) seedStorageMountsFromConfig(ctx context.Context) error {
 // are addressed by a different surface.
 func (n *Node) refreshMountResolver() {
 	if n.mountResolver == nil {
-		n.mountResolver = compute.NewMountResolver()
+		n.mountResolver = tools.NewMountResolver()
 	}
 	for _, m := range n.cfg.Storage.Mounts {
 		if m.Label == "" || m.Type != "local" || m.Path == "" {
 			continue
 		}
-		mode, err := compute.ParseMountMode(m.Mode)
+		mode, err := tools.ParseMountMode(m.Mode)
 		if err != nil {
 			n.log.Warn("storage mount has invalid mode; defaulting to read-only",
 				"label", m.Label, "mode", m.Mode, "error", err)
-			mode = compute.MountMode{Read: true}
+			mode = tools.MountMode{Read: true}
 		}
 		n.mountResolver.Register(m.Label, m.Path, mode, m.Excludes)
 	}
-	compute.SetActiveMountResolver(n.mountResolver)
+	tools.SetActiveMountResolver(n.mountResolver)
 }
 
 // seedDefaultPolicyRules writes a platform-trusted allow rule for

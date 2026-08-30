@@ -152,7 +152,7 @@ func TestRejectedCredentialAdvancesTheChain(t *testing.T) {
 			t.Errorf("HTTP %d classified %s, want credential-rejected", status, class)
 		}
 		err := &DriverError{Class: class, Err: errors.New("auth failed")}
-		if !isRetryableProviderError(t.Context(), err) {
+		if !IsRetryableProviderError(t.Context(), err) {
 			t.Errorf("HTTP %d does not advance the chain; one stale key takes the assistant down", status)
 		}
 	}
@@ -166,7 +166,7 @@ func TestBadRequestStillAbortsTheChain(t *testing.T) {
 		t.Fatalf("HTTP 400 classified %s, want permanent", class)
 	}
 	err := &DriverError{Class: FailurePermanent, Err: errors.New("unknown model")}
-	if isRetryableProviderError(t.Context(), err) {
+	if IsRetryableProviderError(t.Context(), err) {
 		t.Error("a 400 walked the chain; every provider will reject it identically")
 	}
 }

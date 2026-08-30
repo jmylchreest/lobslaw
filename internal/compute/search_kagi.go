@@ -151,7 +151,7 @@ func (d *kagiSearchDriver) Search(ctx context.Context, req SearchRequest) ([]Sea
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(body)),
 			Err: fmt.Errorf("kagi search: HTTP %d: %s",
-				resp.StatusCode, truncateBodyFor(body, 512)),
+				resp.StatusCode, TruncateBodyFor(body, 512)),
 		}
 	}
 

@@ -11,6 +11,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -113,7 +114,7 @@ func (n *Node) registerSessionTools() error {
 		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
 	})
 	cfg := n.cfg.Compute.Context
-	if err := compute.RegisterSessionBuiltins(n.builtinsRegistry, compute.SessionToolConfig{
+	if err := tools.RegisterSessionBuiltins(n.builtinsRegistry, tools.SessionToolConfig{
 		Browser:          &sessionBrowserAdapter{inner: svc, ids: n.identityResolver()},
 		MaxSearchResults: derefInt(cfg.SessionSearchResults),
 		MaxSnippets:      derefInt(cfg.SessionSearchSnippets),
@@ -121,7 +122,7 @@ func (n *Node) registerSessionTools() error {
 	}); err != nil {
 		return fmt.Errorf("register session builtins: %w", err)
 	}
-	for _, td := range compute.SessionToolDefs() {
+	for _, td := range tools.SessionToolDefs() {
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register session tool %q: %w", td.Name, err)
 		}
@@ -231,7 +232,7 @@ type sessionBrowserAdapter struct {
 	ids *identity.Resolver
 }
 
-func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBrowseQuery) ([]compute.SessionBrowseHit, error) {
+func (a *sessionBrowserAdapter) Search(ctx context.Context, q tools.SessionBrowseQuery) ([]tools.SessionBrowseHit, error) {
 	hits, err := a.inner.SearchTranscripts(ctx, memory.SessionSearchQuery{
 		Text:               q.Text,
 		Channel:            q.Channel,
@@ -243,11 +244,11 @@ func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBro
 	if err != nil {
 		return nil, err
 	}
-	out := make([]compute.SessionBrowseHit, 0, len(hits))
+	out := make([]tools.SessionBrowseHit, 0, len(hits))
 	for _, h := range hits {
-		hit := compute.SessionBrowseHit{Info: toBrowseInfo(a.ids, h.Session), Matches: h.Matches}
+		hit := tools.SessionBrowseHit{Info: toBrowseInfo(a.ids, h.Session), Matches: h.Matches}
 		for _, s := range h.Snippets {
-			hit.Snippets = append(hit.Snippets, compute.SessionBrowseSnippet{
+			hit.Snippets = append(hit.Snippets, tools.SessionBrowseSnippet{
 				Seq: s.Seq, Role: s.Role, Text: s.Text,
 			})
 		}
@@ -256,7 +257,7 @@ func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBro
 	return out, nil
 }
 
-func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int, visible compute.SessionVisibleFunc) ([]compute.SessionBrowseInfo, error) {
+func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int, visible tools.SessionVisibleFunc) ([]tools.SessionBrowseInfo, error) {
 	recs, err := a.inner.List(ctx)
 	if err != nil {
 		return nil, err
@@ -264,7 +265,7 @@ func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int, visible c
 	sort.Slice(recs, func(i, j int) bool {
 		return recs[i].UpdatedAt.AsTime().After(recs[j].UpdatedAt.AsTime())
 	})
-	out := make([]compute.SessionBrowseInfo, 0, len(recs))
+	out := make([]tools.SessionBrowseInfo, 0, len(recs))
 	for _, r := range recs {
 		info := toBrowseInfo(a.ids, r)
 		// Filtered before the limit, not after: otherwise a busy
@@ -281,10 +282,10 @@ func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int, visible c
 	return out, nil
 }
 
-func (a *sessionBrowserAdapter) Info(ctx context.Context, k turn.SessionKey) (compute.SessionBrowseInfo, bool, error) {
+func (a *sessionBrowserAdapter) Info(ctx context.Context, k turn.SessionKey) (tools.SessionBrowseInfo, bool, error) {
 	rec, err := a.inner.Describe(ctx, toMemoryKey(k))
 	if err != nil || rec == nil {
-		return compute.SessionBrowseInfo{}, false, err
+		return tools.SessionBrowseInfo{}, false, err
 	}
 	return toBrowseInfo(a.ids, rec), true, nil
 }
@@ -293,7 +294,7 @@ func (a *sessionBrowserAdapter) Info(ctx context.Context, k turn.SessionKey) (co
 // stored record so memory can apply it while it still has the full
 // candidate set. The rule itself stays in compute — this only changes
 // what it's handed.
-func toRecordPredicate(res *identity.Resolver, visible compute.SessionVisibleFunc) func(*lobslawv1.SessionRecord) bool {
+func toRecordPredicate(res *identity.Resolver, visible tools.SessionVisibleFunc) func(*lobslawv1.SessionRecord) bool {
 	if visible == nil {
 		return nil
 	}
@@ -314,7 +315,7 @@ func (a *sessionBrowserAdapter) Read(ctx context.Context, k turn.SessionKey, fro
 	return toComputeMessages(msgs), nil
 }
 
-func toBrowseInfo(res *identity.Resolver, r *lobslawv1.SessionRecord) compute.SessionBrowseInfo {
+func toBrowseInfo(res *identity.Resolver, r *lobslawv1.SessionRecord) tools.SessionBrowseInfo {
 	var updated string
 	if r.UpdatedAt != nil {
 		updated = r.UpdatedAt.AsTime().Format("2006-01-02 15:04 UTC")
@@ -323,7 +324,7 @@ func toBrowseInfo(res *identity.Resolver, r *lobslawv1.SessionRecord) compute.Se
 	if r.NextSeq > r.FirstSeq {
 		count = r.NextSeq - r.FirstSeq
 	}
-	return compute.SessionBrowseInfo{
+	return tools.SessionBrowseInfo{
 		Channel:   r.Channel,
 		ChannelID: r.ChannelId,
 		Title:     r.Title,

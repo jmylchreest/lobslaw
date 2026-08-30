@@ -265,7 +265,7 @@ func (d *templateSearchDriver) Search(ctx context.Context, req SearchRequest) ([
 	if resp.StatusCode != http.StatusOK {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("template search: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("template search: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
 		}
 	}
 

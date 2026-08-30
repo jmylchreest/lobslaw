@@ -6,7 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/tools"
+
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 )
 
@@ -22,7 +23,7 @@ func writePolicy(t *testing.T, dir, tool, body string) {
 }
 
 func nodeWithDirs(dirs ...string) *Node {
-	n := &Node{toolRegistry: compute.NewRegistry(), log: slog.New(slog.DiscardHandler)}
+	n := &Node{toolRegistry: tools.NewRegistry(), log: slog.New(slog.DiscardHandler)}
 	n.cfg.SandboxPolicyDirs = dirs
 	return n
 }
@@ -102,5 +103,5 @@ func TestOperatorPoliciesSurviveAMalformedFile(t *testing.T) {
 // The registry satisfies the sink the loader and watcher both write
 // through. If that ever stops being true the wiring breaks silently.
 func TestToolRegistrySatisfiesPolicySink(t *testing.T) {
-	var _ sandbox.PolicySink = compute.NewRegistry()
+	var _ sandbox.PolicySink = tools.NewRegistry()
 }
