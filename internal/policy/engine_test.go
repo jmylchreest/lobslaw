@@ -402,3 +402,49 @@ func TestEngineMalformedRuleDoesntBreakEvaluation(t *testing.T) {
 		t.Fatal("expected error from malformed rule bytes")
 	}
 }
+
+// An interior wildcard used to match the literal asterisk, so a rule
+// like "(remote=*) git *" matched a host actually named "*" and nothing
+// else — a rule that reads as "git on any host" and grants nothing.
+//
+// The dangerous half is the shape operators reach for instead. "* git *"
+// did match, as Contains(" git "), which grants every command with the
+// word git anywhere in it: `rm -rf / ; git x` included. Interior
+// wildcards exist so nobody has to write that.
+func TestInteriorWildcardsMatchAndDoNotOverGrant(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		pattern, value string
+		want           bool
+		why            string
+	}{
+		{"(remote=*) git *", "(remote=web01) git pull", true, "any host, git anything"},
+		{"(remote=*) git *", "(remote=db02) git status", true, "a different host"},
+		{"(remote=*) git *", "(remote=web01) rm -rf /", false, "not a git command"},
+		{"(remote=web01) git *", "(remote=db02) git pull", false, "host is part of the grant"},
+		{"(remote=*) git *", "(remote=web01) sudo git push", false, "git must lead, not merely appear"},
+
+		// The shapes that already worked keep working — this is a
+		// superset, and an operator's existing rules must not shift.
+		{"*", "anything at all", true, "match-all"},
+		{"git *", "git pull", true, "prefix, as before"},
+		{"*.example.com", "api.example.com", true, "suffix, as before"},
+		{"*secret*", "a secret value", true, "contains, as before"},
+		{"memory:read", "memory:read", true, "exact, as before"},
+		{"memory:read", "memory:write", false, "exact, non-match"},
+
+		// filepath.Match would narrow this one from "anything under
+		// /etc" to "one level under /etc", tightening a shipped rule.
+		{"write_file:/etc/*", "write_file:/etc/ssl/certs/ca.pem", true, "star crosses separators"},
+
+		// Head and tail must not count the same characters twice.
+		{"ab*ab", "ab", false, "overlapping anchors"},
+		{"ab*ab", "abab", true, "adjacent anchors"},
+	}
+	for _, c := range cases {
+		if got := patternMatches(c.pattern, c.value); got != c.want {
+			t.Errorf("patternMatches(%q, %q) = %v, want %v — %s", c.pattern, c.value, got, c.want, c.why)
+		}
+	}
+}
