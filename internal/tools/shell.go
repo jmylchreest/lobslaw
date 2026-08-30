@@ -192,6 +192,17 @@ var shellSystemPaths = []sandbox.PolicyMount{
 	{Path: "/bin", Read: true, Exec: true},
 	{Path: "/etc", Read: true},
 	{Path: "/tmp", Read: true, Write: true},
+
+	// Device nodes. Landlock denies anything unlisted, so without
+	// these an ordinary `cmd 2>/dev/null` dies on EACCES and any TLS
+	// handshake fails seeding from /dev/urandom. Mirrors the "devices"
+	// preset; see its comment for what is excluded and why.
+	{Path: "/dev/null", Read: true, Write: true},
+	{Path: "/dev/zero", Read: true},
+	{Path: "/dev/full", Read: true, Write: true},
+	{Path: "/dev/random", Read: true},
+	{Path: "/dev/urandom", Read: true},
+	{Path: "/dev/shm", Read: true, Write: true},
 }
 
 var shellNoMountWarnOnce sync.Once
