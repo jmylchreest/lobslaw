@@ -27,7 +27,7 @@ func TestAMemoryTheModelWritesIsOwnedByTheCaller(t *testing.T) {
 	t.Parallel()
 
 	applier := &fakeApplier{}
-	h := newMemoryWriteHandler(applier)
+	h := newMemoryWriteHandler(applier, nil)
 
 	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		UserID:    "tg-@alice",
@@ -72,7 +72,7 @@ func TestAnUnidentifiedWriteDoesNotSilentlyVanish(t *testing.T) {
 	t.Parallel()
 
 	applier := &fakeApplier{}
-	h := newMemoryWriteHandler(applier)
+	h := newMemoryWriteHandler(applier, nil)
 
 	out, code, err := h(context.Background(), map[string]string{
 		"event":   "a fact",
@@ -110,7 +110,7 @@ func TestACorrectionKeepsWhatMadeTheOriginalFindable(t *testing.T) {
 	seedEpisodic(t, store, prior)
 
 	applier := &fakeApplier{}
-	h := newMemoryCorrectHandler(store, applier, &noopForgetter{}, nil)
+	h := newMemoryCorrectHandler(store, applier, &noopForgetter{}, nil, nil)
 
 	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Principal: identity.User("alice"), Channel: "telegram", ChannelID: "-100",
@@ -154,4 +154,103 @@ type noopForgetter struct{}
 
 func (noopForgetter) Forget(context.Context, *lobslawv1.ForgetRequest) (*lobslawv1.ForgetResponse, error) {
 	return &lobslawv1.ForgetResponse{RecordsRemoved: 1}, nil
+}
+
+// stubEmbedder returns a fixed vector so a test can assert the index
+// entry without an embedding service.
+type stubEmbedder struct{ model string }
+
+func (s stubEmbedder) Embed(context.Context, string) ([]float32, error) {
+	return []float32{0.1, 0.2}, nil
+}
+func (s stubEmbedder) EmbedQuery(ctx context.Context, t string) ([]float32, error) {
+	return s.Embed(ctx, t)
+}
+func (s stubEmbedder) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i := range texts {
+		out[i] = []float32{0.1, 0.2}
+	}
+	return out, nil
+}
+func (s stubEmbedder) Dimensions() int { return 2 }
+func (s stubEmbedder) Model() string   { return s.model }
+
+// A written memory has to be findable the way memories are usually
+// found.
+//
+// Passive recall prefers the vector path and only falls back to
+// substring matching, so a memory with no vector was reachable only by
+// the words it happened to reuse. Episodic ingest has always written
+// the pair; the tool path never did, which made "remember this"
+// produce a weaker memory than the same fact arriving in conversation.
+func TestAWrittenMemoryIsIndexedForVectorRecall(t *testing.T) {
+	t.Parallel()
+
+	applier := &fakeApplier{}
+	h := newMemoryWriteHandler(applier, stubEmbedder{model: "test-embedder"})
+
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{
+		Principal: identity.User("alice"), Channel: "telegram", ChannelID: "-100",
+	})
+	if _, code, err := h(ctx, map[string]string{
+		"event": "moved house", "context": "The user moved to Leeds in August.",
+	}); err != nil || code != 0 {
+		t.Fatalf("memory_write: code=%d err=%v", code, err)
+	}
+
+	var epi *lobslawv1.EpisodicRecord
+	var vec *lobslawv1.VectorRecord
+	for _, e := range applier.entries {
+		if r := e.GetEpisodicRecord(); r != nil {
+			epi = r
+		}
+		if v := e.GetVectorRecord(); v != nil {
+			vec = v
+		}
+	}
+	if epi == nil {
+		t.Fatal("no episodic record was written")
+	}
+	if vec == nil {
+		t.Fatal("no vector record was written; the memory is reachable only by lexical fallback")
+	}
+
+	// The vector must carry the episodic record's ownership. Search
+	// reads vectors, so an unowned vector over owned text is the same
+	// leak wearing a different hat.
+	if vec.Owner != epi.Owner {
+		t.Errorf("vector owner = %q, episodic owner = %q", vec.Owner, epi.Owner)
+	}
+	if vec.Visibility != epi.Visibility {
+		t.Errorf("vector visibility = %v, episodic = %v", vec.Visibility, epi.Visibility)
+	}
+	if vec.SessionRef != epi.SessionRef {
+		t.Errorf("vector session = %q, episodic = %q; it is invisible in the conversation that produced it",
+			vec.SessionRef, epi.SessionRef)
+	}
+	if len(vec.SourceIds) != 1 || vec.SourceIds[0] != epi.Id {
+		t.Errorf("vector SourceIds = %v, want [%s]", vec.SourceIds, epi.Id)
+	}
+	if vec.EmbeddingModel != "test-embedder" {
+		t.Errorf("EmbeddingModel = %q; a vector whose model is unknown cannot be re-embedded safely", vec.EmbeddingModel)
+	}
+}
+
+// No embedder is not an error. The episodic record is the memory; the
+// vector is an index over it, and a node with no embeddings configured
+// still has to be able to remember something.
+func TestAWriteWithNoEmbedderStillStoresTheMemory(t *testing.T) {
+	t.Parallel()
+
+	applier := &fakeApplier{}
+	h := newMemoryWriteHandler(applier, nil)
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{Principal: identity.User("alice")})
+
+	if _, code, err := h(ctx, map[string]string{"event": "a fact"}); err != nil || code != 0 {
+		t.Fatalf("memory_write: code=%d err=%v", code, err)
+	}
+	if applier.entries[0].GetEpisodicRecord() == nil {
+		t.Error("the episodic record was not written")
+	}
 }
