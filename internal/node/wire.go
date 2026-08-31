@@ -145,6 +145,9 @@ func nodeWireStages() []WireStage {
 		{Name: "pinned-memory", Gate: gateRaft, Wire: (*Node).wirePinnedMemory},
 		{Name: "skill-store", Gate: gateRaft, Wire: (*Node).wireSkillStore},
 		{Name: "self-taught", Gate: gateRaft, Wire: (*Node).wireSelfTaught},
+		// After self-taught, whose store is one of its sources; before
+		// the gateway stage, which reads the result.
+		{Name: "notices", Gate: gateRaft, Wire: (*Node).wireNotices},
 		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},

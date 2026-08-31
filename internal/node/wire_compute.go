@@ -550,6 +550,15 @@ func (n *Node) attachDreamSummarizer() {
 	}
 	runner.SetSummarizer(s)
 	n.log.Info("dream: consolidation enabled", "provider", label, "model", model)
+
+	// The same provider adjudicates near-duplicates. A role of its
+	// own would be a config field nobody sets, which is how the
+	// reranker came to be advertised and never called; when the two
+	// jobs want different models, that is the moment to split them.
+	if a := compute.NewDreamAdjudicator(n.roleMap.For(compute.RoleSummariser), model, n.log); a != nil {
+		runner.SetAdjudicator(a, n.embedder)
+		n.log.Info("dream: near-duplicate adjudication enabled", "provider", label, "model", model)
+	}
 }
 
 // registerDreamHandler wires DreamRunner into the scheduler so an

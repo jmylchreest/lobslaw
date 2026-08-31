@@ -43,3 +43,29 @@ func (p pendingReviewSource) Notices(_ context.Context, principal string) ([]gat
 	}
 	return gateway.PendingReviewNotice(proposals, refinements), nil
 }
+
+// nightmareSource asks about memories that disagree.
+//
+// Owner-scoped at the source rather than filtered afterwards: the
+// question quotes the memories, so a nightmare surfaced to the wrong
+// person is a leak, not a mis-delivery.
+type nightmareSource struct{ store *memory.Store }
+
+func (n nightmareSource) Notices(_ context.Context, principal string) ([]gateway.Notice, error) {
+	if n.store == nil || principal == "" {
+		return nil, nil
+	}
+	// Capped low. The nudge names one and counts the rest, so
+	// gathering more than a handful is work whose result is a number.
+	found, err := memory.UnresolvedNightmares(n.store, principal, 5)
+	if err != nil {
+		return nil, err
+	}
+	questions := make([]string, 0, len(found))
+	for _, nm := range found {
+		if nm.Question != "" {
+			questions = append(questions, nm.Question)
+		}
+	}
+	return gateway.NightmareNotice(questions), nil
+}

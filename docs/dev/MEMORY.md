@@ -10,7 +10,7 @@ Buckets persisted through Raft:
 - **EpisodicRecords** — structured events with tags, importance, timestamps. Dream/REM consolidation source.
 - **Sessions / SessionMessages** — durable conversation transcripts. See [Sessions](#sessions) below.
 
-Every operation distinguishes **deterministic primitives** (cheap math — Search, FindClusters, Forget) from **LLM interpretation**. Summarizer is the only one of those built. Adjudicator and Reranker were designed and their scaffolding removed in 2026-08 — see the note under each — because scaffolding that never runs reads as a feature to anyone grepping for it. Callers compose the two layers into workflows. The memory service never calls an LLM directly; the LLM layer never writes to the store directly. Hard boundary.
+Every operation distinguishes **deterministic primitives** (cheap math — Search, FindClusters, Forget) from **LLM interpretation**. Summarizer and Adjudicator are built. The Reranker is not — see the note under it. Callers compose the two layers into workflows. The memory service never calls an LLM directly; the LLM layer never writes to the store directly. Hard boundary.
 
 ## Architectural split
 
@@ -18,8 +18,8 @@ Every operation distinguishes **deterministic primitives** (cheap math — Searc
 ┌─ Memory service (deterministic) ─┐      ┌─ LLM layer (interpretive) ─┐
 │  Store    Recall                  │      │  Summarizer                 │
 │  Search   FindClusters            │      │  Adjudicator                │
-│  Forget   EpisodicAdd   Dream     │      │  (Adjudicator, Reranker:    │
-│                                   │      │   designed, not built)      │
+│  Forget   EpisodicAdd   Dream     │      │  Adjudicator                │
+│                                   │      │  (Reranker: design only)    │
 └───────────┬──────────────────────┘      └────────────┬────────────────┘
             │                                          │
             └──────────── Caller orchestration ────────┘
@@ -114,40 +114,31 @@ type Summarizer interface {
 
 Consolidates a batch of episodic records into a narrative. Called during Dream's consolidation phase. `nil` makes Dream skip summarisation.
 
-### Adjudicator (design; scaffolding removed 2026-08)
-
-The interface, the `AlwaysKeepDistinctAdjudicator` stub, `mergePhase` and
-the cluster tagging were removed. Nothing installed a real Adjudicator,
-so every Dream run clustered the corpus and then discarded each verdict
-as `KeepDistinct` — a similarity pass over long-term memory, nightly,
-for no effect. The `conflict-cluster` and `supersedes-chain` tags it
-wrote were read by nothing.
-
-`BucketConsolidations`, its FSM case and `lobslaw memory consolidations`
-were KEPT: they read records already written, and dropping a replicated
-bucket is a migration rather than a cleanup.
-
-The design below is retained as the intended shape, not a description
-of code that exists.
+### Adjudicator
 
 ```go
 type Adjudicator interface {
-    AdjudicateMerge(ctx, cluster *Cluster) (MergeDecision, error)
+    AdjudicateMerge(ctx context.Context, cluster *lobslawv1.Cluster) (*Adjudication, error)
 }
 ```
 
-Decides what to do with a near-duplicate cluster. Four verdicts:
+Decides what a cluster of near-identical memories MEANS: the same
+fact twice (`merge`), the same subject at different times
+(`supersedes`), two things that cannot both be true (`conflict`), or
+similar wording about different things (`keep_distinct`).
 
-| Verdict | Action | Destructive? |
-|---|---|---|
-| `KeepDistinct` | Do nothing | No |
-| `Merge` | Store consolidated, delete originals | **Yes** |
-| `Conflict` | Tag `metadata[conflict-cluster] = <id>`, preserve all | No |
-| `Supersedes` | Tag `metadata[supersedes-chain] = <id>`, preserve all | No |
+`internal/compute.DreamAdjudicator` is the implementation, on the same
+provider Dream summarises with. **A nil Adjudicator makes the phase
+absent, not inert** — clustering does not run either. The previous
+version installed an always-keep-distinct stub at construction, so an
+O(n²) similarity pass ran nightly to reach a conclusion it already
+had; a stub that satisfies an interface is not the same as a feature.
 
-**Critical invariant, when this is built: on error, callers treat the cluster as `KeepDistinct`**. False-merge is irreversible; false-no-merge is just bloat.
+The prompt is biased toward `keep_distinct` and says so twice. The
+costs are not symmetric: a duplicate left alone costs a little recall
+budget, and a wrong merge loses a memory.
 
-### Reranker (design; scaffolding removed 2026-08)
+### Reranker (design; not implemented)
 
 The `RoleReranker` constant, its provider selection, the
 `[compute.roles] reranker` config field and the `list_providers` line
@@ -199,6 +190,14 @@ No rerank stage — see Reranker above. Both bounds are applied at
 assembly rather than by the retrieval strategies, so neither depends on
 a strategy having remembered to enforce it.
 
+**A disputed hit travels with the memory it disagrees with**, in one
+block, marked `disputed=<verdict>` on the Source attribute. One block
+because the budget could otherwise take one side and drop the other,
+which is how a contradiction becomes a confident wrong answer. The
+counterpart is re-checked against the audience: a verdict can name a
+record this caller may not read, and rendering it would leak that
+record through the back door of an argument about it.
+
 Recall travels in the same `user` message as the turn text, with the
 `<untrusted>` wrapper as the only boundary. Two adjacent user messages
 would let a provider that merges same-role turns erase a separation the
@@ -215,11 +214,9 @@ Memory that silently rewrites itself and cannot be inspected is a trust
 problem for a privacy-first product, so every adjudication was written
 as a durable record (`BucketConsolidations`).
 
-**Nothing writes that bucket since the merge phase was removed**
-(2026-08). The bucket, its FSM case and the CLI below are kept because
-they read records already written — dropping a replicated bucket is a
-migration rather than a cleanup — so the commands still answer for
-history and will report nothing new:
+Every verdict is written here, including `keep_distinct` — the log is
+both the audit trail and the record of which clusters have already
+been decided:
 
 ```
 lobslaw memory consolidations
@@ -248,41 +245,84 @@ Bounded by 90 days or 5000 entries, whichever bites first, pruned by
 Dream itself. A second scheduled task to tidy after the first is one
 more thing to misconfigure.
 
-## Dream-time merge (removed 2026-08)
+## Dream-time adjudication
 
-The merge phase, the `Adjudicator` interface and the cluster tagging
-are gone. Nothing ever installed a real adjudicator, so the
-`AlwaysKeepDistinctAdjudicator` stub was the implementation — and it
-returns `KeepDistinct` unconditionally.
+Long-term records only, once per night, on whichever node holds
+leadership.
 
-That was not free. The stub is installed at construction, so the phase
-ran `findClusters` on every Dream cycle: a similarity pass over
-long-term memory, nightly, whose every verdict was then discarded. The
-`conflict-cluster` and `supersedes-chain` tags it wrote were read by
-nothing, and could not have been — they went on the *vector* record
-while recall renders the *episodic* one.
-
-The design it implemented is under Adjudicator above. If it returns, it
-returns with something that actually adjudicates.
-
-```go
-// The shape that was removed, for reference:
-clusters := mem.FindClusters(ctx, retention="long-term")
-for each cluster {
-    decision := adjudicator.AdjudicateMerge(cluster)
-    switch decision.Verdict {
-    case Merge:        mem.Store(consolidated); mem.Forget(ids=originals)
-    case Conflict:     tag each member with conflict-cluster:<id>
-    case Supersedes:   tag each member with supersedes-chain:<id>
-    case KeepDistinct: // no-op (safe default)
-    }
-}
+```
+findClusters(threshold 0.92, long-term)   deterministic, per owner
+        ↓  clusters not already decided
+adjudicator.AdjudicateMerge(cluster)      one LLM call per cluster
+        ↓
+merge         → Remember(consolidated) then forget the sources
+supersedes    → both kept, verdict indexed
+conflict      → both kept, verdict indexed, becomes a nightmare
+keep_distinct → recorded, so the cluster is never re-asked
+        ↓
+ConsolidationRecord  (+ dispute index for conflict/supersedes)
 ```
 
-**Contradiction detection went with it.** Two episodic records that
-disagree are both recalled, with nothing marking the disagreement. That
-is the honest state; it was also the state before, since the tags were
-written and never read.
+**Clusters are never re-adjudicated.** A cluster id is a hash of its
+sorted members, so unchanged membership is the same question — and
+asking a model the same question nightly, forever, is how a background
+pass becomes a standing bill. The consolidation log doubles as the
+record of what has already been decided.
+
+**Nothing crosses an owner.** Clustering refuses cross-owner edges,
+and a merge derives its owner from the cluster: a summary of two
+people's memories would be owned by neither, and no read-side filter
+can undo that afterwards.
+
+**Merges go through `Remember`.** The single write door exists so a
+new writer cannot repeat the two mistakes the old ones made — an
+unowned record nobody can read, and an unindexed one nothing can find.
+
+**Only duplicates are resolved automatically.** A conflict is never
+merged, never silently resolved in favour of the newer record, and
+never deleted. Dream marks it and asks.
+
+### What clustering can see
+
+`scanClusterCandidates` skips consolidation OUTPUT — more than one
+source, or a single source with a scope other than `episodic`. The
+test used to be "has any SourceIds", which stopped being right when
+every memory gained a paired vector: `Remember` writes one whose
+SourceIds name its own episodic record, so the old test excluded every
+memory in the store. Clustering examined nothing, which looks exactly
+like finding nothing.
+
+
+## Nightmares
+
+A conflict is the one verdict Dream cannot act on: two memories that
+cannot both be true, and nothing in either says which. Marking it at
+recall time tells the model the ground is uneven. It does not make the
+ground even — only the person whose memories these are can do that,
+and only if somebody asks them.
+
+So an unresolved conflict becomes a question, riding out on a
+conversation that is already happening (`gateway.NightmareNotice`, via
+the same notice slot the self-taught review queue uses). The
+adjudicator writes it as a question a person can answer, because that
+is what the prompt asks it for: *"Are you vegetarian, or was the steak
+the exception?"*
+
+**There is no resolved flag.** A conflict whose sides no longer both
+exist has been settled — by a correction, by forgetting one, or by a
+later merge — so `UnresolvedNightmares` checks the records themselves.
+Nothing has to be kept in step, and a question stops being asked the
+moment it stops being a question.
+
+Answering happens through the tools that already exist:
+`memory_correct` and `memory_forget`. Nothing new to learn, and the
+resolution is a memory operation like any other — owned, audited, and
+undoable by the same means.
+
+Notices are owner-scoped at the source rather than filtered afterwards,
+because the question quotes the memories. A nightmare surfaced to the
+wrong person is a leak, not a mis-delivery.
+
 
 ## Retention tiers
 
