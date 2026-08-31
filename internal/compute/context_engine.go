@@ -40,6 +40,8 @@ type ContextEngine struct {
 	// age a record without sleeping.
 	now func() time.Time
 
+	maxRecallTokens int
+
 	store      *memory.Store
 	embedder   EmbeddingProvider
 	crossOwner CrossOwnerAuthorizer
@@ -66,14 +68,20 @@ type ContextEngineConfig struct {
 
 	// MaxRecall caps the number of memory records injected into the
 	// prompt per turn. Zero takes DefaultMaxRecall.
-	//
-	// A count rather than a token budget, which is the cruder unit:
-	// each record is truncated at 800 characters, so three of them is
-	// anywhere from a line to most of a page. Conversation history is
-	// already token-budgeted through ContextBudget and recall should
-	// probably follow, but a count matches what an operator can
-	// reason about today.
 	MaxRecall int
+
+	// MaxRecallTokens caps their estimated size. Zero takes
+	// DefaultMaxRecallTokens.
+	//
+	// Both bounds apply and the tighter one wins, because they answer
+	// different questions. The count is what an operator reasons about
+	// — "how many things should it remember at me" — while the size is
+	// what the context window actually charges for: each record is
+	// truncated at 800 characters, so three of them is anywhere from a
+	// line to most of a page. Conversation history has been
+	// token-budgeted since ContextBudget; recall was the one input
+	// still bounded only by cardinality.
+	MaxRecallTokens int
 }
 
 // NewContextEngine is safe to call with an empty config; the
@@ -87,13 +95,18 @@ func NewContextEngine(cfg ContextEngineConfig) *ContextEngine {
 	if maxRecall <= 0 {
 		maxRecall = DefaultMaxRecall
 	}
+	maxRecallTokens := cfg.MaxRecallTokens
+	if maxRecallTokens <= 0 {
+		maxRecallTokens = DefaultMaxRecallTokens
+	}
 	return &ContextEngine{
-		now:        time.Now,
-		store:      cfg.Store,
-		embedder:   cfg.Embedder,
-		crossOwner: cfg.CrossOwner,
-		log:        logger,
-		maxRecall:  maxRecall,
+		now:             time.Now,
+		store:           cfg.Store,
+		embedder:        cfg.Embedder,
+		crossOwner:      cfg.CrossOwner,
+		log:             logger,
+		maxRecall:       maxRecall,
+		maxRecallTokens: maxRecallTokens,
 	}
 }
 
@@ -150,6 +163,16 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	}
 	e.log.Debug("context-engine: recall", "strategy", strategy, "hits", len(entries))
 
+	return e.assemble(entries, strategy)
+}
+
+// assemble ranks the hits and renders the ones that fit.
+//
+// Split from Assemble so the ranking and the two bounds can be tested
+// against records a test supplies, without a store, an embedder and a
+// raft behind them. What it decides — which memories the model sees —
+// is the part worth pinning.
+func (e *ContextEngine) assemble(entries []recallEntry, strategy string) ContextAssembly {
 	// Recency folded into the score before ranking.
 	//
 	// Ranking was pure similarity, so a three-year-old fact and a
@@ -175,20 +198,38 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 
 	ids := make([]string, 0, len(entries))
 	blocks := make([]promptgen.ContextBlock, 0, len(entries))
-	for _, e := range entries {
-		ids = append(ids, e.rec.Id)
+	spent := 0
+	for _, entry := range entries {
+		content := truncateContext(entry.rec.Context, 800)
+		// Highest-scoring first, so the budget keeps the best of what
+		// fits rather than whatever happened to be cheap. A single
+		// record over budget is still admitted when nothing has been
+		// taken yet: recalling one long memory beats recalling none
+		// and leaving the turn to guess.
+		// Both bounds here, so neither depends on a strategy having
+		// applied it. The strategies limit their own hits for
+		// efficiency; this is what guarantees the invariant.
+		if len(blocks) >= e.maxRecall {
+			break
+		}
+		cost := estimateTokens(Message{Content: content})
+		if len(blocks) > 0 && spent+cost > e.maxRecallTokens {
+			break
+		}
+		spent += cost
+		ids = append(ids, entry.rec.Id)
 		// score and when ride on Source, which WrapContext already
 		// renders as an attribute — so the metadata survives without a
 		// second tag vocabulary to carry it.
-		source := fmt.Sprintf("memory:recall score=%.3f", e.score)
-		if e.rec.Timestamp != nil {
-			source += fmt.Sprintf(" when=%s", e.rec.Timestamp.AsTime().Format("2006-01-02 15:04"))
+		source := fmt.Sprintf("memory:recall score=%.3f", entry.score)
+		if entry.rec.Timestamp != nil {
+			source += fmt.Sprintf(" when=%s", entry.rec.Timestamp.AsTime().Format("2006-01-02 15:04"))
 		}
 		blocks = append(blocks, promptgen.ContextBlock{
 			Source:   source,
 			Category: promptgen.CategoryLongTerm,
 			Trust:    promptgen.TrustUntrusted,
-			Content:  truncateContext(e.rec.Context, 800),
+			Content:  content,
 		})
 	}
 
@@ -358,6 +399,15 @@ func (e *ContextEngine) quarantined(rec *lobslawv1.EpisodicRecord) bool {
 		"id", rec.Id, "tags", rec.Tags)
 	return true
 }
+
+// DefaultMaxRecallTokens bounds the estimated size of recall.
+//
+// Roughly three full-length records: enough that the count is usually
+// what binds, so the size bound only fires when records are unusually
+// long — which is the case it exists for. A budget that fires on
+// ordinary turns would be a second cap on the same thing rather than a
+// guard against the pathological one.
+const DefaultMaxRecallTokens = 700
 
 // DefaultMaxRecall is how many memories reach the prompt when the
 // operator has not said. Enough for continuity, few enough that a turn
