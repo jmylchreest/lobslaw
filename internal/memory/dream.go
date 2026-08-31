@@ -18,10 +18,11 @@ import (
 )
 
 // Summarizer turns a set of source events into a consolidated
-// summary text plus an embedding for vector indexing. Phase 3.3
-// ships no real implementation — wiring waits for Phase 5's
-// Provider Resolver. A nil Summarizer makes Dream skip the
-// consolidation step while still running score + prune.
+// summary text plus an embedding for vector indexing. The node wires
+// a provider-backed one once the resolver exists; until then, and on
+// nodes that have no summarisation provider, it is nil — which makes
+// Dream skip the consolidation step while still running score +
+// prune.
 // placeholderCommitmentLabel stands in for a commitment with no label
 // when consolidation renders one. Consolidation output is read by a
 // person, and a blank line item cannot be recognised or acted on.
@@ -63,7 +64,7 @@ type DreamConfig struct {
 type DreamRunner struct {
 	store      *Store
 	raft       *RaftNode
-	summarizer Summarizer // may be nil until Phase 5
+	summarizer Summarizer // nil until the node calls SetSummarizer
 	// pinned is the always-on memory store. Nil disables the pinned
 	// consolidation pass entirely, which is what a node without one
 	// should do — not guess at a block it cannot read.
@@ -72,16 +73,15 @@ type DreamRunner struct {
 	logger *slog.Logger
 }
 
-// SetSummarizer swaps in the consolidation-layer summarizer.
-// Intended for Phase 5 to call after constructing the Provider
-// Resolver. Safe to call while the runner is idle.
+// SetSummarizer swaps in the consolidation-layer summarizer, once the
+// provider resolver exists to build one. Safe to call while the runner
+// is idle.
 func (d *DreamRunner) SetSummarizer(s Summarizer) { d.summarizer = s }
 
-// NewDreamRunner constructs a runner. summarizer may be nil — Phase 5
-// supplies the real one. The Adjudicator defaults to the always-
-// keep-distinct stub, so the merge phase is boot-safe (runs, but
-// never merges) until Phase 5 calls SetAdjudicator with an LLM-
-// backed implementation.
+// NewDreamRunner constructs a runner. summarizer may be nil: the node
+// boots before the provider resolver exists, and SetSummarizer fills
+// it in. A runner without one prunes and selects candidates but
+// rewrites nothing.
 func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg DreamConfig, logger *slog.Logger) *DreamRunner {
 	if logger == nil {
 		logger = slog.Default()
@@ -115,9 +115,6 @@ type DreamResult struct {
 	Consolidated int
 	Pruned       int
 	Candidates   []string // IDs selected for consolidation (may be empty if no Summarizer)
-	// Merge is the outcome of the Phase 2 near-duplicate consolidation
-	// pass. Zero values are expected before Phase 5 lands — the default
-	// AlwaysKeepDistinct Adjudicator never takes destructive action.
 	// Pinned is the outcome of the pinned-memory consolidation pass.
 	// Zero values are expected on a node with no Summarizer, which
 	// never rewrites anything.
@@ -195,17 +192,11 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		return nil, fmt.Errorf("prune: %w", err)
 	}
 
-	// Phase 2: near-duplicate consolidation over long-term records.
-	// Runs after prune so session/episodic chatter is already gone
-	// and the merge decisions operate on the records that actually
-	// matter long-term. LLM failures are non-fatal — the stub
-	// Adjudicator is safe, and a real one that errors out just
-	// preserves the cluster for next run's retry.
 	// Pinned consolidation: tidy blocks that are near their cap, so
 	// the pressure produces curation in the background rather than a
-	// write failure the user sees. Non-fatal for the same reason as
-	// the merge phase — a summariser outage leaves the block as it is
-	// and the threshold fires again tomorrow.
+	// write failure the user sees. Non-fatal: a summariser outage
+	// leaves the block as it is and the threshold fires again
+	// tomorrow.
 	pinnedResult, err := d.consolidatePinned(ctx, d.pinned)
 	if err != nil {
 		d.logger.Warn("dream: pinned consolidation failed", "err", err)

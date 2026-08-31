@@ -40,9 +40,9 @@ type Service struct {
 }
 
 // NewService wires a MemoryService against an existing Raft stack.
-// When raft is non-nil, a DreamRunner is constructed alongside — wire
-// a Summarizer on it (Phase 5) to enable consolidation; until then
-// dream runs score + prune but skip the consolidation step.
+// When raft is non-nil, a DreamRunner is constructed alongside with no
+// Summarizer: the node wires one in later, and dream runs score +
+// prune without one.
 func NewService(raft *RaftNode, store *Store, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
@@ -55,9 +55,9 @@ func NewService(raft *RaftNode, store *Store, logger *slog.Logger) *Service {
 	return s
 }
 
-// DreamRunner exposes the runner so Phase 5 can inject a Summarizer
-// (via DreamRunner.SetSummarizer). Returns nil on nodes without
-// raft (compute-only, gateway-only).
+// DreamRunner exposes the runner so the node can inject a Summarizer
+// (via DreamRunner.SetSummarizer) once its providers are resolved.
+// Returns nil on nodes without raft (compute-only, gateway-only).
 func (s *Service) DreamRunner() *DreamRunner { return s.dreamRunner }
 
 // SessionPruner exposes the pruner so node.go can register its
@@ -126,9 +126,10 @@ func (s *Service) Recall(ctx context.Context, req *lobslawv1.RecallRequest) (*lo
 }
 
 // Search performs vector similarity search over the local store.
-// Required: pre-computed Embedding. The Text field is reserved for
-// Phase 5 (when the Provider Resolver can supply embeddings) and
-// returns Unimplemented until then.
+// Required: pre-computed Embedding. The Text field returns
+// Unimplemented: embedding belongs to the caller, which already holds
+// the provider resolver, so doing it here would put a provider call
+// behind a store read.
 func (s *Service) Search(ctx context.Context, req *lobslawv1.SearchRequest) (*lobslawv1.SearchResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
@@ -159,8 +160,8 @@ func (s *Service) Search(ctx context.Context, req *lobslawv1.SearchRequest) (*lo
 
 // FindClusters returns connected components of vector records
 // linked by pairwise cosine similarity above the threshold.
-// Deterministic (no LLM); Phase 3.4 merge flow composes this with
-// the LLM-driven Adjudicator. Runs against the local store.
+// Deterministic (no LLM): it reports which records look alike and
+// decides nothing about them. Runs against the local store.
 func (s *Service) FindClusters(ctx context.Context, req *lobslawv1.FindClustersRequest) (*lobslawv1.FindClustersResponse, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")

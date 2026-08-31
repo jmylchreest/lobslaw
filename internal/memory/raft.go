@@ -29,7 +29,7 @@ type RaftConfig struct {
 	// (internal/node) decides whether to set this based on the join
 	// flow's outcome; tests pass true to skip the join dance.
 	Bootstrap bool
-	// Transport is the raft.Transport implementation. Phase 2.4
+	// Transport is the raft.Transport implementation. The node
 	// injects pkg/rafttransport's gRPC transport; tests can pass
 	// raft.NewInmemTransport(...) for single-process verification.
 	Transport raft.Transport
@@ -89,9 +89,9 @@ type RaftNode struct {
 	onLeadership   func(bool)
 }
 
-// NewRaft constructs a Raft node bound to fsm. For Phase 2.3 only the
-// in-memory transport is wired; Phase 2.4 will introduce a gRPC
-// transport factory that replaces it.
+// NewRaft constructs a Raft node bound to fsm. The transport comes
+// from cfg, so this stays agnostic to whether it is talking over gRPC
+// or to peers in the same process.
 func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 	if cfg.NodeID == "" {
 		return nil, fmt.Errorf("RaftConfig: NodeID required")
