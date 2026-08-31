@@ -68,9 +68,9 @@ func renderConsolidations(w io.Writer, entries []*lobslawv1.ConsolidationRecord,
 		return emitJSON(map[string]any{"source": source, "consolidations": out})
 	}
 
-	fmt.Fprintf(w, "%s\n", source)
+	_, _ = fmt.Fprintf(w, "%s\n", source)
 	if len(entries) == 0 {
-		fmt.Fprintln(w, "no consolidations recorded.")
+		_, _ = fmt.Fprintln(w, "no consolidations recorded.")
 		return nil
 	}
 	for _, e := range entries {
@@ -84,17 +84,17 @@ func renderConsolidations(w io.Writer, entries []*lobslawv1.ConsolidationRecord,
 			// then failed to apply is the case a user is looking for.
 			status = "  !! NOT APPLIED: " + e.Error
 		}
-		fmt.Fprintf(w, "%s  %-14s %d records (avg similarity %.2f)%s\n",
+		_, _ = fmt.Fprintf(w, "%s  %-14s %d records (avg similarity %.2f)%s\n",
 			when, e.Verdict, e.MemberCount, e.AvgSimilarity, status)
 		if e.Reason != "" {
-			fmt.Fprintf(w, "    reason:  %s\n", e.Reason)
+			_, _ = fmt.Fprintf(w, "    reason:  %s\n", e.Reason)
 		}
 		if e.ResultId != "" {
-			fmt.Fprintf(w, "    result:  %s\n", e.ResultId)
+			_, _ = fmt.Fprintf(w, "    result:  %s\n", e.ResultId)
 		}
-		fmt.Fprintf(w, "    sources: %s\n", renderSources(e.SourceIds, full))
+		_, _ = fmt.Fprintf(w, "    sources: %s\n", renderSources(e.SourceIds, full))
 	}
-	fmt.Fprintf(w, "\n%d entr%s.\n", len(entries), plural(len(entries)))
+	_, _ = fmt.Fprintf(w, "\n%d entr%s.\n", len(entries), plural(len(entries)))
 	return nil
 }
 

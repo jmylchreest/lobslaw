@@ -463,18 +463,18 @@ func learnedHistory(args []string) error {
 // FROM. Shared by both forms so they cannot drift.
 func renderLearnedHistory(w io.Writer, current *lobslawv1.SelfTaughtRecord,
 	versions []*lobslawv1.SelfTaughtRecord, source string) error {
-	fmt.Fprintf(w, "%s\n", source)
-	fmt.Fprintf(w, "  v%-4d %-9s (current)  %s\n", current.GetVersion(),
+	_, _ = fmt.Fprintf(w, "%s\n", source)
+	_, _ = fmt.Fprintf(w, "  v%-4d %-9s (current)  %s\n", current.GetVersion(),
 		stateLabel(current.GetState()), firstLine(current.GetDescription()))
 	for _, v := range versions {
-		fmt.Fprintf(w, "  v%-4d %-9s            %s\n", v.GetVersion(),
+		_, _ = fmt.Fprintf(w, "  v%-4d %-9s            %s\n", v.GetVersion(),
 			stateLabel(v.GetState()), firstLine(v.GetDescription()))
 	}
 	if len(versions) == 0 {
-		fmt.Fprintln(w, "\nno prior versions retained.")
+		_, _ = fmt.Fprintln(w, "\nno prior versions retained.")
 		return nil
 	}
-	fmt.Fprintf(w, "\nRestore with: lobslaw learned rollback %s <version> --apply\n", current.GetId())
+	_, _ = fmt.Fprintf(w, "\nRestore with: lobslaw learned rollback %s <version> --apply\n", current.GetId())
 	return nil
 }
 

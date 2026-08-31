@@ -472,23 +472,23 @@ func renderVisibilityChanges(w io.Writer, changes []*lobslawv1.VisibilityChange,
 		})
 	}
 
-	fmt.Fprintf(w, "%s\n", source)
+	_, _ = fmt.Fprintf(w, "%s\n", source)
 	for _, c := range changes {
 		if !c.GetChanged() {
-			fmt.Fprintf(w, "  %-8s %s  owner=%s  already %s — no change\n",
+			_, _ = fmt.Fprintf(w, "  %-8s %s  owner=%s  already %s — no change\n",
 				c.GetKind(), c.GetId(), c.GetOwner(), visLabel(c.GetTo()))
 			continue
 		}
-		fmt.Fprintf(w, "  %-8s %s  owner=%s  %s → %s\n",
+		_, _ = fmt.Fprintf(w, "  %-8s %s  owner=%s  %s → %s\n",
 			c.GetKind(), c.GetId(), c.GetOwner(), visLabel(c.GetFrom()), visLabel(c.GetTo()))
 	}
 	switch {
 	case pending == 0:
-		fmt.Fprintln(w, "\nnothing to do — every record already has the requested visibility.")
+		_, _ = fmt.Fprintln(w, "\nnothing to do — every record already has the requested visibility.")
 	case applied:
-		fmt.Fprintf(w, "\nUPDATED %d record(s).\n", pending)
+		_, _ = fmt.Fprintf(w, "\nUPDATED %d record(s).\n", pending)
 	default:
-		fmt.Fprintf(w, "\nDRY RUN — nothing was written. Re-run with --apply to change %d record(s).\n", pending)
+		_, _ = fmt.Fprintf(w, "\nDRY RUN — nothing was written. Re-run with --apply to change %d record(s).\n", pending)
 	}
 	return nil
 }
