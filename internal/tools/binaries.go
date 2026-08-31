@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/binaries"
@@ -32,6 +33,17 @@ type BinariesConfig struct {
 	Satisfier     *binaries.Satisfier
 	Declarations  map[string]BinaryDeclaration
 	InstallPrefix string
+}
+
+// declaredNames lists the allowlist in a stable order, so the same
+// refusal reads the same way twice.
+func declaredNames(decls map[string]BinaryDeclaration) []string {
+	out := make([]string, 0, len(decls))
+	for name := range decls {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func RegisterBinariesBuiltins(b *Builtins, cfg BinariesConfig) error {
@@ -111,7 +123,13 @@ func newBinaryInstallHandler(cfg BinariesConfig) compute.BuiltinFunc {
 		}
 		decl, ok := cfg.Declarations[name]
 		if !ok {
-			return nil, 1, fmt.Errorf("binary_install: %q is not declared in [[binary]] config", name)
+			// Names what IS declared, not just what was refused. The
+			// model picked this name, and a refusal that does not say
+			// what the alternatives are leaves it guessing against a
+			// list it cannot see — so it tries again, differently
+			// wrong.
+			return nil, 2, fmt.Errorf("binary_install: %q is not declared in [[binary]] config; declared: %s",
+				name, strings.Join(declaredNames(cfg.Declarations), ", "))
 		}
 		bootstrap := strings.EqualFold(strings.TrimSpace(args["bootstrap_managers"]), "true")
 		force := strings.EqualFold(strings.TrimSpace(args["force"]), "true")
