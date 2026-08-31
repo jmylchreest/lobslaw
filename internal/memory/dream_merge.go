@@ -86,6 +86,24 @@ func (d *DreamRunner) mergePhase(ctx context.Context, now time.Time) (MergeOutco
 			out.Skipped++
 			continue
 		}
+		// An unowned cluster is not adjudicated at all.
+		//
+		// Records written before ownership existed all carry the
+		// empty owner, so they cluster with each other — equal
+		// owners, by the letter of the rule that stops cross-owner
+		// clustering. Nothing good comes of deciding about them: a
+		// merge would refuse for want of an owner, and the refusal
+		// happens before the verdict is recorded, so the same cluster
+		// would be sent to the model again every night for the life
+		// of the node. A conflict would be recorded against no owner,
+		// which no principal's nightmare query can see, so the
+		// question would be asked of nobody.
+		if clusterOwner(c) == "" {
+			out.Skipped++
+			d.logger.Debug("dream: cluster has no owner; not adjudicated",
+				"cluster", c.GetId(), "members", len(c.GetRecords()))
+			continue
+		}
 		adj, err := d.adjudicator.AdjudicateMerge(ctx, c)
 		if err != nil {
 			d.logger.Warn("dream: adjudication failed; cluster left for the next pass",

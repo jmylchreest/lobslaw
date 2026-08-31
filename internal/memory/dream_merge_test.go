@@ -294,3 +294,29 @@ func TestNightmaresAreOwnerScoped(t *testing.T) {
 		t.Fatalf("bob was told about alice's contradictions: %+v", got)
 	}
 }
+
+// Records written before ownership existed all share the empty
+// owner, so they cluster with each other. Adjudicating them costs a
+// model call whose verdict cannot be recorded — a merge refuses for
+// want of an owner, before the verdict is written — so the same
+// cluster would be sent again every night forever.
+func TestMergePhaseLeavesUnownedClustersAlone(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	seedPair(t, svc.store, "a", "", "legacy record one", []float32{1, 0, 0}, fixedNow())
+	seedPair(t, svc.store, "b", "", "legacy record two", []float32{1, 0, 0}, fixedNow())
+
+	adj := &stubAdjudicator{verdict: &Adjudication{Verdict: VerdictKeepDistinct}}
+	d := mergeRunner(t, svc, adj)
+
+	out, err := d.mergePhase(context.Background(), fixedNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adj.calls != 0 {
+		t.Errorf("adjudicator asked %d times about an unowned cluster; the verdict could not be recorded either way", adj.calls)
+	}
+	if out.Skipped != 1 {
+		t.Errorf("skipped = %d, want 1", out.Skipped)
+	}
+}
