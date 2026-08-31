@@ -15,7 +15,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
-	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/promptguard"
 	"github.com/jmylchreest/lobslaw/internal/turn"
@@ -413,88 +412,6 @@ func annotateEmbeddingFailure(payload []byte, err error) []byte {
 // model doesn't need to synthesise one. Tags come in as a
 // JSON-encoded string array from the LLM's tool-call arguments.
 
-// writeVectorFor indexes a written memory so vector recall can find it.
-//
-// Without this the record is lexical-only: passive recall prefers the
-// vector path and falls back to substring matching, so a memory the
-// model wrote was reachable only by the words it happened to reuse.
-// Episodic ingest has always paired the two; the tool path never did,
-// which made "remember this" produce a weaker memory than the same
-// fact arriving through a conversation.
-//
-// Best-effort, like ingest's. The episodic record is the source of
-// truth and is already committed by the time this runs; a failure here
-// costs recall quality, not the memory. Surfacing it would report a
-// write failure for something that was written.
-func writeVectorFor(ctx context.Context, raft memoryRaftApplier, embedder compute.EmbeddingProvider, rec *lobslawv1.EpisodicRecord) {
-	if embedder == nil || raft == nil || rec == nil {
-		return
-	}
-	text := rec.Context
-	if text == "" {
-		text = rec.Event
-	}
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	vec, err := embedder.Embed(ctx, text)
-	if err != nil {
-		return
-	}
-	vecID := ids.New()
-	entry := &lobslawv1.LogEntry{
-		Op: lobslawv1.LogOp_LOG_OP_PUT,
-		Id: vecID,
-		Payload: &lobslawv1.LogEntry_VectorRecord{VectorRecord: &lobslawv1.VectorRecord{
-			Id:        vecID,
-			Embedding: vec,
-			Text:      text,
-			Scope:     "episodic",
-			Retention: rec.Retention,
-			// The vector carries the episodic record's ownership. It
-			// has to: search reads vectors, so an unowned vector over
-			// owned text is the same leak wearing a different hat.
-			Owner:      rec.Owner,
-			Visibility: rec.Visibility,
-			CreatedAt:  rec.Timestamp,
-			SourceIds:  []string{rec.Id},
-			// Same reasoning. A conversation-scoped audience decides
-			// during the vector scan, so a vector without the origin
-			// its episodic record carries is invisible in the
-			// conversation that produced it.
-			SessionRef:     rec.SessionRef,
-			EmbeddingModel: embedder.Model(),
-		}},
-	}
-	data, err := proto.Marshal(entry)
-	if err != nil {
-		return
-	}
-	_, _ = raft.Apply(data, 5*time.Second) //nolint:errcheck // best-effort; see doc comment
-}
-
-// memoryOwnership derives who a written memory belongs to and which
-// conversation it came from.
-//
-// Refuses rather than writing an ownerless record, matching the ingest
-// path. Every Claims construction in the tree yields a principal —
-// "anon" for unauthenticated REST, "webhook:<name>", "scheduler", the
-// channel identity — so an empty one here means a turn was built
-// without identity, and the honest outcome is an error the operator
-// can see rather than a memory that reports success and disappears.
-func memoryOwnership(ctx context.Context) (owner, sessionRef string, err error) {
-	id, _ := turn.IdentityFrom(ctx)
-	owner = id.Principal.String()
-	if owner == "" {
-		return "", "", errors.New("this turn carries no identity, and a record nobody owns " +
-			"is a record nobody can read; refusing rather than storing something unreachable")
-	}
-	if id.Channel != "" && id.ChannelID != "" {
-		sessionRef = id.Channel + ":" + id.ChannelID
-	}
-	return owner, sessionRef, nil
-}
-
 func newMemoryWriteHandler(raft memoryRaftApplier, embedder compute.EmbeddingProvider) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		event := strings.TrimSpace(args["event"])
@@ -522,58 +439,22 @@ func newMemoryWriteHandler(raft memoryRaftApplier, embedder compute.EmbeddingPro
 			tags = append(tags, promptguard.Tag(f))
 		}
 
-		// Owned, because an unowned record is one nobody can read.
-		//
-		// visibility.go states the rule and its reasoning: an unowned
-		// record "is readable by nobody but Everyone()", and being
-		// invisible is how an upstream bug surfaces. This was that
-		// bug. Every memory written here went in without an owner, so
-		// passive recall and memory_search both filtered it out the
-		// moment it was stored — the model was told it had remembered
-		// something and could never retrieve it. The ingest path
-		// refuses an ownerless turn outright; this one had no
-		// equivalent, so the same mistake was loud in one place and
-		// silent in the other.
-		owner, sessionRef, oerr := memoryOwnership(ctx)
-		if oerr != nil {
-			return nil, 1, fmt.Errorf("memory_write: %w", oerr)
-		}
-
-		id := ids.New()
 		rec := &lobslawv1.EpisodicRecord{
-			Id:         id,
 			Event:      event,
 			Context:    ctxField,
 			Importance: importance,
 			Tags:       tags,
-			Timestamp:  timestamppb.Now(),
 			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,
-			Owner:      owner,
-			Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE,
-			SessionRef: sessionRef,
 		}
-		entry := &lobslawv1.LogEntry{
-			Op: lobslawv1.LogOp_LOG_OP_PUT,
-			Id: id,
-			Payload: &lobslawv1.LogEntry_EpisodicRecord{
-				EpisodicRecord: rec,
-			},
-		}
-		data, err := proto.Marshal(entry)
+		// One door for creating a memory: it stamps ownership from the
+		// turn, refuses a record nobody would be able to read, and
+		// writes the vector that makes it findable by meaning. This
+		// used to assemble and apply the entry here, which is how it
+		// came to miss both.
+		id, err := memory.Remember(ctx, raft, embedder, 0, rec)
 		if err != nil {
-			return nil, 1, fmt.Errorf("memory_write: marshal: %w", err)
+			return nil, 1, fmt.Errorf("memory_write: %w", err)
 		}
-		res, err := raft.Apply(data, 5*time.Second)
-		if err != nil {
-			return nil, 1, fmt.Errorf("memory_write: raft apply: %w", err)
-		}
-		if fsmErr, ok := res.(error); ok && fsmErr != nil {
-			return nil, 1, fmt.Errorf("memory_write: fsm: %w", fsmErr)
-		}
-
-		// Indexed only after the episodic record is committed, so a
-		// vector never points at a memory that failed to land.
-		writeVectorFor(ctx, raft, embedder, rec)
 
 		out, _ := json.Marshal(map[string]any{
 			"id":         id,
@@ -812,20 +693,9 @@ func newMemoryCorrectHandler(store *memory.Store, raft memoryRaftApplier, forget
 		// and tags.
 		prior := priorEpisodic(store, oldID)
 
-		// Owned, for the reason memory_write is. An unowned correction
-		// is unreadable, and the forget below is scoped to the caller
-		// — so a correction that nobody owns replaces a readable
-		// memory with an invisible one and reports success.
-		owner, sessionRef, oerr := memoryOwnership(ctx)
-		if oerr != nil {
-			return nil, 1, fmt.Errorf("memory_correct: %w", oerr)
-		}
-
 		// Step 1: write the correction as a new memory with a
 		// "corrects:<old_id>" tag so the audit trail is queryable.
-		newID := ids.New()
 		newRec := &lobslawv1.EpisodicRecord{
-			Id:      newID,
 			Event:   newEvent,
 			Context: newContext,
 			// Carried from the original where the caller did not say
@@ -836,27 +706,16 @@ func newMemoryCorrectHandler(store *memory.Store, raft memoryRaftApplier, forget
 			// find has undone more than it fixed.
 			Importance: correctedImportance(args, prior),
 			Tags:       correctedTags(prior, oldID),
-			Timestamp:  timestamppb.Now(),
 			Retention:  correctedRetention(prior),
-			Owner:      owner,
-			Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE,
-			SessionRef: sessionRef,
 		}
-		entry := &lobslawv1.LogEntry{
-			Op: lobslawv1.LogOp_LOG_OP_PUT,
-			Id: newID,
-			Payload: &lobslawv1.LogEntry_EpisodicRecord{
-				EpisodicRecord: newRec,
-			},
-		}
-		data, err := proto.Marshal(entry)
+		// Same door as memory_write. An unowned correction would be
+		// unreadable, and the forget below is scoped to the caller —
+		// so it would replace a readable memory with an invisible one
+		// and report success.
+		newID, err := memory.Remember(ctx, raft, embedder, 0, newRec)
 		if err != nil {
-			return nil, 1, fmt.Errorf("memory_correct: marshal: %w", err)
+			return nil, 1, fmt.Errorf("memory_correct: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
-			return nil, 1, fmt.Errorf("memory_correct: raft apply new: %w", err)
-		}
-		writeVectorFor(ctx, raft, embedder, newRec)
 
 		// Step 2: forget the original. Any consolidations containing
 		// the old id are also swept (privacy-safe).

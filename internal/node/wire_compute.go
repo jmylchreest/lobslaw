@@ -1097,9 +1097,14 @@ func buildResearchToolList(reg *tools.Registry) []compute.Tool {
 type researchMemoryAdapter struct{ svc *memory.Service }
 
 func (a *researchMemoryAdapter) WriteEpisodic(ctx context.Context, content string, tags []string) (string, error) {
-	id := "research-" + ids.New()
+	// Ownership is left to EpisodicAdd, which stamps it from the turn.
+	// This used to set neither owner nor visibility and go straight to
+	// a raft apply, so every research finding was written unreadable —
+	// an unowned record is visible to nobody — and unindexed. The
+	// subsystem reported success on memories that could never be
+	// recalled.
 	rec := &lobslawv1.EpisodicRecord{
-		Id:         id,
+		Id:         "research-" + ids.New(),
 		Event:      "research-finding",
 		Context:    content,
 		Tags:       tags,

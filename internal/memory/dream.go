@@ -404,6 +404,18 @@ func (d *DreamRunner) prune(scored []scoredRecord) (int, error) {
 // logDreamSession writes a tiny episodic record summarising what the
 // dream pass did. Useful for post-hoc introspection ("what did the
 // agent remember to forget last night?").
+// logDreamSession records what a run did.
+//
+// Deliberately UNOWNED, which is the one place that is not a bug.
+// visibility.go says an unowned record means a mistake upstream, and
+// for a memory it does — but this is an audit line about the system
+// rather than something anyone said, and an owner would make it
+// recallable. "dream run: 5 candidates, 2 pruned" surfacing in a
+// conversation is noise the user cannot act on.
+//
+// It does not go through Remember for the same reason: Remember exists
+// to make user memories readable and findable, and this should be
+// neither.
 func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, pruned, digested, digests int) error {
 	session := &lobslawv1.EpisodicRecord{
 		Id:         fmt.Sprintf("dream-session-%d", now.UnixNano()),
