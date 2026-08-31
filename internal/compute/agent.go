@@ -1093,18 +1093,36 @@ func (a *Agent) seedMessages(req ProcessMessageRequest) []Message {
 	}
 	out = append(out, history...)
 
-	// Recall sits immediately before the user's message rather than at
-	// the head of the list. R5 calls it a "leading" context message and
-	// gives prompt-prefix caching as one motivation; placing it here is
-	// what delivers that, because everything above stays byte-identical
-	// between turns while recall changes every turn.
-	if r := strings.TrimSpace(req.RecalledContext); r != "" {
-		out = append(out, Message{Role: "user", Content: r})
-	}
-
+	// Recall and the user's turn travel in ONE user message, recall
+	// first.
+	//
+	// They used to be two consecutive user-role messages, which made
+	// the turn ship words the user never said in a role that says
+	// they did. The <untrusted> wrapper is what separates them, and it
+	// is doing the real work here — but it was not the only thing
+	// carrying the boundary, because the message split implied one
+	// too. Providers are free to concatenate adjacent same-role turns
+	// before rendering, and any that does erases a boundary the
+	// wrapper then has to hold alone without having been the only
+	// claim to it. One message makes the wrapper the sole and explicit
+	// separator, which is the state the safety block already describes.
+	//
+	// Position is unchanged, and it is the position that earns the
+	// prompt-prefix cache: everything above stays byte-identical
+	// between turns while recall changes every turn. Role and index
+	// were always separable; only the index mattered for caching.
 	userText := decorateWithAttachments(req.Message, req.Attachments)
+	turnParts := make([]string, 0, 2)
+	if r := strings.TrimSpace(req.RecalledContext); r != "" {
+		turnParts = append(turnParts, r)
+	}
 	if userText != "" {
-		out = append(out, Message{Role: "user", Content: userText})
+		turnParts = append(turnParts, userText)
+	}
+	if len(turnParts) > 0 {
+		// The user's own words last, so the turn ends on the question
+		// rather than on what was remembered about it.
+		out = append(out, Message{Role: "user", Content: strings.Join(turnParts, "\n\n")})
 	}
 
 	// A turn has to end on something the model can answer. With an
