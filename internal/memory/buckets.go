@@ -79,6 +79,18 @@ const (
 	// per night forever.
 	BucketConsolidations = "consolidations"
 
+	// BucketDisputes indexes records Dream found in disagreement, so
+	// recall can ask "is this hit disputed" without scanning the
+	// consolidation log on every turn. Keyed
+	// "<episodic id>/<consolidation id>", valued with the
+	// consolidation id — the verdict itself stays in one place, and
+	// this is only the way back to it.
+	//
+	// Derived state that is still replicated: it is written by the
+	// same entry that writes the verdict, so a follower cannot end up
+	// holding one without the other.
+	BucketDisputes = "disputes"
+
 	// BucketPinned holds the always-on memory blocks rendered into
 	// every system prompt: the user profile and the agent's notes.
 	// Small and capped by design — it is a fixed tax on every request.
@@ -165,6 +177,7 @@ var allBuckets = []string{
 	BucketSessionLeases,
 	BucketPrompts,
 	BucketConsolidations,
+	BucketDisputes,
 	BucketPinned,
 	BucketSelfTaught,
 	BucketSelfTaughtUsage,

@@ -163,6 +163,7 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	}
 	e.log.Debug("context-engine: recall", "strategy", strategy, "hits", len(entries))
 
+	e.annotateDisputes(audience, entries)
 	return e.assemble(entries, strategy)
 }
 
@@ -201,6 +202,30 @@ func (e *ContextEngine) assemble(entries []recallEntry, strategy string) Context
 	spent := 0
 	for _, entry := range entries {
 		content := truncateContext(entry.rec.Context, 800)
+		// score and when ride on Source, which WrapContext already
+		// renders as an attribute — so the metadata survives without a
+		// second tag vocabulary to carry it.
+		source := fmt.Sprintf("memory:recall score=%.3f", entry.score)
+		if entry.rec.Timestamp != nil {
+			source += fmt.Sprintf(" when=%s", entry.rec.Timestamp.AsTime().Format("2006-01-02 15:04"))
+		}
+		// A disputed memory travels with the memory it disagrees
+		// with, in one block, so the model reads both or neither.
+		// Across two blocks the budget could take one and drop the
+		// other, which is how a contradiction becomes a confident
+		// wrong answer.
+		//
+		// Rendered BEFORE the budget check below, so the pair is
+		// costed as the single thing it is.
+		if entry.dispute != nil {
+			source += " disputed=" + entry.dispute.verdict
+			content += "\n[" + entry.dispute.verdict + "] this disagrees with"
+			if !entry.dispute.when.IsZero() {
+				content += " (" + entry.dispute.when.Format("2006-01-02") + ")"
+			}
+			content += ": " + entry.dispute.counterpart
+		}
+
 		// Highest-scoring first, so the budget keeps the best of what
 		// fits rather than whatever happened to be cheap. A single
 		// record over budget is still admitted when nothing has been
@@ -218,13 +243,6 @@ func (e *ContextEngine) assemble(entries []recallEntry, strategy string) Context
 		}
 		spent += cost
 		ids = append(ids, entry.rec.Id)
-		// score and when ride on Source, which WrapContext already
-		// renders as an attribute — so the metadata survives without a
-		// second tag vocabulary to carry it.
-		source := fmt.Sprintf("memory:recall score=%.3f", entry.score)
-		if entry.rec.Timestamp != nil {
-			source += fmt.Sprintf(" when=%s", entry.rec.Timestamp.AsTime().Format("2006-01-02 15:04"))
-		}
 		blocks = append(blocks, promptgen.ContextBlock{
 			Source:   source,
 			Category: promptgen.CategoryLongTerm,
@@ -244,6 +262,74 @@ func (e *ContextEngine) assemble(entries []recallEntry, strategy string) Context
 type recallEntry struct {
 	rec   *lobslawv1.EpisodicRecord
 	score float32
+	// dispute is what Dream concluded about this memory, when it
+	// concluded anything. Nil for almost everything.
+	dispute *disputeNote
+}
+
+// disputeNote is one disagreement, rendered with the memory it is
+// about.
+//
+// It carries the OTHER SIDE, not just a flag. Telling a model that a
+// memory is disputed and not what it is disputed with leaves it worse
+// off than saying nothing: it now knows one of its facts is unreliable
+// and has no way to work out which way. The previous design wrote a
+// tag and nothing read it, which had the same effect for a different
+// reason.
+type disputeNote struct {
+	verdict string
+	// counterpart is the competing memory's text, already truncated.
+	counterpart string
+	// when is the counterpart's timestamp, so "which of these is
+	// current" is answerable from the prompt rather than guessed.
+	when time.Time
+}
+
+// annotateDisputes attaches Dream's verdicts to the hits that have
+// one.
+//
+// The counterpart is re-checked against the audience rather than
+// trusted because it shares a verdict with something readable: a
+// dispute can name a record this caller may not see, and rendering it
+// would leak that record's text through the back door of an argument
+// about it.
+func (e *ContextEngine) annotateDisputes(audience memory.Audience, entries []recallEntry) {
+	if e.store == nil {
+		return
+	}
+	for i := range entries {
+		verdicts, err := memory.DisputesFor(e.store, entries[i].rec.Id)
+		if err != nil || len(verdicts) == 0 {
+			continue
+		}
+		v := verdicts[0]
+		for _, other := range memory.CounterpartsOf(v, entries[i].rec.Id) {
+			raw, err := e.store.Get(memory.BucketEpisodicRecords, other)
+			if err != nil {
+				continue
+			}
+			var epi lobslawv1.EpisodicRecord
+			if err := proto.Unmarshal(raw, &epi); err != nil {
+				continue
+			}
+			if !audience.AllowsEpisodic(&epi) || e.quarantined(&epi) {
+				continue
+			}
+			text := epi.Context
+			if text == "" {
+				text = epi.Event
+			}
+			note := &disputeNote{
+				verdict:     v.GetVerdict(),
+				counterpart: truncateContext(text, 200),
+			}
+			if epi.Timestamp != nil {
+				note.when = epi.Timestamp.AsTime()
+			}
+			entries[i].dispute = note
+			break
+		}
+	}
 }
 
 // recall picks a strategy and returns what it found, plus the name of

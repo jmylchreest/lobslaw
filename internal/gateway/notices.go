@@ -227,6 +227,63 @@ func PendingReviewNotice(proposals, refinements int) []Notice {
 		"%s — `lobslaw learned pending --all`", strings.Join(parts, ", "))}}
 }
 
+// CombineNoticeSources reads several sources as one.
+//
+// Notices are a shared, rate-limited slot on somebody's reply, not a
+// per-feature channel: two features that each nudged on their own
+// schedule would between them produce the stream of small
+// interruptions the interval exists to prevent.
+//
+// Nil sources are skipped, and all-nil returns nil so the caller
+// still gets absence rather than an appender with nothing to say.
+func CombineNoticeSources(srcs ...NoticeSource) NoticeSource {
+	live := make([]NoticeSource, 0, len(srcs))
+	for _, s := range srcs {
+		if s != nil {
+			live = append(live, s)
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	return multiSource(live)
+}
+
+type multiSource []NoticeSource
+
+// Notices gathers from every source. One source failing must not
+// silence the others — a notice is a courtesy, and a broken courtesy
+// should cost only itself.
+func (m multiSource) Notices(ctx context.Context, principal string) ([]Notice, error) {
+	var out []Notice
+	for _, s := range m {
+		got, err := s.Notices(ctx, principal)
+		if err != nil {
+			continue
+		}
+		out = append(out, got...)
+	}
+	return out, nil
+}
+
+// NightmareNotice renders unresolved contradictions.
+//
+// The first question in full, because unlike a review queue this is
+// answerable on the spot: "which of these is right" needs no tool and
+// no console, only the person reading it. Any others are counted, not
+// listed — a reply about something else is not the place to work
+// through a backlog.
+func NightmareNotice(questions []string) []Notice {
+	if len(questions) == 0 {
+		return nil
+	}
+	text := "Two things I remember disagree: " + questions[0]
+	if len(questions) > 1 {
+		text += fmt.Sprintf(" (and %d more — `lobslaw memory consolidations --verdict conflict`)", len(questions)-1)
+	}
+	return []Notice{{Text: text}}
+}
+
 func plural(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun

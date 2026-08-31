@@ -149,6 +149,28 @@ func findClusters(store *Store, req clusterQuery) ([]*lobslawv1.Cluster, error) 
 	return clusters, nil
 }
 
+// isConsolidationOutput reports whether a vector is a summary of
+// other records rather than the index for one memory.
+//
+// The distinction used to be "has any SourceIds", and that stopped
+// being true when every memory started carrying a paired vector:
+// Remember writes one with SourceIds naming its own episodic record,
+// so the old test excluded EVERY memory in the store and clustering
+// could only ever see the legacy records written before it. A pass
+// that examines nothing is indistinguishable from a pass that finds
+// nothing.
+//
+// Two signals, either sufficient. More than one source is a summary
+// by construction. Scope is what separates the one-source cases: an
+// index vector is scoped "episodic" by the writer that pairs it with
+// a record, and a consolidation is not scoped at all.
+func isConsolidationOutput(v *lobslawv1.VectorRecord) bool {
+	if len(v.GetSourceIds()) > 1 {
+		return true
+	}
+	return len(v.GetSourceIds()) == 1 && v.GetScope() != "episodic"
+}
+
 // clusterQuery is the internal shape of a FindClusters call after
 // defaults are resolved. Keeps findClusters's signature narrow and
 // makes the grpc-handler → internal-helper seam obvious.
@@ -181,7 +203,7 @@ func scanClusterCandidates(store *Store, req clusterQuery) ([]clusterCandidate, 
 		if err := proto.Unmarshal(value, &v); err != nil {
 			return fmt.Errorf("unmarshal vector %q: %w", id, err)
 		}
-		if len(v.SourceIds) > 0 {
+		if isConsolidationOutput(&v) {
 			return nil
 		}
 		if req.scopeFilter != "" && v.Scope != req.scopeFilter {

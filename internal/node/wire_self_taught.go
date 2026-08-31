@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
-	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -50,29 +49,15 @@ func (n *Node) wireSelfTaught() error {
 			&selfLearningService{store: store})
 	}
 
-	// The in-channel nudge. Built here rather than in the gateway
-	// stage because it needs the store.
+	// The in-channel nudge is assembled in wireNotices, which runs
+	// after this stage and can see both this store and the memory
+	// store. Left here is the note about who may be told:
 	//
 	// The audience is DECIDED before it reaches this struct — propose
 	// mode defaults it on, derived from the configured channels and
 	// the owner-scoped users, unless notify.disabled says otherwise.
 	// See resolveNoticeAudience in cmd/lobslaw. Empty here now means "resolved
 	// to nobody", not "nobody typed a list".
-	n.notices = gateway.NewNotices(pendingReviewSource{store: store}, gateway.NoticeConfig{
-		Channels: n.cfg.NotifyChannels,
-		Subjects: n.cfg.NotifySubjects,
-		Interval: n.cfg.NotifyInterval,
-	})
-	if len(n.cfg.NotifyChannels) > 0 && len(n.cfg.NotifySubjects) > 0 {
-		n.log.Info("self-learning: review notices enabled",
-			"channels", n.cfg.NotifyChannels, "subjects", len(n.cfg.NotifySubjects))
-	} else {
-		// Said out loud, because "I never got told about the queue" is
-		// otherwise indistinguishable from "the queue was empty" —
-		// and with proposal expiry running, the difference matters.
-		n.log.Info("self-learning: review notices are off",
-			"reason", "self_learning.notify needs both channels and subjects")
-	}
 	return nil
 }
 

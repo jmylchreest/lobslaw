@@ -55,6 +55,12 @@ type DreamConfig struct {
 	// required.
 	CommitmentGrace time.Duration
 
+	// MaxMergeClusters bounds how many near-duplicate clusters one
+	// pass adjudicates. Default 10. Each is an LLM call, so this is
+	// the knob between "memory tidies itself" and "memory bills you
+	// nightly".
+	MaxMergeClusters int
+
 	// Now is the wall-clock function for tests to override.
 	Now func() time.Time
 }
@@ -65,6 +71,14 @@ type DreamRunner struct {
 	store      *Store
 	raft       *RaftNode
 	summarizer Summarizer // nil until the node calls SetSummarizer
+	// adjudicator decides what near-duplicate clusters mean. Nil
+	// makes the merge phase ABSENT rather than inert — see
+	// adjudicator.go for why that distinction is the whole point.
+	adjudicator Adjudicator
+	// embedder indexes what a merge writes. Nil means a merged record
+	// is stored but not findable by meaning, which is why Remember
+	// takes it rather than assuming one.
+	embedder Embedder
 	// pinned is the always-on memory store. Nil disables the pinned
 	// consolidation pass entirely, which is what a node without one
 	// should do — not guess at a block it cannot read.
@@ -78,6 +92,18 @@ type DreamRunner struct {
 // is idle.
 func (d *DreamRunner) SetSummarizer(s Summarizer) { d.summarizer = s }
 
+// SetAdjudicator wires the merge phase on. Without it the phase does
+// not run: clustering is O(n²) over the vector bucket, and paying
+// that nightly to produce verdicts nobody acts on is what the
+// previous implementation did.
+//
+// The embedder comes with it because a merge writes a memory, and a
+// memory written without one is findable only by lexical fallback.
+func (d *DreamRunner) SetAdjudicator(a Adjudicator, e Embedder) {
+	d.adjudicator = a
+	d.embedder = e
+}
+
 // NewDreamRunner constructs a runner. summarizer may be nil: the node
 // boots before the provider resolver exists, and SetSummarizer fills
 // it in. A runner without one prunes and selects candidates but
@@ -88,6 +114,9 @@ func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg Dre
 	}
 	if cfg.MaxCandidates <= 0 {
 		cfg.MaxCandidates = 10
+	}
+	if cfg.MaxMergeClusters <= 0 {
+		cfg.MaxMergeClusters = 10
 	}
 	if cfg.PruneThreshold <= 0 {
 		cfg.PruneThreshold = 0.1
@@ -115,6 +144,9 @@ type DreamResult struct {
 	Consolidated int
 	Pruned       int
 	Candidates   []string // IDs selected for consolidation (may be empty if no Summarizer)
+	// Merge is the outcome of near-duplicate adjudication. Zero on a
+	// node with no Adjudicator, which never examines a cluster.
+	Merge MergeOutcome
 	// Pinned is the outcome of the pinned-memory consolidation pass.
 	// Zero values are expected on a node with no Summarizer, which
 	// never rewrites anything.
@@ -192,6 +224,16 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		return nil, fmt.Errorf("prune: %w", err)
 	}
 
+	// Near-duplicate adjudication over long-term records. After
+	// prune, so the decisions are made about records that survived
+	// the night rather than ones about to go. Non-fatal: an
+	// adjudicator outage leaves the clusters for tomorrow, and they
+	// are still there tomorrow.
+	mergeOutcome, err := d.mergePhase(ctx, now)
+	if err != nil {
+		d.logger.Warn("dream: adjudication pass failed", "err", err)
+	}
+
 	// Pinned consolidation: tidy blocks that are near their cap, so
 	// the pressure produces curation in the background rather than a
 	// write failure the user sees. Non-fatal: a summariser outage
@@ -225,6 +267,7 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		Consolidated:        consolidated,
 		Pruned:              pruned,
 		Candidates:          ids,
+		Merge:               mergeOutcome,
 		Pinned:              pinnedResult,
 		CommitmentsDigested: digested,
 		CommitmentDigests:   digests,

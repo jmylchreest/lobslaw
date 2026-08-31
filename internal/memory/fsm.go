@@ -249,7 +249,42 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("marshal %s payload: %w", bucket, err)
 	}
-	return f.store.Put(bucket, entry.Id, bytes)
+	if err := f.store.Put(bucket, entry.Id, bytes); err != nil {
+		return err
+	}
+	// A verdict that two memories disagree spans two buckets, for the
+	// same reason a session append does: the log entry is the record,
+	// and the index is how recall finds it without scanning the log on
+	// every turn. Written here so no producer can write one without
+	// the other — the previous version of this feature wrote its
+	// verdicts somewhere nothing read, and was indistinguishable from
+	// working.
+	if p, ok := payload.(*lobslawv1.ConsolidationRecord); ok {
+		return f.indexDispute(p)
+	}
+	return nil
+}
+
+// indexDispute points each disputed memory at the verdict about it.
+//
+// Only the verdicts a reader can act on: a merge has already replaced
+// its sources, and keep-distinct is a decision that there is nothing
+// to say.
+func (f *FSM) indexDispute(rec *lobslawv1.ConsolidationRecord) error {
+	switch rec.GetVerdict() {
+	case string(VerdictConflict), string(VerdictSupersedes):
+	default:
+		return nil
+	}
+	for _, sid := range rec.GetSourceIds() {
+		if sid == "" {
+			continue
+		}
+		if err := f.store.Put(BucketDisputes, sid+"/"+rec.GetId(), []byte(rec.GetId())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bumpRevision sets payload's revision to one past what is stored,
