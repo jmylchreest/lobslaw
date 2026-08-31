@@ -76,7 +76,7 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 	if err := b.Register("memory_search", newMemorySearchHandler(cfg.Store, cfg.Embedder, cfg.CrossOwner)); err != nil {
 		return err
 	}
-	if err := b.Register("memory_write", newMemoryWriteHandler(cfg.Raft)); err != nil {
+	if err := b.Register("memory_write", newMemoryWriteHandler(cfg.Raft, cfg.Embedder)); err != nil {
 		return err
 	}
 	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store, cfg.CrossOwner)); err != nil {
@@ -89,7 +89,7 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 		if err := b.Register("memory_forget", newMemoryForgetHandler(cfg.Forgetter, cfg.CrossOwner)); err != nil {
 			return err
 		}
-		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Store, cfg.Raft, cfg.Forgetter, cfg.CrossOwner)); err != nil {
+		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Store, cfg.Raft, cfg.Forgetter, cfg.CrossOwner, cfg.Embedder)); err != nil {
 			return err
 		}
 	}
@@ -412,6 +412,67 @@ func annotateEmbeddingFailure(payload []byte, err error) []byte {
 // EpisodicRecord via Raft. The ID is auto-generated (UUID) so the
 // model doesn't need to synthesise one. Tags come in as a
 // JSON-encoded string array from the LLM's tool-call arguments.
+
+// writeVectorFor indexes a written memory so vector recall can find it.
+//
+// Without this the record is lexical-only: passive recall prefers the
+// vector path and falls back to substring matching, so a memory the
+// model wrote was reachable only by the words it happened to reuse.
+// Episodic ingest has always paired the two; the tool path never did,
+// which made "remember this" produce a weaker memory than the same
+// fact arriving through a conversation.
+//
+// Best-effort, like ingest's. The episodic record is the source of
+// truth and is already committed by the time this runs; a failure here
+// costs recall quality, not the memory. Surfacing it would report a
+// write failure for something that was written.
+func writeVectorFor(ctx context.Context, raft memoryRaftApplier, embedder compute.EmbeddingProvider, rec *lobslawv1.EpisodicRecord) {
+	if embedder == nil || raft == nil || rec == nil {
+		return
+	}
+	text := rec.Context
+	if text == "" {
+		text = rec.Event
+	}
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	vec, err := embedder.Embed(ctx, text)
+	if err != nil {
+		return
+	}
+	vecID := ids.New()
+	entry := &lobslawv1.LogEntry{
+		Op: lobslawv1.LogOp_LOG_OP_PUT,
+		Id: vecID,
+		Payload: &lobslawv1.LogEntry_VectorRecord{VectorRecord: &lobslawv1.VectorRecord{
+			Id:        vecID,
+			Embedding: vec,
+			Text:      text,
+			Scope:     "episodic",
+			Retention: rec.Retention,
+			// The vector carries the episodic record's ownership. It
+			// has to: search reads vectors, so an unowned vector over
+			// owned text is the same leak wearing a different hat.
+			Owner:      rec.Owner,
+			Visibility: rec.Visibility,
+			CreatedAt:  rec.Timestamp,
+			SourceIds:  []string{rec.Id},
+			// Same reasoning. A conversation-scoped audience decides
+			// during the vector scan, so a vector without the origin
+			// its episodic record carries is invisible in the
+			// conversation that produced it.
+			SessionRef:     rec.SessionRef,
+			EmbeddingModel: embedder.Model(),
+		}},
+	}
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		return
+	}
+	_, _ = raft.Apply(data, 5*time.Second) //nolint:errcheck // best-effort; see doc comment
+}
+
 // memoryOwnership derives who a written memory belongs to and which
 // conversation it came from.
 //
@@ -434,7 +495,7 @@ func memoryOwnership(ctx context.Context) (owner, sessionRef string, err error) 
 	return owner, sessionRef, nil
 }
 
-func newMemoryWriteHandler(raft memoryRaftApplier) compute.BuiltinFunc {
+func newMemoryWriteHandler(raft memoryRaftApplier, embedder compute.EmbeddingProvider) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		event := strings.TrimSpace(args["event"])
 		if event == "" {
@@ -509,6 +570,10 @@ func newMemoryWriteHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		if fsmErr, ok := res.(error); ok && fsmErr != nil {
 			return nil, 1, fmt.Errorf("memory_write: fsm: %w", fsmErr)
 		}
+
+		// Indexed only after the episodic record is committed, so a
+		// vector never points at a memory that failed to land.
+		writeVectorFor(ctx, raft, embedder, rec)
 
 		out, _ := json.Marshal(map[string]any{
 			"id":         id,
@@ -729,7 +794,7 @@ func correctedRetention(prior *lobslawv1.EpisodicRecord) lobslawv1.Retention {
 // metadata, then forgets the original by id. Two-step operation
 // but single transactional intent: audit log retains both the new
 // write and the forget, preserving the correction trail.
-func newMemoryCorrectHandler(store *memory.Store, raft memoryRaftApplier, forgetter memoryForgetter, crossOwner compute.CrossOwnerAuthorizer) compute.BuiltinFunc {
+func newMemoryCorrectHandler(store *memory.Store, raft memoryRaftApplier, forgetter memoryForgetter, crossOwner compute.CrossOwnerAuthorizer, embedder compute.EmbeddingProvider) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		oldID := strings.TrimSpace(args["id"])
 		if oldID == "" {
@@ -791,6 +856,7 @@ func newMemoryCorrectHandler(store *memory.Store, raft memoryRaftApplier, forget
 		if _, err := raft.Apply(data, 5*time.Second); err != nil {
 			return nil, 1, fmt.Errorf("memory_correct: raft apply new: %w", err)
 		}
+		writeVectorFor(ctx, raft, embedder, newRec)
 
 		// Step 2: forget the original. Any consolidations containing
 		// the old id are also swept (privacy-safe).
