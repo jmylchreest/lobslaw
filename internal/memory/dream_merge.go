@@ -96,7 +96,7 @@ func (d *DreamRunner) mergePhase(ctx context.Context, now time.Time) (MergeOutco
 		// happens before the verdict is recorded, so the same cluster
 		// would be sent to the model again every night for the life
 		// of the node. A conflict would be recorded against no owner,
-		// which no principal's nightmare query can see, so the
+		// which no principal's challenge query can see, so the
 		// question would be asked of nobody.
 		if clusterOwner(c) == "" {
 			out.Skipped++

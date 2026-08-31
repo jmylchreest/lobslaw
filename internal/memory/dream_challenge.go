@@ -20,8 +20,8 @@ import (
 // queue to go and drain: a line riding out on a conversation that is
 // already happening, in the same channel the memories came from.
 
-// Nightmare is one unresolved contradiction, phrased for a person.
-type Nightmare struct {
+// DreamChallenge is one unresolved contradiction, phrased for a person.
+type DreamChallenge struct {
 	// ID is the consolidation the question came from, so an answer
 	// can be traced to the verdict that prompted it.
 	ID string
@@ -32,14 +32,14 @@ type Nightmare struct {
 	Sides []*lobslawv1.EpisodicRecord
 }
 
-// UnresolvedNightmares returns this principal's live contradictions.
+// UnresolvedChallenges returns this principal's live contradictions.
 //
 // "Live" is doing real work: a conflict whose sides no longer both
 // exist has been resolved, whether by the user correcting one, by
 // forgetting one, or by a later merge. There is no resolved flag to
 // keep in step — the records themselves are the state, so a question
 // stops being asked the moment it stops being a question.
-func UnresolvedNightmares(store *Store, owner string, limit int) ([]Nightmare, error) {
+func UnresolvedChallenges(store *Store, owner string, limit int) ([]DreamChallenge, error) {
 	if store == nil || owner == "" {
 		return nil, nil
 	}
@@ -51,7 +51,7 @@ func UnresolvedNightmares(store *Store, owner string, limit int) ([]Nightmare, e
 		return nil, err
 	}
 
-	out := make([]Nightmare, 0, len(verdicts))
+	out := make([]DreamChallenge, 0, len(verdicts))
 	for _, v := range verdicts {
 		sides := make([]*lobslawv1.EpisodicRecord, 0, len(v.GetSourceIds()))
 		for _, sid := range v.GetSourceIds() {
@@ -69,7 +69,7 @@ func UnresolvedNightmares(store *Store, owner string, limit int) ([]Nightmare, e
 		if len(sides) < 2 {
 			continue
 		}
-		out = append(out, Nightmare{
+		out = append(out, DreamChallenge{
 			ID:       v.GetId(),
 			Question: v.GetReason(),
 			Sides:    sides,
@@ -107,4 +107,71 @@ func LastDreamRun(store *Store) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return latest, nil
+}
+
+// ChallengeOwners is every principal with a live contradiction.
+//
+// The list, not the questions: the caller deciding whether somebody
+// needs to be spoken to does not need to read their memories to
+// decide it.
+func ChallengeOwners(store *Store) ([]string, error) {
+	if store == nil {
+		return nil, nil
+	}
+	verdicts, err := ListConsolidations(store, ConsolidationQuery{
+		Verdict: string(VerdictConflict),
+	})
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, v := range verdicts {
+		owner := v.GetOwner()
+		if owner == "" || seen[owner] {
+			continue
+		}
+		// Liveness re-checked per owner rather than trusted from the
+		// verdict: a conflict both of whose sides are gone has been
+		// settled, and scheduling a message about it would ask a
+		// question that no longer exists.
+		live, err := UnresolvedChallenges(store, owner, 1)
+		if err != nil || len(live) == 0 {
+			continue
+		}
+		seen[owner] = true
+		out = append(out, owner)
+	}
+	return out, nil
+}
+
+// HasPendingCommitment reports whether this principal is already due
+// to hear from the agent before the given time.
+//
+// Used to decide whether a challenge needs a message of its own. If
+// something is already scheduled to reach them, the question can ride
+// on the conversation that starts — one more thing the agent is
+// already going to say beats a second notification.
+func HasPendingCommitment(store *Store, owner string, before time.Time) (bool, error) {
+	if store == nil || owner == "" {
+		return false, nil
+	}
+	found := false
+	err := store.ForEach(BucketCommitments, func(_ string, raw []byte) error {
+		if found {
+			return nil
+		}
+		var c lobslawv1.AgentCommitment
+		if err := proto.Unmarshal(raw, &c); err != nil {
+			return nil //nolint:nilerr // one unreadable commitment must not hide the rest
+		}
+		if c.GetStatus() != "pending" || c.GetOwner() != owner || c.GetDueAt() == nil {
+			return nil
+		}
+		if c.GetDueAt().AsTime().Before(before) {
+			found = true
+		}
+		return nil
+	})
+	return found, err
 }

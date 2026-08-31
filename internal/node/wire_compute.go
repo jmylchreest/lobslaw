@@ -587,7 +587,15 @@ func (n *Node) registerDreamHandler() {
 				"candidates", result.Candidates,
 				"consolidated", result.Consolidated,
 				"pruned", result.Pruned,
+				"merged", result.Merge.Merged,
+				"conflicts", result.Merge.Conflicts,
 			)
+			// A contradiction is only worth finding if somebody is
+			// asked about it. The notice path reaches whoever speaks
+			// next; this reaches whoever does not.
+			if err := n.scheduleDreamChallenges(ctx); err != nil {
+				n.log.Warn("dream: scheduling challenges failed", "err", err)
+			}
 			return nil
 		})
 }

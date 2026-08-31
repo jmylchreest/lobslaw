@@ -257,7 +257,7 @@ adjudicator.AdjudicateMerge(cluster)      one LLM call per cluster
         ↓
 merge         → Remember(consolidated) then forget the sources
 supersedes    → both kept, verdict indexed
-conflict      → both kept, verdict indexed, becomes a nightmare
+conflict      → both kept, verdict indexed, raised as a challenge
 keep_distinct → recorded, so the cluster is never re-asked
         ↓
 ConsolidationRecord  (+ dispute index for conflict/supersedes)
@@ -293,7 +293,7 @@ memory in the store. Clustering examined nothing, which looks exactly
 like finding nothing.
 
 
-## Nightmares
+## Dream challenges
 
 A conflict is the one verdict Dream cannot act on: two memories that
 cannot both be true, and nothing in either says which. Marking it at
@@ -301,55 +301,49 @@ recall time tells the model the ground is uneven. It does not make the
 ground even — only the person whose memories these are can do that,
 and only if somebody asks them.
 
-So an unresolved conflict becomes a question, riding out on a
-conversation that is already happening (`gateway.NightmareNotice`, via
-the same notice slot the self-taught review queue uses). The
-adjudicator writes it as a question a person can answer, because that
-is what the prompt asks it for: *"Are you vegetarian, or was the steak
-the exception?"*
+So an unresolved conflict becomes a question, in the adjudicator's own
+words, because that is what the prompt asks it for: *"Are you
+vegetarian, or was the steak the exception?"*
 
 ### When it is asked
 
-Not when it is found. Dream runs at 02:00, and the notice path only
-ever appends to a reply the user is already receiving — so there is no
-push to get wrong — but somebody awake at 03:00 would still have been
-asked, and 03:00 is not a better time to adjudicate your own memory
-for being in-band.
+Not when it is found. Dream runs at 02:00 and says nothing. There are
+two ways the question comes up, and between them they cover everyone:
 
-- **Morning, in the user's own timezone** (08:00–22:00, from their
-  UserPreferences, falling back to the cluster default). Morning is a
-  fact about the person, not the machine.
-- **The first conversation of it.** The gate is per principal, not per
-  conversation, so the question arrives once and not again in the next
-  chat window.
-- **Once per dream cycle.** A contradiction that survived another
-  night has earned another mention; one raised this morning and not
-  answered has not, because nothing has re-examined it since. "Has
-  dream run since I last asked" is read from the session records the
-  pass writes for itself, so there is no second place for it to be
-  wrong.
+1. **The next time the user says something** — the question rides out
+   on the reply (`gateway.DreamChallengeNotice`, through the same
+   notice slot the self-taught review queue uses). No hour gate:
+   somebody typing is somebody awake.
+2. **A scheduled message, for the user who says nothing.** After each
+   pass, anybody with a live contradiction and nothing already due to
+   them gets an ordinary commitment at 09:00 in their own timezone —
+   the same mechanism "remind me on Tuesday" produces, which already
+   knows how to reach a person through the channels they subscribe to.
 
-**Nothing expires.** A nightmare is not a queue item with a TTL — it
-lives until the memories stop disagreeing, and it is re-raised each
-cycle until they do. The one place a timer would be tempting is the
-one place it would be wrong: expiring the question would turn "nobody
-answered" into a decision nobody made.
+**If the agent is already going to speak to them, nothing new is
+scheduled.** Anything due inside a day starts a conversation the
+question can ride on, and two messages about things that could have
+been said in one is the agent being a nuisance.
 
-**There is no resolved flag.** A conflict whose sides no longer both
-exist has been settled — by a correction, by forgetting one, or by a
-later merge — so `UnresolvedNightmares` checks the records themselves.
-Nothing has to be kept in step, and a question stops being asked the
-moment it stops being a question.
+**One ask per dream cycle.** A contradiction that survived another
+night has earned another mention; one raised this morning and not
+answered has not, because nothing has re-examined it since. "Has dream
+run since I last asked" is read from the session records the pass
+writes for itself, so there is no second place for it to be wrong.
+
+**Nothing expires.** A challenge is not a queue item with a TTL — it
+lives until the memories stop disagreeing, and is re-raised each cycle
+until they do. Expiring it would turn "nobody answered" into a
+decision nobody made.
 
 Answering happens through the tools that already exist:
 `memory_correct` and `memory_forget`. Nothing new to learn, and the
 resolution is a memory operation like any other — owned, audited, and
 undoable by the same means.
 
-Notices are owner-scoped at the source rather than filtered afterwards,
-because the question quotes the memories. A nightmare surfaced to the
-wrong person is a leak, not a mis-delivery.
-
+Questions are owner-scoped at the source rather than filtered
+afterwards, because they quote the memories. One surfaced to the wrong
+person is a leak, not a mis-delivery.
 
 ## Retention tiers
 

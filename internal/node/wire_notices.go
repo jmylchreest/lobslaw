@@ -22,16 +22,15 @@ func (n *Node) wireNotices() error {
 	if n.selfTaught != nil {
 		review = pendingReviewSource{store: n.selfTaught}
 	}
-	var nightmares gateway.NoticeSource
+	var challenges gateway.NoticeSource
 	if n.store != nil {
-		nightmares = &nightmareSource{
+		challenges = &challengeSource{
 			store:   n.store,
-			tz:      n.resolveUserTimezone,
 			askedAt: map[string]time.Time{},
 		}
 	}
 
-	src := gateway.CombineNoticeSources(review, nightmares)
+	src := gateway.CombineNoticeSources(review, challenges)
 	n.notices = gateway.NewNotices(src, gateway.NoticeConfig{
 		Channels: n.cfg.NotifyChannels,
 		Subjects: n.cfg.NotifySubjects,
