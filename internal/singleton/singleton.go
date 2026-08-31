@@ -96,8 +96,15 @@ func Run(ctx context.Context, gate Gate, name string, log *slog.Logger, fn func(
 				log.Warn("singleton handler returned error", "name", name, "err", err)
 				return err
 			}
-			// fn returned cleanly while we still believe we own it —
-			// nothing more to do; wait for ownership change or ctx.
+			// fn returned cleanly while we still believe we own it.
+			// Nothing more to do — wait for an ownership change or
+			// ctx. Logged because for the long-running loops that use
+			// this (channel pollers, sweepers) returning early is
+			// indistinguishable from working, and on a single-node
+			// cluster the ownership change that would restart it
+			// never comes.
+			log.Warn("singleton handler returned while still held; it will not run again until ownership changes",
+				"name", name)
 		}
 	}
 }

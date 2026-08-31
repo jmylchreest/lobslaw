@@ -269,7 +269,13 @@ type TelegramHandler struct {
 	agent  *compute.Agent
 	log    *slog.Logger
 	client *http.Client
-	base   string
+	// pollTimeout is how long Telegram holds getUpdates open, and
+	// pollSlack how much longer than that we wait before treating the
+	// request as stalled. Fields rather than constants so a test can
+	// drive a real deadline without waiting 25 seconds for one.
+	pollTimeout time.Duration
+	pollSlack   time.Duration
+	base        string
 
 	// pendingScope remembers which operation each prompt is about, so
 	// an "approve for this chat" tap can record a grant that matches.
@@ -425,6 +431,8 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		agent:        agent,
 		log:          logger,
 		client:       client,
+		pollTimeout:  pollLongTimeout,
+		pollSlack:    pollDeadlineSlack,
 		base:         base,
 		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
 		pendingScope: make(map[string]scopedOperation),
@@ -1282,7 +1290,11 @@ func fileMetaToAttachment(f *tgFileMeta, kind AttachmentKind) Attachment {
 // API etiquette (long-poll timeout 25s = a quarter of their 60s
 // server-side max) against backoff behaviour on flaky networks.
 const (
-	pollLongTimeout    = 25 * time.Second
+	pollLongTimeout = 25 * time.Second
+	// pollDeadlineSlack is how long past the long-poll timeout a
+	// getUpdates request may take before we give up on it. Telegram
+	// answers at the timeout; anything much past that is a stall.
+	pollDeadlineSlack  = 10 * time.Second
 	pollInitialBackoff = 1 * time.Second
 	pollMaxBackoff     = 30 * time.Second
 	pollBackoffFactor  = 1.8
@@ -1353,9 +1365,22 @@ func (h *TelegramHandler) pollLoop(ctx context.Context) error {
 			return nil
 		}
 
-		updates, newOffset, err := h.getUpdates(ctx, nextOffset, pollLongTimeout)
+		updates, newOffset, err := h.getUpdates(ctx, nextOffset, h.pollTimeout)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// Only the parent context ending means shutdown, so ask
+			// it rather than reading the error.
+			//
+			// getUpdates wraps ctx in a deadline of its own, so a
+			// stalled request surfaces as DeadlineExceeded with the
+			// parent still perfectly alive. Returning on that ended
+			// polling for the life of the process: singleton.Run
+			// holds a clean return as "this one is finished" and only
+			// starts it again on an ownership change, which a
+			// single-node cluster never has. One slow request, and
+			// the bot goes quiet until someone restarts it — with
+			// nothing in the log to say so.
+			if ctx.Err() != nil {
+				h.log.Info("telegram: long-poll loop exiting", "reason", ctx.Err())
 				return nil
 			}
 			if isWebhookConflict(err) {
@@ -1495,7 +1520,7 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 	// The HTTP client's own timeout must exceed the long-poll
 	// timeout — otherwise we cancel the request before Telegram
 	// gets a chance to reply.
-	reqCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout+h.pollSlack)
 	defer cancel()
 
 	url := fmt.Sprintf("%s/bot%s/getUpdates", h.base, h.cfg.BotToken)

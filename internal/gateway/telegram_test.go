@@ -484,7 +484,12 @@ type pollHarness struct {
 	batches [][]byte
 	// conflictOnce, when true, serves one 409 before resuming
 	// normal batches — simulates a stuck webhook registration.
-	conflictOnce     bool
+	conflictOnce bool
+	// stallOnce, when true, holds the first getUpdates open past the
+	// caller's deadline — a stalled long poll, which is what a
+	// network blip looks like from this side.
+	stallOnce        bool
+	stallFor         time.Duration
 	deleteWebhookHit bool
 }
 
@@ -503,6 +508,16 @@ func newPollHarnessWithState(t *testing.T, agent *compute.Agent, batches [][]byt
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
 			h.mu.Lock()
+			if h.stallOnce {
+				h.stallOnce = false
+				stall := h.stallFor
+				h.mu.Unlock()
+				select {
+				case <-time.After(stall):
+				case <-r.Context().Done():
+				}
+				return
+			}
 			if h.conflictOnce {
 				h.conflictOnce = false
 				h.mu.Unlock()
