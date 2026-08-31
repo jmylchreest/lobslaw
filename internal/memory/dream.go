@@ -450,9 +450,14 @@ func (d *DreamRunner) prune(scored []scoredRecord) (int, error) {
 // It does not go through Remember for the same reason: Remember exists
 // to make user memories readable and findable, and this should be
 // neither.
+// dreamSessionPrefix is the id prefix every session record carries,
+// so "when did dream last run" is a prefix scan rather than a walk of
+// episodic memory.
+const dreamSessionPrefix = "dream-session-"
+
 func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, pruned, digested, digests int) error {
 	session := &lobslawv1.EpisodicRecord{
-		Id:         fmt.Sprintf("dream-session-%d", now.UnixNano()),
+		Id:         fmt.Sprintf("%s%d", dreamSessionPrefix, now.UnixNano()),
 		Event:      fmt.Sprintf("dream run: %d candidates, %d consolidated, %d pruned, %d commitments digested into %d rollups", candidates, consolidated, pruned, digested, digests),
 		Importance: 3, // modest; dream sessions aren't the memories themselves
 		Timestamp:  timestamppb.New(now),

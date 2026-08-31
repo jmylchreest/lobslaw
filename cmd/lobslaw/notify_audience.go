@@ -7,14 +7,13 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
-// Who hears about a review queue, when nobody said.
+// Who hears that something is waiting for them, when nobody said.
 //
-// mode = "propose" is already the statement that a human should look
-// before anything the agent wrote takes effect. Making the nudge a
-// second, separately-populated block meant propose mode defaulted to
-// writing into a queue nobody was told about — auto mode with extra
-// steps, and worse, because proposal expiry then discards things
-// nobody declined.
+// Two things use this: the self-taught review queue, and dream
+// challenges. Neither should need a second, separately-populated
+// block to be heard — a queue nobody is told about is auto mode with
+// extra steps, and a contradiction nobody is asked about is dream
+// talking to itself.
 //
 // Derived rather than defaulted to a constant, because the answer is
 // already in the config: the channels are the ones the gateway
@@ -33,11 +32,16 @@ type noticeAudience struct {
 // Explicit values always win — an operator who named a channel or a
 // subject meant that list, and quietly widening it would send a
 // notice somewhere they had decided against.
-func resolveNoticeAudience(selfLearningMode string, notify config.NotifyConfig, channels []config.GatewayChannelConfig) noticeAudience {
-	// Only propose mode has a queue. Auto applies artefacts
-	// immediately and off writes none, so there is nothing waiting on
-	// a person in either.
-	if selfLearningMode != "propose" || notify.Disabled {
+//
+// NOT gated on self-learning mode any more. It used to return an
+// empty audience unless mode was "propose", which was right when the
+// review queue was the only thing with something to say. Dream
+// challenges exist wherever memory does, so that gate meant switching
+// self-learning to auto silently disabled every question about
+// memories that disagree — an unrelated switch deciding whether
+// anybody hears about their own memory.
+func resolveNoticeAudience(notify config.NotifyConfig, channels []config.GatewayChannelConfig) noticeAudience {
+	if notify.Disabled {
 		return noticeAudience{}
 	}
 
@@ -52,12 +56,26 @@ func resolveNoticeAudience(selfLearningMode string, notify config.NotifyConfig, 
 	if len(out.Subjects) == 0 {
 		out.Subjects = ownerSubjects(channels)
 	}
-	// A queue with nobody to tell is still off, and saying so beats
-	// constructing a notifier that can never fire.
+	// Somebody to tell and somewhere to tell them, or it is off —
+	// and saying so beats constructing a notifier that can never
+	// fire.
 	if len(out.Channels) == 0 || len(out.Subjects) == 0 {
 		return noticeAudience{}
 	}
 	return out
+}
+
+// notifyConfigFor picks the block in force.
+//
+// The top-level [notify] wins; [self_learning.notify] is read when it
+// is empty, so a config written before the move keeps working rather
+// than silently losing its audience.
+func notifyConfigFor(cfg *config.Config) config.NotifyConfig {
+	top := cfg.Notify
+	if top.Disabled || len(top.Channels) > 0 || len(top.Subjects) > 0 || top.Interval > 0 {
+		return top
+	}
+	return cfg.SelfLearning.Notify
 }
 
 // channelKinds lists the gateway channel types in play, deduplicated.

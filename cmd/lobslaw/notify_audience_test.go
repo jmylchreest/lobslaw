@@ -14,14 +14,13 @@ func telegramOwner() []config.GatewayChannelConfig {
 	}}
 }
 
-// THE POINT. mode = "propose" is the statement that a human should
-// look before anything takes effect. Requiring a second block to hear
-// about the queue made it mean "write to a queue nobody is told
-// about" — auto mode with extra steps, and worse, because proposal
-// expiry then discards things nobody declined.
-func TestProposeModeNudgesWithoutBeingAskedTwice(t *testing.T) {
+// THE POINT. Neither the review queue nor a dream challenge should
+// need a second, separately-populated block to be heard: a queue
+// nobody is told about is auto mode with extra steps, and a
+// contradiction nobody is asked about is dream talking to itself.
+func TestTheAudienceIsDerivedWithoutBeingAskedTwice(t *testing.T) {
 	t.Parallel()
-	got := resolveNoticeAudience("propose", config.NotifyConfig{}, telegramOwner())
+	got := resolveNoticeAudience(config.NotifyConfig{}, telegramOwner())
 	if !got.Enabled {
 		t.Fatal("propose mode resolved to silence")
 	}
@@ -41,7 +40,7 @@ func TestProposeModeNudgesWithoutBeingAskedTwice(t *testing.T) {
 // them one is waiting is noise about a door they cannot open.
 func TestOnlyOwnersAreTold(t *testing.T) {
 	t.Parallel()
-	got := resolveNoticeAudience("propose", config.NotifyConfig{}, telegramOwner())
+	got := resolveNoticeAudience(config.NotifyConfig{}, telegramOwner())
 	for _, s := range got.Subjects {
 		if s == "111" || s == "tg-111" {
 			t.Errorf("a public-scoped user is in the audience: %v", got.Subjects)
@@ -49,21 +48,45 @@ func TestOnlyOwnersAreTold(t *testing.T) {
 	}
 }
 
-// The other modes have no queue: auto applies artefacts immediately
-// and off writes none, so there is nothing waiting on a person.
-func TestOnlyProposeModeNudges(t *testing.T) {
+// Self-learning mode must not decide this.
+//
+// The audience used to resolve to nothing unless mode was "propose",
+// which was right when the review queue was the only source. Dream
+// challenges exist wherever memory does, so that gate meant switching
+// self-learning to auto silently disabled every question about
+// memories that disagree.
+func TestSelfLearningModeDoesNotGateTheAudience(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"auto", "off", ""} {
-		if resolveNoticeAudience(mode, config.NotifyConfig{}, telegramOwner()).Enabled {
-			t.Errorf("mode %q produced a review nudge", mode)
-		}
+	if !resolveNoticeAudience(config.NotifyConfig{}, telegramOwner()).Enabled {
+		t.Error("a node with an owner and a channel resolved to silence")
+	}
+}
+
+// The deprecated block still works, so a config written before the
+// move does not silently lose its audience.
+func TestSelfLearningNotifyIsStillRead(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{}
+	cfg.SelfLearning.Notify = config.NotifyConfig{Subjects: []string{"user:old"}}
+	if got := notifyConfigFor(cfg); len(got.Subjects) != 1 || got.Subjects[0] != "user:old" {
+		t.Errorf("the old block was ignored: %+v", got)
+	}
+}
+
+// The top-level block wins when both are set.
+func TestTopLevelNotifyWins(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{Notify: config.NotifyConfig{Subjects: []string{"user:new"}}}
+	cfg.SelfLearning.Notify = config.NotifyConfig{Subjects: []string{"user:old"}}
+	if got := notifyConfigFor(cfg); got.Subjects[0] != "user:new" {
+		t.Errorf("the deprecated block overrode the current one: %+v", got)
 	}
 }
 
 func TestTheNudgeCanBeTurnedOff(t *testing.T) {
 	t.Parallel()
-	if resolveNoticeAudience("propose", config.NotifyConfig{Disabled: true}, telegramOwner()).Enabled {
-		t.Error("notify.disabled did not silence propose mode")
+	if resolveNoticeAudience(config.NotifyConfig{Disabled: true}, telegramOwner()).Enabled {
+		t.Error("notify.disabled did not silence the nudge")
 	}
 }
 
@@ -72,7 +95,7 @@ func TestTheNudgeCanBeTurnedOff(t *testing.T) {
 // against.
 func TestExplicitListsAreNotWidened(t *testing.T) {
 	t.Parallel()
-	got := resolveNoticeAudience("propose", config.NotifyConfig{
+	got := resolveNoticeAudience(config.NotifyConfig{
 		Channels: []string{"rest"},
 		Subjects: []string{"alice"},
 	}, telegramOwner())
@@ -86,7 +109,7 @@ func TestExplicitListsAreNotWidened(t *testing.T) {
 func TestNoOwnerMeansNoNudge(t *testing.T) {
 	t.Parallel()
 	channels := []config.GatewayChannelConfig{{Type: "telegram", UserScopes: map[string]string{"111": "public"}}}
-	if resolveNoticeAudience("propose", config.NotifyConfig{}, channels).Enabled {
+	if resolveNoticeAudience(config.NotifyConfig{}, channels).Enabled {
 		t.Error("a node with no owner resolved to an audience")
 	}
 }

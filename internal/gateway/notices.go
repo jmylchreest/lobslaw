@@ -266,14 +266,14 @@ func (m multiSource) Notices(ctx context.Context, principal string) ([]Notice, e
 	return out, nil
 }
 
-// NightmareNotice renders unresolved contradictions.
+// DreamChallengeNotice renders unresolved contradictions.
 //
 // The first question in full, because unlike a review queue this is
 // answerable on the spot: "which of these is right" needs no tool and
 // no console, only the person reading it. Any others are counted, not
 // listed — a reply about something else is not the place to work
 // through a backlog.
-func NightmareNotice(questions []string) []Notice {
+func DreamChallengeNotice(questions []string) []Notice {
 	if len(questions) == 0 {
 		return nil
 	}

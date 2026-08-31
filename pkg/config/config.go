@@ -35,8 +35,21 @@ type Config struct {
 	// off, so a config that does not mention it has the capability
 	// absent rather than merely unused.
 	SelfLearning SelfLearningConfig `koanf:"self_learning"`
-	Users        []UserConfig       `koanf:"user"`
-	Binaries     []BinaryConfig     `koanf:"binary"`
+
+	// Notify is the in-channel nudge: who may be told something is
+	// waiting for them, and where.
+	//
+	// Top-level because it is no longer about self-learning. It
+	// started as the self-taught review queue's nudge and now also
+	// carries dream challenges, which exist wherever memory does —
+	// leaving it under [self_learning] made an unrelated switch decide
+	// whether somebody could be told their memories disagree.
+	//
+	// [self_learning.notify] is still read when this is empty, so an
+	// existing config keeps working.
+	Notify   NotifyConfig   `koanf:"notify"`
+	Users    []UserConfig   `koanf:"user"`
+	Binaries []BinaryConfig `koanf:"binary"`
 	// Remotes are the hosts remote_ssh may reach. A
 	// top-level repeated block like [[user]] and [[binary]], because
 	// it is a property of the deployment rather than of the agent.
@@ -175,8 +188,9 @@ type SelfLearningConfig struct {
 	// /dev/null.
 	ProposalExpiryDays int `koanf:"proposal_expiry_days"`
 
-	// Notify controls the in-channel nudge that says a review queue
-	// exists. Off unless both allowlists are populated.
+	// Notify is the deprecated home for the notice audience. Use the
+	// top-level [notify] block; this is read only when that one is
+	// empty.
 	Notify NotifyConfig `koanf:"notify"`
 }
 

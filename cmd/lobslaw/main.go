@@ -514,10 +514,9 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 
 	// Resolved before the node config is built, so the node receives a
 	// decided audience rather than raw fields plus the rules for
-	// interpreting them. mode = "propose" defaults the nudge ON; see
+	// interpreting them. Defaults derive from the gateway config; see
 	// resolveNoticeAudience.
-	audience := resolveNoticeAudience(
-		cfg.SelfLearning.Mode, cfg.SelfLearning.Notify, cfg.Gateway.Channels)
+	audience := resolveNoticeAudience(notifyConfigFor(cfg), cfg.Gateway.Channels)
 
 	return node.Config{
 		NodeID:           nodeID,

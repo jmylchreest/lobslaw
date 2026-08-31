@@ -235,7 +235,7 @@ func TestMergePhaseRefusesAnEmptyConsolidation(t *testing.T) {
 
 // An unresolved conflict is a question for the person whose memories
 // these are; one whose sides no longer both exist is not.
-func TestNightmaresAreLiveConflictsOnly(t *testing.T) {
+func TestChallengesAreLiveConflictsOnly(t *testing.T) {
 	t.Parallel()
 	svc := newTestServiceStack(t)
 	seedPair(t, svc.store, "a", "user:test", "john is vegetarian", []float32{1, 0, 0}, fixedNow())
@@ -250,12 +250,12 @@ func TestNightmaresAreLiveConflictsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := UnresolvedNightmares(svc.store, "user:test", 5)
+	got, err := UnresolvedChallenges(svc.store, "user:test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Question == "" {
-		t.Fatalf("nightmares = %+v; want one question", got)
+		t.Fatalf("challenges = %+v; want one question", got)
 	}
 
 	// Answering it by forgetting one side settles it, with no
@@ -263,7 +263,7 @@ func TestNightmaresAreLiveConflictsOnly(t *testing.T) {
 	if err := svc.store.Delete(BucketEpisodicRecords, "b"); err != nil {
 		t.Fatal(err)
 	}
-	got, err = UnresolvedNightmares(svc.store, "user:test", 5)
+	got, err = UnresolvedChallenges(svc.store, "user:test", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestNightmaresAreLiveConflictsOnly(t *testing.T) {
 
 // Another principal's contradictions are not this one's business:
 // the question quotes the memories.
-func TestNightmaresAreOwnerScoped(t *testing.T) {
+func TestChallengesAreOwnerScoped(t *testing.T) {
 	t.Parallel()
 	svc := newTestServiceStack(t)
 	seedPair(t, svc.store, "a", "user:alice", "alice is vegetarian", []float32{1, 0, 0}, fixedNow())
@@ -286,7 +286,7 @@ func TestNightmaresAreOwnerScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := UnresolvedNightmares(svc.store, "user:bob", 5)
+	got, err := UnresolvedChallenges(svc.store, "user:bob", 5)
 	if err != nil {
 		t.Fatal(err)
 	}
