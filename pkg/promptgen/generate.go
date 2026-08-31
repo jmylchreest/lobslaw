@@ -101,7 +101,7 @@ func Generate(in GenerateInput) string {
 		// document. See BuildPromptContract.
 		BuildPromptContract(),
 		BuildSafety(in.Tools),
-		BuildPersonality(in.Soul),
+		BuildPersonality(in.Soul, in.Tools),
 		BuildFragments(in.Soul),
 		BuildTooling(in.Tools),
 		BuildSkills(in.Skills, in.SkillProposals),

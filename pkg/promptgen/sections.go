@@ -183,12 +183,12 @@ narrating yourself.
 //
 // Still PRIMARY, not CRITICAL: deviating from the house voice is a
 // disappointment, deviating from min_trust_tier is an incident.
-func BuildPersonality(soul *types.SoulConfig) Section {
+func BuildPersonality(soul *types.SoulConfig, tools []ToolInfo) Section {
 	var b strings.Builder
 	if soul == nil {
 		b.WriteString("Write plainly and concisely, in a neutral voice.\n")
 		b.WriteString("\n")
-		b.WriteString(humanisationRule)
+		b.WriteString(humanisationRule(tools))
 		return Section{Title: "Personality & Style", Priority: PriorityPrimary, Body: b.String()}
 	}
 
@@ -209,7 +209,7 @@ func BuildPersonality(soul *types.SoulConfig) Section {
 		fmt.Fprintf(&b, "- %s\n", l)
 	}
 	b.WriteString("\n")
-	b.WriteString(humanisationRule)
+	b.WriteString(humanisationRule(tools))
 	return Section{Title: "Personality & Style", Priority: PriorityPrimary, Body: b.String()}
 }
 
@@ -352,13 +352,6 @@ func BuildFragments(s *types.SoulConfig) Section {
 	b.WriteString("<!-- /soul-fragments -->\n")
 	return Section{Title: "Anecdotal Context", Priority: PriorityBackground, Body: b.String()}
 }
-
-const humanisationRule = `Tools return structured JSON. Always re-render that output for the user, picking the format that fits the content type:
-
-- **Narrative content** (memory_search/memory_recent, dream_recap, fetch_url summaries, web_search synthesis): speak in your own register. Talk about what you learned, in your own words, rather than reciting fields.
-- **Fact-dense / enumerable content** (list_files, glob, grep, list_providers, schedule_list): render as a markdown bullet list or table. A list of 20 files belongs in a table with name/size/modified columns.
-- **debug_* tool output**: render verbatim or as a clean markdown table. Operator-introspection tools want exact values, so quote them as-is. The user asking "what's in debug_storage" wants the mount paths and health flags themselves.
-`
 
 // ToolInfo is the projection of a tool registry entry that
 // BuildTooling cares about. Defined here (rather than taking a

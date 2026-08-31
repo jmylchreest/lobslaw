@@ -57,7 +57,7 @@ func TestBuildIdentityOmitsName(t *testing.T) {
 		PersonaDescription: "A thoughtful assistant.",
 	}
 	identity := BuildIdentity(soul)
-	personality := BuildPersonality(soul)
+	personality := BuildPersonality(soul, nil)
 	if strings.Contains(identity.Body, "Jarvis") || strings.Contains(personality.Body, "Jarvis") {
 		t.Error("SECURITY: soul.Name must NOT appear in identity or personality blocks")
 	}
@@ -86,7 +86,7 @@ func TestBuildPersonalitySkipsZeroScores(t *testing.T) {
 			Directness: 0, // unset — should not render
 		},
 	}
-	s := BuildPersonality(soul)
+	s := BuildPersonality(soul, nil)
 	if !strings.Contains(s.Body, "Write plainly") {
 		t.Error("a set dial should render its guidance")
 	}
@@ -115,7 +115,7 @@ func TestPersonalityCarriesNoDialVocabulary(t *testing.T) {
 			Humor:      7,
 		},
 	}
-	body := BuildPersonality(soul).Body
+	body := BuildPersonality(soul, nil).Body
 	for _, leak := range []string{
 		"3/10", "7/10", "2/10", "4/10", "5/10",
 		"emoji_usage", "directness", "formality", "excitement", "sarcasm",
