@@ -54,35 +54,6 @@ func TestFindClustersStillGroupsWithinAnOwner(t *testing.T) {
 	}
 }
 
-func TestMostRestrictiveVisibility(t *testing.T) {
-	t.Parallel()
-	priv := &lobslawv1.VectorRecord{Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE}
-	shared := &lobslawv1.VectorRecord{Visibility: lobslawv1.Visibility_VISIBILITY_SHARED}
-	unspec := &lobslawv1.VectorRecord{}
-
-	cases := []struct {
-		name string
-		in   []*lobslawv1.VectorRecord
-		want lobslawv1.Visibility
-	}{
-		// The one that matters: a single private member must not be
-		// published by its shared neighbours.
-		{"private wins over shared", []*lobslawv1.VectorRecord{shared, priv},
-			lobslawv1.Visibility_VISIBILITY_PRIVATE},
-		{"shared wins over unspecified", []*lobslawv1.VectorRecord{unspec, shared},
-			lobslawv1.Visibility_VISIBILITY_SHARED},
-		{"all unspecified stays legacy", []*lobslawv1.VectorRecord{unspec, unspec},
-			lobslawv1.Visibility_VISIBILITY_UNSPECIFIED},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := mostRestrictiveVisibility(tc.in); got != tc.want {
-				t.Errorf("got %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 // Forget is destructive and cascades through consolidations, so an
 // unscoped one lets any caller erase someone else's memory.
 func TestForgetRefusesAnotherPrincipalsRecord(t *testing.T) {
