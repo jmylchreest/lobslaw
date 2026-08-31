@@ -522,6 +522,8 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 	return node.Config{
 		NodeID:           nodeID,
 		Functions:        funcs,
+		Version:          Version,
+		Commit:           Commit,
 		ListenAddr:       listen,
 		AdvertiseAddr:    cfg.Cluster.AdvertiseAddr,
 		SeedNodes:        cfg.Discovery.SeedNodes,

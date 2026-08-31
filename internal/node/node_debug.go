@@ -211,7 +211,19 @@ func (d *debugInspector) DebugProviders() []map[string]any {
 }
 
 func (d *debugInspector) DebugVersion() string {
-	return fmt.Sprintf("node_id=%s functions=%v", d.n.cfg.NodeID, d.n.cfg.Functions)
+	// The build stamp first: the question this tool is asked is
+	// almost always "what are you running", and a tool called
+	// debug_version that answers with a node ID invites the model to
+	// make the version up.
+	version, commit := d.n.cfg.Version, d.n.cfg.Commit
+	if version == "" {
+		version = "unstamped"
+	}
+	if commit == "" {
+		commit = "unknown"
+	}
+	return fmt.Sprintf("version=%s commit=%s node_id=%s functions=%v",
+		version, commit, d.n.cfg.NodeID, d.n.cfg.Functions)
 }
 
 // DebugSandbox probes live kernel capabilities. See

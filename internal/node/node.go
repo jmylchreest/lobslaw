@@ -52,8 +52,16 @@ import (
 // Callers (typically cmd/lobslaw/main.go) assemble this from flags +
 // config.toml + resolved secrets.
 type Config struct {
-	NodeID        string
-	Functions     []types.NodeFunction
+	NodeID    string
+	Functions []types.NodeFunction
+
+	// Version and Commit are the build stamp from main, carried here
+	// so the running node can report what it is. Empty on a build
+	// that was not stamped; debug_version says so rather than
+	// inventing a number.
+	Version string
+	Commit  string
+
 	ListenAddr    string // where to bind the cluster gRPC listener
 	AdvertiseAddr string // what peers dial; empty falls back to the bound address
 	SeedNodes     []string
