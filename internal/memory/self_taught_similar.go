@@ -20,9 +20,9 @@ import (
 // So a near-duplicate search runs before anything new is accepted, and
 // the proposer has to say which it is.
 //
-// NOT auto-adjudicated, deliberately. The Adjudicator does decide
-// merge/conflict/supersedes for MEMORIES, and reusing it here would
-// look consistent and be wrong: a memory is data the model may weigh,
+// NOT auto-adjudicated, deliberately. Deciding
+// merge/conflict/supersedes automatically is a plausible thing to
+// want here and would be wrong: a memory is data the model may weigh,
 // a skill is an instruction it follows. Silently merging two
 // instructions produces a third that nobody wrote.
 

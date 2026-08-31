@@ -18,14 +18,15 @@ Every operation distinguishes **deterministic primitives** (cheap math — Searc
 ┌─ Memory service (deterministic) ─┐      ┌─ LLM layer (interpretive) ─┐
 │  Store    Recall                  │      │  Summarizer                 │
 │  Search   FindClusters            │      │  Adjudicator                │
-│  Forget   EpisodicAdd   Dream     │      │  Reranker (Phase 5)         │
+│  Forget   EpisodicAdd   Dream     │      │  (Adjudicator, Reranker:    │
+│                                   │      │   designed, not built)      │
 └───────────┬──────────────────────┘      └────────────┬────────────────┘
             │                                          │
             └──────────── Caller orchestration ────────┘
               Agent loop / DreamRunner / Channel handlers
 ```
 
-**Why the split**: cost opacity, testability, injectability. A caller that only needs cheap candidate retrieval shouldn't pay for an LLM call. Tests exercising merge-flow plumbing shouldn't need an LLM mock. Different callers may inject different LLM strategies (cheap-fast for hot-path rerank; smart-expensive for merge adjudication).
+**Why the split**: cost opacity, testability, injectability. A caller that only needs cheap candidate retrieval shouldn't pay for an LLM call. Tests exercising merge-flow plumbing shouldn't need an LLM mock. Different callers may inject different LLM strategies. Only the Summarizer side is populated today — the split is what let the other two be removed without touching a memory primitive.
 
 See aide decision `lobslaw-memory-merge-architecture` for the full rationale.
 
@@ -37,15 +38,31 @@ See aide decision `lobslaw-memory-merge-architecture` for the full rationale.
 
 Persist VectorRecords and EpisodicRecords via Raft (`raft.Apply`). Recall reads by ID from the local store directly — no Raft round-trip for reads. See `internal/memory/service.go`.
 
+**Creating an episodic memory goes through `memory.Remember`, and only
+through it** (`internal/memory/remember.go`). It stamps owner,
+visibility and session from the turn when the caller has not set them,
+refuses a record nobody would be able to read, and writes the paired
+VectorRecord that makes the memory findable by meaning.
+
+There used to be three ways in — conversation ingest, `EpisodicAdd`,
+and the `memory_*` tools — and only ingest was complete. The other two
+each assembled a record by hand, and each missed the same two things:
+ownership, without which the record is visible only to `Everyone()`,
+and the vector, without which nothing finds it except lexical fallback.
+Three callers assembling a record from parts is what made the same pair
+of mistakes twice; `EpisodicAdd` now delegates rather than applying its
+own entry, which is why it can refuse an ownerless record where it
+previously stored one and reported success.
+
 ### Search — vector cosine similarity
 
-Takes a query embedding, scans the vector bucket, returns top-K by cosine similarity. Scope/retention filters apply during the scan (records failing a filter are never scored). O(N × D) where D is embedding dimension. Personal-scale-acceptable; HNSW upgrade tracked in DEFERRED.md.
+Takes a query embedding, scans the vector bucket, returns top-K by cosine similarity. **Recall then weights that score by recency** before ranking (`internal/compute/context_engine.go`): a 90-day half-life with a floor, so a record keeps at least half its similarity score however old it is. Recency tilts the ordering; it never overrules relevance, because a fact stated once and still true has to stay recallable. Ranking was pure cosine until 2026-08, so a three-year-old fact and a three-minute-old one competed on wording alone. Scope/retention filters apply during the scan (records failing a filter are never scored). O(N × D) where D is embedding dimension. Personal-scale-acceptable; HNSW upgrade tracked in DEFERRED.md.
 
-**No text-based search.** `SearchRequest.Text` returns `Unimplemented` — the caller computes the embedding via Phase 5's Provider Resolver, then calls Search with that embedding.
+**No text-based search.** `SearchRequest.Text` returns `Unimplemented` — the caller computes the embedding via the provider resolver, then calls Search with that embedding. When embedding fails, recall falls back to a lexical scan rather than returning nothing.
 
 ### FindClusters — pairwise cosine + union-find
 
-New in Phase 3.4. Discovers groups of near-duplicate records without an input query.
+Discovers groups of near-duplicate records without an input query.
 
 ```go
 clusters, _ := mem.FindClusters(ctx, &FindClustersRequest{
@@ -68,10 +85,10 @@ clusters, _ := mem.FindClusters(ctx, &FindClustersRequest{
 ### Forget — full-text, tag, timestamp, or explicit IDs
 
 ```go
-// Topic-based forget (Phase 3.2):
+// Topic-based forget:
 mem.Forget(ctx, &ForgetRequest{Query: "medical", Tags: []string{"health"}})
 
-// Explicit IDs (Phase 3.4a) — how Search → preview → Forget composes:
+// Explicit IDs — how Search → preview → Forget composes:
 hits := mem.Search(ctx, &SearchRequest{Embedding: q, Limit: 50})
 // ... client-side preview / confirmation ...
 mem.Forget(ctx, &ForgetRequest{Ids: idsOf(hits.Hits)})
@@ -85,7 +102,7 @@ At least one of `query`/`before`/`tags`/`ids` must be set — the handler refuse
 
 ## LLM interpretation interfaces
 
-All defined in `internal/memory/` but have no memory-service dependencies. Each takes context + data, returns a decision. Phase 5 ships the first real implementations.
+All defined in `internal/memory/` but have no memory-service dependencies. Each takes context + data, returns a decision. Summarizer is the only one implemented; the other two are described here as design.
 
 ### Summarizer
 
@@ -130,34 +147,62 @@ Decides what to do with a near-duplicate cluster. Four verdicts:
 
 **Critical invariant, when this is built: on error, callers treat the cluster as `KeepDistinct`**. False-merge is irreversible; false-no-merge is just bloat.
 
-### Reranker (Phase 5)
+### Reranker (design; scaffolding removed 2026-08)
+
+The `RoleReranker` constant, its provider selection, the
+`[compute.roles] reranker` config field and the `list_providers` line
+advertising it were removed. No reranking code ever existed — an
+operator could configure a provider for the role, the node would hold a
+client for it, and nothing would call it.
+
+It was removed rather than built on economics: passive recall runs on
+every turn with no tool call in front of it, so a rerank there is an
+extra model call per turn to reorder a handful of candidates down to
+three. Reranking earns its keep when fifty candidates must become five
+for something expensive downstream. If it is wanted later,
+`memory_search` is the place — the model asked by name, so a second
+call is proportionate.
+
+The shape below is retained as the intended design, not a description
+of code that exists.
 
 ```go
-// Shape proposed; not yet implemented.
+// Shape proposed; not implemented.
 type Reranker interface {
     Rerank(ctx, query string, candidates []*VectorRecord, topN int) ([]RerankResult, error)
 }
 ```
 
-The second stage of two-stage RAG. Vector `Search` is high-recall/cheap (cosine can't reason about intent, negation, temporal qualifiers); LLM rerank over top-K candidates is high-precision. Lands with Phase 5's Agent Core when the agent loop needs to select memory for system-prompt injection.
+The second stage of two-stage RAG. Vector `Search` is high-recall/cheap (cosine can't reason about intent, negation, temporal qualifiers); LLM rerank over top-K candidates is high-precision. Not scheduled — see above for why the per-turn cost does not pay here.
 
 ---
 
 ## Flow diagrams
 
-Full sequence diagrams for the Dream cycle (with Phase 2 merge) and Forget cascade live in [ARCHITECTURE.md](ARCHITECTURE.md) since they span component boundaries. The composition workflows below describe the same flows in caller-side code.
+Full sequence diagrams for the Dream cycle and the Forget cascade live in [ARCHITECTURE.md](ARCHITECTURE.md) since they span component boundaries. The composition workflows below describe the same flows in caller-side code.
 
 ## Composition workflows
 
-### Hot-path recall (Phase 5)
+### Hot-path recall
+
+What actually runs, in `ContextEngine.Assemble`:
 
 ```go
-cands, _ := mem.Search(ctx, &SearchRequest{Embedding: qEmb, Limit: 50})
-top, _ := reranker.Rerank(ctx, userQuery, cands.Hits, 10)
-systemPrompt := promptgen.BuildContext(top)
+hits          := vectorRecall(audience, queryEmbedding)  // or lexicalRecall on any embedding failure
+scored        := hits × recencyWeight(record.Timestamp)  // 90-day half-life, floored at 0.5
+ranked        := sortByScore(scored)
+blocks        := take(ranked, MaxRecall, MaxRecallTokens) // count AND size; tighter wins
+systemPrompt  := promptgen.WrapContext(blocks)           // <untrusted>, per block
 ```
 
-Agent composes cheap retrieval + expensive semantic filtering. Memory service sees only the Search call.
+No rerank stage — see Reranker above. Both bounds are applied at
+assembly rather than by the retrieval strategies, so neither depends on
+a strategy having remembered to enforce it.
+
+Recall travels in the same `user` message as the turn text, with the
+`<untrusted>` wrapper as the only boundary. Two adjacent user messages
+would let a provider that merges same-role turns erase a separation the
+wrapper is supposed to own.
 
 ### Consolidation log
 
@@ -167,8 +212,14 @@ log line and forgotten, so "why did it merge those two notes" had no
 answer and "what has it been doing to my memory" had none either.
 
 Memory that silently rewrites itself and cannot be inspected is a trust
-problem for a privacy-first product, so every adjudication is now a
-durable record (`BucketConsolidations`):
+problem for a privacy-first product, so every adjudication was written
+as a durable record (`BucketConsolidations`).
+
+**Nothing writes that bucket since the merge phase was removed**
+(2026-08). The bucket, its FSM case and the CLI below are kept because
+they read records already written — dropping a replicated bucket is a
+migration rather than a cleanup — so the commands still answer for
+history and will report nothing new:
 
 ```
 lobslaw memory consolidations
@@ -197,13 +248,28 @@ Bounded by 90 days or 5000 entries, whichever bites first, pruned by
 Dream itself. A second scheduled task to tidy after the first is one
 more thing to misconfigure.
 
-## Dream-time merge (Phase 3.4, landed)
+## Dream-time merge (removed 2026-08)
+
+The merge phase, the `Adjudicator` interface and the cluster tagging
+are gone. Nothing ever installed a real adjudicator, so the
+`AlwaysKeepDistinctAdjudicator` stub was the implementation — and it
+returns `KeepDistinct` unconditionally.
+
+That was not free. The stub is installed at construction, so the phase
+ran `findClusters` on every Dream cycle: a similarity pass over
+long-term memory, nightly, whose every verdict was then discarded. The
+`conflict-cluster` and `supersedes-chain` tags it wrote were read by
+nothing, and could not have been — they went on the *vector* record
+while recall renders the *episodic* one.
+
+The design it implemented is under Adjudicator above. If it returns, it
+returns with something that actually adjudicates.
 
 ```go
-// DreamRunner.Run → after summarise → after prune:
+// The shape that was removed, for reference:
 clusters := mem.FindClusters(ctx, retention="long-term")
 for each cluster {
-    decision := adjudicator.AdjudicateMerge(cluster)    // LLM or stub
+    decision := adjudicator.AdjudicateMerge(cluster)
     switch decision.Verdict {
     case Merge:        mem.Store(consolidated); mem.Forget(ids=originals)
     case Conflict:     tag each member with conflict-cluster:<id>
@@ -213,23 +279,10 @@ for each cluster {
 }
 ```
 
-Error paths at every step are conservative. `findClusters` error → phase logs + skips, Dream continues. `AdjudicateMerge` error on one cluster → skip that cluster, continue. `applyMerge` or `tagCluster` error → log, next run retries.
-
-### User-initiated topic forget (Phase 6)
-
-```go
-// Channel handler (REST / Telegram / CLI):
-emb := provider.Embed(ctx, userQuery)
-hits := mem.Search(ctx, &SearchRequest{Embedding: emb, Limit: 50})
-// Render preview: "I'd delete these 27 records. Confirm?"
-if user.confirmed() {
-    mem.Forget(ctx, &ForgetRequest{Ids: idsOf(hits)})
-}
-```
-
-No dedicated `ForgetSemantic` RPC — the composition of `Search → Forget(ids)` covers it. The preview UI is medium-specific (Telegram buttons, REST JSON, CLI prompt) so it belongs at the channel layer, not the server.
-
----
+**Contradiction detection went with it.** Two episodic records that
+disagree are both recalled, with nothing marking the disagreement. That
+is the honest state; it was also the state before, since the tags were
+written and never read.
 
 ## Retention tiers
 
@@ -237,9 +290,9 @@ No dedicated `ForgetSemantic` RPC — the composition of `Search → Forget(ids)
 |---|---|---|
 | `session` | Tool outputs, transient context | Pruned aggressively; NOT merge-eligible |
 | `episodic` | User turns on channels | Scored + consolidated; NOT merge-eligible today |
-| `long-term` | Explicit "remember this" or consolidation output | Never auto-pruned; **only tier that participates in merge** |
+| `long-term` | Explicit "remember this" or consolidation output | Never auto-pruned; the only tier a consolidation pass may rewrite |
 
-`mergePhase` filters to `long-term` only. Session chatter can never accidentally be consolidated into persistent memory.
+Consolidation passes filter to `long-term` only, so session chatter can never accidentally be consolidated into persistent memory. The rule outlived the merge phase it was written for and binds the pinned pass the same way.
 
 ---
 
@@ -575,7 +628,7 @@ message cap is the only storage bound today.
 
 No active Go proposals that would simplify this architecture today. HNSW-backed vector search (post-MVP upgrade path for FindClusters + Search over larger stores) is tracked in DEFERRED.md.
 
-Phase 5 (Agent Core) is the next phase that materially changes memory use — it lands the first real Adjudicator (LLM-backed) and the Reranker interface for hot-path recall. Memory-service primitives defined here should not change shape.
+The memory-service primitives defined here are stable; the open work is interpretive, not structural — a real Adjudicator would let Dream consolidate rather than only cluster, and contradiction detection returns with it.
 
 ---
 
