@@ -931,6 +931,23 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	h.resumeAfterApproval(ctx, prompt)
 }
 
+// resumeSessionForTelegram is the conversation a resumed leg runs in.
+//
+// UserID carries through from the prompt, and that is the whole point:
+// the resumed leg can raise a SECOND confirmation, and
+// sendConfirmationKeyboard stamps RaisedFor from this field. Left
+// empty, that prompt is attributable to nobody, mayResolve refuses
+// every tap — including from the person it was asked of, who is told
+// "This confirmation cannot be attributed to anyone" — and a turn
+// approved once has no ending but its TTL.
+//
+// It also keeps the resumed leg's messages attributed when they are
+// appended to the conversation, rather than recording the tail of the
+// turn as belonging to nobody.
+func resumeSessionForTelegram(p *Prompt) SessionRef {
+	return SessionRef{Channel: "telegram", ChannelID: p.SessionID, UserID: p.RaisedFor}
+}
+
 // resumeAfterApproval re-enters the agent loop with a relaxed
 // budget and sends the final reply (or a new keyboard if another
 // confirmation is needed) back to the originating chat. Kept as a
@@ -943,7 +960,7 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, p *Prompt) {
 			"prompt_id", p.ID, "channel_id", p.ChannelID)
 		return
 	}
-	session := SessionRef{Channel: "telegram", ChannelID: p.SessionID}
+	session := resumeSessionForTelegram(p)
 
 	// Tools stay nil: fillDefaults populates them from the resuming
 	// node's own registry. Serialising them onto the record would let
