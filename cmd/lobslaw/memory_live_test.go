@@ -275,3 +275,29 @@ func TestAResponseWithNeitherRecordIsNotMistakenForAMiss(t *testing.T) {
 		t.Error("an episodic response did not resolve to an episodic record")
 	}
 }
+
+// Every memory subcommand that reads or writes a bucket must have a
+// live form.
+//
+// The bug this catches is not a missing function — it is
+// `consolidations` quietly reading a laptop-local state.db, or
+// refusing outright because the node it is asking about holds the
+// lock. bbolt's lock is exclusive for the life of the process, so
+// "offline only" means "unavailable while the thing it describes is
+// running".
+func TestEveryMemorySubcommandHasALiveForm(t *testing.T) {
+	t.Parallel()
+	for _, sub := range []string{"show", "list", "forget", "share", "unshare", "consolidations"} {
+		form, ok := memoryForms[sub]
+		if !ok {
+			t.Errorf("memory %s has no live/offline pair", sub)
+			continue
+		}
+		if form.live == nil {
+			t.Errorf("memory %s has no live form", sub)
+		}
+	}
+	if len(memoryOfflineOnly) != 0 {
+		t.Errorf("memory subcommands still offline-only: %v", memoryOfflineOnly)
+	}
+}

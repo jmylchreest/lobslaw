@@ -235,6 +235,14 @@ service SelfLearningService {
   rpc DecideRevision(DecideRevisionRequest) returns (DecideRevisionResponse);
   rpc ArchiveArtefact(ArchiveArtefactRequest) returns (ArchiveArtefactResponse);
   rpc RestoreArtefact(RestoreArtefactRequest) returns (RestoreArtefactResponse);
+
+  // ListArtefactHistory returns the prior versions kept for rollback,
+  // newest first, alongside the version in force.
+  rpc ListArtefactHistory(ListArtefactHistoryRequest) returns (ListArtefactHistoryResponse);
+
+  // RollbackArtefact puts a prior version back in force. With apply
+  // unset it reports what would be restored and writes nothing.
+  rpc RollbackArtefact(RollbackArtefactRequest) returns (RollbackArtefactResponse);
 }
 
 message ListArtefactsRequest {
@@ -288,6 +296,29 @@ message RestoreArtefactResponse {
   SelfTaughtRecord artefact = 1;
 }
 
+message ListArtefactHistoryRequest {
+  string id = 1;
+}
+
+message ListArtefactHistoryResponse {
+  // current is the version in force.
+  SelfTaughtRecord current = 1;
+  // history is the prior versions kept for rollback, newest first.
+  repeated SelfTaughtRecord history = 2;
+}
+
+message RollbackArtefactRequest {
+  string id = 1;
+  uint32 version = 2;
+  bool apply = 3;
+}
+
+message RollbackArtefactResponse {
+  // artefact is what is now in force, or what would be with apply.
+  SelfTaughtRecord artefact = 1;
+  bool applied = 2;
+}
+
 // -----------------------------------------------------------------------------
 // MemoryService — vector + episodic memory + retention + forget
 // -----------------------------------------------------------------------------
@@ -329,6 +360,22 @@ service MemoryService {
   // among their sources — which is exactly what forgetting it would
   // take with it, and finding that out afterwards is too late.
   rpc GetRecord(GetRecordRequest) returns (GetRecordResponse);
+
+  // ListConsolidations reads Dream's adjudication log: what it decided
+  // about each cluster of near-duplicate memories, and why.
+  //
+  // Live because the offline form cannot run while the node is up —
+  // bbolt holds an exclusive lock — and an audit trail readable only
+  // by stopping the thing it audits is one nobody reads.
+  rpc ListConsolidations(ListConsolidationsRequest) returns (ListConsolidationsResponse);
+
+  // SetRecordVisibility shares or unshares records.
+  //
+  // The plan is computed on the server even for a dry run, so the
+  // preview and the write see the same store. A client that planned
+  // locally would be describing a state.db it cannot open while the
+  // node is running.
+  rpc SetRecordVisibility(SetRecordVisibilityRequest) returns (SetRecordVisibilityResponse);
 }
 
 message ListRecordsRequest {
@@ -366,6 +413,49 @@ message GetRecordResponse {
   VectorRecord vector = 1;
   EpisodicRecord episodic = 2;
   repeated string referenced_by = 3;
+}
+
+// ListConsolidationsRequest filters a read of the adjudication log.
+message ListConsolidationsRequest {
+  // owner restricts to one principal's memories. Required for any
+  // caller that is not an operator: the log names what was decided
+  // about somebody's memories, and an unscoped read describes one
+  // person's to another.
+  string owner = 1;
+  string verdict = 2; // merge | keep_distinct | conflict | supersedes
+  int32 limit = 3;
+  // since_seconds drops anything older. Seconds rather than a
+  // timestamp so a caller can say "the last week" without agreeing a
+  // clock with the server.
+  int64 since_seconds = 4;
+}
+
+message ListConsolidationsResponse {
+  repeated ConsolidationRecord consolidations = 1;
+}
+
+message SetRecordVisibilityRequest {
+  repeated string ids = 1;
+  Visibility visibility = 2;
+  // apply writes. Without it the response is a plan and nothing
+  // changes — the same dry-run-by-default the CLI has always had,
+  // moved to where the records are.
+  bool apply = 3;
+}
+
+// VisibilityChange is one record's before and after.
+message VisibilityChange {
+  string id = 1;
+  string kind = 2; // vector | episodic
+  string owner = 3;
+  Visibility from = 4;
+  Visibility to = 5;
+  bool changed = 6;
+}
+
+message SetRecordVisibilityResponse {
+  repeated VisibilityChange changes = 1;
+  bool applied = 2;
 }
 
 // Retention governs how long a memory record lives before it's a

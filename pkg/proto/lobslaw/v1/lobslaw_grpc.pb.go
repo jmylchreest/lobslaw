@@ -658,11 +658,13 @@ var SkillService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SelfLearningService_ListArtefacts_FullMethodName   = "/lobslaw.v1.SelfLearningService/ListArtefacts"
-	SelfLearningService_ApproveArtefact_FullMethodName = "/lobslaw.v1.SelfLearningService/ApproveArtefact"
-	SelfLearningService_DecideRevision_FullMethodName  = "/lobslaw.v1.SelfLearningService/DecideRevision"
-	SelfLearningService_ArchiveArtefact_FullMethodName = "/lobslaw.v1.SelfLearningService/ArchiveArtefact"
-	SelfLearningService_RestoreArtefact_FullMethodName = "/lobslaw.v1.SelfLearningService/RestoreArtefact"
+	SelfLearningService_ListArtefacts_FullMethodName       = "/lobslaw.v1.SelfLearningService/ListArtefacts"
+	SelfLearningService_ApproveArtefact_FullMethodName     = "/lobslaw.v1.SelfLearningService/ApproveArtefact"
+	SelfLearningService_DecideRevision_FullMethodName      = "/lobslaw.v1.SelfLearningService/DecideRevision"
+	SelfLearningService_ArchiveArtefact_FullMethodName     = "/lobslaw.v1.SelfLearningService/ArchiveArtefact"
+	SelfLearningService_RestoreArtefact_FullMethodName     = "/lobslaw.v1.SelfLearningService/RestoreArtefact"
+	SelfLearningService_ListArtefactHistory_FullMethodName = "/lobslaw.v1.SelfLearningService/ListArtefactHistory"
+	SelfLearningService_RollbackArtefact_FullMethodName    = "/lobslaw.v1.SelfLearningService/RollbackArtefact"
 )
 
 // SelfLearningServiceClient is the client API for SelfLearningService service.
@@ -696,6 +698,12 @@ type SelfLearningServiceClient interface {
 	DecideRevision(ctx context.Context, in *DecideRevisionRequest, opts ...grpc.CallOption) (*DecideRevisionResponse, error)
 	ArchiveArtefact(ctx context.Context, in *ArchiveArtefactRequest, opts ...grpc.CallOption) (*ArchiveArtefactResponse, error)
 	RestoreArtefact(ctx context.Context, in *RestoreArtefactRequest, opts ...grpc.CallOption) (*RestoreArtefactResponse, error)
+	// ListArtefactHistory returns the prior versions kept for rollback,
+	// newest first, alongside the version in force.
+	ListArtefactHistory(ctx context.Context, in *ListArtefactHistoryRequest, opts ...grpc.CallOption) (*ListArtefactHistoryResponse, error)
+	// RollbackArtefact puts a prior version back in force. With apply
+	// unset it reports what would be restored and writes nothing.
+	RollbackArtefact(ctx context.Context, in *RollbackArtefactRequest, opts ...grpc.CallOption) (*RollbackArtefactResponse, error)
 }
 
 type selfLearningServiceClient struct {
@@ -756,6 +764,26 @@ func (c *selfLearningServiceClient) RestoreArtefact(ctx context.Context, in *Res
 	return out, nil
 }
 
+func (c *selfLearningServiceClient) ListArtefactHistory(ctx context.Context, in *ListArtefactHistoryRequest, opts ...grpc.CallOption) (*ListArtefactHistoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListArtefactHistoryResponse)
+	err := c.cc.Invoke(ctx, SelfLearningService_ListArtefactHistory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *selfLearningServiceClient) RollbackArtefact(ctx context.Context, in *RollbackArtefactRequest, opts ...grpc.CallOption) (*RollbackArtefactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RollbackArtefactResponse)
+	err := c.cc.Invoke(ctx, SelfLearningService_RollbackArtefact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SelfLearningServiceServer is the server API for SelfLearningService service.
 // All implementations should embed UnimplementedSelfLearningServiceServer
 // for forward compatibility.
@@ -787,6 +815,12 @@ type SelfLearningServiceServer interface {
 	DecideRevision(context.Context, *DecideRevisionRequest) (*DecideRevisionResponse, error)
 	ArchiveArtefact(context.Context, *ArchiveArtefactRequest) (*ArchiveArtefactResponse, error)
 	RestoreArtefact(context.Context, *RestoreArtefactRequest) (*RestoreArtefactResponse, error)
+	// ListArtefactHistory returns the prior versions kept for rollback,
+	// newest first, alongside the version in force.
+	ListArtefactHistory(context.Context, *ListArtefactHistoryRequest) (*ListArtefactHistoryResponse, error)
+	// RollbackArtefact puts a prior version back in force. With apply
+	// unset it reports what would be restored and writes nothing.
+	RollbackArtefact(context.Context, *RollbackArtefactRequest) (*RollbackArtefactResponse, error)
 }
 
 // UnimplementedSelfLearningServiceServer should be embedded to have
@@ -810,6 +844,12 @@ func (UnimplementedSelfLearningServiceServer) ArchiveArtefact(context.Context, *
 }
 func (UnimplementedSelfLearningServiceServer) RestoreArtefact(context.Context, *RestoreArtefactRequest) (*RestoreArtefactResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RestoreArtefact not implemented")
+}
+func (UnimplementedSelfLearningServiceServer) ListArtefactHistory(context.Context, *ListArtefactHistoryRequest) (*ListArtefactHistoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListArtefactHistory not implemented")
+}
+func (UnimplementedSelfLearningServiceServer) RollbackArtefact(context.Context, *RollbackArtefactRequest) (*RollbackArtefactResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RollbackArtefact not implemented")
 }
 func (UnimplementedSelfLearningServiceServer) testEmbeddedByValue() {}
 
@@ -921,6 +961,42 @@ func _SelfLearningService_RestoreArtefact_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SelfLearningService_ListArtefactHistory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListArtefactHistoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SelfLearningServiceServer).ListArtefactHistory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SelfLearningService_ListArtefactHistory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SelfLearningServiceServer).ListArtefactHistory(ctx, req.(*ListArtefactHistoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SelfLearningService_RollbackArtefact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RollbackArtefactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SelfLearningServiceServer).RollbackArtefact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SelfLearningService_RollbackArtefact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SelfLearningServiceServer).RollbackArtefact(ctx, req.(*RollbackArtefactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SelfLearningService_ServiceDesc is the grpc.ServiceDesc for SelfLearningService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -948,22 +1024,32 @@ var SelfLearningService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RestoreArtefact",
 			Handler:    _SelfLearningService_RestoreArtefact_Handler,
 		},
+		{
+			MethodName: "ListArtefactHistory",
+			Handler:    _SelfLearningService_ListArtefactHistory_Handler,
+		},
+		{
+			MethodName: "RollbackArtefact",
+			Handler:    _SelfLearningService_RollbackArtefact_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "lobslaw/v1/lobslaw.proto",
 }
 
 const (
-	MemoryService_Store_FullMethodName        = "/lobslaw.v1.MemoryService/Store"
-	MemoryService_Recall_FullMethodName       = "/lobslaw.v1.MemoryService/Recall"
-	MemoryService_Search_FullMethodName       = "/lobslaw.v1.MemoryService/Search"
-	MemoryService_EpisodicAdd_FullMethodName  = "/lobslaw.v1.MemoryService/EpisodicAdd"
-	MemoryService_Dream_FullMethodName        = "/lobslaw.v1.MemoryService/Dream"
-	MemoryService_Forget_FullMethodName       = "/lobslaw.v1.MemoryService/Forget"
-	MemoryService_Reembed_FullMethodName      = "/lobslaw.v1.MemoryService/Reembed"
-	MemoryService_FindClusters_FullMethodName = "/lobslaw.v1.MemoryService/FindClusters"
-	MemoryService_ListRecords_FullMethodName  = "/lobslaw.v1.MemoryService/ListRecords"
-	MemoryService_GetRecord_FullMethodName    = "/lobslaw.v1.MemoryService/GetRecord"
+	MemoryService_Store_FullMethodName               = "/lobslaw.v1.MemoryService/Store"
+	MemoryService_Recall_FullMethodName              = "/lobslaw.v1.MemoryService/Recall"
+	MemoryService_Search_FullMethodName              = "/lobslaw.v1.MemoryService/Search"
+	MemoryService_EpisodicAdd_FullMethodName         = "/lobslaw.v1.MemoryService/EpisodicAdd"
+	MemoryService_Dream_FullMethodName               = "/lobslaw.v1.MemoryService/Dream"
+	MemoryService_Forget_FullMethodName              = "/lobslaw.v1.MemoryService/Forget"
+	MemoryService_Reembed_FullMethodName             = "/lobslaw.v1.MemoryService/Reembed"
+	MemoryService_FindClusters_FullMethodName        = "/lobslaw.v1.MemoryService/FindClusters"
+	MemoryService_ListRecords_FullMethodName         = "/lobslaw.v1.MemoryService/ListRecords"
+	MemoryService_GetRecord_FullMethodName           = "/lobslaw.v1.MemoryService/GetRecord"
+	MemoryService_ListConsolidations_FullMethodName  = "/lobslaw.v1.MemoryService/ListConsolidations"
+	MemoryService_SetRecordVisibility_FullMethodName = "/lobslaw.v1.MemoryService/SetRecordVisibility"
 )
 
 // MemoryServiceClient is the client API for MemoryService service.
@@ -1006,6 +1092,20 @@ type MemoryServiceClient interface {
 	// among their sources — which is exactly what forgetting it would
 	// take with it, and finding that out afterwards is too late.
 	GetRecord(ctx context.Context, in *GetRecordRequest, opts ...grpc.CallOption) (*GetRecordResponse, error)
+	// ListConsolidations reads Dream's adjudication log: what it decided
+	// about each cluster of near-duplicate memories, and why.
+	//
+	// Live because the offline form cannot run while the node is up —
+	// bbolt holds an exclusive lock — and an audit trail readable only
+	// by stopping the thing it audits is one nobody reads.
+	ListConsolidations(ctx context.Context, in *ListConsolidationsRequest, opts ...grpc.CallOption) (*ListConsolidationsResponse, error)
+	// SetRecordVisibility shares or unshares records.
+	//
+	// The plan is computed on the server even for a dry run, so the
+	// preview and the write see the same store. A client that planned
+	// locally would be describing a state.db it cannot open while the
+	// node is running.
+	SetRecordVisibility(ctx context.Context, in *SetRecordVisibilityRequest, opts ...grpc.CallOption) (*SetRecordVisibilityResponse, error)
 }
 
 type memoryServiceClient struct {
@@ -1116,6 +1216,26 @@ func (c *memoryServiceClient) GetRecord(ctx context.Context, in *GetRecordReques
 	return out, nil
 }
 
+func (c *memoryServiceClient) ListConsolidations(ctx context.Context, in *ListConsolidationsRequest, opts ...grpc.CallOption) (*ListConsolidationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListConsolidationsResponse)
+	err := c.cc.Invoke(ctx, MemoryService_ListConsolidations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *memoryServiceClient) SetRecordVisibility(ctx context.Context, in *SetRecordVisibilityRequest, opts ...grpc.CallOption) (*SetRecordVisibilityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetRecordVisibilityResponse)
+	err := c.cc.Invoke(ctx, MemoryService_SetRecordVisibility_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MemoryServiceServer is the server API for MemoryService service.
 // All implementations should embed UnimplementedMemoryServiceServer
 // for forward compatibility.
@@ -1156,6 +1276,20 @@ type MemoryServiceServer interface {
 	// among their sources — which is exactly what forgetting it would
 	// take with it, and finding that out afterwards is too late.
 	GetRecord(context.Context, *GetRecordRequest) (*GetRecordResponse, error)
+	// ListConsolidations reads Dream's adjudication log: what it decided
+	// about each cluster of near-duplicate memories, and why.
+	//
+	// Live because the offline form cannot run while the node is up —
+	// bbolt holds an exclusive lock — and an audit trail readable only
+	// by stopping the thing it audits is one nobody reads.
+	ListConsolidations(context.Context, *ListConsolidationsRequest) (*ListConsolidationsResponse, error)
+	// SetRecordVisibility shares or unshares records.
+	//
+	// The plan is computed on the server even for a dry run, so the
+	// preview and the write see the same store. A client that planned
+	// locally would be describing a state.db it cannot open while the
+	// node is running.
+	SetRecordVisibility(context.Context, *SetRecordVisibilityRequest) (*SetRecordVisibilityResponse, error)
 }
 
 // UnimplementedMemoryServiceServer should be embedded to have
@@ -1194,6 +1328,12 @@ func (UnimplementedMemoryServiceServer) ListRecords(context.Context, *ListRecord
 }
 func (UnimplementedMemoryServiceServer) GetRecord(context.Context, *GetRecordRequest) (*GetRecordResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRecord not implemented")
+}
+func (UnimplementedMemoryServiceServer) ListConsolidations(context.Context, *ListConsolidationsRequest) (*ListConsolidationsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListConsolidations not implemented")
+}
+func (UnimplementedMemoryServiceServer) SetRecordVisibility(context.Context, *SetRecordVisibilityRequest) (*SetRecordVisibilityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetRecordVisibility not implemented")
 }
 func (UnimplementedMemoryServiceServer) testEmbeddedByValue() {}
 
@@ -1395,6 +1535,42 @@ func _MemoryService_GetRecord_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MemoryService_ListConsolidations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListConsolidationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).ListConsolidations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_ListConsolidations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).ListConsolidations(ctx, req.(*ListConsolidationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MemoryService_SetRecordVisibility_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetRecordVisibilityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MemoryServiceServer).SetRecordVisibility(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MemoryService_SetRecordVisibility_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MemoryServiceServer).SetRecordVisibility(ctx, req.(*SetRecordVisibilityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MemoryService_ServiceDesc is the grpc.ServiceDesc for MemoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1441,6 +1617,14 @@ var MemoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRecord",
 			Handler:    _MemoryService_GetRecord_Handler,
+		},
+		{
+			MethodName: "ListConsolidations",
+			Handler:    _MemoryService_ListConsolidations_Handler,
+		},
+		{
+			MethodName: "SetRecordVisibility",
+			Handler:    _MemoryService_SetRecordVisibility_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
