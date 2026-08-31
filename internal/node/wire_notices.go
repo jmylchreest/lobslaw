@@ -1,6 +1,8 @@
 package node
 
 import (
+	"time"
+
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 )
 
@@ -22,7 +24,11 @@ func (n *Node) wireNotices() error {
 	}
 	var nightmares gateway.NoticeSource
 	if n.store != nil {
-		nightmares = nightmareSource{store: n.store}
+		nightmares = &nightmareSource{
+			store:   n.store,
+			tz:      n.resolveUserTimezone,
+			askedAt: map[string]time.Time{},
+		}
 	}
 
 	src := gateway.CombineNoticeSources(review, nightmares)

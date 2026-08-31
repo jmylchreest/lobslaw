@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"time"
+
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -77,4 +79,32 @@ func UnresolvedNightmares(store *Store, owner string, limit int) ([]Nightmare, e
 		}
 	}
 	return out, nil
+}
+
+// LastDreamRun is when a dream pass last completed.
+//
+// Read from the session records the pass writes for itself, so there
+// is no second place for "when did this last run" to be wrong. Zero
+// time means it has never run — a fresh node, or one where dream is
+// switched off.
+func LastDreamRun(store *Store) (time.Time, error) {
+	if store == nil {
+		return time.Time{}, nil
+	}
+	var latest time.Time
+	err := store.ForEachPrefix(BucketEpisodicRecords, dreamSessionPrefix,
+		func(_ string, raw []byte) error {
+			var rec lobslawv1.EpisodicRecord
+			if err := proto.Unmarshal(raw, &rec); err != nil {
+				return nil //nolint:nilerr // one unreadable session must not hide the rest
+			}
+			if rec.Timestamp != nil && rec.Timestamp.AsTime().After(latest) {
+				latest = rec.Timestamp.AsTime()
+			}
+			return nil
+		})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return latest, nil
 }

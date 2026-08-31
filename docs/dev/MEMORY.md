@@ -308,6 +308,33 @@ adjudicator writes it as a question a person can answer, because that
 is what the prompt asks it for: *"Are you vegetarian, or was the steak
 the exception?"*
 
+### When it is asked
+
+Not when it is found. Dream runs at 02:00, and the notice path only
+ever appends to a reply the user is already receiving — so there is no
+push to get wrong — but somebody awake at 03:00 would still have been
+asked, and 03:00 is not a better time to adjudicate your own memory
+for being in-band.
+
+- **Morning, in the user's own timezone** (08:00–22:00, from their
+  UserPreferences, falling back to the cluster default). Morning is a
+  fact about the person, not the machine.
+- **The first conversation of it.** The gate is per principal, not per
+  conversation, so the question arrives once and not again in the next
+  chat window.
+- **Once per dream cycle.** A contradiction that survived another
+  night has earned another mention; one raised this morning and not
+  answered has not, because nothing has re-examined it since. "Has
+  dream run since I last asked" is read from the session records the
+  pass writes for itself, so there is no second place for it to be
+  wrong.
+
+**Nothing expires.** A nightmare is not a queue item with a TTL — it
+lives until the memories stop disagreeing, and it is re-raised each
+cycle until they do. The one place a timer would be tempting is the
+one place it would be wrong: expiring the question would turn "nobody
+answered" into a decision nobody made.
+
 **There is no resolved flag.** A conflict whose sides no longer both
 exist has been settled — by a correction, by forgetting one, or by a
 later merge — so `UnresolvedNightmares` checks the records themselves.
