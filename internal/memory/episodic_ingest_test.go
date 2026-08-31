@@ -147,7 +147,8 @@ func TestATurnWithMultiByteTextIsStillRemembered(t *testing.T) {
 		if !utf8.ValidString(event) {
 			t.Fatalf("pad=%d: the event summary is not valid UTF-8; protobuf will refuse the record", pad)
 		}
-		rec := &lobslawv1.EpisodicRecord{Id: "x", Event: event, Timestamp: timestamppb.Now()}
+		rec := &lobslawv1.EpisodicRecord{
+			Owner: "user:test", Id: "x", Event: event, Timestamp: timestamppb.Now()}
 		if _, err := proto.Marshal(rec); err != nil {
 			t.Fatalf("pad=%d: the record does not marshal, so the memory is lost: %v", pad, err)
 		}
@@ -160,7 +161,8 @@ func TestInvalidTextFromElsewhereStillMarshals(t *testing.T) {
 	t.Parallel()
 	broken := "hello " + string([]byte{0xff}) + " world"
 	rec := &lobslawv1.EpisodicRecord{
-		Id: "x", Event: textutil.Sanitise(turnEventSummary(broken)), Timestamp: timestamppb.Now(),
+		Owner: "user:test",
+		Id:    "x", Event: textutil.Sanitise(turnEventSummary(broken)), Timestamp: timestamppb.Now(),
 	}
 	if _, err := proto.Marshal(rec); err != nil {
 		t.Fatalf("a record built from invalid input does not marshal: %v", err)

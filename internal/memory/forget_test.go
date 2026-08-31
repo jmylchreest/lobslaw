@@ -187,8 +187,8 @@ func TestForgetByTags(t *testing.T) {
 
 	// Use EpisodicAdd for tag-based matching (VectorRecord uses metadata).
 	for _, rec := range []*lobslawv1.EpisodicRecord{
-		{Id: "e-1", Event: "saw Dr Smith", Tags: []string{"medical", "appointment"}},
-		{Id: "e-2", Event: "made coffee", Tags: []string{"routine"}},
+		{Owner: "user:test", Id: "e-1", Event: "saw Dr Smith", Tags: []string{"medical", "appointment"}},
+		{Owner: "user:test", Id: "e-2", Event: "made coffee", Tags: []string{"routine"}},
 	} {
 		if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
 			t.Fatal(err)

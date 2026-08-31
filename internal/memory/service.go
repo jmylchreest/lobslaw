@@ -193,33 +193,32 @@ func (s *Service) EpisodicAdd(ctx context.Context, req *lobslawv1.EpisodicAddReq
 	if req == nil || req.Record == nil {
 		return nil, status.Error(codes.InvalidArgument, "record required")
 	}
-	rec := req.Record
-	if rec.Id == "" {
-		return nil, status.Error(codes.InvalidArgument, "record.id required")
+	// Through the one door. This used to default a few fields and
+	// apply the entry itself, which meant every EpisodicAdd caller —
+	// research findings, and anything reaching the service over the
+	// wire — wrote a record with no owner and no vector: unreadable,
+	// because an unowned record is visible only to Everyone(), and
+	// findable only by lexical fallback.
+	id, err := Remember(ctx, s.raft, s.rememberEmbedder(), 0, req.Record)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	if rec.Retention == lobslawv1.Retention_RETENTION_UNSPECIFIED {
-		rec.Retention = lobslawv1.Retention_RETENTION_EPISODIC
+	logging.From(ctx).Debug("episodic record added", "id", id, "importance", req.Record.Importance)
+	return &lobslawv1.EpisodicAddResponse{Id: id}, nil
+}
+
+// rememberEmbedder adapts the service's embedder to what Remember
+// needs, or nil when none is configured. Nil is not an error: a node
+// with no embeddings still remembers, it just does so without a vector
+// index and relies on lexical recall.
+func (s *Service) rememberEmbedder() Embedder {
+	if s.embedder == nil {
+		return nil
 	}
-	if rec.Timestamp == nil {
-		rec.Timestamp = timestamppb.Now()
+	if e, ok := any(s.embedder).(Embedder); ok {
+		return e
 	}
-	if rec.Importance == 0 {
-		// Default to mid-range — dream consolidation scores by
-		// (importance × recency × access_freq); zero importance would
-		// silently exclude the record.
-		rec.Importance = 5
-	}
-	if err := s.applyEntry(ctx, &lobslawv1.LogEntry{
-		Op: lobslawv1.LogOp_LOG_OP_PUT,
-		Id: rec.Id,
-		Payload: &lobslawv1.LogEntry_EpisodicRecord{
-			EpisodicRecord: rec,
-		},
-	}); err != nil {
-		return nil, err
-	}
-	logging.From(ctx).Debug("episodic record added", "id", rec.Id, "importance", rec.Importance)
-	return &lobslawv1.EpisodicAddResponse{Id: rec.Id}, nil
+	return nil
 }
 
 // Dream triggers one Dream/REM consolidation pass. Leader-only —

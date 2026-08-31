@@ -136,6 +136,7 @@ func TestServiceEpisodicAdd(t *testing.T) {
 
 	resp, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{
 		Record: &lobslawv1.EpisodicRecord{
+			Owner: "user:test",
 			Id:    "ep-1",
 			Event: "user mentioned they like hiking",
 		},

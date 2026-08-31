@@ -9,7 +9,6 @@ import (
 
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/ids"
@@ -148,81 +147,12 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 		SessionRef: sessionRefFor(turn.Channel, turn.ChatID),
 	}
 
-	entry := &lobslawv1.LogEntry{
-		Op: lobslawv1.LogOp_LOG_OP_PUT,
-		Id: id,
-		Payload: &lobslawv1.LogEntry_EpisodicRecord{
-			EpisodicRecord: rec,
-		},
-	}
-	data, err := proto.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	res, err := i.raft.Apply(data, i.timeout)
-	if err != nil {
-		return fmt.Errorf("raft apply: %w", err)
-	}
-	if fsmErr, ok := res.(error); ok && fsmErr != nil {
-		return fmt.Errorf("fsm: %w", fsmErr)
-	}
-
-	// Paired vector record: embed the turn body so memory_search's
-	// semantic strategy has content to match against. Embedding is
-	// best-effort — a failure here doesn't roll back the episodic
-	// write because losing one turn's vector is better than losing
-	// the episodic content entirely.
-	if i.embedder != nil {
-		embedText := rec.Context
-		if embedText == "" {
-			embedText = rec.Event
-		}
-		if vec, verr := i.embedder.Embed(ctx, embedText); verr == nil {
-			vecID := ids.New()
-			vrec := &lobslawv1.VectorRecord{
-				Id:        vecID,
-				Embedding: vec,
-				Text:      embedText,
-				Scope:     "episodic",
-				Retention: rec.Retention,
-				// The vector carries the same ownership as the episodic
-				// record it embeds. It has to: search reads vectors, so
-				// an unowned vector over owned text is the leak wearing
-				// a different hat.
-				Owner:      rec.Owner,
-				Visibility: rec.Visibility,
-				CreatedAt:  rec.Timestamp,
-				SourceIds:  []string{rec.Id},
-				// Same reasoning as Owner above. A conversation-scoped
-				// audience decides during the vector scan, so a vector
-				// without the origin its episodic record carries is
-				// invisible in the conversation that produced it.
-				SessionRef: rec.SessionRef,
-				// Stamped here rather than in the FSM, where Norm is
-				// derived: the model is NODE CONFIG, and two replicas
-				// could legitimately hold different values, so an FSM
-				// that stamped it would not be deterministic.
-				EmbeddingModel: i.embedder.Model(),
-			}
-			ventry := &lobslawv1.LogEntry{
-				Op: lobslawv1.LogOp_LOG_OP_PUT,
-				Id: vecID,
-				Payload: &lobslawv1.LogEntry_VectorRecord{
-					VectorRecord: vrec,
-				},
-			}
-			vdata, merr := proto.Marshal(ventry)
-			if merr == nil {
-				// Best-effort: the episodic record above is the
-				// source of truth; this vector index entry is a
-				// derived performance optimisation. If the raft
-				// Apply fails the vector record is missing but the
-				// episodic record persists — search still works via
-				// the substring fallback. Surfacing this would
-				// double-log the same root cause.
-				_, _ = i.raft.Apply(vdata, i.timeout) //nolint:errcheck // see comment above
-			}
-		}
+	// Through the one door, which stamps what is missing and writes
+	// the paired vector. This used to assemble and apply the entry
+	// itself, which is how two other callers came to do the same and
+	// get it wrong.
+	if _, err := Remember(ctx, i.raft, i.embedder, i.timeout, rec); err != nil {
+		return err
 	}
 	return nil
 }

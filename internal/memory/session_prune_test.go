@@ -20,9 +20,9 @@ func TestSessionPruneDropsExpiredSessionRecords(t *testing.T) {
 	recent := timestamppb.New(now.Add(-30 * time.Minute))
 
 	for _, rec := range []*lobslawv1.EpisodicRecord{
-		{Id: "ep-stale-session", Event: "ephemeral", Timestamp: old, Retention: lobslawv1.Retention_RETENTION_SESSION},
-		{Id: "ep-fresh-session", Event: "still useful", Timestamp: recent, Retention: lobslawv1.Retention_RETENTION_SESSION},
-		{Id: "ep-stale-episodic", Event: "keep me", Timestamp: old, Retention: lobslawv1.Retention_RETENTION_EPISODIC},
+		{Owner: "user:test", Id: "ep-stale-session", Event: "ephemeral", Timestamp: old, Retention: lobslawv1.Retention_RETENTION_SESSION},
+		{Owner: "user:test", Id: "ep-fresh-session", Event: "still useful", Timestamp: recent, Retention: lobslawv1.Retention_RETENTION_SESSION},
+		{Owner: "user:test", Id: "ep-stale-episodic", Event: "keep me", Timestamp: old, Retention: lobslawv1.Retention_RETENTION_EPISODIC},
 	} {
 		if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
 			t.Fatal(err)
@@ -71,6 +71,7 @@ func TestSessionPruneIgnoresMissingTimestamps(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: &lobslawv1.EpisodicRecord{
+		Owner:     "user:test",
 		Id:        "ep-no-ts",
 		Event:     "no timestamp",
 		Retention: lobslawv1.Retention_RETENTION_SESSION,

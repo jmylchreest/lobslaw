@@ -95,6 +95,10 @@ func (a Audience) IsZero() bool { return !a.set }
 // "webhook:<name>", "scheduler", the Telegram identity), so an unowned
 // record now means a bug upstream, and being invisible is how it
 // surfaces rather than how it hides.
+//
+// One deliberate exception: the dream-session audit line, which
+// describes a run rather than recording anything anyone said. See
+// logDreamSession.
 //   - Same conversation. Only when the audience names one, which only
 //     happens for a conversation with an audience — see ForConversation.
 //     A record with no origin ("" session_ref) matches no conversation,

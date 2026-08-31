@@ -55,12 +55,14 @@ func TestDreamScoreAllSkipsConsolidated(t *testing.T) {
 
 	// Source record.
 	seedEpisodic(t, s, &lobslawv1.EpisodicRecord{
+		Owner:      "user:test",
 		Id:         "src-1",
 		Importance: 8,
 		Timestamp:  timestamppb.New(now.Add(-24 * time.Hour)),
 	})
 	// Consolidated record (has SourceIds).
 	seedEpisodic(t, s, &lobslawv1.EpisodicRecord{
+		Owner:      "user:test",
 		Id:         "cons-1",
 		Importance: 9,
 		Timestamp:  timestamppb.New(now),
@@ -92,11 +94,13 @@ func TestDreamScoreRecencyDecay(t *testing.T) {
 
 	// Two records: one fresh, one one half-life old. Same importance.
 	seedEpisodic(t, s, &lobslawv1.EpisodicRecord{
-		Id: "fresh", Importance: 5,
+		Owner: "user:test",
+		Id:    "fresh", Importance: 5,
 		Timestamp: timestamppb.New(now),
 	})
 	seedEpisodic(t, s, &lobslawv1.EpisodicRecord{
-		Id: "half-life-old", Importance: 5,
+		Owner: "user:test",
+		Id:    "half-life-old", Importance: 5,
 		Timestamp: timestamppb.New(now.Add(-halfLife)),
 	})
 
@@ -146,6 +150,7 @@ func TestDreamPrunePreservesLongTerm(t *testing.T) {
 	// Below-threshold episodic with default retention (should be pruned).
 	_, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{
 		Record: &lobslawv1.EpisodicRecord{
+			Owner:      "user:test",
 			Id:         "prune-me",
 			Event:      "old grocery list",
 			Importance: 1, // score stays tiny after decay
@@ -160,6 +165,7 @@ func TestDreamPrunePreservesLongTerm(t *testing.T) {
 	// Below-threshold LONG-TERM retention (must survive).
 	_, err = svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{
 		Record: &lobslawv1.EpisodicRecord{
+			Owner:      "user:test",
 			Id:         "keep-me",
 			Event:      "user's wedding anniversary",
 			Importance: 1,
@@ -203,8 +209,8 @@ func TestDreamRunWithSummarizer(t *testing.T) {
 
 	// Two high-score episodics.
 	for _, rec := range []*lobslawv1.EpisodicRecord{
-		{Id: "e-1", Event: "met alice", Importance: 9, Timestamp: timestamppb.New(now)},
-		{Id: "e-2", Event: "met bob", Importance: 8, Timestamp: timestamppb.New(now)},
+		{Owner: "user:test", Id: "e-1", Event: "met alice", Importance: 9, Timestamp: timestamppb.New(now)},
+		{Owner: "user:test", Id: "e-2", Event: "met bob", Importance: 8, Timestamp: timestamppb.New(now)},
 	} {
 		if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
 			t.Fatal(err)
@@ -265,9 +271,9 @@ func TestDreamConsolidationInheritsHighestRetention(t *testing.T) {
 	// Mix of retentions: one long-term, two episodic. Consolidation
 	// should inherit long-term (the highest).
 	for _, rec := range []*lobslawv1.EpisodicRecord{
-		{Id: "e-1", Event: "routine A", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_EPISODIC},
-		{Id: "e-2", Event: "anniversary", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_LONG_TERM},
-		{Id: "e-3", Event: "routine B", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_EPISODIC},
+		{Owner: "user:test", Id: "e-1", Event: "routine A", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_EPISODIC},
+		{Owner: "user:test", Id: "e-2", Event: "anniversary", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_LONG_TERM},
+		{Owner: "user:test", Id: "e-3", Event: "routine B", Importance: 9, Timestamp: timestamppb.New(now), Retention: lobslawv1.Retention_RETENTION_EPISODIC},
 	} {
 		if _, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
 			t.Fatal(err)
@@ -331,7 +337,8 @@ func TestDreamRunWithoutSummarizerSkipsConsolidation(t *testing.T) {
 
 	_, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{
 		Record: &lobslawv1.EpisodicRecord{
-			Id: "e-1", Event: "hello", Importance: 9,
+			Owner: "user:test",
+			Id:    "e-1", Event: "hello", Importance: 9,
 			Timestamp: timestamppb.New(fixedNow()),
 		},
 	})
@@ -365,7 +372,8 @@ func TestServiceDreamViaGRPC(t *testing.T) {
 	// Seed one candidate.
 	_, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{
 		Record: &lobslawv1.EpisodicRecord{
-			Id: "e-1", Event: "interesting event", Importance: 9,
+			Owner: "user:test",
+			Id:    "e-1", Event: "interesting event", Importance: 9,
 			Timestamp: timestamppb.New(fixedNow()),
 		},
 	})
@@ -550,9 +558,12 @@ func TestAConsolidationIsAsPrivateAsItsSources(t *testing.T) {
 func TestOnePrivateSourceMakesTheWholeSummaryPrivate(t *testing.T) {
 	t.Parallel()
 	cands := []scoredRecord{
-		{record: &lobslawv1.EpisodicRecord{Visibility: lobslawv1.Visibility_VISIBILITY_SHARED}},
-		{record: &lobslawv1.EpisodicRecord{Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE}},
-		{record: &lobslawv1.EpisodicRecord{Visibility: lobslawv1.Visibility_VISIBILITY_SHARED}},
+		{record: &lobslawv1.EpisodicRecord{
+			Owner: "user:test", Visibility: lobslawv1.Visibility_VISIBILITY_SHARED}},
+		{record: &lobslawv1.EpisodicRecord{
+			Owner: "user:test", Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE}},
+		{record: &lobslawv1.EpisodicRecord{
+			Owner: "user:test", Visibility: lobslawv1.Visibility_VISIBILITY_SHARED}},
 	}
 	if got := strictestVisibility(cands); got != lobslawv1.Visibility_VISIBILITY_PRIVATE {
 		t.Errorf("visibility = %v; a private source was summarised into a shared record", got)
