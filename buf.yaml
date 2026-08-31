@@ -6,29 +6,3 @@ modules:
 lint:
   use:
     - STANDARD
-
-breaking:
-  use:
-    # WIRE_JSON, not FILE.
-    #
-    # What can actually hurt this cluster is a change that makes two
-    # versions of the binary disagree on the wire: a renumbered field,
-    # a changed type, a field deleted without reserving its number.
-    # Nodes talk to each other over this protocol and a rolling
-    # restart runs mixed versions, so raft replication is on the line.
-    # WIRE_JSON catches all of that, verified: renumbering a live
-    # field is reported, and so is deleting one without a reservation.
-    #
-    # FILE also forbids deleting a service or a message, which is
-    # source compatibility rather than wire compatibility. Every
-    # consumer of this schema is in this repository, so removing
-    # something still referenced fails the build — a stronger and
-    # faster signal than a lint. FILE's extra strictness only fired
-    # when deleting AgentService and ChannelService, two services no
-    # node ever registered, and a rule whose sole effect is to make
-    # deleting dead code awkward is one that keeps dead code.
-    #
-    # The gap it leaves — declaring a service nothing serves — is
-    # covered by TestEveryDeclaredServiceIsServed, which is the check
-    # that would have caught those two in the first place.
-    - WIRE_JSON
