@@ -517,6 +517,17 @@ type ComputeConfig struct {
 	// already preferred.
 	MaxRecall int `koanf:"max_recall,omitempty"`
 
+	// MaxRecallTokens caps the estimated size of those memories. Zero
+	// takes compute.DefaultMaxRecallTokens.
+	//
+	// Both bounds apply and the tighter wins. The count is what an
+	// operator reasons about; the size is what the context window
+	// charges for, and a record can be a line or most of a page. The
+	// size bound is meant to fire only on unusually long records —
+	// if it fires on ordinary turns it has become a second cap on the
+	// same thing rather than a guard against the pathological case.
+	MaxRecallTokens int `koanf:"max_recall_tokens,omitempty"`
+
 	Vision     VisionConfig     `koanf:"vision,omitempty"`
 	Audio      AudioConfig      `koanf:"audio,omitempty"`
 	PDF        PDFConfig        `koanf:"pdf,omitempty"`
