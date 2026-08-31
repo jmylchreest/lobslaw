@@ -69,8 +69,6 @@ func TestEveryMappedServiceNameIsReal(t *testing.T) {
 		&lobslawv1.SelfLearningService_ServiceDesc,
 		&lobslawv1.MemoryService_ServiceDesc,
 		&lobslawv1.PolicyService_ServiceDesc,
-		&lobslawv1.AgentService_ServiceDesc,
-		&lobslawv1.ChannelService_ServiceDesc,
 		&lobslawv1.PlanService_ServiceDesc,
 		&lobslawv1.AuditService_ServiceDesc,
 		&lobslawv1.StorageService_ServiceDesc,

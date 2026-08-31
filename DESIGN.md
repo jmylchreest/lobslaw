@@ -141,17 +141,6 @@ service PolicyService {
   rpc RequestConfirmation(ConfirmationRequest) returns (ConfirmationResponse);
 }
 
-service AgentService {
-  rpc InvokeTool(InvokeToolRequest) returns (InvokeToolResponse);
-  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
-  rpc ProcessMessage(ProcessMessageRequest) returns (ProcessMessageResponse);
-}
-
-service ChannelService {
-  rpc HandleUpdate(HandleUpdateRequest) returns (HandleUpdateResponse);
-  rpc Prompt(PromptRequest) returns (PromptResponse);   // inline confirmation
-}
-
 service PlanService {
   rpc GetPlan(GetPlanRequest) returns (GetPlanResponse);
   rpc AddCommitment(AddCommitmentRequest) returns (AddCommitmentResponse);
@@ -364,7 +353,7 @@ The validated Claims struct does **not** carry the raw JWT — once validated, t
 2. Local policy engine evaluates rules against Claims + action + resource.
 3. If `allow` → proceed.
 4. If `deny` → error with rule ID.
-5. If `require_confirmation` → `ChannelService.Prompt` to originating channel with question, options, timeout; on approval proceed, on deny/timeout refuse.
+5. If `require_confirmation` → the originating channel handler renders the question, options and timeout; on approval proceed, on deny/timeout refuse.
 
 **Dangerous-command filter (last resort):** A block-list used only for tools whose `allowed_paths` include `*` (operator override). Default filter blocks `rm -Rf /`, `dd` with raw device targets, `sudo`, `su`, command-substitution patterns. This is a safety net, not the primary defence — primary defence is typed argv templates (see Tool Execution).
 
@@ -1562,7 +1551,7 @@ func WrapContext(blocks []ContextBlock) string   // adds trust delimiters
 - [ ] Sandbox enforces namespaces + seccomp + cgroup v2 + nftables egress allow-list
 - [ ] Tool execution uses typed argv (no shell); path open is `O_NOFOLLOW` + realpath prefix
 - [ ] Policy rules support `allow | deny | require_confirmation` effect
-- [ ] `ChannelService.Prompt` delivers inline confirmation on Telegram and REST
+- [ ] The channel handlers deliver inline confirmation on Telegram and REST
 - [ ] Tool risk tiers (`reversible | communicating | irreversible`) drive default confirmation
 - [ ] Per-turn budgets (tool calls, $, egress bytes) trigger confirmation on exceedance
 - [ ] Audit log appends hash-chained entries to both sinks; `VerifyChain` detects tampering on each
