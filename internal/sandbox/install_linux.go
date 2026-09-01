@@ -137,10 +137,34 @@ func installLandlock(p *Policy) error {
 	return landlock.V5.BestEffort().RestrictPaths(rules...)
 }
 
+// fileAccessFS is every right that means something on a file.
+//
+// The rest — read_dir, make_*, remove_* — describe operations on a
+// directory's contents, and the kernel rejects a rule carrying them
+// for anything that is not a directory. That rejection is EINVAL on
+// landlock_add_rule, which fails the whole install and therefore
+// every command the sandbox was asked to run.
+var fileAccessFS = landlock.AccessFSSet(llsyscall.AccessFSReadFile |
+	llsyscall.AccessFSWriteFile |
+	llsyscall.AccessFSExecute |
+	llsyscall.AccessFSTruncate)
+
 // mountModeAccessFS turns a PolicyMount's read/write/exec triple
 // into the Landlock AccessFSSet bitmask. Mirrors the higher-level
 // landlock.RODirs / RWDirs helpers but lets us subset more
 // precisely — e.g. read-only without exec, or write-only-no-read.
+//
+// Masked to the file rights when the path is not a directory. The
+// device nodes are the case that matters: /dev/null is mounted rw,
+// and asking for make_dir on a character device is EINVAL — "using
+// directory access rights on a regular file", as the library puts
+// it. One such rule fails the entire ruleset, so a policy naming a
+// single file turned every shell command into
+//
+//	install landlock: populating ruleset for "/dev/null" ...
+//
+// which reads as the sandbox being broken rather than the policy
+// asking for something the kernel cannot express.
 func mountModeAccessFS(m PolicyMount) landlock.AccessFSSet {
 	var a landlock.AccessFSSet
 	if m.Read {
@@ -157,7 +181,24 @@ func mountModeAccessFS(m PolicyMount) landlock.AccessFSSet {
 			llsyscall.AccessFSMakeFifo | llsyscall.AccessFSMakeBlock |
 			llsyscall.AccessFSMakeSym | llsyscall.AccessFSTruncate)
 	}
+	if !isDirectory(m.Path) {
+		a &= fileAccessFS
+	}
 	return a
+}
+
+// isDirectory reports whether the path is a directory right now.
+//
+// A path that does not exist counts as one: the rule carries
+// IgnoreIfMissing, so it is dropped before the kernel sees it, and
+// guessing "file" here would silently narrow a directory that
+// appears later.
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	return info.IsDir()
 }
 
 // installSeccomp compiles the policy's Seccomp.Deny list into a
