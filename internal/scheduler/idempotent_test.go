@@ -75,7 +75,13 @@ func TestIdempotentHandlerRunsBeforeCompletion(t *testing.T) {
 		DueAt: timestamppb.New(time.Now().Add(-time.Second)),
 	})
 
-	runSchedulerBriefly(t, s)
+	// Waits for the completion this test is about, rather than
+	// sleeping and hoping: the handler running and its raft apply
+	// landing are two events, and only the second one is what the
+	// assertion below reads.
+	runSchedulerUntil(t, s, func() bool {
+		return loadCommitmentIfPresent(node, "c1").GetStatus() == string(statusDone)
+	})
 
 	got, _ := sawStatusAtRun.Load().(string)
 	if got == string(statusDone) {
@@ -149,7 +155,9 @@ func TestIdempotentHandlerErrorStillCompletes(t *testing.T) {
 		DueAt: timestamppb.New(time.Now().Add(-time.Second)),
 	})
 
-	runSchedulerBriefly(t, s)
+	runSchedulerUntil(t, s, func() bool {
+		return loadCommitmentIfPresent(node, "c1").GetStatus() == string(statusDone)
+	})
 
 	if got := loadCommitment(t, node, "c1"); got.Status != string(statusDone) {
 		t.Errorf("status = %q, want done — a handler that errored is finished, not retrying", got.Status)

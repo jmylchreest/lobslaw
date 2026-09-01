@@ -43,10 +43,6 @@ func loadCommitment(tb testing.TB, node *memory.RaftNode, id string) *lobslawv1.
 	return &c
 }
 
-// runSchedulerBriefly runs the loop long enough for one due
-// commitment to be picked up and settled, then stops it. Bounded by a
-// deadline rather than a fixed sleep so a slow machine does not turn
-// this into a flake — the lesson from the concurrent-claim test.
 // runSchedulerUntil runs the scheduler until `settled` reports true,
 // then stops it.
 //
@@ -80,19 +76,21 @@ func runSchedulerUntil(tb testing.TB, s *Scheduler, settled func() bool) {
 	}
 }
 
-func runSchedulerBriefly(tb testing.TB, s *Scheduler) {
-	tb.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	done := make(chan struct{})
-	go func() { _ = s.Run(ctx); close(done) }()
-
-	// Give the loop time to fire and apply the result.
-	time.Sleep(400 * time.Millisecond)
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		tb.Fatal("scheduler did not stop")
+// loadCommitmentIfPresent reads a commitment without failing the test
+// when it is not there yet.
+//
+// loadCommitment calls Fatal, which is right for an assertion and
+// wrong inside a polling predicate: the record legitimately does not
+// exist for the first few milliseconds, and failing on that would
+// turn the wait into the flake it replaced.
+func loadCommitmentIfPresent(node *memory.RaftNode, id string) *lobslawv1.AgentCommitment {
+	raw, err := node.FSM().Store().Get(memory.BucketCommitments, id)
+	if err != nil {
+		return nil
 	}
+	var c lobslawv1.AgentCommitment
+	if err := proto.Unmarshal(raw, &c); err != nil {
+		return nil
+	}
+	return &c
 }
