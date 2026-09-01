@@ -23,7 +23,7 @@ func newLoaderWithFakeServer(t *testing.T, serverName string, tools []Tool) (*Lo
 	})
 	c, _ := NewClient(Config{Transport: tr})
 	_, _ = c.Initialize(context.Background())
-	l.registerServer(serverName, c, tools)
+	l.registerServer(serverName, c, tools, ServerConfig{})
 	return l, tr
 }
 

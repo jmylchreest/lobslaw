@@ -35,6 +35,16 @@ import (
 // knowing when it misbehaves: a POST that succeeds proves the server
 // accepted the frame, not that it answered.
 
+// ErrSessionGone means the server no longer knows the session this
+// transport was POSTing to.
+//
+// A remote session is not forever: the server restarts, an idle
+// stream is reaped, a proxy times the connection out. Distinguished
+// from any other send failure because it is the one worth REBUILDING
+// for — the endpoint is valid, the credentials are valid, and the
+// only thing wrong is a session id that has been forgotten.
+var ErrSessionGone = errors.New("mcp: sse session is gone")
+
 // SSETransport implements Transport over MCP's HTTP+SSE binding.
 type SSETransport struct {
 	client *http.Client
@@ -244,7 +254,16 @@ func (t *SSETransport) Send(ctx context.Context, frame []byte) error {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted &&
 		resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("mcp: sse send: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		text := strings.TrimSpace(string(body))
+		// 404 and 410 on a POST to an endpoint we were given mean the
+		// SESSION is gone, not the server: the caller can rebuild and
+		// carry on rather than reporting the integration broken.
+		// KitchenOwl answers 404 {"error":"Unknown or expired
+		// session"}; the status alone is enough to act on.
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+			return fmt.Errorf("%w: %s: %s", ErrSessionGone, resp.Status, text)
+		}
+		return fmt.Errorf("mcp: sse send: %s: %s", resp.Status, text)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	return nil
@@ -265,12 +284,16 @@ func (t *SSETransport) Recv(ctx context.Context) ([]byte, error) {
 
 // endedWhy reports why the stream stopped, so a closed channel does
 // not surface as a bare EOF with nothing to act on.
+//
+// Wrapped in ErrSessionGone: a stream that ended has taken its
+// session with it, and the caller's recovery is the same one a 404 on
+// send calls for.
 func (t *SSETransport) endedWhy() error {
 	select {
 	case err := <-t.streamErr:
-		return fmt.Errorf("mcp: sse stream ended: %w", err)
+		return fmt.Errorf("%w: stream ended: %w", ErrSessionGone, err)
 	default:
-		return errors.New("mcp: sse stream ended")
+		return fmt.Errorf("%w: stream ended", ErrSessionGone)
 	}
 }
 
