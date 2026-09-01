@@ -88,8 +88,129 @@ The resource is **the exact command**, canonicalised for whitespace and quoting 
 dropped, so `git status --short` and `git push --force` are different grants. Tapping *Always
 allow* therefore stops one command from being asked about, not the shell.
 
-Some commands have no stable identity and are asked about **every time**, with no scope button
-offered: anything containing a pipe, `&&`, `;`, a redirect, `$`, backticks, a backslash, a glob, a
+### What a command does decides whether you are asked
+
+Before the gate asks, the command is **classified** by what it does. A command line is split into
+its steps — across `&&`, `||`, `;`, `|` and newlines — each step's program is looked up in a
+shipped table, and the command's tier is the most severe tier any step reaches:
+
+| Tier | Meaning | Examples |
+|---|---|---|
+| `read` | inspects state and changes nothing | `uname -a`, `git status`, `df -h /`, `cat /proc/self/status` |
+| `write` | mutates local state, recoverably | `touch /tmp/probe`, `git commit`, `sed -i`, `rm /tmp/build/x` |
+| `network` | reaches off the box | `curl`, `wget`, `ssh`, `git push`, `apt-get install` |
+| `destructive` | deletes, changes the machine, or runs as root | `rm -rf /etc/hosts`, `systemctl restart`, `sudo -n true`, `chmod -R 777 /etc` |
+| `unknown` | the classifier cannot read it | a `for` loop, `$(…)`, `` ` ` ``, `$CMD status`, `sh -c …`, any program not in the table |
+
+The classification is **fail-closed**: a program the table does not name is `unknown`, an argument
+whose value cannot be seen is `unknown`, and `unknown` runs unasked in no mode at all.
+
+**What a command is pointed at counts, not only what it is called.** `rm /tmp/probe.txt`,
+`rm -rf /` and `rm -rf $DIR` are one program and three different operations, so the operands of a
+targeting program are read as paths:
+
+- a path under a declared scratch root lowers a deletion to `write` — `rm -rf /tmp/build/out` is
+  a write, `rm -rf /etc` is not;
+- a path under `/etc`, `/usr`, `/bin`, `/boot`, `/` and friends raises the tier to `destructive`
+  whatever the program — `cp payload /usr/bin/ls` is not a copy, and `echo x > /etc/passwd` is not
+  an echo;
+- a path whose value cannot be seen makes the whole command `unknown` — `rm -rf $DIR` is not
+  `rm -rf /tmp/x` and is never treated as though it were.
+
+Scratch roots default to `/tmp` and `/var/tmp`. Nothing else is assumed: a deployment with a
+mounted workspace names it in `[compute.shell_approval] scratch_paths`. Note that this reads the
+path as *written* — a symlink out of a scratch root defeats it — which is why the de-escalation
+only ever turns a deletion into a write, and `write` still asks under the shipped default.
+
+Check any command without running it:
+
+```console
+$ lobslaw policy classify 'echo start; touch /tmp/.w && rm /workspace/.w'
+destructive · `rm /workspace/.w` (step 3 of 3) · echo, touch, rm
+
+steps:
+   1  read         reads_only                         echo start
+   2  write        mutates_files                      touch /tmp/.w
+   3  destructive  deletes_or_changes_machine_state   rm /workspace/.w
+
+under each approval mode:
+    strict    asks
+  * standard  asks
+    trusted   asks
+```
+
+### Approval modes
+
+`[compute] approval_mode` decides which tiers are worth asking about:
+
+| Mode | Runs without asking | Still asks about |
+|---|---|---|
+| `strict` | nothing | everything |
+| `standard` *(default)* | `read` | `write`, `network`, `destructive`, `unknown` |
+| `trusted` | `read`, `write` | `network`, `destructive`, `unknown` |
+
+There is no mode that waves through `network`, `destructive` or `unknown`, and no configuration
+adds one — an operator who wants that writes a policy rule and owns it.
+
+A mode installs ordinary policy rules at the lowest priority the type allows, so anything an
+operator wrote and anything an approval minted still outranks them, and the whole posture is
+visible in `lobslaw policy list` rather than being invisible behaviour in Go. `strict` installs
+nothing at all: it is the absence of those rules.
+
+The default is `standard` rather than `strict` deliberately. A gate that asks eight times in four
+minutes is answered by reflex, and a reflex is not consent — removing the questions nobody needed
+to be asked is what makes the remaining ones legible.
+
+The [hardline floor](/security/hardline-floor) is unaffected by every mode.
+
+### A second opinion on commands that cannot be read
+
+A probing agent writes exactly the shapes static reading refuses — loops, substitutions, variables
+in the command slot — so the commands producing the most confirmations are the ones the classifier
+helps with least. A model can read them:
+
+```toml
+[compute.roles]
+command_risk = "big-model"        # a [[compute.providers]] label
+
+[compute.shell_approval]
+verdict_trust = "resolve_unknown"  # advisory (default) | resolve_unknown
+```
+
+It answers the **same closed enum** the classifier uses, and nothing else: no prose ever reaches
+the prompt, and a reply that is unparseable, outside the enum, late, or marked low-confidence is
+discarded with the static verdict left standing. What it is allowed to move is the security-
+relevant part:
+
+- `advisory` — it may only **raise** a tier. A wrong answer costs one confirmation nobody needed
+  to give.
+- `resolve_unknown` — it may additionally resolve `unknown` **down** to a concrete tier, and only
+  `unknown`. Where the static classifier has an opinion it keeps it.
+
+`resolve_unknown` is what stops a shell-loop probe asking every time. It is opt-in because the
+command text is attacker-influenced, and a command that can argue its own tier down is the whole
+vulnerability. There is no fallback to the main model: with no `command_risk` role assigned, no
+model is consulted at all.
+
+### Granting a whole tier for one conversation
+
+Alongside *Approve* and *Approve for this chat*, a confirmation offers **Allow read-only here** /
+**Allow local writes here** when the command classifies into one of those two tiers.
+
+This exists for the case the per-command buttons cannot help with. An agent probing its
+environment writes a different command every time, and those commands are compound, so no grant
+can name them — the user is offered exactly one answer, *Approve*, over and over. A tier is
+nameable even when the command is not.
+
+The grant is recorded like any session grant, scoped to the conversation, under the reserved
+resource `(risk=read)` or `(risk=write)`. It is never offered for `network`, `destructive` or
+`unknown`: "allow everything I could not read" is not a decision anybody should be able to make
+with one tap.
+
+### Commands with no stable form
+
+Some commands have no stable identity and are asked about **every time**, with no *per-command*
+scope button offered (the tier button above may still be): anything containing a pipe, `&&`, `;`, a redirect, `$`, backticks, a backslash, a glob, a
 `#`, a `!`, a `VAR=` prefix, or a shell reserved word in front position. What runs depends on the
 environment, or on more than one program, or on shell syntax the key cannot preserve — so no grant
 could honestly name it. Those are evaluated under the reserved resource `!unclassified`, and an
@@ -121,7 +242,8 @@ command can reach that resource, so it cannot be hit by accident.
 
 The [hardline floor](/security/hardline-floor) still applies first and is not reachable by any of
 this: `rm -rf /`, fork bombs, `mkfs`, `curl | sh` are refused before a prompt is ever raised, and
-`Mint` refuses to write a rule for them even if one were somehow requested.
+`Mint` refuses to write a rule for them even if one were somehow requested. No approval mode, no
+classification, no scratch-path declaration and no model verdict reaches it.
 
 ## Inputs
 
@@ -139,7 +261,7 @@ The action+resource shape is the matching key. Conventions:
 | Action | Resource shape | Used for |
 |---|---|---|
 | `tool:exec` | tool name (`current_time`, `notify`, `gws-workspace.gmail.send`) | Every agent tool call |
-| `shell:run` | the exact command (`git status --short`) | Every `shell_command` call, asked separately from `tool:exec` |
+| `shell:run` | the exact command (`git status --short`), or `(risk=read)` for a tier grant | Every `shell_command` call, asked separately from `tool:exec` |
 | `memory:write` | record kind (`episodic`) | Staging agent-initiated memory writes |
 | `credentials:read` | credential ID | `credentials_grant` invoker side |
 | `credentials:grant` | role / skill name | granting a skill access |

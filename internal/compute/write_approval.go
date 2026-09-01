@@ -52,7 +52,12 @@ type gatedTool struct {
 	// can decide about. A confirmation that says only "the agent wants
 	// to write a memory" is one nobody can answer usefully, so they
 	// answer it reflexively — which is worse than not asking.
-	summarise func(map[string]string) string
+	//
+	// Takes a ctx because a summary may consult something that can
+	// block: the shell summariser optionally asks a model for a
+	// structured verdict, and a prompt is not worth waiting forever
+	// for.
+	summarise func(context.Context, map[string]string) string
 }
 
 // RequireApproval marks a tool as needing confirmation before it runs.
@@ -66,7 +71,7 @@ type gatedTool struct {
 // silently satisfied by a rule that has nothing to do with it. There is
 // no configuration in which that is the right thing to pass, so it is
 // not offered.
-func (e *Executor) RequireApproval(tool, resource string, summarise func(map[string]string) string) {
+func (e *Executor) RequireApproval(tool, resource string, summarise func(context.Context, map[string]string) string) {
 	e.gateMu.Lock()
 	defer e.gateMu.Unlock()
 	if e.gated == nil {
@@ -96,6 +101,16 @@ type GrantTarget struct {
 	// Grantable false means confirmable but not mintable: the channel
 	// offers Approve and Deny, without "always".
 	Grantable bool
+
+	// Risk is what the operation DOES, as classified by ClassifyRisk.
+	//
+	// Carried alongside the key rather than folded into it, because the
+	// two answer different questions and have different lifetimes: the
+	// resource names one command forever, while the tier is a property
+	// of this invocation that policy conditions on and the prompt
+	// reports. Empty means the resolver does not classify, which a rule
+	// conditioned on a tier must treat as "does not apply".
+	Risk CommandRisk
 }
 
 // grantActions is every action a resolver may name. A closed set, not
@@ -109,7 +124,7 @@ var grantActions = map[string]bool{
 
 // RequireCommandApproval marks a tool whose approval is about its
 // PARAMETERS rather than its name.
-func (e *Executor) RequireCommandApproval(tool string, resolve func(map[string]string) GrantTarget, summarise func(map[string]string) string) {
+func (e *Executor) RequireCommandApproval(tool string, resolve func(map[string]string) GrantTarget, summarise func(context.Context, map[string]string) string) {
 	e.gateMu.Lock()
 	defer e.gateMu.Unlock()
 	if e.gated == nil {
@@ -139,9 +154,10 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 		return nil
 	}
 	action, resource, grantable := gate.action, gate.resource, true
+	risk := CommandRisk("")
 	if gate.resolve != nil {
 		t := gate.resolve(params)
-		resource, grantable = t.Resource, t.Grantable
+		resource, grantable, risk = t.Resource, t.Grantable, t.Risk
 		// An unrecognised action falls back to the registered one
 		// rather than being trusted. A resolver is in-tree code, but
 		// the whole point of the closed set is that a mistake here
@@ -151,6 +167,13 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 			action = t.Action
 		}
 	}
+	// The tier goes on the context before the engine is asked, because
+	// that is where a condition evaluator reads it. Set from the
+	// resolver's classification of the PARAMETERS, never from anything
+	// the model wrote in prose — the same provenance rule the turn
+	// identity follows.
+	ctx = WithCommandRisk(ctx, risk)
+
 	err := e.PolicyAllow(ctx, claims, action, resource)
 	if err == nil {
 		return nil
@@ -165,9 +188,10 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 	}
 	req := &ConfirmationRequest{
 		inner: err, Action: action, Resource: resource, Grantable: grantable,
+		Risk: risk,
 	}
 	if gate.summarise != nil {
-		req.Summary = gate.summarise(params)
+		req.Summary = gate.summarise(ctx, params)
 	}
 	return req
 }
@@ -200,6 +224,18 @@ type ConfirmationRequest struct {
 	// same prompt. The resource is what policy evaluates and what the
 	// turn approval keys on; this is what the channel offers.
 	Grantable bool
+
+	// Risk is the tier this operation classified into.
+	//
+	// Carried to the channel so it can offer a grant covering the TIER
+	// — "allow read-only here" — as well as one covering this exact
+	// command. For a probing agent those are very different offers:
+	// every probe is a different command, so a per-command grant is
+	// never asked for twice, while a tier grant is answered once.
+	//
+	// Empty for a gate that does not classify, in which case no tier
+	// button is offered.
+	Risk CommandRisk
 }
 
 func (c *ConfirmationRequest) Error() string {
@@ -221,7 +257,7 @@ func (c *ConfirmationRequest) Unwrap() error { return c.inner }
 //
 // Truncated, because a confirmation is a prompt and a prompt that is
 // three screens long is one nobody reads to the end.
-func MemoryWriteSummary(params map[string]string) string {
+func MemoryWriteSummary(_ context.Context, params map[string]string) string {
 	event := strings.TrimSpace(params["event"])
 	if event == "" {
 		return ""

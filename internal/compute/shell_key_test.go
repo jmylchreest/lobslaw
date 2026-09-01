@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -93,7 +94,7 @@ func TestTheKeyIsWhatTheUserIsShown(t *testing.T) {
 			t.Errorf("shellGrant(%q) was not grantable", cmd)
 			continue
 		}
-		summary := ShellCommandSummary(params)
+		summary := ShellCommandSummary(context.Background(), params)
 		if !strings.Contains(summary, resource) {
 			t.Errorf("the prompt does not contain what would be minted:\n  summary  = %q\n  resource = %q",
 				summary, resource)
@@ -290,7 +291,7 @@ func TestARelativeWorkingDirectoryIsNotGrantable(t *testing.T) {
 // A prompt that paraphrases what will run cannot be answered.
 func TestTheSummaryShowsTheCommandEvenWhenItCannotBeGranted(t *testing.T) {
 	t.Parallel()
-	summary := ShellCommandSummary(map[string]string{"command": `git status && make`})
+	summary := ShellCommandSummary(context.Background(), map[string]string{"command": `git status && make`})
 	if !strings.Contains(summary, "git status && make") {
 		t.Errorf("summary = %q; it does not show the command", summary)
 	}
@@ -301,7 +302,7 @@ func TestTheSummaryShowsTheCommandEvenWhenItCannotBeGranted(t *testing.T) {
 
 func TestTheSummaryFlagsNonASCII(t *testing.T) {
 	t.Parallel()
-	summary := ShellCommandSummary(map[string]string{"command": "g\u0456t status"})
+	summary := ShellCommandSummary(context.Background(), map[string]string{"command": "g\u0456t status"})
 	if !strings.Contains(summary, "non-ASCII") {
 		t.Errorf("summary = %q; a homoglyph command was not flagged", summary)
 	}
@@ -360,7 +361,7 @@ func TestTheCommentExploitCannotShareAKey(t *testing.T) {
 func TestAnUnprintableCwdIsNotRenderedIntoThePrompt(t *testing.T) {
 	t.Parallel()
 	params := map[string]string{"command": "rm -rf build", "cwd": "/home/x/safe\u202Eevil"}
-	summary := ShellCommandSummary(params)
+	summary := ShellCommandSummary(context.Background(), params)
 	if strings.ContainsRune(summary, '\u202E') {
 		t.Errorf("a bidi override reached the prompt: %q", summary)
 	}

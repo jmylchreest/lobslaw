@@ -357,6 +357,16 @@ enabled = true
 # /reference/builtin-tools#disabling-tools.
 disabled_tools = ["remote_*"]
 
+# Which shell commands are worth asking about, by what they DO.
+#   strict   — ask about every command.
+#   standard — ask about everything except commands that only read.
+#   trusted  — additionally allow ordinary local writes.
+# Nothing runs unasked in any mode if it reaches the network, deletes,
+# changes the machine, runs as root, or cannot be read; and no mode
+# reaches the hardline floor. `lobslaw policy classify '<cmd>'` shows
+# what any command is classified as.
+approval_mode       = "standard"
+
 # Providers self-declare their capabilities. The modality builtins
 # (read_image, read_audio, read_pdf) auto-discover by capability tag
 # — operators don't wire each builtin separately. Higher `priority`

@@ -118,7 +118,15 @@ The agent pauses, the channel asks `[Yes / No]`, the human decides. This is the 
 
 ### Stop being asked about a family of shell commands
 
-Every `shell_command` call is asked about individually, and *Always allow* grants that one
+**Reach for `[compute] approval_mode` first.** Every command is classified by what it does before
+the gate asks, and the shipped default already runs read-only commands without asking. If you are
+being asked about `uname -a` and `git status`, the mode is doing something other than the default;
+if you are being asked about ordinary local writes and would rather not be, `approval_mode =
+"trusted"` is the one-line answer. See [the policy engine](/security/policy-engine) for the tiers.
+No mode ever waves through the network, a deletion, a change to the machine, or a command the
+classifier could not read — those are what the rules below are for.
+
+Every `shell_command` call is then asked about individually, and *Always allow* grants that one
 command — so approving `git status --short` leaves `git push --force` still asked about. That is
 deliberate: no rule about argv shape separates `git status` from `ssh host`, so nothing is
 generalised automatically.
@@ -140,9 +148,15 @@ Edit the config **once**, rather than approving every git command forever. The
 `rm -rf /`.
 
 Commands with no stable form — pipelines, `&&`, redirects, globs, `$` — are asked about every
-time and offer no scope button, because no grant could honestly name them. They evaluate under the
-reserved resource `!unclassified`; an `allow` on it is the explicit "stop asking me about compound
-commands".
+time and offer no *per-command* scope button, because no grant could honestly name them. They
+evaluate under the reserved resource `!unclassified`; an `allow` on it is the explicit "stop
+asking me about compound commands".
+
+Those are exactly the commands an environment-probing agent produces, which is why a confirmation
+also offers **Allow read-only here** / **Allow local writes here** when the command classifies
+into one of those tiers. A tier is nameable even when the command is not, and the grant is scoped
+to the conversation like any other session grant. It is never offered for anything that reaches
+the network, deletes, changes the machine, or could not be read.
 
 ### Allow a public visitor to call read-only tools
 

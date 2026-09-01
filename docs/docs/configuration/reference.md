@@ -244,9 +244,21 @@ format      = "openai"
 # download_url = "https://huggingface.co/intfloat/multilingual-e5-base/resolve/main"
 
 [compute.roles]
-# main, preflight, reranker, summariser. There is no "worker" or
-# "council" role.
+# main, preflight, reranker, summariser, command_risk. There is no
+# "worker" or "council" role.
 main = "openrouter"
+
+# The model asked what a shell command does when the static classifier
+# cannot read it — a loop, a substitution, a variable in the command
+# slot. It answers a closed enum and nothing else, and no prose from it
+# ever reaches a confirmation prompt.
+#
+# UNSET MEANS NO MODEL IS ASKED. There is deliberately no fallback to
+# main: this runs on every unreadable command, which is not a bill
+# anybody has budgeted for unless they said so. Worth the strongest
+# model you will pay for — its verdict is what consent is given
+# against. See /security/policy-engine.
+# command_risk = "big-model"
 
 # Where secret references other than env: and file: resolve from. A
 # provider's label IS the reference scheme, so "bw:app/key" works
@@ -342,6 +354,40 @@ ever folded in.
 Compaction needs a summariser: set `[compute.roles].summariser` to a cheap model
 so compaction doesn't run on your expensive one. With no summariser resolved,
 compaction is off and long conversations simply lose their oldest messages.
+
+### Classifying what a command does
+
+```toml
+[compute.shell_approval]
+# Absolute roots under which deleting something is a write rather than
+# a loss, so `rm /tmp/probe` and `rm -rf /etc` are not filed as the
+# same act. Empty takes /tmp and /var/tmp; nothing else is assumed.
+# Relative entries are dropped.
+scratch_paths = ["/tmp", "/var/tmp", "/workspace"]
+
+# How far the [compute.roles] command_risk model may move a tier:
+#   advisory        — it may only RAISE one (the default).
+#   resolve_unknown — it may also resolve "unknown" down to a concrete
+#                     tier, and only unknown.
+verdict_trust = "advisory"
+
+# Extend the shipped classification table. MERGED over it, not
+# replacing it — the opposite contract to command_classes. An empty
+# entry removes a shipped one.
+[compute.command_risks]
+  terraform = { tier = "read", subcommands = { apply = "destructive", destroy = "destructive" } }
+  our-tool  = { tier = "write", targets = true, scratch_tier = "write" }
+```
+
+Check any command against the table without running it:
+
+```console
+$ lobslaw policy classify 'rm -rf /tmp/build'
+writes · scratch_path · rm
+```
+
+See [the policy engine](/security/policy-engine) for the tiers, the approval modes and the
+optional model verdict.
 
 ## `[gateway]`
 

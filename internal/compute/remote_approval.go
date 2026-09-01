@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -54,7 +55,13 @@ type RemoteHostLookup func(name string) (host string, ok bool)
 // the other — which is the entire property this exists for.
 func RemoteGrantResourceFor(hostOf RemoteHostLookup) func(map[string]string) GrantTarget {
 	return func(params map[string]string) GrantTarget {
-		return remoteGrant(hostOf, params)
+		t := remoteGrant(hostOf, params)
+		// Reaching another host is network whatever the command is.
+		// The command's own tier is not consulted: `uptime` run here
+		// and `uptime` run on somebody else's box are not the same
+		// operation, and only one of them leaves this machine.
+		t.Risk = RiskNetwork
+		return t
 	}
 }
 
@@ -99,7 +106,9 @@ func resolveRemoteHost(hostOf RemoteHostLookup, name string) (string, bool) {
 // whole question.
 func RemoteCopyGrantResourceFor(hostOf RemoteHostLookup) func(map[string]string) GrantTarget {
 	return func(params map[string]string) GrantTarget {
-		return remoteCopyGrant(hostOf, params)
+		t := remoteCopyGrant(hostOf, params)
+		t.Risk = RiskNetwork
+		return t
 	}
 }
 
@@ -116,7 +125,7 @@ func remoteCopyGrant(hostOf RemoteHostLookup, params map[string]string) GrantTar
 // RemoteCommandSummary renders a remote_ssh call for the prompt.
 // Verbatim and in full, for the reason ShellCommandSummary is: a
 // prompt that paraphrases what is about to run cannot be answered.
-func RemoteCommandSummary(params map[string]string) string {
+func RemoteCommandSummary(_ context.Context, params map[string]string) string {
 	cmd := strings.TrimSpace(params["command"])
 	host := strings.TrimSpace(params["remote"])
 	if cmd == "" || host == "" {
@@ -126,7 +135,7 @@ func RemoteCommandSummary(params map[string]string) string {
 }
 
 // RemoteCopySummary renders a remote_scp call for the prompt.
-func RemoteCopySummary(params map[string]string) string {
+func RemoteCopySummary(_ context.Context, params map[string]string) string {
 	host := strings.TrimSpace(params["remote"])
 	remotePath := strings.TrimSpace(params["remote_path"])
 	localPath := strings.TrimSpace(params["local_path"])

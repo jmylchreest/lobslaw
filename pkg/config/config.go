@@ -520,6 +520,39 @@ type ComputeConfig struct {
 	// it, matching disabled_tools.
 	CommandClasses map[string]CommandClassConfig `koanf:"command_classes,omitempty"`
 
+	// ApprovalMode is which shell commands are worth asking about:
+	// "strict", "standard" or "trusted".
+	//
+	//	strict   — ask about every command, whatever it does.
+	//	standard — ask about everything except commands that only read.
+	//	trusted  — additionally allow ordinary local writes.
+	//
+	// Empty takes "standard". Nothing runs unasked in any mode if it
+	// reaches the network, deletes, changes the machine, runs as root,
+	// or cannot be read — and no mode touches the hardline floor.
+	ApprovalMode string `koanf:"approval_mode,omitempty"`
+
+	// ShellApproval tunes how a command is classified before it is
+	// asked about.
+	ShellApproval ShellApprovalConfig `koanf:"shell_approval,omitempty"`
+
+	// CommandRisks maps a command name to what it does, extending the
+	// shipped classification table:
+	//
+	//	[compute.command_risks]
+	//	terraform = { tier = "destructive" }
+	//	our-tool  = { tier = "read" }
+	//	ls        = { }   # stop classifying it
+	//
+	// MERGED over the shipped table rather than replacing it — the
+	// opposite contract to command_classes, and deliberately so. That
+	// table has six entries an operator can restate; this one has
+	// hundreds, and replacing it wholesale would mean adding one
+	// in-house tool silently reclassified every other command as
+	// unreadable, which turns a one-line config edit into a flood of
+	// confirmations. An empty entry removes a shipped one.
+	CommandRisks map[string]CommandRiskConfig `koanf:"command_risks,omitempty"`
+
 	// MaxRecall caps how many memories passive recall injects into a
 	// turn. Zero takes compute.DefaultMaxRecall.
 	//
@@ -687,6 +720,20 @@ type RolesConfig struct {
 	// Summariser is the model used for dream consolidation /
 	// episodic summarisation. Empty → Main.
 	Summariser string `koanf:"summariser,omitempty"`
+
+	// CommandRisk is the model asked what a shell command does when
+	// the static classifier cannot read it — a loop, a substitution, a
+	// variable in the command slot.
+	//
+	// Empty means NO model is asked and those commands keep being
+	// confirmed by hand. Deliberately not falling back to Main: this
+	// runs on commands nobody could read, which is precisely the case
+	// an operator has not budgeted for unless they said so.
+	//
+	// Worth the strongest model a deployment will pay for. Its verdict
+	// is what consent is given against, and how far it is trusted is
+	// [compute.shell_approval] verdict_trust.
+	CommandRisk string `koanf:"command_risk,omitempty"`
 }
 
 // WebSearchConfig selects which declared search backends the
@@ -1139,6 +1186,71 @@ type CommandClassConfig struct {
 	// action classifies the command but extracts no host, which makes
 	// every call confirmable and none grantable.
 	HostFrom string `koanf:"host_from,omitempty"`
+}
+
+// CommandRiskConfig is one entry of [compute.command_risks].
+type CommandRiskConfig struct {
+	// Tier is what the command does: "read", "write", "network",
+	// "destructive" or "unknown". An empty tier with no other field
+	// set removes a shipped entry, which makes the command unreadable
+	// and therefore always asked about.
+	Tier string `koanf:"tier,omitempty"`
+
+	// Subcommands classifies by the first non-flag argument, for a
+	// program that is really a family:
+	//
+	//	terraform = { tier = "read", subcommands = { apply = "destructive" } }
+	//
+	// A subcommand not named here is unreadable rather than taking
+	// Tier: a verb nobody classified could be anything.
+	Subcommands map[string]string `koanf:"subcommands,omitempty"`
+
+	// Escalate raises the tier when a token appears in the argv. Keys
+	// match exactly, or as a prefix when they end in "*".
+	Escalate map[string]string `koanf:"escalate,omitempty"`
+
+	// Targets marks a command whose risk depends on the paths it is
+	// pointed at, and ScratchTier the tier it drops to when every one
+	// of those paths is under a scratch root.
+	Targets     bool   `koanf:"targets,omitempty"`
+	ScratchTier string `koanf:"scratch_tier,omitempty"`
+}
+
+// ShellApprovalConfig is the [compute.shell_approval] section: how a
+// command is classified before the gate asks about it.
+type ShellApprovalConfig struct {
+	// ScratchPaths are absolute roots under which deleting something
+	// is a write rather than a loss, so `rm /tmp/probe` and
+	// `rm -rf /etc` are not filed as the same act.
+	//
+	// Empty takes /tmp and /var/tmp. Nothing else is assumed — guessing
+	// that a directory is disposable is the one classification error
+	// that loses data — so a deployment with a mounted workspace names
+	// it here.
+	//
+	// Relative entries are dropped: they resolve against whatever
+	// directory the process happens to be in, which is exactly the
+	// ambiguity a de-escalation must not rest on.
+	ScratchPaths []string `koanf:"scratch_paths,omitempty"`
+
+	// VerdictTrust is how far the [compute.roles] command_risk model's
+	// verdict may move the tier.
+	//
+	// That model answers the same closed enum the classifier uses and
+	// nothing else: no prose reaches the prompt, and a reply that is
+	// unparseable, outside the enum, late, or marked low-confidence is
+	// discarded. The settings are:
+	//
+	//	advisory        — it may only RAISE a tier (the default).
+	//	resolve_unknown — it may also resolve "unknown" DOWN to a
+	//	                  concrete tier, and only unknown. Where the
+	//	                  static classifier has an opinion it keeps it.
+	//
+	// The second is what stops a shell-loop probe asking every time.
+	// It is opt-in because the command text is attacker-influenced,
+	// and a command that can argue its own tier down is the whole
+	// vulnerability.
+	VerdictTrust string `koanf:"verdict_trust,omitempty"`
 }
 
 // LimitsConfig holds non-cost safety valves. These are about

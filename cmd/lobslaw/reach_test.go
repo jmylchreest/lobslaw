@@ -32,6 +32,11 @@ type commandGroup struct {
 	offlineOnly map[string]func([]string) error
 	// liveOnly have no offline form at all.
 	liveOnly map[string]func([]string) error
+	// localOnly read NO state — not the cluster's and not a local
+	// store — so the reach rule does not apply to them. Answering from
+	// compiled-in knowledge cannot report an empty cluster as fact,
+	// which is the mistake the rule exists to catch.
+	localOnly map[string]func([]string) error
 }
 
 // everyGroup is the inventory. A dispatcher missing from here is
@@ -39,7 +44,7 @@ type commandGroup struct {
 func everyGroup() []commandGroup {
 	return []commandGroup{
 		{name: "audit", usage: auditUsage, forms: auditForms},
-		{name: "policy", usage: policyUsage, forms: policyForms},
+		{name: "policy", usage: policyUsage, forms: policyForms, localOnly: policyLocalOnly},
 		{name: "memory", usage: memoryUsage, forms: memoryForms, offlineOnly: memoryOfflineOnly},
 		{name: "session", usage: sessionUsage, forms: sessionForms},
 		{name: "identity", usage: identityUsage, forms: identityForms},
@@ -71,7 +76,7 @@ func TestEveryCommandReachesTheClusterByDefault(t *testing.T) {
 // find is a command nobody uses correctly.
 func TestEverySubcommandIsDiscoverable(t *testing.T) {
 	for _, g := range everyGroup() {
-		for _, set := range []map[string]func([]string) error{g.offlineOnly, g.liveOnly} {
+		for _, set := range []map[string]func([]string) error{g.offlineOnly, g.liveOnly, g.localOnly} {
 			for sub := range set {
 				if !strings.Contains(g.usage, sub) {
 					t.Errorf("%s: usage does not mention %q", g.name, sub)
@@ -165,6 +170,9 @@ func TestNoSubcommandIsDeclaredTwice(t *testing.T) {
 		for sub := range g.liveOnly {
 			record(sub, "liveOnly")
 		}
+		for sub := range g.localOnly {
+			record(sub, "localOnly")
+		}
 	}
 }
 
@@ -185,6 +193,11 @@ func TestNoDeclaredSubcommandIsNil(t *testing.T) {
 		for sub, fn := range g.liveOnly {
 			if fn == nil {
 				t.Errorf("%s %s: live-only entry is nil", g.name, sub)
+			}
+		}
+		for sub, fn := range g.localOnly {
+			if fn == nil {
+				t.Errorf("%s %s: local-only entry is nil", g.name, sub)
 			}
 		}
 	}

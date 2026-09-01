@@ -40,6 +40,17 @@ func sessionGrantReply(resource, where string) string {
 	return "Approved — I won't ask again for this in this " + where + "."
 }
 
+// riskGrantReply is the confirmation shown after a grant covering a
+// whole tier rather than one command.
+//
+// It names the TIER and says what is still gated, because the offer is
+// broader than any other button on the prompt and a reply that only
+// said "approved" would understate what was just given.
+func riskGrantReply(tier, where string) string {
+	return "Approved — " + tier + " commands will run without asking in this " + where +
+		". Anything that writes elsewhere, reaches the network, deletes, or can't be read still asks."
+}
+
 // displayResource renders a resource for a reply, or empty when there
 // is nothing worth naming.
 //

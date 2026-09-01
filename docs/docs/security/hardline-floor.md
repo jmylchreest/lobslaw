@@ -34,6 +34,12 @@ a human can answer. The floor did not move: it is checked before policy and befo
 `ApprovalRules.Mint` refuses to write a rule for anything it denies, so no approval at any scope
 reaches past it.
 
+Nothing about **risk classification** reaches it either. `[compute] approval_mode` decides which
+tiers are worth asking a human about, `scratch_paths` decides where a deletion counts as a write,
+and an optional model may offer a second opinion on commands the classifier cannot read — all of
+which happen *after* the floor has already refused what it refuses. A command the floor denies is
+never classified, never prompted about, and never granted, in any mode.
+
 ## What it refuses
 
 **Commands** (`internal/policy/hardline.go`, `CheckCommand`):
