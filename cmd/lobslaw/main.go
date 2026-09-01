@@ -40,12 +40,6 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// Version and Commit are injected at build time via -ldflags.
-var (
-	Version = "dev"
-	Commit  = "none"
-)
-
 type flags struct {
 	showVersion bool
 	configPath  string
@@ -264,8 +258,9 @@ func main() {
 		os.Exit(2)
 	}
 
+	stamp := resolveBuildStamp()
 	if f.showVersion {
-		fmt.Printf("lobslaw %s (%s)\n", Version, Commit)
+		fmt.Printf("lobslaw %s\n", stamp)
 		return
 	}
 
@@ -319,8 +314,10 @@ func main() {
 	funcs := resolveFunctions(f, cfg)
 	nodeID := derivedNodeID()
 	logger.Info("lobslaw starting",
-		"version", Version,
-		"commit", Commit,
+		"version", stamp.Version,
+		"commit", stamp.Commit,
+		"built", stamp.Built,
+		"dirty", stamp.Dirty,
 		"node_id", nodeID,
 		"functions", funcs,
 	)
@@ -424,6 +421,7 @@ func secretSchemes(c config.SecretsConfig) []string {
 }
 
 func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFunction, logger *slog.Logger) (node.Config, error) {
+	stamp := resolveBuildStamp()
 	needsRaft := slices.Contains(funcs, types.FunctionMemory) || slices.Contains(funcs, types.FunctionPolicy)
 
 	// Merge .mcp.json from the same dir as config.toml. Trust model
@@ -521,8 +519,10 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 	return node.Config{
 		NodeID:           nodeID,
 		Functions:        funcs,
-		Version:          Version,
-		Commit:           Commit,
+		Version:          stamp.Version,
+		Commit:           stamp.Commit,
+		BuildDate:        stamp.Built,
+		BuildDirty:       stamp.Dirty,
 		ListenAddr:       listen,
 		AdvertiseAddr:    cfg.Cluster.AdvertiseAddr,
 		SeedNodes:        cfg.Discovery.SeedNodes,

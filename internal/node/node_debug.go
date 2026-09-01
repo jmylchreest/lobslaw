@@ -222,8 +222,19 @@ func (d *debugInspector) DebugVersion() string {
 	if commit == "" {
 		commit = "unknown"
 	}
-	return fmt.Sprintf("version=%s commit=%s node_id=%s functions=%v",
-		version, commit, d.n.cfg.NodeID, d.n.cfg.Functions)
+	built := d.n.cfg.BuildDate
+	if built == "" {
+		built = "unknown"
+	}
+	dirty := ""
+	if d.n.cfg.BuildDirty {
+		// Loudest thing on the line. A commit hash is a claim about
+		// which source is running, and an uncommitted tree makes it
+		// a false one.
+		dirty = " DIRTY=uncommitted-changes"
+	}
+	return fmt.Sprintf("version=%s commit=%s built=%s%s node_id=%s functions=%v",
+		version, commit, built, dirty, d.n.cfg.NodeID, d.n.cfg.Functions)
 }
 
 // DebugSandbox probes live kernel capabilities. See

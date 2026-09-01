@@ -154,6 +154,7 @@ cmd_build() {
       -f "$CONTAINERFILE" \
       --build-arg "VERSION=local" \
       --build-arg "COMMIT=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+      --build-arg "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$REPO_ROOT" 2>&1 | tee "$log"; then
     rm -f "$log"
     return
@@ -190,7 +191,7 @@ cmd_build() {
   info "building the binary on the host"
   ( cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
-      -ldflags "-s -w -X main.Version=local -X main.Commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+      -ldflags "-s -w -X main.Version=local -X main.Commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       -o "$bin" ./cmd/lobslaw )
 
   podman rm -f "$ctr" >/dev/null 2>&1 || true
