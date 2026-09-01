@@ -165,16 +165,29 @@ func (s *Service) SetRecordVisibility(ctx context.Context, req *lobslawv1.SetRec
 		Applied: req.GetApply(),
 	}
 	for _, c := range plan {
-		out.Changes = append(out.Changes, &lobslawv1.VisibilityChange{
+		change := &lobslawv1.VisibilityChange{
 			Id: c.ID, Kind: c.Kind, Owner: c.Owner,
-			From: c.From, To: c.To, Changed: c.From != c.To,
-		})
-		if !req.GetApply() || c.From == c.To {
+			From: c.From, To: c.To,
+		}
+		out.Changes = append(out.Changes, change)
+		if c.From == c.To {
+			// Nothing to write. Reported as unchanged either way, so
+			// the plan and the result read the same.
+			continue
+		}
+		if !req.GetApply() {
+			change.Changed = true // what a write would do
 			continue
 		}
 		if err := s.applyEntry(ctx, c.entry()); err != nil {
-			return nil, status.Errorf(codes.Internal, "write %s: %v", c.ID, err)
+			// NOT a gRPC error: that discards the response, and the
+			// caller is then holding a partial write it cannot see.
+			// Which records changed is the answer they need most.
+			out.Error = err.Error()
+			out.FailedId = c.ID
+			return out, nil
 		}
+		change.Changed = true // written, and committed through raft
 	}
 	return out, nil
 }

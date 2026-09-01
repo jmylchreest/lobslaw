@@ -2959,10 +2959,12 @@ func (x *GetRecordResponse) GetReferencedBy() []string {
 // ListConsolidationsRequest filters a read of the adjudication log.
 type ListConsolidationsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// owner restricts to one principal's memories. Required for any
-	// caller that is not an operator: the log names what was decided
-	// about somebody's memories, and an unscoped read describes one
-	// person's to another.
+	// owner restricts to one principal's memories. Optional, and
+	// unenforced: this service is reachable only by an operator
+	// credential, which holds the unrestricted audience by design (see
+	// the operator-role-and-cluster-authorization decision), the same
+	// as ListRecords beside it. Should a non-operator caller ever reach
+	// here, scoping becomes a requirement rather than a filter.
 	Owner   string `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
 	Verdict string `protobuf:"bytes,2,opt,name=verdict,proto3" json:"verdict,omitempty"` // merge | keep_distinct | conflict | supersedes
 	Limit   int32  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
@@ -3225,9 +3227,17 @@ func (x *VisibilityChange) GetChanged() bool {
 }
 
 type SetRecordVisibilityResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Changes       []*VisibilityChange    `protobuf:"bytes,1,rep,name=changes,proto3" json:"changes,omitempty"`
-	Applied       bool                   `protobuf:"varint,2,opt,name=applied,proto3" json:"applied,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Changes []*VisibilityChange    `protobuf:"bytes,1,rep,name=changes,proto3" json:"changes,omitempty"`
+	Applied bool                   `protobuf:"varint,2,opt,name=applied,proto3" json:"applied,omitempty"`
+	// error is set when a write failed partway. The changes list still
+	// reports which records were written, because a gRPC error would
+	// discard the response and leave the caller unable to tell what
+	// landed — the worst possible answer for a command whose subject is
+	// who can read a memory.
+	Error string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// failed_id is the record the write stopped on.
+	FailedId      string `protobuf:"bytes,4,opt,name=failed_id,json=failedId,proto3" json:"failed_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3274,6 +3284,20 @@ func (x *SetRecordVisibilityResponse) GetApplied() bool {
 		return x.Applied
 	}
 	return false
+}
+
+func (x *SetRecordVisibilityResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *SetRecordVisibilityResponse) GetFailedId() string {
+	if x != nil {
+		return x.FailedId
+	}
+	return ""
 }
 
 type VectorRecord struct {
@@ -12220,10 +12244,12 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x05owner\x18\x03 \x01(\tR\x05owner\x12*\n" +
 	"\x04from\x18\x04 \x01(\x0e2\x16.lobslaw.v1.VisibilityR\x04from\x12&\n" +
 	"\x02to\x18\x05 \x01(\x0e2\x16.lobslaw.v1.VisibilityR\x02to\x12\x18\n" +
-	"\achanged\x18\x06 \x01(\bR\achanged\"o\n" +
+	"\achanged\x18\x06 \x01(\bR\achanged\"\xa2\x01\n" +
 	"\x1bSetRecordVisibilityResponse\x126\n" +
 	"\achanges\x18\x01 \x03(\v2\x1c.lobslaw.v1.VisibilityChangeR\achanges\x12\x18\n" +
-	"\aapplied\x18\x02 \x01(\bR\aapplied\"\xa2\x04\n" +
+	"\aapplied\x18\x02 \x01(\bR\aapplied\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12\x1b\n" +
+	"\tfailed_id\x18\x04 \x01(\tR\bfailedId\"\xa2\x04\n" +
 	"\fVectorRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\tembedding\x18\x02 \x03(\x02R\tembedding\x12\x12\n" +

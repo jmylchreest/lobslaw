@@ -301,3 +301,29 @@ func TestEveryMemorySubcommandHasALiveForm(t *testing.T) {
 		t.Errorf("memory subcommands still offline-only: %v", memoryOfflineOnly)
 	}
 }
+
+// A write that stops partway must still say what it wrote.
+//
+// Returning a gRPC error discards the response, leaving the caller
+// holding a partial change it cannot see — the worst possible answer
+// for a command whose subject is who can read a memory.
+func TestPartialVisibilityWriteIsReported(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	changes := []*lobslawv1.VisibilityChange{
+		{Id: "a", Kind: "episodic", Owner: "user:john", Changed: true,
+			From: lobslawv1.Visibility_VISIBILITY_PRIVATE, To: lobslawv1.Visibility_VISIBILITY_SHARED},
+		{Id: "b", Kind: "episodic", Owner: "user:john", Changed: false,
+			From: lobslawv1.Visibility_VISIBILITY_PRIVATE, To: lobslawv1.Visibility_VISIBILITY_SHARED},
+	}
+	if err := renderVisibilityChanges(&buf, changes, "node", true, false); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "UPDATED 1 record(s)") {
+		t.Errorf("the count does not report what actually landed:\n%s", out)
+	}
+	if !strings.Contains(out, "a") || !strings.Contains(out, "b") {
+		t.Errorf("both records should be listed:\n%s", out)
+	}
+}

@@ -359,6 +359,7 @@ func memoryForget(args []string) error {
 	}
 
 	if *apply && plan.Total() > 0 {
+		warnOfflineWrite(os.Stdout, "memory forget")
 		if err := memory.ApplyForgetPlan(store, plan); err != nil {
 			return err
 		}
@@ -422,6 +423,7 @@ func runVisibility(name string, args []string, to lobslawv1.Visibility) error {
 	}
 
 	if *apply && pending > 0 {
+		warnOfflineWrite(os.Stdout, name)
 		if err := applyVisibility(store, changes); err != nil {
 			return err
 		}

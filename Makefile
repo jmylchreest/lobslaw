@@ -1,4 +1,4 @@
-.PHONY: proto proto-lint proto-tools build test smoke lint lint-tools tidy hooks hook-tools
+.PHONY: proto proto-lint proto-breaking proto-tools build test smoke lint lint-tools tidy hooks hook-tools
 
 # Go-tool-installed binaries live under $(go env GOPATH)/bin. Prepend to PATH
 # for targets that shell out to them (buf invokes protoc-gen-go via PATH).
@@ -22,6 +22,10 @@ proto: proto-tools
 
 proto-lint:
 	@buf lint
+
+# Detect proto breaking changes against main. Only meaningful on PR branches.
+proto-breaking:
+	@buf breaking --against '.git#branch=main'
 
 build:
 	@go build ./...

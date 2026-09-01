@@ -417,10 +417,12 @@ message GetRecordResponse {
 
 // ListConsolidationsRequest filters a read of the adjudication log.
 message ListConsolidationsRequest {
-  // owner restricts to one principal's memories. Required for any
-  // caller that is not an operator: the log names what was decided
-  // about somebody's memories, and an unscoped read describes one
-  // person's to another.
+  // owner restricts to one principal's memories. Optional, and
+  // unenforced: this service is reachable only by an operator
+  // credential, which holds the unrestricted audience by design (see
+  // the operator-role-and-cluster-authorization decision), the same
+  // as ListRecords beside it. Should a non-operator caller ever reach
+  // here, scoping becomes a requirement rather than a filter.
   string owner = 1;
   string verdict = 2; // merge | keep_distinct | conflict | supersedes
   int32 limit = 3;
@@ -456,6 +458,14 @@ message VisibilityChange {
 message SetRecordVisibilityResponse {
   repeated VisibilityChange changes = 1;
   bool applied = 2;
+  // error is set when a write failed partway. The changes list still
+  // reports which records were written, because a gRPC error would
+  // discard the response and leave the caller unable to tell what
+  // landed — the worst possible answer for a command whose subject is
+  // who can read a memory.
+  string error = 3;
+  // failed_id is the record the write stopped on.
+  string failed_id = 4;
 }
 
 // Retention governs how long a memory record lives before it's a

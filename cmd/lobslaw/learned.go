@@ -328,6 +328,9 @@ func mutateLearned(name string, args []string, fn func(*memory.OfflineSelfTaught
 	defer func() { _ = s.Close() }()
 
 	fmt.Printf("%s\n", path)
+	if *apply {
+		warnOfflineWrite(os.Stdout, name)
+	}
 	if err := fn(memory.NewOfflineSelfTaught(s), positional, *apply); err != nil {
 		return err
 	}

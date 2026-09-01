@@ -378,5 +378,15 @@ func runVisibilityLive(name string, args []string, to lobslawv1.Visibility) erro
 	if err != nil {
 		return err
 	}
-	return renderVisibilityChanges(os.Stdout, res.GetChanges(), node.addr, res.GetApplied(), *asJSON)
+	if err := renderVisibilityChanges(os.Stdout, res.GetChanges(), node.addr,
+		res.GetApplied(), *asJSON); err != nil {
+		return err
+	}
+	// Reported after the changes, not instead of them: the list above
+	// says what was written before the write stopped, which is the
+	// thing an operator needs in order to know where they stand.
+	if res.GetError() != "" {
+		return fmt.Errorf("stopped at %s: %s", res.GetFailedId(), res.GetError())
+	}
+	return nil
 }

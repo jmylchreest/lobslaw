@@ -56,18 +56,18 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # buf breaking needs the full history (or at least the base
+          # branch) to compare against. fetch-depth: 0 is the simplest
+          # correct choice.
+          fetch-depth: 0
 
       - name: setup buf
         uses: bufbuild/buf-action@fd21066df7214747548607aaa45548ba2b9bc1ff # v1.4.0
         with:
           lint: true
-          # No breaking check. Every consumer of this schema is in this
-          # repository and ships with the server, so removing something
-          # still referenced fails the build — earlier and louder than a
-          # lint would. What it did catch that the compiler cannot is a
-          # renumbered field between two running versions; that risk is
-          # real during a rolling restart and is now on the reviewer.
-          breaking: false
+          breaking: true
+          breaking_against: 'https://github.com/${{ github.repository }}.git#branch=main'
           # Off because the job holds contents:read only, and posting a
           # comment needs pull-requests:write. The findings are already
           # in the job log and the check status; a convenience comment

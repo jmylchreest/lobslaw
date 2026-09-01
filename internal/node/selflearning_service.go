@@ -274,6 +274,20 @@ func (s *selfLearningService) RollbackArtefact(ctx context.Context, req *lobslaw
 		return nil, s.errNoStore()
 	}
 
+	// Archive-aware, because history is: reading the versions of an
+	// archived artefact works, and rolling one back would fail with a
+	// bare "not found" that describes neither the artefact nor the
+	// reason. Refused rather than performed — restoring a version of
+	// something that was retired should go through the decision that
+	// retired it, which is what `learned restore` is.
+	if _, err := s.store.Get(id); err != nil {
+		if _, archiveErr := s.findArtefact(id); archiveErr == nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"%s is archived — restore it first with `lobslaw learned restore %s`", id, id)
+		}
+		return nil, artefactError(err)
+	}
+
 	if !req.GetApply() {
 		history, err := s.store.History(id)
 		if err != nil {
