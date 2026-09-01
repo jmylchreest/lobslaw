@@ -38,10 +38,6 @@ func Probe() CapabilityReport {
 		r.KernelVersion = strings.TrimSpace(string(v))
 	}
 
-	// Landlock probe: prctl(PR_GET_SPECULATION_CTRL) is cheap and
-	// always-present; landlock uses its own syscall. go-landlock's
-	// ABIVersion isn't exposed as a pure-lookup function, but we
-	// can check for the presence of the landlock interface files.
 	// The SYSCALL is the authority, not securityfs.
 	//
 	// /sys/kernel/security is not mounted in an ordinary container,
@@ -54,10 +50,13 @@ func Probe() CapabilityReport {
 		r.LandlockSupported = true
 		r.LandlockABIVersion = abi
 	} else if _, err := os.Stat("/sys/kernel/security/landlock"); err == nil {
-		// Kept as a fallback for a kernel whose syscall is blocked
-		// (seccomp, or a runtime that filters it) but whose
-		// securityfs entry is visible.
+		// Fallback for a kernel whose syscall is blocked (seccomp, or
+		// a runtime that filters it) while securityfs is still
+		// readable. The version comes from the file in that case:
+		// reporting support without it would leave the report saying
+		// less than the host could tell us.
 		r.LandlockSupported = true
+		r.LandlockABIVersion = readLandlockABI()
 	}
 
 	// Seccomp probe: SECCOMP_GET_ACTION_AVAIL via seccomp(2) would
