@@ -55,12 +55,19 @@ type Config struct {
 	NodeID    string
 	Functions []types.NodeFunction
 
-	// Version and Commit are the build stamp from main, carried here
-	// so the running node can report what it is. Empty on a build
-	// that was not stamped; debug_version says so rather than
+	// Version, Commit, BuildDate and BuildDirty are the build stamp
+	// from main, carried here so the running node can report what it
+	// is. Empty on a build that was not stamped and whose toolchain
+	// embedded nothing either; debug_version says so rather than
 	// inventing a number.
-	Version string
-	Commit  string
+	//
+	// BuildDirty marks a binary built from a tree with uncommitted
+	// changes, which is the field that stops somebody chasing a bug
+	// through source the running code was not built from.
+	Version    string
+	Commit     string
+	BuildDate  string
+	BuildDirty bool
 
 	ListenAddr    string // where to bind the cluster gRPC listener
 	AdvertiseAddr string // what peers dial; empty falls back to the bound address

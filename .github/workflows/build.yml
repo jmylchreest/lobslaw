@@ -49,6 +49,13 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME}-$(git rev-parse --short HEAD)"
           COMMIT="$(git rev-parse HEAD)"
-          LDFLAGS="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}"
+          # The COMMIT's time, not the wall clock: a release built
+          # twice from one tag must produce the same bytes, and a
+          # timestamp taken at build time is the usual reason it does
+          # not. Local and container builds stamp the real build time,
+          # where reproducibility buys nothing and "when did I last
+          # rebuild this" is the question being asked.
+          BUILD_DATE="$(git show -s --format=%cI HEAD)"
+          LDFLAGS="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
           mkdir -p dist
           go build -trimpath -ldflags "${LDFLAGS}" -o "dist/lobslaw-${GOOS}-${GOARCH}" ./cmd/lobslaw

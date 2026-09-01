@@ -36,6 +36,10 @@ COPY . .
 
 ARG VERSION=dev
 ARG COMMIT=unknown
+# BUILD_DATE is when this image was compiled, RFC3339 UTC. Empty falls
+# back to the commit time the toolchain embeds, so an image built
+# without it still says something true rather than nothing.
+ARG BUILD_DATE=
 
 # Pure-Go build: CGO_ENABLED=0 so the binary is statically linked
 # and runs against any libc without dynamic linking surprises.
@@ -45,7 +49,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
-        -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
+        -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
         -o /out/lobslaw \
         ./cmd/lobslaw
 
