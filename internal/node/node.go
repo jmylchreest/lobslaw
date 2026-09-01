@@ -723,6 +723,32 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 		}
 	}
 
+	// MCP servers from top-level [mcp.servers] config. Plugin
+	// manifests can also declare servers; the loader dedupes by
+	// name (first-registered wins). Failures per server are
+	// isolated — a misconfigured integration doesn't block boot.
+	//
+	// BEFORE the seed pass below, which is what makes mcp_list,
+	// mcp_add and mcp_remove callable at all. The seeder walks the
+	// tool registry and grants tool:exec to every builtin it finds;
+	// these registered sixty-five lines after it had already run, so
+	// they got no rule and every call landed in default-deny. The
+	// symptom was a builtin that existed, appeared in listings, and
+	// refused — with debug_mcp working beside it, because that one
+	// registers in the compute stage and was therefore seen.
+	//
+	// The management builtins register whether or not a server is
+	// configured. They used to be inside the len(Servers) > 0 branch,
+	// which meant mcp_add — the tool for adding a server — did not
+	// exist on a node with none.
+	n.log.Info("mcp: wireup", "configured_servers", len(n.cfg.MCP.Servers))
+	if len(n.cfg.MCP.Servers) > 0 {
+		if err := n.startMCPFromConfig(ctx); err != nil {
+			n.log.Warn("mcp: direct servers failed to start", "err", err)
+		}
+	}
+	n.registerMCPToolsWithCompute()
+
 	// Seed default policy rules for stdlib builtins. Leader-only
 	// and idempotent; followers see them through replication.
 	// Runs after a brief leadership wait so single-node bootstrap
@@ -785,18 +811,6 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// to land and something to materialise it.
 	if err := n.startSkillMountImport(ctx); err != nil {
 		n.log.Warn("skills: mount import not started", "err", err)
-	}
-
-	// MCP servers from top-level [mcp.servers] config. Plugin
-	// manifests can also declare servers; the loader dedupes by
-	// name (first-registered wins). Failures per server are
-	// isolated — a misconfigured integration doesn't block boot.
-	n.log.Info("mcp: wireup", "configured_servers", len(n.cfg.MCP.Servers))
-	if len(n.cfg.MCP.Servers) > 0 {
-		if err := n.startMCPFromConfig(ctx); err != nil {
-			n.log.Warn("mcp: direct servers failed to start", "err", err)
-		}
-		n.registerMCPToolsWithCompute()
 	}
 
 	// Gateway HTTP server, when wired. Runs until ctx is cancelled;
