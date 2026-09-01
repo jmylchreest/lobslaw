@@ -456,6 +456,7 @@ func (n *Node) startMCPFromConfig(ctx context.Context) error {
 	for name, s := range n.cfg.MCP.Servers {
 		servers[name] = mcp.ServerConfig{
 			URL:           s.URL,
+			BearerToken:   s.BearerToken,
 			Headers:       s.Headers,
 			SecretHeaders: s.SecretHeaders,
 			Networks:      s.Networks,

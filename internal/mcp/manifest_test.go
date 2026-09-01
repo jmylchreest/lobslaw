@@ -258,3 +258,47 @@ func TestResolvedHeadersMergesAndHidesRefs(t *testing.T) {
 		t.Errorf("err leaks the ref: %v", err)
 	}
 }
+
+// The secret is the TOKEN, not the header. Storing "Bearer " in the
+// vault would make the entry a header value rather than a credential,
+// and wrong for anything else that wants the same token.
+func TestBearerTokenBecomesAnAuthorizationHeader(t *testing.T) {
+	t.Parallel()
+	cfg := ServerConfig{URL: "https://x.test/sse", BearerToken: "env:TOKEN"}
+	got, err := cfg.ResolvedHeaders(func(string) (string, error) { return "eyJraw", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "Bearer eyJraw" {
+		t.Fatalf("Authorization = %q", got.Get("Authorization"))
+	}
+}
+
+// Two ways to set one header is a collision debugged from the far
+// side of an HTTP 401.
+func TestBearerTokenAndAuthorizationHeaderCollide(t *testing.T) {
+	t.Parallel()
+	for _, cfg := range []ServerConfig{
+		{URL: "https://x.test/sse", BearerToken: "env:T", Headers: map[string]string{"Authorization": "Basic x"}},
+		{URL: "https://x.test/sse", BearerToken: "env:T", SecretHeaders: map[string]string{"authorization": "env:OTHER"}},
+	} {
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "keep one") {
+			t.Errorf("%+v: err = %v; want the collision refused", cfg, err)
+		}
+	}
+}
+
+// An API wanting a raw key in Authorization — some do — must stay
+// expressible without fighting a prefix it never asked for.
+func TestRawAuthorizationHeaderIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	cfg := ServerConfig{URL: "https://x.test/sse",
+		SecretHeaders: map[string]string{"Authorization": "env:RAW"}}
+	got, err := cfg.ResolvedHeaders(func(string) (string, error) { return "raw-key-no-scheme", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "raw-key-no-scheme" {
+		t.Fatalf("Authorization = %q; a verbatim header was rewritten", got.Get("Authorization"))
+	}
+}

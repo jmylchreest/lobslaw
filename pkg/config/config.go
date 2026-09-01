@@ -1081,12 +1081,17 @@ type MCPServerConfig struct {
 	// one — the same rule [[remote]] follows.
 	URL string `koanf:"url,omitempty"`
 
-	// Headers and SecretHeaders authenticate a remote server.
-	// Long-lived tokens belong in SecretHeaders, whose values are
-	// secret refs (env:/file:/kms:) resolved like every other
-	// lobslaw secret; Headers is for anything that is not a
-	// credential. Both are sent on the event stream AND on every
-	// POST: a token on only one is a session that opens and then
+	// BearerToken is a secret ref (env:/file:/<provider>:) whose
+	// value becomes "Authorization: Bearer <value>". The usual case,
+	// and its own field because the secret is the TOKEN: storing
+	// "Bearer " in the vault would make the entry a header value
+	// rather than a credential.
+	BearerToken string `koanf:"bearer_token,omitempty"`
+
+	// Headers and SecretHeaders cover everything else, verbatim —
+	// an API wanting a raw key in Authorization is expressible.
+	// Every header is sent on the event stream AND on each POST: one
+	// carrying it and not the other is a session that opens and then
 	// refuses every call.
 	Headers       map[string]string `koanf:"headers,omitempty"`
 	SecretHeaders map[string]string `koanf:"secret_headers,omitempty"`

@@ -441,8 +441,8 @@ refused at start.
 
 ```toml
 [mcp.servers.kitchenowl]
-url = "https://kitchen.example.net/sse"
-secret_headers = { Authorization = "env:KITCHENOWL_TOKEN" }
+url = "https://kitchen.example.net/mcp/sse"
+bearer_token = "env:KITCHENOWL_TOKEN"
 ```
 
 **Local (stdio):**
@@ -458,7 +458,8 @@ networks = ["api.minimax.chat"]
 | Field | Shape | Meaning |
 |---|---|---|
 | `url` | remote | SSE endpoint. Its host **is** the egress allowlist |
-| `headers` / `secret_headers` | remote | Sent on the stream *and* every POST; secret refs resolve like any other |
+| `bearer_token` | remote | Secret ref → `Authorization: Bearer <value>`. The usual case |
+| `headers` / `secret_headers` | remote | Everything else, verbatim. Sent on the stream *and* every POST |
 | `command` / `args` | stdio | The subprocess to spawn |
 | `env` / `secret_env` | stdio | Its environment |
 | `networks` | stdio | Hosts the subprocess may reach. **Empty means none** |

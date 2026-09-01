@@ -37,9 +37,21 @@ type ServerConfig struct {
 	// Command.
 	URL string `json:"url,omitempty"`
 
-	// Headers and SecretHeaders authenticate a remote server.
-	// SecretHeaders values are secret refs, resolved the same way
-	// SecretEnv is.
+	// BearerToken is a secret ref whose value becomes
+	// "Authorization: Bearer <value>".
+	//
+	// Its own field because the secret is the TOKEN, not the header:
+	// putting "Bearer " into the vault entry makes the stored secret
+	// a header value, which is wrong the moment anything else wants
+	// the same token. Mirrors StaticCredential's Header+Prefix pair
+	// in internal/compute, where the scheme is the code's business
+	// and the credential is the operator's.
+	BearerToken string `json:"bearer_token,omitempty"`
+
+	// Headers and SecretHeaders are for everything else. Values are
+	// used verbatim, so an API wanting a raw key in Authorization —
+	// some do — is expressible without fighting a prefix it never
+	// asked for.
 	Headers       map[string]string `json:"headers,omitempty"`
 	SecretHeaders map[string]string `json:"secret_headers,omitempty"`
 
@@ -181,6 +193,16 @@ func (cfg ServerConfig) Remote() bool { return strings.TrimSpace(cfg.URL) != "" 
 // rather than two orders to remember.
 func (cfg ServerConfig) ResolvedHeaders(resolve SecretResolver) (http.Header, error) {
 	out := http.Header{}
+	if cfg.BearerToken != "" {
+		if resolve == nil {
+			return nil, errors.New("mcp: bearer_token requires a SecretResolver")
+		}
+		val, err := resolve(cfg.BearerToken)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: resolve bearer_token: %w", err)
+		}
+		out.Set("Authorization", "Bearer "+val)
+	}
 	for k, ref := range cfg.SecretHeaders {
 		if resolve == nil {
 			return nil, errors.New("mcp: secret_headers entries require a SecretResolver")
@@ -230,8 +252,19 @@ func (cfg ServerConfig) Validate() error {
 			return fmt.Errorf("mcp: url %q: %w", cfg.URL, err)
 		}
 	}
-	if local && (len(cfg.Headers) > 0 || len(cfg.SecretHeaders) > 0) {
+	if local && (len(cfg.Headers) > 0 || len(cfg.SecretHeaders) > 0 || cfg.BearerToken != "") {
 		return errors.New("mcp: headers are for a remote server; a stdio server takes env")
+	}
+	// Two ways to set one header is a collision waiting to be
+	// debugged from the far side of an HTTP 401.
+	if cfg.BearerToken != "" {
+		for _, m := range []map[string]string{cfg.Headers, cfg.SecretHeaders} {
+			for k := range m {
+				if strings.EqualFold(k, "Authorization") {
+					return errors.New("mcp: bearer_token and an Authorization header both set; keep one")
+				}
+			}
+		}
 	}
 	return nil
 }
