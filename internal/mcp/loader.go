@@ -97,6 +97,10 @@ type managedServer struct {
 	command string
 	args    []string
 	client  *Client
+	// cfg is what the server was started from, kept so a lost
+	// session can be rebuilt without the operator's config being
+	// re-read — and without the credential being anywhere new.
+	cfg ServerConfig
 }
 
 // managedTool is one tool sourced from an MCP server. We keep both
@@ -242,6 +246,7 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 		command: cfg.Command,
 		args:    cfg.Args,
 		client:  client,
+		cfg:     cfg,
 	}
 	l.servers[name] = srv
 	for _, t := range tools {
@@ -262,6 +267,47 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 		"name", name, "server_name", client.ServerInfo().Name,
 		"tools", len(tools))
 	return nil
+}
+
+// reconnect rebuilds one server's client from the config it was
+// started with.
+//
+// Same path as startup, deliberately: a rebuilt session has to be
+// initialised and its tools re-listed, and a second construction path
+// would be the one that drifts. The old client is closed first so a
+// half-open stream does not outlive the entry that owned it.
+func (l *Loader) reconnect(ctx context.Context, name string) error {
+	l.mu.Lock()
+	srv, ok := l.servers[name]
+	if !ok {
+		l.mu.Unlock()
+		return fmt.Errorf("mcp: server %q is not running", name)
+	}
+	cfg := srv.cfg
+	old := srv.client
+	// Tools are re-registered by startServerLocked; dropping them
+	// first keeps the collision check from rejecting its own entries.
+	for qualified, mt := range l.tools {
+		if mt.server == srv {
+			delete(l.tools, qualified)
+		}
+	}
+	delete(l.servers, name)
+	err := l.startServerLocked(ctx, name, cfg)
+	l.mu.Unlock()
+
+	if old != nil {
+		_ = old.Close()
+	}
+	return err
+}
+
+// toolByName reads one tool under the lock.
+func (l *Loader) toolByName(name string) (*managedTool, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	t, ok := l.tools[name]
+	return t, ok
 }
 
 // runInstall executes the configured install command before the
@@ -293,10 +339,10 @@ func (l *Loader) runInstall(ctx context.Context, name string, install []string, 
 // registerServer is the test-facing hook that lets unit tests
 // attach a fake transport-backed client instead of spawning a
 // subprocess. Not intended for production callers.
-func (l *Loader) registerServer(name string, client *Client, tools []Tool) {
+func (l *Loader) registerServer(name string, client *Client, tools []Tool, cfg ServerConfig) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	srv := &managedServer{name: name, client: client}
+	srv := &managedServer{name: name, client: client, cfg: cfg}
 	l.servers[name] = srv
 	for _, t := range tools {
 		raw := t.Name
@@ -361,6 +407,27 @@ func (l *Loader) Invoke(ctx context.Context, req compute.SkillInvokeRequest) (*c
 	start := time.Now()
 
 	res, err := t.server.client.CallTool(ctx, t.rawName, req.Params)
+	if err != nil && errors.Is(err, ErrSessionGone) {
+		// A remote session is not forever: the server restarts, an
+		// idle stream is reaped, a proxy times the connection out.
+		// The endpoint and the credential are still good, so the
+		// recovery is to build a new session — not to report the
+		// integration broken and wait for someone to restart the
+		// node, which is what happened before this existed.
+		//
+		// Once. A server refusing the freshly-built session too is
+		// saying something other than "that id is stale", and
+		// retrying a second time would turn a bad config into a
+		// loop.
+		l.log.Info("mcp: session lost; rebuilding",
+			"server", t.server.name, "tool", t.rawName)
+		if rebuildErr := l.reconnect(ctx, t.server.name); rebuildErr != nil {
+			l.log.Warn("mcp: could not rebuild the session",
+				"server", t.server.name, "err", rebuildErr)
+		} else if fresh, ok := l.toolByName(req.Name); ok {
+			res, err = fresh.server.client.CallTool(ctx, fresh.rawName, req.Params)
+		}
+	}
 	dur := time.Since(start)
 	if err != nil {
 		l.log.Warn("mcp: tool call failed",
