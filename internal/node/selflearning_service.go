@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -203,4 +204,106 @@ func artefactError(err error) error {
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
+}
+
+// ListArtefactHistory returns the versions kept for rollback.
+//
+// Live because the offline form cannot run while the node is up:
+// bbolt holds an exclusive flock on state.db, so `lobslaw learned
+// history` against a running node times out on its own open. Reading
+// what the agent used to think, only by stopping it, is not reading.
+func (s *selfLearningService) ListArtefactHistory(_ context.Context, req *lobslawv1.ListArtefactHistoryRequest) (
+	*lobslawv1.ListArtefactHistoryResponse, error) {
+	id := strings.TrimSpace(req.GetId())
+	if id == "" {
+		return nil, errIDRequired()
+	}
+	if s.store == nil {
+		return nil, s.errNoStore()
+	}
+	current, err := s.findArtefact(id)
+	if err != nil {
+		return nil, artefactError(err)
+	}
+	history, err := s.store.History(current.GetId())
+	if err != nil {
+		return nil, artefactError(err)
+	}
+	return &lobslawv1.ListArtefactHistoryResponse{Current: current, History: history}, nil
+}
+
+// findArtefact looks in the live set and then the archive, matching
+// what the offline form does.
+//
+// Both, because "show me what it used to think" is asked about
+// artefacts that were retired as often as ones still in force, and an
+// id that resolves offline but not live would be a worse answer than
+// the lock error it replaced.
+func (s *selfLearningService) findArtefact(id string) (*lobslawv1.SelfTaughtRecord, error) {
+	if rec, err := s.store.Get(id); err == nil {
+		return rec, nil
+	}
+	archived, err := s.store.List(memory.SelfTaughtQuery{Archived: true})
+	if err != nil {
+		return nil, err
+	}
+	for _, rec := range archived {
+		if rec.GetId() == id {
+			return rec, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", memory.ErrArtefactNotFound, id)
+}
+
+// RollbackArtefact puts a prior version back in force.
+//
+// The dry run is served here rather than in the client, for the same
+// reason the plan is: the client cannot read the history bucket while
+// the node holds the store, so a preview it computed would be of a
+// file it could not open.
+func (s *selfLearningService) RollbackArtefact(ctx context.Context, req *lobslawv1.RollbackArtefactRequest) (
+	*lobslawv1.RollbackArtefactResponse, error) {
+	id := strings.TrimSpace(req.GetId())
+	if id == "" {
+		return nil, errIDRequired()
+	}
+	if req.GetVersion() == 0 {
+		return nil, status.Error(codes.InvalidArgument, "version required")
+	}
+	if s.store == nil {
+		return nil, s.errNoStore()
+	}
+
+	// Archive-aware, because history is: reading the versions of an
+	// archived artefact works, and rolling one back would fail with a
+	// bare "not found" that describes neither the artefact nor the
+	// reason. Refused rather than performed — restoring a version of
+	// something that was retired should go through the decision that
+	// retired it, which is what `learned restore` is.
+	if _, err := s.store.Get(id); err != nil {
+		if _, archiveErr := s.findArtefact(id); archiveErr == nil {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"%s is archived — restore it first with `lobslaw learned restore %s`", id, id)
+		}
+		return nil, artefactError(err)
+	}
+
+	if !req.GetApply() {
+		history, err := s.store.History(id)
+		if err != nil {
+			return nil, artefactError(err)
+		}
+		for _, rec := range history {
+			if rec.GetVersion() == req.GetVersion() {
+				return &lobslawv1.RollbackArtefactResponse{Artefact: rec}, nil
+			}
+		}
+		return nil, status.Errorf(codes.NotFound, "no version %d kept for %s", req.GetVersion(), id)
+	}
+
+	rec, err := s.store.Rollback(ctx, id, req.GetVersion())
+	if err != nil {
+		return nil, artefactError(err)
+	}
+	return &lobslawv1.RollbackArtefactResponse{Artefact: rec, Applied: true}, nil
 }

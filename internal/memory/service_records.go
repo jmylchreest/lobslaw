@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -93,4 +94,100 @@ func (s *Service) GetRecord(_ context.Context, req *lobslawv1.GetRecordRequest) 
 		Episodic:     epi,
 		ReferencedBy: refs,
 	}, nil
+}
+
+// ListConsolidations reads Dream's adjudication log.
+//
+// The offline `lobslaw memory consolidations` cannot run while the
+// node is up: bbolt holds an exclusive flock on state.db for the life
+// of the process, so the CLI's own open times out. An audit trail
+// readable only by stopping the thing it audits is one nobody reads,
+// and this is the whole justification for letting Dream rewrite
+// memory at all.
+func (s *Service) ListConsolidations(_ context.Context, req *lobslawv1.ListConsolidationsRequest) (
+	*lobslawv1.ListConsolidationsResponse, error) {
+	if s.store == nil {
+		return nil, status.Error(codes.FailedPrecondition, "this node has no memory store")
+	}
+	if req == nil {
+		req = &lobslawv1.ListConsolidationsRequest{}
+	}
+	q := ConsolidationQuery{
+		Owner:   req.GetOwner(),
+		Verdict: req.GetVerdict(),
+		Limit:   int(req.GetLimit()),
+	}
+	if secs := req.GetSinceSeconds(); secs > 0 {
+		q.Since = time.Now().Add(-time.Duration(secs) * time.Second)
+	}
+	entries, err := ListConsolidations(s.store, q)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list consolidations: %v", err)
+	}
+	return &lobslawv1.ListConsolidationsResponse{Consolidations: entries}, nil
+}
+
+// SetRecordVisibility shares or unshares records.
+//
+// Planned and applied on the server, even for a dry run. A client
+// cannot plan this while the node is up — bbolt's lock is exclusive —
+// and a preview computed against a different view of the store than
+// the write is a preview of nothing.
+//
+// Refuses an unowned record rather than sharing it. An owner-less
+// record is a leftover or a write path that skipped the field; either
+// way it belongs to nobody, and "shared with everyone" is the one
+// change that cannot be walked back by finding out whose it was.
+func (s *Service) SetRecordVisibility(ctx context.Context, req *lobslawv1.SetRecordVisibilityRequest) (
+	*lobslawv1.SetRecordVisibilityResponse, error) {
+	if s.store == nil {
+		return nil, status.Error(codes.FailedPrecondition, "this node has no memory store")
+	}
+	if req == nil || len(req.GetIds()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "at least one record id required")
+	}
+	to := req.GetVisibility()
+	if to == lobslawv1.Visibility_VISIBILITY_UNSPECIFIED {
+		return nil, status.Error(codes.InvalidArgument, "visibility required")
+	}
+	if req.GetApply() && s.raft != nil && !s.raft.IsLeader() {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"not the raft leader; retry at %s", s.raft.LeaderAddress())
+	}
+
+	plan, err := PlanVisibility(s.store, req.GetIds(), to)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	out := &lobslawv1.SetRecordVisibilityResponse{
+		Changes: make([]*lobslawv1.VisibilityChange, 0, len(plan)),
+		Applied: req.GetApply(),
+	}
+	for _, c := range plan {
+		change := &lobslawv1.VisibilityChange{
+			Id: c.ID, Kind: c.Kind, Owner: c.Owner,
+			From: c.From, To: c.To,
+		}
+		out.Changes = append(out.Changes, change)
+		if c.From == c.To {
+			// Nothing to write. Reported as unchanged either way, so
+			// the plan and the result read the same.
+			continue
+		}
+		if !req.GetApply() {
+			change.Changed = true // what a write would do
+			continue
+		}
+		if err := s.applyEntry(ctx, c.entry()); err != nil {
+			// NOT a gRPC error: that discards the response, and the
+			// caller is then holding a partial write it cannot see.
+			// Which records changed is the answer they need most.
+			out.Error = err.Error()
+			out.FailedId = c.ID
+			return out, nil
+		}
+		change.Changed = true // written, and committed through raft
+	}
+	return out, nil
 }

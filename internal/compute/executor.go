@@ -17,7 +17,6 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
-	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -570,8 +569,3 @@ func scopeOf(c *types.Claims) string {
 	}
 	return c.Scope
 }
-
-// Guard against an unused-import warning during incremental builds
-// — the proto import is reserved for future InvokeTool RPC wiring
-// that plugs this executor into AgentService.InvokeTool.
-var _ = lobslawv1.InvokeToolRequest{}

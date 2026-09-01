@@ -32,9 +32,9 @@ subcommands:
   show <id>        print one vector or episodic record in full
   list             list records, with filters
   forget <filter>  delete records AND the consolidations built from them
-  share <id>...    make owned records readable cluster-wide (offline)
-  unshare <id>...  return shared records to their owner only (offline)
-  consolidations   what Dream merged, superseded or left alone (offline)
+  share <id>...    make owned records readable cluster-wide
+  unshare <id>...  return shared records to their owner only
+  consolidations   what Dream merged, superseded or left alone
   reembed          rewrite every vector with the current model (live)
 
 forget, share and unshare are DRY RUN unless --apply is given.
@@ -48,14 +48,13 @@ be findable and the CLI has no embedder wired.`
 // assert. The bug worth catching is not a missing function — it is
 // `list` quietly reading a laptop-local state.db and reporting an
 // empty store as an empty cluster.
-//
-// share, unshare and consolidations are offline-only for now: they
-// need RPCs that do not exist, and pretending otherwise would be worse
-// than saying so.
 var memoryForms = map[string]struct{ live, offline func([]string) error }{
-	"show":   {live: memoryShowLive, offline: memoryShow},
-	"list":   {live: memoryListLive, offline: memoryList},
-	"forget": {live: memoryForgetLive, offline: memoryForget},
+	"show":           {live: memoryShowLive, offline: memoryShow},
+	"list":           {live: memoryListLive, offline: memoryList},
+	"forget":         {live: memoryForgetLive, offline: memoryForget},
+	"share":          {live: memoryShareLive, offline: memoryShare},
+	"unshare":        {live: memoryUnshareLive, offline: memoryUnshare},
+	"consolidations": {live: memoryConsolidationsLive, offline: memoryConsolidations},
 }
 
 // memoryLiveOnly are the subcommands that REQUIRE a running node.
@@ -68,12 +67,13 @@ var memoryLiveOnly = map[string]func([]string) error{
 	"reembed": memoryReembedLive,
 }
 
-// memoryOfflineOnly are the subcommands with no live form yet.
-var memoryOfflineOnly = map[string]func([]string) error{
-	"share":          memoryShare,
-	"unshare":        memoryUnshare,
-	"consolidations": memoryConsolidations,
-}
+// memoryOfflineOnly are the subcommands with no live form.
+//
+// Empty, and the routing keeps the concept rather than deleting it:
+// the next subcommand that reads a bucket no RPC exposes belongs
+// here, and having nowhere to put it is how one ends up in
+// memoryForms with a live function that opens a file.
+var memoryOfflineOnly = map[string]func([]string) error{}
 
 // memoryRoute returns the implementation for a subcommand, or nil if
 // there is none. Live is the default; --offline is the opt-out.
@@ -359,6 +359,7 @@ func memoryForget(args []string) error {
 	}
 
 	if *apply && plan.Total() > 0 {
+		warnOfflineWrite(os.Stdout, "memory forget")
 		if err := memory.ApplyForgetPlan(store, plan); err != nil {
 			return err
 		}
@@ -422,46 +423,74 @@ func runVisibility(name string, args []string, to lobslawv1.Visibility) error {
 	}
 
 	if *apply && pending > 0 {
+		warnOfflineWrite(os.Stdout, name)
 		if err := applyVisibility(store, changes); err != nil {
 			return err
 		}
 	}
 
-	if *asJSON {
+	wire := make([]*lobslawv1.VisibilityChange, 0, len(changes))
+	for _, c := range changes {
+		wire = append(wire, &lobslawv1.VisibilityChange{
+			Id: c.ID, Kind: c.Kind, Owner: c.Owner,
+			From: c.From, To: c.To, Changed: c.From != c.To,
+		})
+	}
+	return renderVisibilityChanges(os.Stdout, wire, path, *apply && pending > 0, *asJSON)
+}
+
+// renderVisibilityChanges prints the plan, or what was written.
+//
+// Shared by the live and offline forms and rendering the wire type,
+// so the two cannot drift into describing the same operation
+// differently — which for a command whose subject is "who can read
+// this" would be its own kind of harm.
+func renderVisibilityChanges(w io.Writer, changes []*lobslawv1.VisibilityChange,
+	source string, applied, asJSON bool) error {
+	pending := 0
+	for _, c := range changes {
+		if c.GetChanged() {
+			pending++
+		}
+	}
+
+	if asJSON {
 		out := make([]map[string]any, 0, len(changes))
 		for _, c := range changes {
 			out = append(out, map[string]any{
-				"id":      c.ID,
-				"kind":    c.Kind,
-				"owner":   c.Owner,
-				"from":    visLabel(c.From),
-				"to":      visLabel(c.To),
-				"changed": c.From != c.To,
+				"id":      c.GetId(),
+				"kind":    c.GetKind(),
+				"owner":   c.GetOwner(),
+				"from":    visLabel(c.GetFrom()),
+				"to":      visLabel(c.GetTo()),
+				"changed": c.GetChanged(),
 			})
 		}
 		return emitJSON(map[string]any{
-			"applied":  *apply,
-			"state_db": path,
-			"changes":  out,
-			"pending":  pending,
+			"applied": applied,
+			"source":  source,
+			"changes": out,
+			"pending": pending,
 		})
 	}
 
-	fmt.Printf("%s\n", path)
+	_, _ = fmt.Fprintf(w, "%s\n", source)
 	for _, c := range changes {
-		if c.From == c.To {
-			fmt.Printf("  %-8s %s  owner=%s  already %s — no change\n", c.Kind, c.ID, c.Owner, visLabel(c.To))
+		if !c.GetChanged() {
+			_, _ = fmt.Fprintf(w, "  %-8s %s  owner=%s  already %s — no change\n",
+				c.GetKind(), c.GetId(), c.GetOwner(), visLabel(c.GetTo()))
 			continue
 		}
-		fmt.Printf("  %-8s %s  owner=%s  %s → %s\n", c.Kind, c.ID, c.Owner, visLabel(c.From), visLabel(c.To))
+		_, _ = fmt.Fprintf(w, "  %-8s %s  owner=%s  %s → %s\n",
+			c.GetKind(), c.GetId(), c.GetOwner(), visLabel(c.GetFrom()), visLabel(c.GetTo()))
 	}
 	switch {
 	case pending == 0:
-		fmt.Println("\nnothing to do — every record already has the requested visibility.")
-	case *apply:
-		fmt.Printf("\nUPDATED %d record(s).\n", pending)
+		_, _ = fmt.Fprintln(w, "\nnothing to do — every record already has the requested visibility.")
+	case applied:
+		_, _ = fmt.Fprintf(w, "\nUPDATED %d record(s).\n", pending)
 	default:
-		fmt.Printf("\nDRY RUN — nothing was written. Re-run with --apply to change %d record(s).\n", pending)
+		_, _ = fmt.Fprintf(w, "\nDRY RUN — nothing was written. Re-run with --apply to change %d record(s).\n", pending)
 	}
 	return nil
 }

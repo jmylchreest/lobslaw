@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -349,4 +350,89 @@ func filterByOwner(records []*lobslawv1.SelfTaughtRecord, owner string) []*lobsl
 		}
 	}
 	return out
+}
+
+// liveHistory shows the versions kept for rollback, from a running
+// node.
+//
+// The offline form reads the history bucket directly, which it cannot
+// do while the node holds state.db. "What did it used to think" is a
+// question about a running agent, so requiring it be stopped first
+// made the answer unavailable exactly when it was wanted.
+func liveHistory(args []string) error {
+	fs := flag.NewFlagSet("learned history", flag.ExitOnError)
+	var node liveNode
+	node.bind(fs)
+	rest, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return fmt.Errorf("usage: lobslaw learned history <id>")
+	}
+
+	conn, err := node.dial()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := node.ctx()
+	defer cancel()
+	res, err := lobslawv1.NewSelfLearningServiceClient(conn).ListArtefactHistory(ctx,
+		&lobslawv1.ListArtefactHistoryRequest{Id: rest[0]})
+	if err != nil {
+		return err
+	}
+	return renderLearnedHistory(os.Stdout, res.GetCurrent(), res.GetHistory(), node.addr)
+}
+
+// liveRollback puts a prior version back in force.
+//
+// Dry run by default, like the offline form — and the preview comes
+// from the server, so what it describes is what the write would do
+// rather than what a second read of a different store suggests.
+func liveRollback(args []string) error {
+	fs := flag.NewFlagSet("learned rollback", flag.ExitOnError)
+	var node liveNode
+	node.bind(fs)
+	apply := fs.Bool("apply", false, "actually write (default is a dry run)")
+	rest, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 2 {
+		return fmt.Errorf("usage: lobslaw learned rollback <id> <version> [--apply]")
+	}
+	version, err := strconv.ParseUint(rest[1], 10, 32)
+	if err != nil {
+		return fmt.Errorf("version must be a number: %w", err)
+	}
+
+	conn, err := node.dial()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	ctx, cancel := node.ctx()
+	defer cancel()
+	res, err := lobslawv1.NewSelfLearningServiceClient(conn).RollbackArtefact(ctx,
+		&lobslawv1.RollbackArtefactRequest{
+			Id:      rest[0],
+			Version: uint32(version), //nolint:gosec // bounded by ParseUint above
+			Apply:   *apply,
+		})
+	if err != nil {
+		return err
+	}
+	rec := res.GetArtefact()
+	if !res.GetApplied() {
+		fmt.Printf("DRY RUN — would restore %s to v%d: %s\n",
+			rest[0], rec.GetVersion(), firstLine(rec.GetDescription()))
+		fmt.Printf("Re-run with --apply to write it.\n")
+		return nil
+	}
+	fmt.Printf("restored %s to v%d (now v%d)\n", rest[0], version, rec.GetVersion())
+	return nil
 }

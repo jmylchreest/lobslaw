@@ -235,6 +235,14 @@ service SelfLearningService {
   rpc DecideRevision(DecideRevisionRequest) returns (DecideRevisionResponse);
   rpc ArchiveArtefact(ArchiveArtefactRequest) returns (ArchiveArtefactResponse);
   rpc RestoreArtefact(RestoreArtefactRequest) returns (RestoreArtefactResponse);
+
+  // ListArtefactHistory returns the prior versions kept for rollback,
+  // newest first, alongside the version in force.
+  rpc ListArtefactHistory(ListArtefactHistoryRequest) returns (ListArtefactHistoryResponse);
+
+  // RollbackArtefact puts a prior version back in force. With apply
+  // unset it reports what would be restored and writes nothing.
+  rpc RollbackArtefact(RollbackArtefactRequest) returns (RollbackArtefactResponse);
 }
 
 message ListArtefactsRequest {
@@ -288,6 +296,29 @@ message RestoreArtefactResponse {
   SelfTaughtRecord artefact = 1;
 }
 
+message ListArtefactHistoryRequest {
+  string id = 1;
+}
+
+message ListArtefactHistoryResponse {
+  // current is the version in force.
+  SelfTaughtRecord current = 1;
+  // history is the prior versions kept for rollback, newest first.
+  repeated SelfTaughtRecord history = 2;
+}
+
+message RollbackArtefactRequest {
+  string id = 1;
+  uint32 version = 2;
+  bool apply = 3;
+}
+
+message RollbackArtefactResponse {
+  // artefact is what is now in force, or what would be with apply.
+  SelfTaughtRecord artefact = 1;
+  bool applied = 2;
+}
+
 // -----------------------------------------------------------------------------
 // MemoryService — vector + episodic memory + retention + forget
 // -----------------------------------------------------------------------------
@@ -329,6 +360,22 @@ service MemoryService {
   // among their sources — which is exactly what forgetting it would
   // take with it, and finding that out afterwards is too late.
   rpc GetRecord(GetRecordRequest) returns (GetRecordResponse);
+
+  // ListConsolidations reads Dream's adjudication log: what it decided
+  // about each cluster of near-duplicate memories, and why.
+  //
+  // Live because the offline form cannot run while the node is up —
+  // bbolt holds an exclusive lock — and an audit trail readable only
+  // by stopping the thing it audits is one nobody reads.
+  rpc ListConsolidations(ListConsolidationsRequest) returns (ListConsolidationsResponse);
+
+  // SetRecordVisibility shares or unshares records.
+  //
+  // The plan is computed on the server even for a dry run, so the
+  // preview and the write see the same store. A client that planned
+  // locally would be describing a state.db it cannot open while the
+  // node is running.
+  rpc SetRecordVisibility(SetRecordVisibilityRequest) returns (SetRecordVisibilityResponse);
 }
 
 message ListRecordsRequest {
@@ -366,6 +413,59 @@ message GetRecordResponse {
   VectorRecord vector = 1;
   EpisodicRecord episodic = 2;
   repeated string referenced_by = 3;
+}
+
+// ListConsolidationsRequest filters a read of the adjudication log.
+message ListConsolidationsRequest {
+  // owner restricts to one principal's memories. Optional, and
+  // unenforced: this service is reachable only by an operator
+  // credential, which holds the unrestricted audience by design (see
+  // the operator-role-and-cluster-authorization decision), the same
+  // as ListRecords beside it. Should a non-operator caller ever reach
+  // here, scoping becomes a requirement rather than a filter.
+  string owner = 1;
+  string verdict = 2; // merge | keep_distinct | conflict | supersedes
+  int32 limit = 3;
+  // since_seconds drops anything older. Seconds rather than a
+  // timestamp so a caller can say "the last week" without agreeing a
+  // clock with the server.
+  int64 since_seconds = 4;
+}
+
+message ListConsolidationsResponse {
+  repeated ConsolidationRecord consolidations = 1;
+}
+
+message SetRecordVisibilityRequest {
+  repeated string ids = 1;
+  Visibility visibility = 2;
+  // apply writes. Without it the response is a plan and nothing
+  // changes — the same dry-run-by-default the CLI has always had,
+  // moved to where the records are.
+  bool apply = 3;
+}
+
+// VisibilityChange is one record's before and after.
+message VisibilityChange {
+  string id = 1;
+  string kind = 2; // vector | episodic
+  string owner = 3;
+  Visibility from = 4;
+  Visibility to = 5;
+  bool changed = 6;
+}
+
+message SetRecordVisibilityResponse {
+  repeated VisibilityChange changes = 1;
+  bool applied = 2;
+  // error is set when a write failed partway. The changes list still
+  // reports which records were written, because a gRPC error would
+  // discard the response and leave the caller unable to tell what
+  // landed — the worst possible answer for a command whose subject is
+  // who can read a memory.
+  string error = 3;
+  // failed_id is the record the write stopped on.
+  string failed_id = 4;
 }
 
 // Retention governs how long a memory record lives before it's a
@@ -827,87 +927,6 @@ message RequestConfirmationResponse {
   bool approved = 1;
   string chosen_option = 2;
   bool timed_out = 3;
-}
-
-// -----------------------------------------------------------------------------
-// AgentService — tool invocation, tool listing, message processing
-// -----------------------------------------------------------------------------
-
-service AgentService {
-  rpc InvokeTool(InvokeToolRequest) returns (InvokeToolResponse);
-  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
-  rpc ProcessMessage(ProcessMessageRequest) returns (ProcessMessageResponse);
-}
-
-message ToolDef {
-  string name = 1;
-  string path = 2;
-  repeated string argv_template = 3;
-  repeated string capabilities = 4;
-  bool sidecar_only = 5;
-  string risk_tier = 6; // "reversible" | "communicating" | "irreversible"
-}
-
-message InvokeToolRequest {
-  string tool = 1;
-  map<string, string> params = 2;
-  Claims claims = 3;
-  string turn_id = 4;
-}
-message InvokeToolResponse {
-  int32 exit_code = 1;
-  bytes stdout = 2;
-  bytes stderr = 3;
-  string effect_applied = 4; // policy effect that gated the call
-}
-
-message ListToolsRequest {}
-message ListToolsResponse {
-  repeated ToolDef tools = 1;
-}
-
-message ProcessMessageRequest {
-  Claims claims = 1;
-  string text = 2;
-  map<string, string> metadata = 3;
-  string channel = 4;
-  string turn_id = 5;
-}
-message ProcessMessageResponse {
-  string text = 1;
-  map<string, string> metadata = 2;
-  int32 tool_calls = 3;
-  double spend_usd = 4;
-}
-
-// -----------------------------------------------------------------------------
-// ChannelService — inbound update handling + inline confirmation prompts
-// -----------------------------------------------------------------------------
-
-service ChannelService {
-  rpc HandleUpdate(HandleUpdateRequest) returns (HandleUpdateResponse);
-  rpc Prompt(PromptRequest) returns (PromptResponse);
-}
-
-message HandleUpdateRequest {
-  string channel = 1; // "telegram" | "rest" | "websocket"
-  bytes payload = 2; // channel-specific encoded update
-  map<string, string> headers = 3;
-}
-message HandleUpdateResponse {
-  bool accepted = 1;
-}
-
-message PromptRequest {
-  string channel = 1;
-  string user = 2;
-  string question = 3;
-  repeated string options = 4;
-  google.protobuf.Duration timeout = 5;
-}
-message PromptResponse {
-  string chosen_option = 1;
-  bool timed_out = 2;
 }
 
 // -----------------------------------------------------------------------------

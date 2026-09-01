@@ -291,3 +291,102 @@ func printForgetPlan(w io.Writer, source string, matched, swept, missing []strin
 		_, _ = fmt.Fprintln(w, "\nDRY RUN — nothing was written. Re-run with --apply to delete.")
 	}
 }
+
+// memoryConsolidationsLive reads Dream's adjudication log from a
+// running node.
+//
+// The offline form cannot run while the node is up: bbolt holds an
+// exclusive flock for the life of the process, so the CLI's own open
+// times out after five seconds. An audit trail readable only by
+// stopping the thing it audits is one nobody reads — and this log is
+// the whole justification for letting Dream rewrite memory at all.
+func memoryConsolidationsLive(args []string) error {
+	fs := flag.NewFlagSet("memory consolidations", flag.ExitOnError)
+	var node liveNode
+	node.bind(fs)
+	owner := fs.String("owner", "", "restrict to one principal (e.g. user:alice)")
+	verdict := fs.String("verdict", "", "restrict to merge | keep_distinct | conflict | supersedes")
+	since := fs.Duration("since", 0, "only entries newer than this (e.g. 168h)")
+	limit := fs.Int("limit", 50, "maximum entries to show; 0 for all")
+	full := fs.Bool("full", false, "show every source record id rather than a sample")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	client, closeConn, err := memoryClient(&node)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	ctx, cancel := node.ctx()
+	defer cancel()
+	res, err := client.ListConsolidations(ctx, &lobslawv1.ListConsolidationsRequest{
+		Owner:        *owner,
+		Verdict:      *verdict,
+		Limit:        int32(*limit), //nolint:gosec // a CLI --limit is not attacker-controlled
+		SinceSeconds: int64(since.Seconds()),
+	})
+	if err != nil {
+		return err
+	}
+	return renderConsolidations(os.Stdout, res.GetConsolidations(), node.addr, *full, *asJSON)
+}
+
+// memoryShareLive and memoryUnshareLive change visibility on a running
+// node.
+//
+// The plan comes back from the server rather than being computed here,
+// so the dry run and the write see the same store. A client-side plan
+// would have to open state.db, which is the thing it cannot do.
+func memoryShareLive(args []string) error {
+	return runVisibilityLive("memory share", args, lobslawv1.Visibility_VISIBILITY_SHARED)
+}
+
+func memoryUnshareLive(args []string) error {
+	return runVisibilityLive("memory unshare", args, lobslawv1.Visibility_VISIBILITY_PRIVATE)
+}
+
+func runVisibilityLive(name string, args []string, to lobslawv1.Visibility) error {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	var node liveNode
+	node.bind(fs)
+	apply := fs.Bool("apply", false, "actually write; without it this is a dry run")
+	asJSON := fs.Bool("json", false, "emit JSON instead of text")
+	positional, err := parseFlagsAndPositionals(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) == 0 {
+		return errors.New("at least one record id required")
+	}
+
+	client, closeConn, err := memoryClient(&node)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	ctx, cancel := node.ctx()
+	defer cancel()
+	res, err := client.SetRecordVisibility(ctx, &lobslawv1.SetRecordVisibilityRequest{
+		Ids:        positional,
+		Visibility: to,
+		Apply:      *apply,
+	})
+	if err != nil {
+		return err
+	}
+	if err := renderVisibilityChanges(os.Stdout, res.GetChanges(), node.addr,
+		res.GetApplied(), *asJSON); err != nil {
+		return err
+	}
+	// Reported after the changes, not instead of them: the list above
+	// says what was written before the write stopped, which is the
+	// thing an operator needs in order to know where they stand.
+	if res.GetError() != "" {
+		return fmt.Errorf("stopped at %s: %s", res.GetFailedId(), res.GetError())
+	}
+	return nil
+}

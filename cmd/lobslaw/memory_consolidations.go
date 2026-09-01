@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -47,17 +49,28 @@ func memoryConsolidations(args []string) error {
 		return err
 	}
 
-	if *asJSON {
+	return renderConsolidations(os.Stdout, entries, path, *full, *asJSON)
+}
+
+// renderConsolidations prints the log and SAYS WHERE IT CAME FROM.
+//
+// Shared by the live and offline forms, because "no consolidations
+// recorded" is indistinguishable from the wrong store unless the
+// source is on the page — and on a laptop that sentence used to be
+// about a state.db the cluster never wrote.
+func renderConsolidations(w io.Writer, entries []*lobslawv1.ConsolidationRecord,
+	source string, full, asJSON bool) error {
+	if asJSON {
 		out := make([]map[string]any, 0, len(entries))
 		for _, e := range entries {
 			out = append(out, consolidationJSON(e))
 		}
-		return emitJSON(map[string]any{"state_db": path, "consolidations": out})
+		return emitJSON(map[string]any{"source": source, "consolidations": out})
 	}
 
-	fmt.Printf("%s\n", path)
+	_, _ = fmt.Fprintf(w, "%s\n", source)
 	if len(entries) == 0 {
-		fmt.Println("no consolidations recorded.")
+		_, _ = fmt.Fprintln(w, "no consolidations recorded.")
 		return nil
 	}
 	for _, e := range entries {
@@ -71,17 +84,17 @@ func memoryConsolidations(args []string) error {
 			// then failed to apply is the case a user is looking for.
 			status = "  !! NOT APPLIED: " + e.Error
 		}
-		fmt.Printf("%s  %-14s %d records (avg similarity %.2f)%s\n",
+		_, _ = fmt.Fprintf(w, "%s  %-14s %d records (avg similarity %.2f)%s\n",
 			when, e.Verdict, e.MemberCount, e.AvgSimilarity, status)
 		if e.Reason != "" {
-			fmt.Printf("    reason:  %s\n", e.Reason)
+			_, _ = fmt.Fprintf(w, "    reason:  %s\n", e.Reason)
 		}
 		if e.ResultId != "" {
-			fmt.Printf("    result:  %s\n", e.ResultId)
+			_, _ = fmt.Fprintf(w, "    result:  %s\n", e.ResultId)
 		}
-		fmt.Printf("    sources: %s\n", renderSources(e.SourceIds, *full))
+		_, _ = fmt.Fprintf(w, "    sources: %s\n", renderSources(e.SourceIds, full))
 	}
-	fmt.Printf("\n%d entr%s.\n", len(entries), plural(len(entries)))
+	_, _ = fmt.Fprintf(w, "\n%d entr%s.\n", len(entries), plural(len(entries)))
 	return nil
 }
 

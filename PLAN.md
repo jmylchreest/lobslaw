@@ -232,17 +232,6 @@ service PolicyService {
   rpc RequestConfirmation(RequestConfirmationRequest) returns (RequestConfirmationResponse);
 }
 
-service AgentService {
-  rpc InvokeTool(InvokeToolRequest) returns (InvokeToolResponse);
-  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
-  rpc ProcessMessage(ProcessMessageRequest) returns (ProcessMessageResponse);
-}
-
-service ChannelService {
-  rpc HandleUpdate(HandleUpdateRequest) returns (HandleUpdateResponse);
-  rpc Prompt(PromptRequest) returns (PromptResponse);
-}
-
 service PlanService {
   rpc GetPlan(GetPlanRequest) returns (GetPlanResponse);
   rpc AddCommitment(AddCommitmentRequest) returns (AddCommitmentResponse);
@@ -726,7 +715,7 @@ Follow-ups deferred past Phase 6:
 `internal/gateway/rest.go`:
 
 HTTP server on `[gateway.http_port]`. Routes:
-- `POST /v1/messages` — receive message, call `AgentService.ProcessMessage`
+- `POST /v1/messages` — receive message, run the agent turn in-process
 - `GET /v1/plan` — call `PlanService.GetPlan`
 - `GET /healthz` — liveness (process is running)
 - `GET /readyz` — readiness (Raft joined, mounts ready, providers configured)
@@ -745,7 +734,7 @@ Inline keyboard for confirmations: render question as Telegram inline keyboard w
 
 ### 6.3 Channel Prompt
 
-`ChannelService.Prompt(ctx, PromptRequest)` renders on the originating channel. The channel handler (`rest` or `telegram`) decides how to render and poll.
+The channel handler (`rest` or `telegram`) renders the confirmation on the originating channel and decides how to poll. Prompts are held in raft (`BucketPrompts`), so an approval tapped on one node resolves a question asked by another.
 
 Timeout: `[gateway.confirmation_timeout]` (default 5 minutes). On timeout → deny.
 

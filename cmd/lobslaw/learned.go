@@ -35,8 +35,8 @@ subcommands:
   pending              refinements staged against a live artefact
   accept <id>...       apply a staged refinement
   reject <id>...       discard a staged refinement, leaving the live one
-  history <id>         prior versions kept for rollback [offline]
-  rollback <id> <ver>  restore a prior version as the current one [offline]
+  history <id>         prior versions kept for rollback
+  rollback <id> <ver>  restore a prior version as the current one
   approve <id>...      let a proposal out of PROPOSED (live only)
 
 Subcommands marked [offline] have no live form yet. They still run, and
@@ -53,24 +53,24 @@ archive, discard and restore are DRY RUN unless --apply is given.`
 // implementation. A table rather than a switch so the ROUTING is a
 // value a test can assert.
 var learnedForms = map[string]struct{ live, offline func([]string) error }{
-	"list":    {live: liveList, offline: learnedList},
-	"pending": {live: livePending, offline: learnedPending},
-	"accept":  {live: func(a []string) error { return liveDecide(a, true) }, offline: learnedAccept},
-	"reject":  {live: func(a []string) error { return liveDecide(a, false) }, offline: learnedReject},
-	"archive": {live: liveShelve, offline: learnedArchive},
-	"restore": {live: liveRestore, offline: learnedRestore},
+	"list":     {live: liveList, offline: learnedList},
+	"pending":  {live: livePending, offline: learnedPending},
+	"accept":   {live: func(a []string) error { return liveDecide(a, true) }, offline: learnedAccept},
+	"reject":   {live: func(a []string) error { return liveDecide(a, false) }, offline: learnedReject},
+	"archive":  {live: liveShelve, offline: learnedArchive},
+	"restore":  {live: liveRestore, offline: learnedRestore},
+	"history":  {live: liveHistory, offline: learnedHistory},
+	"rollback": {live: liveRollback, offline: learnedRollback},
 }
 
-// learnedOfflineOnly are the subcommands with no live form yet.
+// learnedOfflineOnly are the subcommands with no live form.
 //
-// history and rollback read the version bucket, which no RPC exposes.
-// discard is a bulk archive with a dry run, and composing it out of
-// per-artefact calls would lose the one preview an operator gets
-// before archiving everything.
+// discard is a bulk archive with a dry run over the whole live set.
+// Composing it out of per-artefact calls would make the preview and
+// the writes two different reads of the store, which for a command
+// that archives everything is the wrong place to be approximate.
 var learnedOfflineOnly = map[string]func([]string) error{
-	"history":  learnedHistory,
-	"rollback": learnedRollback,
-	"discard":  learnedDiscard,
+	"discard": learnedDiscard,
 }
 
 // learnedLiveOnly are the subcommands with no offline form.
@@ -328,6 +328,9 @@ func mutateLearned(name string, args []string, fn func(*memory.OfflineSelfTaught
 	defer func() { _ = s.Close() }()
 
 	fmt.Printf("%s\n", path)
+	if *apply {
+		warnOfflineWrite(os.Stdout, name)
+	}
 	if err := fn(memory.NewOfflineSelfTaught(s), positional, *apply); err != nil {
 		return err
 	}
@@ -456,18 +459,25 @@ func learnedHistory(args []string) error {
 		return err
 	}
 
-	fmt.Printf("%s\n", path)
-	fmt.Printf("  v%-4d %-9s (current)  %s\n", current.Version,
-		stateLabel(current.State), firstLine(current.Description))
+	return renderLearnedHistory(os.Stdout, current, versions, path)
+}
+
+// renderLearnedHistory prints the versions and SAYS WHERE THEY CAME
+// FROM. Shared by both forms so they cannot drift.
+func renderLearnedHistory(w io.Writer, current *lobslawv1.SelfTaughtRecord,
+	versions []*lobslawv1.SelfTaughtRecord, source string) error {
+	_, _ = fmt.Fprintf(w, "%s\n", source)
+	_, _ = fmt.Fprintf(w, "  v%-4d %-9s (current)  %s\n", current.GetVersion(),
+		stateLabel(current.GetState()), firstLine(current.GetDescription()))
 	for _, v := range versions {
-		fmt.Printf("  v%-4d %-9s            %s\n", v.Version,
-			stateLabel(v.State), firstLine(v.Description))
+		_, _ = fmt.Fprintf(w, "  v%-4d %-9s            %s\n", v.GetVersion(),
+			stateLabel(v.GetState()), firstLine(v.GetDescription()))
 	}
 	if len(versions) == 0 {
-		fmt.Println("\nno prior versions retained.")
+		_, _ = fmt.Fprintln(w, "\nno prior versions retained.")
 		return nil
 	}
-	fmt.Printf("\nRestore with: lobslaw learned rollback %s <version> --apply\n", positional[0])
+	_, _ = fmt.Fprintf(w, "\nRestore with: lobslaw learned rollback %s <version> --apply\n", current.GetId())
 	return nil
 }
 

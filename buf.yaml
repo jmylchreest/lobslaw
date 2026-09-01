@@ -9,4 +9,21 @@ lint:
 
 breaking:
   use:
-    - FILE
+    # WIRE_JSON, not FILE.
+    #
+    # What can hurt this cluster is two versions of the binary
+    # disagreeing on the wire: a renumbered field, a changed type, a
+    # field deleted without reserving its number. Nodes speak this
+    # protocol to each other and a rolling restart runs mixed
+    # versions, so raft replication is on the line. That is the risk
+    # the lobslaw-proto-toolchain decision names, and WIRE_JSON
+    # catches all of it — verified both ways: renumbering a live field
+    # is reported, and so is deleting one without a reservation.
+    #
+    # FILE additionally forbids deleting a service or a message, which
+    # is source compatibility rather than wire compatibility. Every
+    # consumer of this schema is in this repository, so removing
+    # something still referenced fails the build — earlier and louder
+    # than a lint. FILE's extra strictness fired exactly once, on
+    # deleting two services no node ever registered.
+    - WIRE_JSON

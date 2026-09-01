@@ -275,3 +275,55 @@ func TestAResponseWithNeitherRecordIsNotMistakenForAMiss(t *testing.T) {
 		t.Error("an episodic response did not resolve to an episodic record")
 	}
 }
+
+// Every memory subcommand that reads or writes a bucket must have a
+// live form.
+//
+// The bug this catches is not a missing function — it is
+// `consolidations` quietly reading a laptop-local state.db, or
+// refusing outright because the node it is asking about holds the
+// lock. bbolt's lock is exclusive for the life of the process, so
+// "offline only" means "unavailable while the thing it describes is
+// running".
+func TestEveryMemorySubcommandHasALiveForm(t *testing.T) {
+	t.Parallel()
+	for _, sub := range []string{"show", "list", "forget", "share", "unshare", "consolidations"} {
+		form, ok := memoryForms[sub]
+		if !ok {
+			t.Errorf("memory %s has no live/offline pair", sub)
+			continue
+		}
+		if form.live == nil {
+			t.Errorf("memory %s has no live form", sub)
+		}
+	}
+	if len(memoryOfflineOnly) != 0 {
+		t.Errorf("memory subcommands still offline-only: %v", memoryOfflineOnly)
+	}
+}
+
+// A write that stops partway must still say what it wrote.
+//
+// Returning a gRPC error discards the response, leaving the caller
+// holding a partial change it cannot see — the worst possible answer
+// for a command whose subject is who can read a memory.
+func TestPartialVisibilityWriteIsReported(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	changes := []*lobslawv1.VisibilityChange{
+		{Id: "a", Kind: "episodic", Owner: "user:john", Changed: true,
+			From: lobslawv1.Visibility_VISIBILITY_PRIVATE, To: lobslawv1.Visibility_VISIBILITY_SHARED},
+		{Id: "b", Kind: "episodic", Owner: "user:john", Changed: false,
+			From: lobslawv1.Visibility_VISIBILITY_PRIVATE, To: lobslawv1.Visibility_VISIBILITY_SHARED},
+	}
+	if err := renderVisibilityChanges(&buf, changes, "node", true, false); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "UPDATED 1 record(s)") {
+		t.Errorf("the count does not report what actually landed:\n%s", out)
+	}
+	if !strings.Contains(out, "a") || !strings.Contains(out, "b") {
+		t.Errorf("both records should be listed:\n%s", out)
+	}
+}
