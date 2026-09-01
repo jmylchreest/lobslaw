@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	llsyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"golang.org/x/sys/unix"
 )
 
@@ -37,15 +38,25 @@ func Probe() CapabilityReport {
 		r.KernelVersion = strings.TrimSpace(string(v))
 	}
 
-	// Landlock probe: prctl(PR_GET_SPECULATION_CTRL) is cheap and
-	// always-present; landlock uses its own syscall. go-landlock's
-	// ABIVersion isn't exposed as a pure-lookup function, but we
-	// can check for the presence of the landlock interface files.
-	if _, err := os.Stat("/sys/kernel/security/landlock"); err == nil {
-		r.LandlockSupported = true
-	} else if abi := readLandlockABI(); abi > 0 {
+	// The SYSCALL is the authority, not securityfs.
+	//
+	// /sys/kernel/security is not mounted in an ordinary container,
+	// so reading it reported landlock_supported: false on a host
+	// enforcing landlock perfectly well — and sent a reader looking
+	// for a missing kernel feature when the real fault was the
+	// ruleset being asked for something invalid. The syscall answers
+	// from the kernel the process is actually running under.
+	if abi := landlockABIVersion(); abi > 0 {
 		r.LandlockSupported = true
 		r.LandlockABIVersion = abi
+	} else if _, err := os.Stat("/sys/kernel/security/landlock"); err == nil {
+		// Fallback for a kernel whose syscall is blocked (seccomp, or
+		// a runtime that filters it) while securityfs is still
+		// readable. The version comes from the file in that case:
+		// reporting support without it would leave the report saying
+		// less than the host could tell us.
+		r.LandlockSupported = true
+		r.LandlockABIVersion = readLandlockABI()
 	}
 
 	// Seccomp probe: SECCOMP_GET_ACTION_AVAIL via seccomp(2) would
@@ -83,6 +94,21 @@ func Probe() CapabilityReport {
 // version. Falls back to 0 when landlock isn't compiled in or the
 // kernel is too old. A non-zero value implies Landlock is real and
 // usable for filesystem restriction.
+// landlockABIVersion asks the kernel directly.
+//
+// landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)
+// is a pure query: it creates nothing and changes no process state,
+// which is what makes it safe on a probe path called for a debug
+// tool.
+func landlockABIVersion() int {
+	v, err := llsyscall.LandlockGetABIVersion()
+	if err != nil || v <= 0 {
+		return 0
+	}
+	return v
+}
+
+// readLandlockABI reads the securityfs entry, for the fallback above.
 func readLandlockABI() int {
 	raw, err := os.ReadFile("/sys/kernel/security/landlock/abi_version")
 	if err != nil {
