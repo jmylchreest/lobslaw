@@ -40,14 +40,14 @@ func newFakeSSE(t *testing.T) (*fakeSSEServer, *httptest.Server) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			fl, _ := w.(http.Flusher)
-			fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", f.endpointPath)
+			_, _ = fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", f.endpointPath)
 			if fl != nil {
 				fl.Flush()
 			}
 			for {
 				select {
 				case frame := <-f.flush:
-					fmt.Fprintf(w, "event: message\ndata: %s\n\n", frame)
+					_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", frame)
 					if fl != nil {
 						fl.Flush()
 					}
