@@ -32,6 +32,8 @@ const policyUsage = `lobslaw policy — see and undo the grants an "always" appr
 subcommands:
   approvals          list the rules minted by "always" approvals
   revoke-approvals   delete them, all or by id
+  classify           show what the shell classifier makes of a command,
+                     and what each approval mode would do with it
 
 Both talk to a RUNNING node over mTLS by default — use --context, or
 --addr with the credential flags. Pass --offline to open state.db
@@ -57,6 +59,11 @@ var policyForms = map[string]struct{ live, offline func([]string) error }{
 // policyRoute returns the implementation for a subcommand, or nil if
 // there is none. Live is the default; --offline is the opt-out.
 func policyRoute(sub string, offline bool) func([]string) error {
+	// A local-only subcommand reads no state at all, so --offline is
+	// neither honoured nor needed: there is nothing for it to change.
+	if fn, ok := policyLocalOnly[sub]; ok {
+		return fn
+	}
 	form, ok := policyForms[sub]
 	if !ok {
 		return nil

@@ -27,6 +27,37 @@ import (
 func (n *Node) wireApprovalGates() error {
 	var defaults []types.PolicyRule
 
+	// The condition evaluator goes in FIRST, and before the boot audit
+	// in Start reads the rules. A rule naming a condition key nothing
+	// can evaluate is reported as a defect and — for an allow — skipped
+	// entirely, so registering after the rules were installed would
+	// leave the approval mode silently inert with an error in the log
+	// blaming the rule.
+	//
+	// It is also the first evaluator this tree has ever registered;
+	// until now every conditioned rule was, correctly, a defect.
+	if n.policyEngine != nil {
+		n.policyEngine.RegisterCondition(compute.CommandRiskCondition, compute.EvaluateCommandRisk)
+	}
+
+	// Ahead of ShellApprovalDefault in the slice, because the engine
+	// walks its defaults in order and both sit at the same floor
+	// priority. Nothing for strict: that mode is the ABSENCE of these
+	// rules rather than a second rule restating the one below.
+	mode := n.approvalMode()
+	if n.shellIsRegistered() && n.executor != nil && n.policyEngine != nil {
+		if modeRules := compute.ApprovalModeDefaults(mode); len(modeRules) > 0 {
+			defaults = append(defaults, modeRules...)
+			n.log.Info("compute: shell commands are approved by what they do",
+				"approval_mode", mode,
+				"runs_without_asking", mode.AutoAllowed(),
+				"override", `set [compute] approval_mode = "strict" to ask about everything`)
+		} else {
+			n.log.Info("compute: every shell command is asked about",
+				"approval_mode", mode)
+		}
+	}
+
 	if n.cfg.MemoryWriteApproval {
 		if n.executor == nil || n.policyEngine == nil {
 			// Said out loud. An operator who set the flag and got
@@ -123,4 +154,69 @@ func (n *Node) remoteHostLookup() compute.RemoteHostLookup {
 		h, ok := hosts[name]
 		return h, ok
 	}
+}
+
+// approvalMode reads the operator's posture, falling back loudly.
+//
+// A typo must not quietly select a posture nobody chose, so an
+// unrecognised value is logged as an error and the shipped default
+// applies — the same treatment a malformed rule gets, rather than a
+// silent reinterpretation of what the operator wrote.
+func (n *Node) approvalMode() compute.ApprovalMode {
+	mode, err := compute.ParseApprovalMode(n.cfg.Compute.ApprovalMode)
+	if err != nil {
+		n.log.Error("compute: unrecognised approval_mode; using the default",
+			"error", err, "using", mode)
+	}
+	return mode
+}
+
+// applyCommandRisks installs the operator's classification entries and
+// scratch roots.
+//
+// Merged over the shipped table rather than replacing it — see
+// SetCommandRisks for why this contract differs from the one
+// applyCommandClasses follows.
+func (n *Node) applyCommandRisks() {
+	if paths := n.cfg.Compute.ShellApproval.ScratchPaths; len(paths) > 0 {
+		compute.SetScratchPaths(paths)
+		n.log.Info("compute: deleting under these roots is classified as a write, not a loss",
+			"scratch_paths", compute.ActiveScratchPaths())
+	}
+
+	risks := n.cfg.Compute.CommandRisks
+	if len(risks) == 0 {
+		return
+	}
+	table := make(map[string]compute.CommandRiskRule, len(risks))
+	for name, c := range risks {
+		rule := compute.CommandRiskRule{
+			Tier:        compute.CommandRisk(strings.TrimSpace(c.Tier)),
+			Targets:     c.Targets,
+			ScratchTier: compute.CommandRisk(strings.TrimSpace(c.ScratchTier)),
+		}
+		if len(c.Subcommands) > 0 {
+			rule.Sub = make(map[string]compute.CommandRisk, len(c.Subcommands))
+			for sub, tier := range c.Subcommands {
+				rule.Sub[strings.TrimSpace(sub)] = compute.CommandRisk(strings.TrimSpace(tier))
+			}
+		}
+		if len(c.Escalate) > 0 {
+			rule.Escalate = make(map[string]compute.CommandRisk, len(c.Escalate))
+			for tok, tier := range c.Escalate {
+				rule.Escalate[strings.TrimSpace(tok)] = compute.CommandRisk(strings.TrimSpace(tier))
+			}
+		}
+		// An unrecognised tier is refused rather than stored: it would
+		// match no rule condition and read, from the prompt, exactly
+		// like a command nobody classified.
+		if rule.Tier != "" && !rule.Tier.Valid() {
+			n.log.Error("compute: command_risks entry has an unrecognised tier; ignoring it",
+				"command", name, "tier", c.Tier)
+			continue
+		}
+		table[strings.TrimSpace(name)] = rule
+	}
+	compute.SetCommandRisks(table)
+	n.log.Info("compute: command classification extended by config", "commands", len(table))
 }

@@ -39,6 +39,15 @@ type promptOutcome struct {
 type grantFns struct {
 	session func() string
 	always  func() string
+	// sessionRisk records "everything of this KIND is fine here".
+	//
+	// A separate path rather than a parameter on session, because the
+	// two cover genuinely different sets and the reply has to say
+	// which was given. It exists for the case session cannot help
+	// with: a probing agent writes a different command every time, so
+	// a grant naming one command is never matched again, while one
+	// naming a tier is answered once.
+	sessionRisk func() string
 	// noun is what the channel calls the thing a session grant covers
 	// — Slack says "conversation", Telegram says "chat". Carried
 	// rather than fixed here because it is the one part of the reply
@@ -58,6 +67,12 @@ type grantFns struct {
 // resolving first lets the resume race the grant and ask a second time
 // for the same operation.
 func resolvePromptVerb(verb string, grants grantFns) (promptOutcome, bool) {
+	if grants.sessionRisk == nil {
+		// A channel that does not offer the tier button never renders
+		// the verb either, so a callback carrying it is malformed
+		// input rather than a missing feature.
+		grants.sessionRisk = func() string { return "" }
+	}
 	switch verb {
 	case "approve":
 		return promptOutcome{PromptApproved, PromptScopeOnce, "Approved."}, true
@@ -72,6 +87,14 @@ func resolvePromptVerb(verb string, grants grantFns) (promptOutcome, bool) {
 		}
 		return promptOutcome{PromptApproved, PromptScopeSession,
 			sessionGrantReply(granted, grants.noun)}, true
+
+	case "approve-session-risk":
+		granted := grants.sessionRisk()
+		if granted == "" {
+			return promptOutcome{PromptApproved, PromptScopeOnce, "Approved."}, true
+		}
+		return promptOutcome{PromptApproved, PromptScopeSession,
+			riskGrantReply(granted, grants.noun)}, true
 
 	case "approve-always":
 		granted := grants.always()

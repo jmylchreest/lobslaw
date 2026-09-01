@@ -252,7 +252,7 @@ func TestTheDefaultRuleIsTheLowestPriority(t *testing.T) {
 func TestTheSummaryIsTruncated(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", 5000)
-	got := MemoryWriteSummary(map[string]string{"event": long})
+	got := MemoryWriteSummary(context.Background(), map[string]string{"event": long})
 	if len([]rune(got)) > 250 {
 		t.Errorf("summary is %d runes; a three-screen prompt is one nobody reads", len([]rune(got)))
 	}
@@ -263,7 +263,7 @@ func TestTheSummaryIsTruncated(t *testing.T) {
 
 func TestAnEmptyEventHasNoSummary(t *testing.T) {
 	t.Parallel()
-	if got := MemoryWriteSummary(map[string]string{}); got != "" {
+	if got := MemoryWriteSummary(context.Background(), map[string]string{}); got != "" {
 		t.Errorf("got %q", got)
 	}
 }

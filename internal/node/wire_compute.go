@@ -64,8 +64,9 @@ func (n *Node) applyCommandClasses() {
 
 func (n *Node) wireCompute() error {
 	// Before any gate resolves a command, so the first call is judged
-	// by the operator's table rather than the defaults.
+	// by the operator's tables rather than the defaults.
 	n.applyCommandClasses()
+	n.applyCommandRisks()
 
 	// hooks.Dispatcher from config.Hooks. NewDispatcher expects the
 	// keyed-by-event map shape; the config's HooksConfig already
@@ -296,6 +297,41 @@ func (n *Node) newJudge() *compute.Judge {
 	return compute.NewJudge(n.roleMap.For(compute.RolePreflight), model, n.log)
 }
 
+// newRiskJudge builds the second opinion on commands the static
+// classifier cannot read.
+//
+// Returns nil unless [compute.roles] command_risk names a provider.
+// No fallback to main, deliberately: this runs on every unreadable
+// command, and a deployment discovering its main model billed for that
+// would rightly call it a bug rather than a default.
+func (n *Node) newRiskJudge() *compute.RiskJudge {
+	label := strings.TrimSpace(n.cfg.Compute.Roles.CommandRisk)
+	if label == "" || n.roleMap == nil {
+		return nil
+	}
+	var model string
+	for _, p := range n.cfg.Compute.Providers {
+		if p.Label == label {
+			model = p.Model
+			break
+		}
+	}
+	trust, err := compute.ParseRiskTrust(n.cfg.Compute.ShellApproval.VerdictTrust)
+	if err != nil {
+		// Loud, and falling back to the SAFE setting rather than the
+		// permissive one. A typo here decides whether a model is
+		// allowed to talk a command's tier down.
+		n.log.Error("compute: unrecognised verdict_trust; using the safe setting",
+			"error", err, "using", trust)
+	}
+	judge := compute.NewRiskJudge(n.roleMap.For(compute.RoleCommandRisk), model, trust, n.log)
+	if judge != nil {
+		n.log.Info("compute: unreadable shell commands get a second opinion",
+			"provider", label, "model", model, "verdict_trust", trust)
+	}
+	return judge
+}
+
 // wireLLMProviders builds the LLM clients: injection wins for the main
 // slot; else build a client per configured [[compute.providers]]
 // entry. The returned label→client map is what wireRoleMap resolves
@@ -396,6 +432,9 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 	if err := pickRole(compute.RoleSummariser, n.cfg.Compute.Roles.Summariser); err != nil {
 		return err
 	}
+	if err := pickRole(compute.RoleCommandRisk, n.cfg.Compute.Roles.CommandRisk); err != nil {
+		return err
+	}
 	// If compute.roles.main was set, it overrides first-provider.
 	main := n.llmProvider
 	mainLabel := n.defaultProviderLabel()
@@ -409,6 +448,12 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 		return fmt.Errorf("role map: %w", err)
 	}
 	n.roleMap = rm
+
+	// The second opinion on unreadable commands, once the roles it
+	// resolves through exist. Installed unconditionally — including as
+	// nil — so a node that removed the role stops consulting a model
+	// rather than keeping the previous wiring's judge.
+	compute.SetRiskJudge(n.newRiskJudge())
 	return nil
 }
 

@@ -24,6 +24,21 @@ const (
 	// full replay would cold-write the whole transcript. The role is
 	// what makes that derivable rather than guessed.
 	RoleReview Role = "review"
+
+	// RoleCommandRisk is the model asked what a shell command does when
+	// the static classifier cannot read it.
+	//
+	// Its own role rather than a reuse of preflight, because the two
+	// want opposite things. Preflight is deliberately cheap and fast —
+	// it decides how to route a turn, and being wrong costs routing
+	// precision. This one's answer decides whether somebody is asked
+	// before a command runs, so it wants the best model a deployment
+	// is willing to pay for.
+	//
+	// Never falls back: a judge is built only when this role is
+	// EXPLICITLY assigned, so nobody discovers their main model being
+	// billed for every unreadable command they never asked it about.
+	RoleCommandRisk Role = "command_risk"
 )
 
 // RoleMap is the resolved mapping from roles to LLM clients.

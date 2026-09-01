@@ -407,6 +407,25 @@ func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action
 				"action", action, "resource", resource)
 			return nil
 		}
+		// A grant covering the whole TIER, given in this conversation.
+		//
+		// Consulted only after the exact key misses, so a grant naming
+		// one command is still the narrower and preferred answer. This
+		// is what an agent probing its environment needs: every probe
+		// is a different command, so a per-command grant is never
+		// matched twice, while "read-only is fine here" is answered
+		// once and holds.
+		//
+		// The tier comes off the context, where CheckGate put it from
+		// its own classification of the parameters. A request nobody
+		// classified carries none and takes none of this.
+		if tier, ok := CommandRiskFrom(ctx); ok {
+			if key := RiskGrantResource(tier); key != "" && e.approvals.Granted(ctx, action, key) {
+				e.logger.Debug("policy: risk tier already approved for this conversation",
+					"action", action, "risk", tier, "resource", resource)
+				return nil
+			}
+		}
 		return fmt.Errorf("%w: %s", ErrRequireConfirm, dec.Reason)
 	default:
 		return fmt.Errorf("%w: %s", ErrPolicyDenied, dec.Reason)

@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -77,6 +78,17 @@ func ShellApprovalDefault() types.PolicyRule {
 // resource is still returned in that case, because policy must be able
 // to match on it even when no approval can create a rule for it.
 func ShellGrantResource(params map[string]string) GrantTarget {
+	t := shellGrantTarget(params)
+	// The tier is stamped on EVERY path, including the ones that give
+	// up on deriving a key. Whether a grant can name this command and
+	// what the command does are different questions, and the most
+	// common case — a compound probe with no stable form — is exactly
+	// the one where the tier is the only thing anybody can act on.
+	t.Risk = ClassifyRisk(params["command"]).Tier
+	return t
+}
+
+func shellGrantTarget(params map[string]string) GrantTarget {
 	raw := params["command"]
 	key, ok := NormaliseCommand(raw)
 	if !ok {
@@ -156,15 +168,24 @@ func remoteTarget(action, host, command string) GrantTarget {
 // byte-for-byte, so what the user reads is what gets minted. That is
 // the property the whole design rests on and it is asserted in the
 // tests.
-func ShellCommandSummary(params map[string]string) string {
+func ShellCommandSummary(ctx context.Context, params map[string]string) string {
 	cmd := strings.TrimSpace(params["command"])
 	if cmd == "" {
 		return ""
 	}
-	t := ShellGrantResource(params)
+	t := shellGrantTarget(params)
 	resource, grantable := t.Resource, t.Grantable
 
 	var b strings.Builder
+	// The classification leads, because it is the part somebody can
+	// answer in one glance. It is ADDED to the verbatim command rather
+	// than replacing it: a prompt that only paraphrases what is about
+	// to run cannot be checked, and the whole design rests on the user
+	// seeing exactly what runs.
+	if head := RiskHeadline(VerdictFor(ctx, params)); head != "" {
+		b.WriteString(head)
+		b.WriteString("\n")
+	}
 	b.WriteString("run `")
 	if grantable {
 		b.WriteString(resource)

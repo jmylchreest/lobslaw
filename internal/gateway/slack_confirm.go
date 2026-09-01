@@ -55,18 +55,31 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 	// policy rule asked the question. A budget confirmation is about
 	// spend, so there is no operation to remember and a button that
 	// silenced future budget warnings would be actively harmful.
-	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" && resp.ConfirmationGrantable {
+	perCommand := resp.ConfirmationAction != "" && resp.ConfirmationResource != "" && resp.ConfirmationGrantable
+	// Offered without grantability, for the reason the Telegram path
+	// explains: a command with no stable form cannot be named by a
+	// grant, but its tier can, and those are the commands that repeat.
+	perTier := resp.ConfirmationAction != "" && riskGrantOffered(resp.ConfirmationRisk)
+
+	if perCommand || perTier {
 		subject := grantSubject(req.Claims)
 		h.pendingScopeMu.Lock()
 		h.pendingScope[p.ID] = scopedOperation{
 			action:   resp.ConfirmationAction,
 			resource: resp.ConfirmationResource,
 			subject:  subject,
+			risk:     resp.ConfirmationRisk,
 		}
 		h.pendingScopeMu.Unlock()
 
-		buttons = append(buttons, button("Approve here", "prompt:approve-session:"+p.ID, ""))
-		if subject != "" && h.cfg.ApprovalRules != nil {
+		if perCommand {
+			buttons = append(buttons, button("Approve here", "prompt:approve-session:"+p.ID, ""))
+		}
+		if perTier {
+			buttons = append(buttons,
+				button(riskGrantLabel(resp.ConfirmationRisk), "prompt:approve-session-risk:"+p.ID, ""))
+		}
+		if perCommand && subject != "" && h.cfg.ApprovalRules != nil {
 			buttons = append(buttons, button("Always allow", "prompt:approve-always:"+p.ID, ""))
 		}
 	}
@@ -176,9 +189,10 @@ func (h *SlackHandler) handleInteraction(ctx context.Context, in slackInteractio
 	defer h.takePendingScope(promptID)
 
 	outcome, ok := resolvePromptVerb(verb, grantFns{
-		session: func() string { return h.grantForSession(ctx, promptID, grantSession) },
-		always:  func() string { return h.grantAlways(ctx, promptID) },
-		noun:    "conversation",
+		session:     func() string { return h.grantForSession(ctx, promptID, grantSession) },
+		sessionRisk: func() string { return h.grantForRisk(ctx, promptID, grantSession) },
+		always:      func() string { return h.grantAlways(ctx, promptID) },
+		noun:        "conversation",
 	})
 	if !ok {
 		h.log.Debug("slack: unknown prompt verb", "verb", verb)
@@ -261,6 +275,43 @@ func (h *SlackHandler) isAudience(ctx context.Context, teamID, userID, raisedFor
 // grantForSession records "approved for the rest of this conversation".
 // Reports whether a grant was actually recorded, so the reply does not
 // promise something that did not happen.
+// grantForRisk records "everything of this kind is fine in this
+// conversation", the Slack half of the Telegram path of the same name.
+//
+// Broader than grantForSession's grant and available where that one is
+// not, because a command with no stable form cannot be named by a
+// grant while its tier can. riskGrantOffered is what bounds it.
+func (h *SlackHandler) grantForRisk(ctx context.Context, promptID, convID string) string {
+	op, ok := h.takePendingScope(promptID)
+	if !ok || h.cfg.Approvals == nil || convID == "" {
+		return ""
+	}
+	// Re-checked rather than trusted from the tap: in a Slack channel
+	// the buttons are visible to the room and the action_id is not a
+	// secret.
+	if !riskGrantOffered(op.risk) {
+		h.log.Warn("slack: refusing a tier grant for an unofferable tier",
+			"action", op.action, "risk", op.risk)
+		return ""
+	}
+	key := compute.RiskGrantResource(op.risk)
+	if key == "" {
+		return ""
+	}
+	grantCtx := turn.WithIdentity(ctx, turn.Identity{
+		Channel:   ChannelSlack,
+		ChannelID: convID,
+	})
+	if !h.cfg.Approvals.Grant(grantCtx, op.action, key) {
+		h.log.Warn("slack: could not record tier approval",
+			"action", op.action, "risk", op.risk)
+		return ""
+	}
+	h.log.Info("slack: risk tier approved for this conversation",
+		"action", op.action, "risk", op.risk, "conversation", convID)
+	return op.risk.Label()
+}
+
 func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID string) string {
 	// Taken before the store is checked so the entry is consumed even
 	// when there is nowhere to record the grant. A pending scope that

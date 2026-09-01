@@ -724,22 +724,40 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	// last thing an operator wants on that particular prompt. A shell
 	// command with no stable form is the other case: policy evaluates
 	// it, but no grant could name it, so remembering is not on offer.
-	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" && resp.ConfirmationGrantable {
+	perCommand := resp.ConfirmationAction != "" && resp.ConfirmationResource != "" && resp.ConfirmationGrantable
+	// The tier offer does NOT require grantability, and that is the
+	// whole point of it. The commands with no stable form to remember
+	// are exactly the ones an environment-probing agent produces, so
+	// the per-command button is missing precisely when the repetition
+	// is worst. A tier is nameable even when the command is not.
+	perTier := resp.ConfirmationAction != "" && riskGrantOffered(resp.ConfirmationRisk)
+
+	if perCommand || perTier {
 		subject := grantSubject(req.Claims)
 		h.pendingScopeMu.Lock()
 		h.pendingScope[p.ID] = scopedOperation{
 			action:   resp.ConfirmationAction,
 			resource: resp.ConfirmationResource,
 			subject:  subject,
+			risk:     resp.ConfirmationRisk,
 		}
 		h.pendingScopeMu.Unlock()
-		buttons = append(buttons, map[string]string{
-			"text": "Approve for this chat", "callback_data": "prompt:approve-session:" + p.ID,
-		})
+
+		if perCommand {
+			buttons = append(buttons, map[string]string{
+				"text": "Approve for this chat", "callback_data": "prompt:approve-session:" + p.ID,
+			})
+		}
+		if perTier {
+			buttons = append(buttons, map[string]string{
+				"text":          riskGrantLabel(resp.ConfirmationRisk),
+				"callback_data": "prompt:approve-session-risk:" + p.ID,
+			})
+		}
 		// "Always" is offered only when there is a principal to bind it
 		// to and somewhere to record it. Nil ApprovalRules hides the
 		// button rather than showing one that silently does nothing.
-		if subject != "" && h.cfg.ApprovalRules != nil {
+		if perCommand && subject != "" && h.cfg.ApprovalRules != nil {
 			buttons = append(buttons, map[string]string{
 				"text": "Always allow", "callback_data": "prompt:approve-always:" + p.ID,
 			})
@@ -752,7 +770,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	h.postJSON("sendMessage", map[string]any{
 		"chat_id":      chatID,
 		"text":         "Confirmation required: " + resp.ConfirmationReason,
-		"reply_markup": map[string]any{"inline_keyboard": [][]map[string]string{buttons}},
+		"reply_markup": map[string]any{"inline_keyboard": keyboardRows(buttons)},
 	})
 }
 
@@ -875,9 +893,10 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	var decision PromptDecision
 	var scope PromptScope
 	outcome, ok := resolvePromptVerb(verb, grantFns{
-		session: func() string { return h.grantForSession(ctx, promptID, q) },
-		always:  func() string { return h.grantAlways(ctx, promptID, q) },
-		noun:    "chat",
+		session:     func() string { return h.grantForSession(ctx, promptID, q) },
+		sessionRisk: func() string { return h.grantForRisk(ctx, promptID, q) },
+		always:      func() string { return h.grantAlways(ctx, promptID, q) },
+		noun:        "chat",
 	})
 	if !ok {
 		h.log.Debug("telegram: unknown prompt verb", "verb", verb, "data", q.Data)
@@ -1685,6 +1704,9 @@ func (h *TelegramHandler) takePendingScope(promptID string) (scopedOperation, bo
 type scopedOperation struct {
 	action   string
 	resource string
+	// risk is the tier the operation classified into, for the button
+	// that grants the whole tier rather than this one command.
+	risk compute.CommandRisk
 	// subject is the principal an "always" grant binds to, captured
 	// when the prompt was raised rather than read off the callback.
 	// A callback is attacker-shaped input; the turn that triggered
@@ -1728,6 +1750,48 @@ func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *t
 		"rule_id", rule.Id, "subject", op.subject,
 		"action", op.action, "resource", op.resource)
 	return op.resource
+}
+
+// grantForRisk records "everything of this kind is fine in this chat".
+//
+// A far broader grant than grantForSession's, and deliberately
+// available on prompts where that one is not: a command with no stable
+// form cannot be named by a grant, but its TIER can. What bounds it is
+// the tier itself — riskGrantOffered refuses to render this for
+// anything that reaches the network, deletes, changes the machine, or
+// could not be read, so the broadest thing anybody can tap is "local
+// writes, here, until this conversation ends".
+//
+// Returns the tier's label so the reply can name what was given.
+func (h *TelegramHandler) grantForRisk(ctx context.Context, promptID string, q *tgCallbackQuery) string {
+	op, ok := h.takePendingScope(promptID)
+	if !ok || h.cfg.Approvals == nil || q.Message == nil {
+		return ""
+	}
+	// Re-checked here rather than trusted from the tap. The button is
+	// only rendered for the offerable tiers, but a callback is
+	// attacker-shaped input and the id in it is guessable.
+	if !riskGrantOffered(op.risk) {
+		h.log.Warn("telegram: refusing a tier grant for an unofferable tier",
+			"action", op.action, "risk", op.risk)
+		return ""
+	}
+	key := compute.RiskGrantResource(op.risk)
+	if key == "" {
+		return ""
+	}
+	grantCtx := turn.WithIdentity(ctx, turn.Identity{
+		Channel:   "telegram",
+		ChannelID: strconv.FormatInt(q.Message.Chat.ID, 10),
+	})
+	if !h.cfg.Approvals.Grant(grantCtx, op.action, key) {
+		h.log.Warn("telegram: could not record tier approval",
+			"action", op.action, "risk", op.risk)
+		return ""
+	}
+	h.log.Info("telegram: risk tier approved for this chat",
+		"action", op.action, "risk", op.risk, "chat_id", q.Message.Chat.ID)
+	return op.risk.Label()
 }
 
 // grantForSession records "approved for the rest of this chat" for the
