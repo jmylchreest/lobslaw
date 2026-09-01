@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,5 +177,128 @@ func TestResolvedEnvPropagatesResolverError(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("resolver error should propagate")
+	}
+}
+
+// The two shapes are mutually exclusive, and "both" is the one worth
+// refusing loudly: install runs a command before the transport
+// opens, so a url plus an install would execute something for a
+// server that never spawns.
+func TestServerConfigRefusesMixedShapes(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		cfg  ServerConfig
+		want string
+	}{
+		{"both", ServerConfig{URL: "https://x.test/sse", Command: "uvx"}, "not both"},
+		{"neither", ServerConfig{}, "needs a url"},
+		{"remote with install", ServerConfig{URL: "https://x.test/sse", Install: []string{"uv", "tool"}}, "spawns nothing"},
+		{"remote with env", ServerConfig{URL: "https://x.test/sse", Env: map[string]string{"A": "b"}}, "takes headers"},
+		{"remote with networks", ServerConfig{URL: "https://x.test/sse", Networks: []string{"x.test"}}, "its allowlist"},
+		{"stdio with headers", ServerConfig{Command: "uvx", Headers: map[string]string{"A": "b"}}, "takes env"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if err == nil {
+				t.Fatalf("%+v was accepted", tc.cfg)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %q; want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// Both shapes on their own are fine.
+func TestServerConfigAcceptsEitherShape(t *testing.T) {
+	t.Parallel()
+	for _, cfg := range []ServerConfig{
+		{URL: "https://x.test/sse", SecretHeaders: map[string]string{"Authorization": "env:TOKEN"}},
+		{Command: "uvx", Args: []string{"server"}, Networks: []string{"api.example.test"}},
+	} {
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%+v was refused: %v", cfg, err)
+		}
+	}
+}
+
+// A secret header resolves like every other secret, and a failure
+// names the HEADER rather than the ref — a resolver error on a bad
+// env name would otherwise print the name of a variable holding a
+// token.
+func TestResolvedHeadersMergesAndHidesRefs(t *testing.T) {
+	t.Parallel()
+	cfg := ServerConfig{
+		URL:           "https://x.test/sse",
+		Headers:       map[string]string{"X-Client": "lobslaw"},
+		SecretHeaders: map[string]string{"Authorization": "env:KITCHENOWL_TOKEN"},
+	}
+	got, err := cfg.ResolvedHeaders(func(ref string) (string, error) {
+		if ref == "env:KITCHENOWL_TOKEN" {
+			return "Bearer live-token", nil
+		}
+		return "", fmt.Errorf("unknown ref")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "Bearer live-token" || got.Get("X-Client") != "lobslaw" {
+		t.Fatalf("headers = %v", got)
+	}
+
+	_, err = ServerConfig{URL: "https://x.test/sse",
+		SecretHeaders: map[string]string{"Authorization": "env:MISSING"}}.
+		ResolvedHeaders(func(string) (string, error) { return "", fmt.Errorf("no such variable") })
+	if err == nil || !strings.Contains(err.Error(), "Authorization") {
+		t.Errorf("err = %v; want it to name the header", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "MISSING") {
+		t.Errorf("err leaks the ref: %v", err)
+	}
+}
+
+// The secret is the TOKEN, not the header. Storing "Bearer " in the
+// vault would make the entry a header value rather than a credential,
+// and wrong for anything else that wants the same token.
+func TestBearerTokenBecomesAnAuthorizationHeader(t *testing.T) {
+	t.Parallel()
+	cfg := ServerConfig{URL: "https://x.test/sse", BearerToken: "env:TOKEN"}
+	got, err := cfg.ResolvedHeaders(func(string) (string, error) { return "eyJraw", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "Bearer eyJraw" {
+		t.Fatalf("Authorization = %q", got.Get("Authorization"))
+	}
+}
+
+// Two ways to set one header is a collision debugged from the far
+// side of an HTTP 401.
+func TestBearerTokenAndAuthorizationHeaderCollide(t *testing.T) {
+	t.Parallel()
+	for _, cfg := range []ServerConfig{
+		{URL: "https://x.test/sse", BearerToken: "env:T", Headers: map[string]string{"Authorization": "Basic x"}},
+		{URL: "https://x.test/sse", BearerToken: "env:T", SecretHeaders: map[string]string{"authorization": "env:OTHER"}},
+	} {
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "keep one") {
+			t.Errorf("%+v: err = %v; want the collision refused", cfg, err)
+		}
+	}
+}
+
+// An API wanting a raw key in Authorization — some do — must stay
+// expressible without fighting a prefix it never asked for.
+func TestRawAuthorizationHeaderIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	cfg := ServerConfig{URL: "https://x.test/sse",
+		SecretHeaders: map[string]string{"Authorization": "env:RAW"}}
+	got, err := cfg.ResolvedHeaders(func(string) (string, error) { return "raw-key-no-scheme", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("Authorization") != "raw-key-no-scheme" {
+		t.Fatalf("Authorization = %q; a verbatim header was rewritten", got.Get("Authorization"))
 	}
 }

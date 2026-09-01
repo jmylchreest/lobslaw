@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/tools"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -164,10 +165,48 @@ func (l *Loader) StartDirect(ctx context.Context, servers map[string]ServerConfi
 	return nil
 }
 
+// transportFor opens the wire to one server.
+//
+// Two shapes, one difference that matters: a subprocess is handed
+// HTTPS_PROXY and may ignore it, while a remote server is reached
+// through the egress client itself, so the role's ACL is enforced
+// rather than suggested. Both carry role "mcp/<name>" either way, so
+// the ACL is written once and reads the same for both.
+func (l *Loader) transportFor(ctx context.Context, name string, cfg ServerConfig, env []string) (Transport, error) {
+	if cfg.Remote() {
+		header, err := cfg.ResolvedHeaders(l.secretResolver)
+		if err != nil {
+			return nil, err
+		}
+		return NewSSETransport(ctx, SSEConfig{
+			Client: egress.ForMCP(name).HTTPClient(),
+			URL:    cfg.URL,
+			Header: header,
+		})
+	}
+
+	if strings.TrimSpace(cfg.Command) == "" {
+		return nil, errors.New("needs either a command (stdio) or a url (remote)")
+	}
+	env = append(env, l.proxyEnv("mcp/"+name)...)
+	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+	if len(env) > 0 {
+		cmd.Env = env
+	}
+	return NewStdioTransport(cmd)
+}
+
 // startServerLocked spawns one server. Separated so tests can
 // substitute a fake transport by calling the inner method with a
 // pre-wired client. Caller must hold l.mu.
 func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerConfig) error {
+	// Before the secret resolver and before install: a malformed
+	// server should be reported as malformed, not as whichever
+	// side-effect it reached first.
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+
 	env, err := cfg.ResolvedEnv(l.secretResolver)
 	if err != nil {
 		return err
@@ -179,12 +218,7 @@ func (l *Loader) startServerLocked(ctx context.Context, name string, cfg ServerC
 		}
 	}
 
-	env = append(env, l.proxyEnv("mcp/"+name)...)
-	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
-	if len(env) > 0 {
-		cmd.Env = env
-	}
-	transport, err := NewStdioTransport(cmd)
+	transport, err := l.transportFor(ctx, name, cfg, env)
 	if err != nil {
 		return fmt.Errorf("mcp: server %q: %w", name, err)
 	}

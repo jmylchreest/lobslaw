@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +32,34 @@ type Manifest struct {
 // and Telegram use. Everything is a concrete string in argv/env by
 // the time the subprocess starts.
 type ServerConfig struct {
+	// URL makes this a REMOTE server over MCP's HTTP+SSE binding
+	// rather than a spawned subprocess. Mutually exclusive with
+	// Command.
+	URL string `json:"url,omitempty"`
+
+	// BearerToken is a secret ref whose value becomes
+	// "Authorization: Bearer <value>".
+	//
+	// Its own field because the secret is the TOKEN, not the header:
+	// putting "Bearer " into the vault entry makes the stored secret
+	// a header value, which is wrong the moment anything else wants
+	// the same token. Mirrors StaticCredential's Header+Prefix pair
+	// in internal/compute, where the scheme is the code's business
+	// and the credential is the operator's.
+	BearerToken string `json:"bearer_token,omitempty"`
+
+	// Headers and SecretHeaders are for everything else. Values are
+	// used verbatim, so an API wanting a raw key in Authorization —
+	// some do — is expressible without fighting a prefix it never
+	// asked for.
+	Headers       map[string]string `json:"headers,omitempty"`
+	SecretHeaders map[string]string `json:"secret_headers,omitempty"`
+
+	// Networks is the host allowlist for a stdio server's own
+	// outbound traffic. A remote server needs none: its URL host is
+	// the allowlist.
+	Networks []string `json:"networks,omitempty"`
+
 	Command   string            `json:"command"`
 	Args      []string          `json:"args,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
@@ -151,3 +181,90 @@ func (cfg ServerConfig) ResolvedEnv(resolve SecretResolver) ([]string, error) {
 // value. Injected so pkg/config.ResolveSecret (or any scheme) can
 // front the MCP loader without this package depending on it.
 type SecretResolver func(ref string) (string, error)
+
+// Remote reports whether this server is reached over HTTP rather
+// than spawned.
+func (cfg ServerConfig) Remote() bool { return strings.TrimSpace(cfg.URL) != "" }
+
+// ResolvedHeaders merges plain and secret headers for a remote
+// server, resolving refs the same way ResolvedEnv does.
+//
+// Plain wins on collision, matching ResolvedEnv: one rule for both,
+// rather than two orders to remember.
+func (cfg ServerConfig) ResolvedHeaders(resolve SecretResolver) (http.Header, error) {
+	out := http.Header{}
+	if cfg.BearerToken != "" {
+		if resolve == nil {
+			return nil, errors.New("mcp: bearer_token requires a SecretResolver")
+		}
+		val, err := resolve(cfg.BearerToken)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: resolve bearer_token: %w", err)
+		}
+		out.Set("Authorization", "Bearer "+val)
+	}
+	for k, ref := range cfg.SecretHeaders {
+		if resolve == nil {
+			return nil, errors.New("mcp: secret_headers entries require a SecretResolver")
+		}
+		val, err := resolve(ref)
+		if err != nil {
+			// The KEY, never the ref's value: a resolver failure on a
+			// bad path would otherwise print the path, and on a bad
+			// env name the name of a variable holding a token.
+			return nil, fmt.Errorf("mcp: resolve secret header %q: %w", k, err)
+		}
+		out.Set(k, val)
+	}
+	for k, v := range cfg.Headers {
+		out.Set(k, v)
+	}
+	return out, nil
+}
+
+// Validate refuses a server that is neither shape or both.
+//
+// Both is the one worth refusing loudly: install runs a command
+// before the transport opens, so a config carrying a url AND an
+// install would execute something for a server that never spawns —
+// a subprocess nobody declared, on a path nobody reads.
+func (cfg ServerConfig) Validate() error {
+	remote := cfg.Remote()
+	local := strings.TrimSpace(cfg.Command) != ""
+
+	switch {
+	case remote && local:
+		return errors.New("mcp: a server takes either url (remote) or command (stdio), not both")
+	case !remote && !local:
+		return errors.New("mcp: a server needs a url (remote) or a command (stdio)")
+	}
+	if remote {
+		if len(cfg.Install) > 0 {
+			return errors.New("mcp: install is for a stdio server's binary; a remote server spawns nothing")
+		}
+		if len(cfg.Env) > 0 || len(cfg.SecretEnv) > 0 {
+			return errors.New("mcp: env is for a stdio server's process; a remote server takes headers")
+		}
+		if len(cfg.Networks) > 0 {
+			return errors.New("mcp: networks is for a stdio server; a remote server's url is its allowlist")
+		}
+		if _, err := url.Parse(cfg.URL); err != nil {
+			return fmt.Errorf("mcp: url %q: %w", cfg.URL, err)
+		}
+	}
+	if local && (len(cfg.Headers) > 0 || len(cfg.SecretHeaders) > 0 || cfg.BearerToken != "") {
+		return errors.New("mcp: headers are for a remote server; a stdio server takes env")
+	}
+	// Two ways to set one header is a collision waiting to be
+	// debugged from the far side of an HTTP 401.
+	if cfg.BearerToken != "" {
+		for _, m := range []map[string]string{cfg.Headers, cfg.SecretHeaders} {
+			for k := range m {
+				if strings.EqualFold(k, "Authorization") {
+					return errors.New("mcp: bearer_token and an Authorization header both set; keep one")
+				}
+			}
+		}
+	}
+	return nil
+}
