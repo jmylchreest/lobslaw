@@ -3,6 +3,7 @@ package node
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -155,7 +156,7 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 	in.WebSearchHosts = webSearchEgressHosts(n)
 
 	in.CallbackHosts = callbackEgressHosts(n)
-	in.MCPServerNetworks = map[string][]string{}
+	in.MCPServerNetworks = mcpEgressHosts(n)
 	in.SkillNetworks = skillNetworks(n)
 	return in
 }
@@ -361,4 +362,63 @@ func remoteAllowRanges(n *Node) []string {
 		}
 	}
 	return out
+}
+
+// mcpEgressHosts derives each MCP server's allowlist.
+//
+// The field this fills existed, and was set to an empty map
+// unconditionally. Nothing registered a role, so every request from
+// an MCP server fell through to DefaultAllowedHosts — empty in
+// production — and the effect was the worst of both: a server that
+// honoured HTTPS_PROXY was denied every call, and one that ignored
+// proxy env was unrestricted. The mechanism was built and switched
+// off by one line.
+//
+// A REMOTE server's allowlist is its own URL host. Nothing else needs
+// writing and there is no second list to drift, which is the rule
+// [[remote]] already follows.
+//
+// A STDIO server's is whatever it declares in networks. Empty means
+// it may reach nothing — the correct default for a subprocess whose
+// outbound traffic nobody has thought about, and the one that makes
+// the omission visible as a denial rather than as unbounded access.
+func mcpEgressHosts(n *Node) map[string][]string {
+	out := make(map[string][]string, len(n.cfg.MCP.Servers))
+	for name, s := range n.cfg.MCP.Servers {
+		if s.Disabled {
+			continue
+		}
+		if strings.TrimSpace(s.URL) != "" {
+			host := hostOf(s.URL)
+			if host == "" {
+				n.log.Warn("mcp: server url has no host; it will reach nothing",
+					"server", name, "url", s.URL)
+				out[name] = nil
+				continue
+			}
+			// Said out loud, because a private address is the shape a
+			// self-hosted MCP server takes every time and
+			// smokescreen refuses RFC1918 whatever the hostname ACL
+			// says. Same trap the web_search allowlist warns about.
+			n.log.Info("mcp: remote server pinned to its own host",
+				"server", name, "host", host)
+			out[name] = []string{host}
+			continue
+		}
+		out[name] = s.Networks
+		if len(s.Networks) == 0 {
+			n.log.Info("mcp: stdio server declares no networks; its outbound calls are denied",
+				"server", name, "hint", "set networks = [\"host\"] under [mcp.servers.<name>]")
+		}
+	}
+	return out
+}
+
+// hostOf returns the hostname of a URL, without the port.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }

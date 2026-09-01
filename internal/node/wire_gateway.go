@@ -455,12 +455,16 @@ func (n *Node) startMCPFromConfig(ctx context.Context) error {
 	servers := make(map[string]mcp.ServerConfig, len(n.cfg.MCP.Servers))
 	for name, s := range n.cfg.MCP.Servers {
 		servers[name] = mcp.ServerConfig{
-			Command:   s.Command,
-			Args:      s.Args,
-			Env:       s.Env,
-			SecretEnv: s.SecretEnv,
-			Disabled:  s.Disabled,
-			Install:   s.Install,
+			URL:           s.URL,
+			Headers:       s.Headers,
+			SecretHeaders: s.SecretHeaders,
+			Networks:      s.Networks,
+			Command:       s.Command,
+			Args:          s.Args,
+			Env:           s.Env,
+			SecretEnv:     s.SecretEnv,
+			Disabled:      s.Disabled,
+			Install:       s.Install,
 		}
 	}
 	return n.mcpLoader.StartDirect(ctx, servers)

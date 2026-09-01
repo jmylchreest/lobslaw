@@ -1066,6 +1066,45 @@ type MCPConfig struct {
 // (env:, file:, or a [[secrets.providers]] label) the same way every
 // other lobslaw secret does.
 type MCPServerConfig struct {
+	// URL makes this a REMOTE server, reached over MCP's HTTP+SSE
+	// binding instead of spawned as a subprocess. Mutually exclusive
+	// with command.
+	//
+	// A remote server is the more confinable of the two, which
+	// inverts the usual intuition: lobslaw makes the HTTP call
+	// itself under egress role "mcp/<name>", so the host allowlist
+	// is enforced in-process and the server cannot opt out. The
+	// HTTPS_PROXY handed to a subprocess is a hint it may ignore.
+	//
+	// The URL's host IS the allowlist. Nothing else needs writing,
+	// and there is no second list to drift out of step with this
+	// one — the same rule [[remote]] follows.
+	URL string `koanf:"url,omitempty"`
+
+	// Headers and SecretHeaders authenticate a remote server.
+	// Long-lived tokens belong in SecretHeaders, whose values are
+	// secret refs (env:/file:/kms:) resolved like every other
+	// lobslaw secret; Headers is for anything that is not a
+	// credential. Both are sent on the event stream AND on every
+	// POST: a token on only one is a session that opens and then
+	// refuses every call.
+	Headers       map[string]string `koanf:"headers,omitempty"`
+	SecretHeaders map[string]string `koanf:"secret_headers,omitempty"`
+
+	// Networks is the host allowlist for a STDIO server's own
+	// outbound traffic, applied via the HTTPS_PROXY the subprocess
+	// is spawned with.
+	//
+	// Empty means the server may reach nothing. That is the correct
+	// default and it is also a change in behaviour: the field the
+	// ACL builder reads was populated with an empty map
+	// unconditionally, so no mcp/<name> role was ever registered and
+	// every well-behaved server was denied while every server that
+	// ignored proxy env was unrestricted.
+	//
+	// A remote server needs no entry here: its URL supplies one.
+	Networks []string `koanf:"networks,omitempty"`
+
 	Command   string            `koanf:"command"`
 	Args      []string          `koanf:"args,omitempty"`
 	Env       map[string]string `koanf:"env,omitempty"`

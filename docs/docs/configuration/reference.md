@@ -432,12 +432,59 @@ type      = "rest"
 
 ## `[mcp.servers.<name>]`
 
+Two shapes, and a server is one or the other. `command` spawns a
+subprocess and talks to it over stdio; `url` reaches a server someone
+else is running, over MCP's HTTP+SSE binding. Declaring both is
+refused at start.
+
+**Remote (SSE):**
+
+```toml
+[mcp.servers.kitchenowl]
+url = "https://kitchen.example.net/sse"
+secret_headers = { Authorization = "env:KITCHENOWL_TOKEN" }
+```
+
+**Local (stdio):**
+
 ```toml
 [mcp.servers.minimax]
 command  = "uvx"
 args     = ["minimax-mcp-server"]
 env      = { MINIMAX_API_KEY = "ref:env:MINIMAX_API_KEY" }
+networks = ["api.minimax.chat"]
 ```
+
+| Field | Shape | Meaning |
+|---|---|---|
+| `url` | remote | SSE endpoint. Its host **is** the egress allowlist |
+| `headers` / `secret_headers` | remote | Sent on the stream *and* every POST; secret refs resolve like any other |
+| `command` / `args` | stdio | The subprocess to spawn |
+| `env` / `secret_env` | stdio | Its environment |
+| `networks` | stdio | Hosts the subprocess may reach. **Empty means none** |
+| `install` | stdio | Runs once before spawning; pin the version — this is the supply-chain boundary |
+| `disabled` | both | Declared but not started |
+
+### Egress is pinned, both ways
+
+Every server gets egress role `mcp/<name>`, and the two shapes enforce
+it differently:
+
+- **Remote** — lobslaw makes the HTTP call itself through that role, so
+  the allowlist is enforced in-process and the server cannot opt out.
+- **Stdio** — the subprocess is handed `HTTPS_PROXY` pointing at the
+  proxy. That is a hint a subprocess may ignore, so a stdio server is
+  the *less* confined of the two.
+
+A stdio server with no `networks` reaches nothing. That is deliberate:
+an omission should show up as a denial rather than as unbounded
+access.
+
+**A self-hosted server on your LAN needs one more setting.** Smokescreen
+refuses RFC1918 destinations whatever the hostname allowlist says, so
+`https://kitchen.local/sse` also needs its range in
+`security.egress_allow_ranges`. Without it the failure is a proxy
+rejection naming neither the range nor the setting that fixes it.
 
 ## `[scheduler]`
 
