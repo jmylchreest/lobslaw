@@ -1,13 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
 // Seeing what the classifier thinks, without a chat window.
@@ -41,6 +46,8 @@ func policyClassify(args []string) error {
 	asJSON := fs.Bool("json", false, "emit JSON")
 	scratch := fs.String("scratch", "",
 		"comma-separated scratch roots, as [compute.shell_approval] scratch_paths would set")
+	withModel := fs.String("with-model", "",
+		"also ask the [compute.roles] command_risk model, using this config file")
 	// parseFlagsAndPositionals rather than fs.Parse: a command line is
 	// the positional here, and `classify 'rm -rf /' --json` must not
 	// read --json as part of the command being classified.
@@ -56,11 +63,20 @@ func policyClassify(args []string) error {
 		compute.SetScratchPaths(strings.Split(*scratch, ","))
 	}
 
-	// The static verdict only. No model is consulted even when one is
-	// configured: this command exists to show what the classifier
-	// knows on its own, and a verdict that silently depended on a
-	// provider being reachable would not be reproducible.
+	// The static verdict is always shown on its own first: it is
+	// reproducible, and a reader needs to see what the classifier knew
+	// unaided before seeing what a model did to it.
 	v := compute.ClassifyRisk(command)
+
+	// --with-model is the only way to exercise the model path without
+	// going through a real confirmation. That matters more than it
+	// sounds: every failure mode of that path is silent — a timeout, a
+	// reply outside the enum, a low-confidence hedge — and all of them
+	// look exactly like "the model agreed with the classifier".
+	var modelErr error
+	if *withModel != "" {
+		v, modelErr = classifyWithModel(*withModel, command, v)
+	}
 
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -84,6 +100,9 @@ func policyClassify(args []string) error {
 		})
 	}
 
+	if modelErr != nil {
+		fmt.Fprintf(os.Stderr, "model verdict unavailable: %v\n\n", modelErr)
+	}
 	fmt.Println(compute.RiskHeadline(v))
 	if len(v.Segments) > 1 {
 		fmt.Println()
@@ -126,4 +145,76 @@ func modeOutcomes(tier compute.CommandRisk) map[string]string {
 		out[string(mode)] = outcome
 	}
 	return out
+}
+
+// classifyWithModel asks the configured command_risk model and folds
+// its verdict in exactly as the running node would.
+//
+// It builds the one provider that role names rather than a whole node:
+// the question is "does this role answer, in time, in the enum", and
+// standing up raft to find out would make the answer depend on a dozen
+// things that are not being asked about.
+func classifyWithModel(configPath, command string, static compute.RiskVerdict) (compute.RiskVerdict, error) {
+	cfg, err := config.Load(config.LoadOptions{Path: configPath})
+	if err != nil {
+		return static, err
+	}
+	role := cfg.Compute.Roles.CommandRisk
+	if role.Provider == "" {
+		return static, errors.New("[compute.roles] command_risk names no provider, so no model is asked")
+	}
+	var pc config.ProviderConfig
+	found := false
+	for _, p := range cfg.Compute.Providers {
+		if p.Label == role.Provider {
+			pc, found = p, true
+			break
+		}
+	}
+	if !found {
+		return static, fmt.Errorf("command_risk names provider %q, which is not declared", role.Provider)
+	}
+	apiKey, err := config.ResolveSecret(pc.APIKeyRef)
+	if err != nil {
+		return static, fmt.Errorf("resolve %s: %w", pc.APIKeyRef, err)
+	}
+	client, err := compute.NewLLMClientFromProvider(pc, apiKey)
+	if err != nil {
+		return static, err
+	}
+
+	timeout := role.Timeout
+	if timeout == 0 {
+		timeout = cfg.Compute.ModelTimeout
+	}
+	trust, terr := compute.ParseRiskTrust(cfg.Compute.ShellApproval.VerdictTrust)
+	if terr != nil {
+		fmt.Fprintf(os.Stderr, "%v; using %q\n", terr, trust)
+	}
+
+	judge := compute.NewRiskJudge(client, pc.Model, trust, timeout, slog.New(slog.DiscardHandler))
+	started := time.Now()
+	out := compute.AdjudicateWith(context.Background(), static, command, judge)
+	elapsed := time.Since(started)
+
+	fmt.Fprintf(os.Stderr, "model: provider=%s model=%s trust=%s timeout=%s took=%s\n",
+		role.Provider, pc.Model, trust, timeoutLabel(timeout), elapsed.Round(10*time.Millisecond))
+	if !out.FromModel {
+		// Said plainly, because this is the outcome that looks like
+		// success and is not: the static verdict stands and nothing
+		// says why unless somebody asks.
+		fmt.Fprintln(os.Stderr,
+			"model: verdict not used — it declined, timed out, answered outside the enum, "+
+				"was low-confidence, or agreed with the classifier")
+	}
+	return out, nil
+}
+
+// timeoutLabel names the deadline in force, saying so when nothing was
+// configured and the call site's own constant applies.
+func timeoutLabel(d time.Duration) string {
+	if d == 0 {
+		return "(call-site default)"
+	}
+	return d.String()
 }

@@ -7,6 +7,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/go-hclog v1.6.2
 	github.com/hashicorp/raft v1.7.3
@@ -43,7 +44,6 @@ require (
 	github.com/armon/go-proxyproto v0.0.0-20170620220930-48572f11356f // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/fatih/color v1.13.0 // indirect
-	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect

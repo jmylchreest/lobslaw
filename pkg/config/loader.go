@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	koanftoml "github.com/knadh/koanf/parsers/toml/v2"
 	koanfenv "github.com/knadh/koanf/providers/env/v2"
 	koanffile "github.com/knadh/koanf/providers/file"
@@ -72,7 +74,10 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 
 	cfg := &Config{}
-	if err := k.UnmarshalWithConf("", cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
+	if err := k.UnmarshalWithConf("", cfg, koanf.UnmarshalConf{
+		Tag:           "koanf",
+		DecoderConfig: decoderConfig(),
+	}); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal: %w", types.ErrInvalidConfig, err)
 	}
 	cfg.resolvedPath = path
@@ -422,4 +427,54 @@ func findConfigPath(explicit string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// Two shapes for one key.
+//
+// koanf builds its own decoder when handed none, and that default is
+// load-bearing: StringToTimeDurationHookFunc is what turns "5m" into a
+// time.Duration, and TextUnmarshallerHookFunc is what lets
+// types.TrustTier read "public". Supplying a DecoderConfig REPLACES
+// that default wholesale, so both have to be restated here — dropping
+// either would silently stop parsing values this config is full of.
+//
+// Result and TagName are deliberately absent: UnmarshalWithConf sets
+// them itself after this returns, and setting them here would be two
+// places deciding one thing.
+func decoderConfig() *mapstructure.DecoderConfig {
+	return &mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.TextUnmarshallerHookFunc(),
+			stringToRoleConfigHook(),
+		),
+		Metadata:         nil,
+		WeaklyTypedInput: true,
+	}
+}
+
+// stringToRoleConfigHook lets a role be written as a bare provider
+// label or as a table.
+//
+//	main         = "qwen-flash"
+//	command_risk = { provider = "qwen-flash", timeout = "15s" }
+//
+// The string form is not a legacy shape to be migrated off: it is the
+// right way to write a role that has nothing to say beyond which
+// provider serves it, which is most of them. Widening it here rather
+// than asking every deployment to rewrite working config is the whole
+// point — a config change that breaks every existing file to add an
+// optional field is a bad trade.
+func stringToRoleConfigHook() mapstructure.DecodeHookFuncType {
+	roleType := reflect.TypeOf(RoleConfig{})
+	return func(from, to reflect.Type, data any) (any, error) {
+		if to != roleType || from.Kind() != reflect.String {
+			return data, nil
+		}
+		label, ok := data.(string)
+		if !ok {
+			return data, nil
+		}
+		return RoleConfig{Provider: label}, nil
+	}
 }

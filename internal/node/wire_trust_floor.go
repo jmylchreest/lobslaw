@@ -48,8 +48,8 @@ func (n *Node) primaryProviderLabel() string {
 	if len(n.cfg.Compute.Providers) == 0 {
 		return ""
 	}
-	if n.cfg.Compute.Roles.Main != "" {
-		return n.cfg.Compute.Roles.Main
+	if n.cfg.Compute.Roles.Main.Provider != "" {
+		return n.cfg.Compute.Roles.Main.Provider
 	}
 	return n.cfg.Compute.Providers[0].Label
 }

@@ -101,8 +101,15 @@ Answer "unknown" if any part is something you cannot read: a variable whose valu
 
 confidence: "low" whenever you are guessing. A low-confidence answer is thrown away, so guessing gains you nothing.`
 
-// riskJudgeMaxTokens bounds the reply. The answer is one small object.
-const riskJudgeMaxTokens = 64
+// riskJudgeMaxTokens bounds the reply.
+//
+// The answer is one small object — but a reasoning model spends its
+// budget thinking before writing it. qwen3.8-max was measured emitting
+// 449 completion tokens (434 of them reasoning) for a single verdict,
+// and 1200+ is not unusual. A cap sized for the ANSWER truncates those
+// models mid-thought on any endpoint that counts reasoning against it,
+// which discards the verdict with nothing to show for the call.
+const riskJudgeMaxTokens = 2048
 
 // riskJudgeTimeout bounds the call.
 //
@@ -124,13 +131,16 @@ type RiskJudge struct {
 	provider LLMProvider
 	model    string
 	trust    RiskTrust
-	log      *slog.Logger
+	// timeout overrides riskJudgeTimeout when the operator set one for
+	// this role. Zero keeps the constant.
+	timeout time.Duration
+	log     *slog.Logger
 }
 
 // NewRiskJudge wires a judge. A nil provider gives a nil judge:
 // absence rather than a disabled flag. An unrecognised trust setting
 // falls back to advisory rather than to the permissive one.
-func NewRiskJudge(provider LLMProvider, model string, trust RiskTrust, log *slog.Logger) *RiskJudge {
+func NewRiskJudge(provider LLMProvider, model string, trust RiskTrust, timeout time.Duration, log *slog.Logger) *RiskJudge {
 	if provider == nil {
 		return nil
 	}
@@ -140,7 +150,7 @@ func NewRiskJudge(provider LLMProvider, model string, trust RiskTrust, log *slog
 	if log == nil {
 		log = slog.Default()
 	}
-	return &RiskJudge{provider: provider, model: model, trust: trust, log: log}
+	return &RiskJudge{provider: provider, model: model, trust: trust, timeout: timeout, log: log}
 }
 
 // Trust reports what this judge is permitted to move.
@@ -161,7 +171,7 @@ func (j *RiskJudge) Classify(ctx context.Context, command string) (CommandRisk, 
 		return "", false
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, riskJudgeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, orDefault(j.timeout, riskJudgeTimeout))
 	defer cancel()
 
 	resp, err := j.provider.Chat(ctx, ChatRequest{
@@ -238,16 +248,18 @@ func ActiveRiskJudge() *RiskJudge { return activeRiskJudge.Load() }
 // This is what the prompt and the gate both read, so there is exactly
 // one place the two verdicts are combined.
 func VerdictFor(ctx context.Context, params map[string]string) RiskVerdict {
-	return adjudicate(ctx, ClassifyRisk(params["command"]), params["command"], ActiveRiskJudge())
+	return AdjudicateWith(ctx, ClassifyRisk(params["command"]), params["command"], ActiveRiskJudge())
 }
 
-// adjudicate combines the static verdict with a model's, under the
+// AdjudicateWith combines a static verdict with a model's, under the
 // trust setting.
 //
 // Split out from VerdictFor so the combination rules — the part that
 // decides whether something runs unasked — are testable without a
-// provider.
-func adjudicate(ctx context.Context, static RiskVerdict, command string, judge *RiskJudge) RiskVerdict {
+// provider, and so `lobslaw policy classify --with-model` folds the
+// verdict in through THIS code rather than a second implementation
+// that could disagree with the running node.
+func AdjudicateWith(ctx context.Context, static RiskVerdict, command string, judge *RiskJudge) RiskVerdict {
 	if judge == nil {
 		return static
 	}

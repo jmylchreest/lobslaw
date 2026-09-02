@@ -487,7 +487,7 @@ func (n *Node) newRelatednessJudge() gateway.RelatednessJudge {
 	if n.roleMap == nil {
 		return nil
 	}
-	label := n.cfg.Compute.Roles.Preflight
+	label := n.cfg.Compute.Roles.Preflight.Provider
 	if label == "" {
 		label = n.primaryProviderLabel()
 	}

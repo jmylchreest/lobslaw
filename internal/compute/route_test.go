@@ -41,7 +41,7 @@ func routedAgent(t *testing.T, chains []config.ChainConfig, judgment string) (*A
 	}
 	var judge *Judge
 	if judgment != "" {
-		judge = NewJudge(&scriptedLLM{reply: judgment}, "tiny", slog.Default())
+		judge = NewJudge(&scriptedLLM{reply: judgment}, "tiny", 0, slog.Default())
 	}
 	a := &Agent{cfg: AgentConfig{
 		Provider:     &scriptedProvider{label: "unused", calls: calls},

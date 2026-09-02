@@ -520,6 +520,13 @@ type ComputeConfig struct {
 	// it, matching disabled_tools.
 	CommandClasses map[string]CommandClassConfig `koanf:"command_classes,omitempty"`
 
+	// ModelTimeout is the default deadline for every role that does not
+	// set its own. Zero leaves each call site on its own compiled-in
+	// default rather than imposing one number on work whose shapes
+	// differ by two orders of magnitude — a routing hint and a
+	// full transcript replay are not the same wait.
+	ModelTimeout time.Duration `koanf:"model_timeout,omitempty"`
+
 	// ApprovalMode is which shell commands are worth asking about:
 	// "strict", "standard" or "trusted".
 	//
@@ -711,15 +718,21 @@ type ContextConfig struct {
 type RolesConfig struct {
 	// Main is the provider for the user-facing agent turn. Empty
 	// → first provider (back-compat).
-	Main string `koanf:"main,omitempty"`
+	Main RoleConfig `koanf:"main,omitempty"`
 
 	// Preflight is the cheap model used for context-engine
 	// classification and prompt tailoring. Empty → Main.
-	Preflight string `koanf:"preflight,omitempty"`
+	Preflight RoleConfig `koanf:"preflight,omitempty"`
 
 	// Summariser is the model used for dream consolidation /
 	// episodic summarisation. Empty → Main.
-	Summariser string `koanf:"summariser,omitempty"`
+	Summariser RoleConfig `koanf:"summariser,omitempty"`
+
+	// Review is the post-turn fork that asks whether anything about
+	// this turn is worth keeping. Empty → Main, which is also the
+	// cheap case: the same model reads a warm prefix cache, so a full
+	// replay is mostly cache reads.
+	Review RoleConfig `koanf:"review,omitempty"`
 
 	// CommandRisk is the model asked what a shell command does when
 	// the static classifier cannot read it — a loop, a substitution, a
@@ -730,10 +743,41 @@ type RolesConfig struct {
 	// runs on commands nobody could read, which is precisely the case
 	// an operator has not budgeted for unless they said so.
 	//
-	// Worth the strongest model a deployment will pay for. Its verdict
-	// is what consent is given against, and how far it is trusted is
-	// [compute.shell_approval] verdict_trust.
-	CommandRisk string `koanf:"command_risk,omitempty"`
+	// Worth the strongest model a deployment will pay for — but only
+	// one that ANSWERS IN TIME. This runs while a confirmation is being
+	// composed, so its timeout is short by default, and a reasoning
+	// model that spends thirty seconds thinking has its verdict thrown
+	// away every time with nothing but a debug line to say so. Measure
+	// before choosing: `lobslaw policy classify --with-model`.
+	CommandRisk RoleConfig `koanf:"command_risk,omitempty"`
+}
+
+// RoleConfig is which provider serves a role, and how long that role
+// is allowed to take.
+//
+// The timeout belongs to the ROLE rather than to the provider because
+// the deadline you can afford is a property of what the call is FOR,
+// not of the endpoint. One provider commonly serves several roles —
+// the same model answering a turn can afford two minutes, and has
+// fifteen seconds when it is classifying a shell command somebody is
+// waiting on. A per-provider timeout cannot express that at all.
+//
+// Written either way:
+//
+//	main         = "qwen-flash"
+//	command_risk = { provider = "qwen-flash", timeout = "15s" }
+//
+// The bare string is the same as { provider = "..." } and stays valid
+// — every config in existence uses it. See stringToRoleConfigHook.
+type RoleConfig struct {
+	// Provider is a [[compute.providers]] label.
+	Provider string `koanf:"provider,omitempty"`
+
+	// Timeout bounds one call made for this role. Zero takes
+	// [compute] model_timeout; zero there takes the call site's own
+	// compiled-in default, which differs by purpose and is the right
+	// answer for anybody who has not thought about it.
+	Timeout time.Duration `koanf:"timeout,omitempty"`
 }
 
 // WebSearchConfig selects which declared search backends the

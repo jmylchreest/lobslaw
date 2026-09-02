@@ -190,13 +190,13 @@ func (d *debugInspector) DebugProviders() []map[string]any {
 	roles := d.n.cfg.Compute.Roles
 	for _, p := range providers {
 		var assignedRoles []string
-		if roles.Main == p.Label {
+		if roles.Main.Provider == p.Label {
 			assignedRoles = append(assignedRoles, "main")
 		}
-		if roles.Preflight == p.Label {
+		if roles.Preflight.Provider == p.Label {
 			assignedRoles = append(assignedRoles, "preflight")
 		}
-		if roles.Summariser == p.Label {
+		if roles.Summariser.Provider == p.Label {
 			assignedRoles = append(assignedRoles, "summariser")
 		}
 		out = append(out, map[string]any{

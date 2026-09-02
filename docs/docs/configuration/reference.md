@@ -386,6 +386,21 @@ $ lobslaw policy classify 'rm -rf /tmp/build'
 writes · scratch_path · rm
 ```
 
+Add `--with-model <config>` to also ask the `command_risk` model and see whether its
+verdict was actually used. This is the only way to exercise that path outside a live
+confirmation, and it matters because every failure mode there is silent — a timeout, a
+reply outside the enum, a low-confidence hedge, and genuine agreement all look identical
+from the outside:
+
+```console
+$ lobslaw policy classify --with-model ~/.config/lobslaw/config.toml 'for f in a b; do stat $f; done'
+model: provider=fast-model model=… trust=resolve_unknown timeout=15s took=3.24s
+read-only · reads_only · stat · model
+```
+
+A `model: verdict not used` line means the static verdict stood. If `took` sits close to
+the timeout, that is why.
+
 See [the policy engine](/security/policy-engine) for the tiers, the approval modes and the
 optional model verdict.
 
