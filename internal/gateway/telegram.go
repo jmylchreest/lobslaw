@@ -275,6 +275,12 @@ type TelegramHandler struct {
 	// drive a real deadline without waiting 25 seconds for one.
 	pollTimeout time.Duration
 	pollSlack   time.Duration
+	// pollBackoff is the first wait after a failed getUpdates,
+	// doubling from there. A field for the same reason the two above
+	// are: a test that has to sit through a real one-second backoff
+	// is a test whose deadline is a guess about CI hardware, and the
+	// guess is what fails.
+	pollBackoff time.Duration
 	base        string
 
 	// pendingScope remembers which operation each prompt is about, so
@@ -433,6 +439,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		client:       client,
 		pollTimeout:  pollLongTimeout,
 		pollSlack:    pollDeadlineSlack,
+		pollBackoff:  pollInitialBackoff,
 		base:         base,
 		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
 		pendingScope: make(map[string]scopedOperation),
@@ -1380,7 +1387,7 @@ func (h *TelegramHandler) pollLoop(ctx context.Context) error {
 
 	var (
 		nextOffset = h.loadPersistedOffset(ctx)
-		backoff    = pollInitialBackoff
+		backoff    = h.pollBackoff
 		// firstFlush handles the no-persisted-offset case: rather
 		// than re-processing Telegram's 24h buffered backlog (which
 		// causes duplicate agent turns + duplicate replies on every
@@ -1451,7 +1458,7 @@ func (h *TelegramHandler) pollLoop(ctx context.Context) error {
 			backoff = nextBackoff(backoff)
 			continue
 		}
-		backoff = pollInitialBackoff
+		backoff = h.pollBackoff
 
 		if firstFlush {
 			if len(updates) > 0 {
