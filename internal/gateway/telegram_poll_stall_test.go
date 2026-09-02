@@ -24,9 +24,13 @@ func TestPollSurvivesAStalledRequest(t *testing.T) {
 	h := newPollHarness(t, agent, [][]byte{batch})
 
 	// A deadline short enough to fire in a test, and a stall that
-	// outlasts it.
+	// outlasts it. The backoff comes down with them: sitting through
+	// a real one-second wait made the assertion's own deadline a
+	// guess about how loaded the runner is, and the guess is what
+	// failed — this test flaked in CI for exactly that reason.
 	h.handler.pollTimeout = 20 * time.Millisecond
 	h.handler.pollSlack = 20 * time.Millisecond
+	h.handler.pollBackoff = 10 * time.Millisecond
 	h.mu.Lock()
 	h.stallOnce = true
 	h.stallFor = 500 * time.Millisecond
