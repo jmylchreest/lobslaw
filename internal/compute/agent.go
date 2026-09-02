@@ -1563,6 +1563,16 @@ func IsRetryableProviderError(ctx context.Context, err error) bool {
 		// THIS endpoint can't serve THIS model right now; the
 		// backup chain may have a model with compliant providers.
 		"no endpoints available", "data policy",
+		// An egress denial is about THIS provider's host, and the
+		// backup's host has its own ACL entry — so it is provider-
+		// specific in exactly the way the chain exists to route
+		// around. Classified permanent, one unlisted host took the
+		// whole turn down while a configured, allowed backup sat
+		// idle.
+		//
+		// Smokescreen answers "Request rejected by proxy"; the 407
+		// covers a proxy that answers with the status alone.
+		"rejected by proxy", "407",
 	} {
 		if strings.Contains(msg, sig) {
 			return true
