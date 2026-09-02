@@ -3,6 +3,7 @@ package compute
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Role names the functional slot a caller wants a provider for.
@@ -57,6 +58,46 @@ type RoleMap struct {
 	// label would name whichever matched first.
 	labels    map[Role]string
 	mainLabel string
+
+	// timeouts is the deadline each role may take, and defaultTimeout
+	// the fallback for roles that named none. Zero at both means "no
+	// opinion", which leaves the call site on its own constant.
+	//
+	// Deliberately NOT walked through resolve(). A role that falls back
+	// to main's PROVIDER has not thereby inherited main's patience: the
+	// classifier runs on the same model as the turn and can afford two
+	// orders of magnitude less time, which is the entire reason this
+	// lives on the role.
+	timeouts       map[Role]time.Duration
+	defaultTimeout time.Duration
+}
+
+// SetTimeouts installs the per-role deadlines and the global default.
+//
+// A setter rather than a fifth constructor parameter: the two existing
+// constructors are about which CLIENT serves a role, every caller has
+// one of them wired, and threading an optional map through both to
+// serve one caller would make the common case pay for the rare one.
+func (rm *RoleMap) SetTimeouts(defaultTimeout time.Duration, per map[Role]time.Duration) {
+	rm.defaultTimeout = defaultTimeout
+	rm.timeouts = per
+}
+
+// TimeoutFor returns the deadline configured for a role, or zero when
+// nothing was configured.
+//
+// Zero is a real answer and means "use your own default". Each call
+// site has a compiled-in constant chosen for what that call actually
+// does — 8s for a routing hint, 90s for a transcript replay — and
+// those are better numbers than any single global could be.
+func (rm *RoleMap) TimeoutFor(role Role) time.Duration {
+	if rm == nil {
+		return 0
+	}
+	if t, ok := rm.timeouts[role]; ok && t > 0 {
+		return t
+	}
+	return rm.defaultTimeout
 }
 
 // NewRoleMap builds a RoleMap from explicit role-to-client
@@ -185,4 +226,16 @@ func LookupProviderLabel(labels []string, label string) (int, error) {
 		}
 	}
 	return -1, fmt.Errorf("%w: %q (configured providers: %v)", ErrUnknownRoleLabel, label, labels)
+}
+
+// orDefault returns configured when it is positive, else fallback.
+//
+// The shape every timeout call site needs: zero from config means "no
+// opinion", not "no time at all", and reading that as a deadline would
+// cancel the call before it was made.
+func orDefault(configured, fallback time.Duration) time.Duration {
+	if configured > 0 {
+		return configured
+	}
+	return fallback
 }

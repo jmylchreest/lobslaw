@@ -41,7 +41,7 @@ func (s *scriptedLLM) Chat(_ context.Context, req ChatRequest) (*ChatResponse, e
 func judgeWith(t *testing.T, reply string) (*Judge, *scriptedLLM) {
 	t.Helper()
 	llm := &scriptedLLM{reply: reply}
-	return NewJudge(llm, "tiny", slog.Default()), llm
+	return NewJudge(llm, "tiny", 0, slog.Default()), llm
 }
 
 func TestAJudgmentRoutes(t *testing.T) {
@@ -96,7 +96,7 @@ func TestAnUnknownExplicitHintDoesNotSkipTheCall(t *testing.T) {
 func TestAFailedJudgeRoutesOnTheDefault(t *testing.T) {
 	t.Parallel()
 	llm := &scriptedLLM{err: errors.New("429 slow down")}
-	j := NewJudge(llm, "tiny", slog.Default())
+	j := NewJudge(llm, "tiny", 0, slog.Default())
 	got := j.Judge(context.Background(), "a question", "")
 	if !isNeutral(got) {
 		t.Errorf("got %+v, want the neutral judgment", got)
@@ -123,7 +123,7 @@ func TestGarbageRoutesOnTheDefault(t *testing.T) {
 // preflight provider was configured.
 func TestANilJudgeIsUsable(t *testing.T) {
 	t.Parallel()
-	if NewJudge(nil, "", nil) != nil {
+	if NewJudge(nil, "", 0, nil) != nil {
 		t.Fatal("a nil provider should give a nil judge")
 	}
 	var j *Judge
@@ -224,7 +224,7 @@ func TestTheJudgeIsBounded(t *testing.T) {
 		t.Fatal("the judge has no timeout; a hanging preflight would hang the turn")
 	}
 	llm := &scriptedLLM{reply: `{"complexity": 10}`}
-	j := NewJudge(llm, "tiny", slog.Default())
+	j := NewJudge(llm, "tiny", 0, slog.Default())
 	j.Judge(context.Background(), "hello", "")
 	if _, hasDeadline := context.Background().Deadline(); hasDeadline {
 		t.Fatal("test assumption broken")

@@ -57,7 +57,7 @@ func TestAdjudicate(t *testing.T) {
 				trust:    tt.trust,
 				log:      slog.New(slog.DiscardHandler),
 			}
-			got := adjudicate(context.Background(), staticVerdict(tt.static), "some command", judge)
+			got := AdjudicateWith(context.Background(), staticVerdict(tt.static), "some command", judge)
 			if got.Tier != tt.want {
 				t.Errorf("tier = %q, want %q", got.Tier, tt.want)
 			}
@@ -76,7 +76,7 @@ func TestAdjudicateDoesNotAskAboutReads(t *testing.T) {
 	p := &countingRiskProvider{tier: RiskDestructive}
 	judge := &RiskJudge{provider: p, trust: RiskTrustAdvisory, log: slog.New(slog.DiscardHandler)}
 
-	got := adjudicate(context.Background(), staticVerdict(RiskRead), "uname -a", judge)
+	got := AdjudicateWith(context.Background(), staticVerdict(RiskRead), "uname -a", judge)
 	if got.Tier != RiskRead {
 		t.Errorf("tier = %q, want read", got.Tier)
 	}
@@ -87,7 +87,7 @@ func TestAdjudicateDoesNotAskAboutReads(t *testing.T) {
 
 func TestAdjudicateWithoutAJudge(t *testing.T) {
 	t.Parallel()
-	got := adjudicate(context.Background(), staticVerdict(RiskUnknown), "for x in a; do echo $x; done", nil)
+	got := AdjudicateWith(context.Background(), staticVerdict(RiskUnknown), "for x in a; do echo $x; done", nil)
 	if got.Tier != RiskUnknown || got.FromModel {
 		t.Errorf("got %q/%v, want unknown/false", got.Tier, got.FromModel)
 	}
@@ -167,12 +167,12 @@ func TestNilRiskJudgeDeclines(t *testing.T) {
 	if j.Trust() != RiskTrustAdvisory {
 		t.Error("a nil judge reported a permissive trust setting")
 	}
-	if NewRiskJudge(nil, "m", RiskTrustResolveUnknown, nil) != nil {
+	if NewRiskJudge(nil, "m", RiskTrustResolveUnknown, 0, nil) != nil {
 		t.Error("a judge was built without a provider")
 	}
 	// An unrecognised trust setting falls back to the safe one rather
 	// than being stored as-is.
-	if j := NewRiskJudge(stubRiskProvider{}, "m", RiskTrust("yolo"), nil); j.Trust() != RiskTrustAdvisory {
+	if j := NewRiskJudge(stubRiskProvider{}, "m", RiskTrust("yolo"), 0, nil); j.Trust() != RiskTrustAdvisory {
 		t.Errorf("trust = %q, want advisory", j.Trust())
 	}
 }

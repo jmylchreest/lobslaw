@@ -171,11 +171,17 @@ helps with least. A model can read them:
 
 ```toml
 [compute.roles]
-command_risk = "big-model"        # a [[compute.providers]] label
+command_risk = { provider = "fast-model", timeout = "15s" }
 
 [compute.shell_approval]
 verdict_trust = "resolve_unknown"  # advisory (default) | resolve_unknown
 ```
+
+**Pick a model that answers in time, not the biggest one.** This call happens while a
+confirmation is being composed, so its default deadline is 5 seconds. A reasoning model
+that spends thirty seconds thinking has its verdict discarded every time, and the only
+symptom is that nothing changes. Measure with `lobslaw policy classify --with-model`
+before choosing, and set the role's `timeout` to fit what you measured.
 
 It answers the **same closed enum** the classifier uses, and nothing else: no prose ever reaches
 the prompt, and a reply that is unparseable, outside the enum, late, or marked low-confidence is

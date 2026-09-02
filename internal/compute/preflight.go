@@ -112,19 +112,22 @@ const maxDomains = 3
 type Judge struct {
 	provider LLMProvider
 	model    string
-	log      *slog.Logger
+	// timeout overrides judgeTimeout when the operator set one for
+	// this role. Zero keeps the constant.
+	timeout time.Duration
+	log     *slog.Logger
 }
 
 // NewJudge wires a judge to the preflight provider. A nil provider
 // gives a nil judge — absence, not a disabled flag.
-func NewJudge(provider LLMProvider, model string, log *slog.Logger) *Judge {
+func NewJudge(provider LLMProvider, model string, timeout time.Duration, log *slog.Logger) *Judge {
 	if provider == nil {
 		return nil
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Judge{provider: provider, model: model, log: log}
+	return &Judge{provider: provider, model: model, timeout: timeout, log: log}
 }
 
 // Judge classifies text, honouring an explicit hint.
@@ -141,7 +144,7 @@ func (j *Judge) Judge(ctx context.Context, text string, explicit Hint) Judgment 
 		return NeutralJudgment()
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, judgeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, orDefault(j.timeout, judgeTimeout))
 	defer cancel()
 
 	resp, err := j.provider.Chat(ctx, ChatRequest{

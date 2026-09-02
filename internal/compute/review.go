@@ -220,7 +220,8 @@ func (f *ReviewFork) Consider(ctx context.Context, req ProcessMessageRequest, me
 		// WithoutCancel: the turn's context is cancelled the moment the
 		// reply goes out, and this deliberately outlives it. The values
 		// stay true.
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reviewTimeout)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx),
+			orDefault(f.cfg.Roles.TimeoutFor(RoleReview), reviewTimeout))
 		defer cancel()
 		if err := f.run(ctx, req, replay, axes); err != nil {
 			f.log.Warn("review: fork failed", "turn_id", req.TurnID, "err", err)

@@ -283,7 +283,7 @@ func (n *Node) newJudge() *compute.Judge {
 	if n.roleMap == nil {
 		return nil
 	}
-	label := n.cfg.Compute.Roles.Preflight
+	label := n.cfg.Compute.Roles.Preflight.Provider
 	if label == "" {
 		label = n.primaryProviderLabel()
 	}
@@ -294,7 +294,8 @@ func (n *Node) newJudge() *compute.Judge {
 			break
 		}
 	}
-	return compute.NewJudge(n.roleMap.For(compute.RolePreflight), model, n.log)
+	return compute.NewJudge(n.roleMap.For(compute.RolePreflight), model,
+		n.roleMap.TimeoutFor(compute.RolePreflight), n.log)
 }
 
 // newRiskJudge builds the second opinion on commands the static
@@ -305,7 +306,7 @@ func (n *Node) newJudge() *compute.Judge {
 // command, and a deployment discovering its main model billed for that
 // would rightly call it a bug rather than a default.
 func (n *Node) newRiskJudge() *compute.RiskJudge {
-	label := strings.TrimSpace(n.cfg.Compute.Roles.CommandRisk)
+	label := strings.TrimSpace(n.cfg.Compute.Roles.CommandRisk.Provider)
 	if label == "" || n.roleMap == nil {
 		return nil
 	}
@@ -324,7 +325,8 @@ func (n *Node) newRiskJudge() *compute.RiskJudge {
 		n.log.Error("compute: unrecognised verdict_trust; using the safe setting",
 			"error", err, "using", trust)
 	}
-	judge := compute.NewRiskJudge(n.roleMap.For(compute.RoleCommandRisk), model, trust, n.log)
+	judge := compute.NewRiskJudge(n.roleMap.For(compute.RoleCommandRisk), model, trust,
+		n.roleMap.TimeoutFor(compute.RoleCommandRisk), n.log)
 	if judge != nil {
 		n.log.Info("compute: unreadable shell commands get a second opinion",
 			"provider", label, "model", model, "verdict_trust", trust)
@@ -423,16 +425,19 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 		roleLabels[role] = label
 		return nil
 	}
-	if err := pickRole(compute.RoleMain, n.cfg.Compute.Roles.Main); err != nil {
+	if err := pickRole(compute.RoleMain, n.cfg.Compute.Roles.Main.Provider); err != nil {
 		return err
 	}
-	if err := pickRole(compute.RolePreflight, n.cfg.Compute.Roles.Preflight); err != nil {
+	if err := pickRole(compute.RolePreflight, n.cfg.Compute.Roles.Preflight.Provider); err != nil {
 		return err
 	}
-	if err := pickRole(compute.RoleSummariser, n.cfg.Compute.Roles.Summariser); err != nil {
+	if err := pickRole(compute.RoleSummariser, n.cfg.Compute.Roles.Summariser.Provider); err != nil {
 		return err
 	}
-	if err := pickRole(compute.RoleCommandRisk, n.cfg.Compute.Roles.CommandRisk); err != nil {
+	if err := pickRole(compute.RoleCommandRisk, n.cfg.Compute.Roles.CommandRisk.Provider); err != nil {
+		return err
+	}
+	if err := pickRole(compute.RoleReview, n.cfg.Compute.Roles.Review.Provider); err != nil {
 		return err
 	}
 	// If compute.roles.main was set, it overrides first-provider.
@@ -448,6 +453,19 @@ func (n *Node) wireRoleMap(clientsByLabel map[string]compute.LLMProvider) error 
 		return fmt.Errorf("role map: %w", err)
 	}
 	n.roleMap = rm
+
+	// Deadlines, once the map they hang off exists. Per role rather
+	// than per provider because one provider commonly serves several
+	// roles — qwen-flash answering a turn can have two minutes and has
+	// fifteen seconds when it is classifying a command somebody is
+	// waiting on — and a per-provider number cannot say both.
+	rm.SetTimeouts(n.cfg.Compute.ModelTimeout, map[compute.Role]time.Duration{
+		compute.RoleMain:        n.cfg.Compute.Roles.Main.Timeout,
+		compute.RolePreflight:   n.cfg.Compute.Roles.Preflight.Timeout,
+		compute.RoleSummariser:  n.cfg.Compute.Roles.Summariser.Timeout,
+		compute.RoleReview:      n.cfg.Compute.Roles.Review.Timeout,
+		compute.RoleCommandRisk: n.cfg.Compute.Roles.CommandRisk.Timeout,
+	})
 
 	// The second opinion on unreadable commands, once the roles it
 	// resolves through exist. Installed unconditionally — including as
@@ -578,7 +596,7 @@ func (n *Node) attachDreamSummarizer() {
 	if runner == nil {
 		return
 	}
-	label := n.cfg.Compute.Roles.Summariser
+	label := n.cfg.Compute.Roles.Summariser.Provider
 	if label == "" {
 		label = n.primaryProviderLabel()
 	}
