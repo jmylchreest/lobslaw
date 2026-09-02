@@ -101,6 +101,12 @@ type managedServer struct {
 	// session can be rebuilt without the operator's config being
 	// re-read — and without the credential being anywhere new.
 	cfg ServerConfig
+
+	// lastErr and lastCallAt are what health is derived from. Set on
+	// every invoke, so "healthy" means the last call worked rather
+	// than the constant true it used to be.
+	lastErr    string
+	lastCallAt time.Time
 }
 
 // managedTool is one tool sourced from an MCP server. We keep both
@@ -302,6 +308,27 @@ func (l *Loader) reconnect(ctx context.Context, name string) error {
 	return err
 }
 
+// recordCallOutcome is what health is derived from.
+//
+// Written after any rebuild and retry, so a session that expired and
+// was rebuilt reports the outcome the CALLER saw rather than the
+// transient 404 in the middle — which is the honest answer and also
+// the one that stops a self-healing server looking broken.
+func (l *Loader) recordCallOutcome(server string, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	srv, ok := l.servers[server]
+	if !ok {
+		return
+	}
+	srv.lastCallAt = time.Now()
+	if err != nil {
+		srv.lastErr = err.Error()
+		return
+	}
+	srv.lastErr = ""
+}
+
 // toolByName reads one tool under the lock.
 func (l *Loader) toolByName(name string) (*managedTool, bool) {
 	l.mu.Lock()
@@ -429,6 +456,7 @@ func (l *Loader) Invoke(ctx context.Context, req compute.SkillInvokeRequest) (*c
 		}
 	}
 	dur := time.Since(start)
+	l.recordCallOutcome(t.server.name, err)
 	if err != nil {
 		l.log.Warn("mcp: tool call failed",
 			"server", t.server.name,
@@ -490,10 +518,15 @@ func (l *Loader) ListTools() []Tool {
 }
 
 // ListServers returns a snapshot view of every registered server
-// for the mcp_list builtin. Tool counts are derived by scanning the
-// tools map; healthy is stubbed to true today (MCP doesn't have a
-// cheap liveness probe — reachability is only confirmed when the
-// next CallTool runs).
+// for the mcp_list builtin.
+//
+// Health is the outcome of the last call, not a probe. MCP has no
+// cheap liveness check, which is why this used to report the constant
+// true — accurate about the protocol, and useless as an answer: a
+// server whose session had expired listed as healthy while every call
+// returned 404, and the operator reading it went looking elsewhere.
+// Reporting the last outcome costs nothing and cannot mislead in that
+// direction.
 func (l *Loader) ListServers() []tools.MCPServerView {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -505,13 +538,19 @@ func (l *Loader) ListServers() []tools.MCPServerView {
 				count++
 			}
 		}
-		out = append(out, tools.MCPServerView{
+		view := tools.MCPServerView{
 			Name:      name,
 			Command:   srv.command,
+			URL:       srv.cfg.URL,
 			Args:      srv.args,
 			ToolCount: count,
-			Healthy:   true,
-		})
+			Healthy:   srv.lastErr == "",
+			LastError: srv.lastErr,
+		}
+		if !srv.lastCallAt.IsZero() {
+			view.LastCallAt = srv.lastCallAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, view)
 	}
 	return out
 }
