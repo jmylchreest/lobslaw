@@ -254,6 +254,22 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		d.logger.Warn("dream: commitment digest failed", "err", err)
 	}
 
+	// Logged HERE, not in the scheduler handler, so an on-demand nap
+	// and the nightly pass say the same thing. The handler was the
+	// only place that reported, which left the tool path — the one
+	// somebody uses when they want to watch dream work — silent.
+	d.logger.Info("dream: pass completed",
+		"consolidated", consolidated,
+		"pruned", pruned,
+		"clusters", mergeOutcome.Clusters,
+		"merged", mergeOutcome.Merged,
+		"superseded", mergeOutcome.Superseded,
+		"conflicts", mergeOutcome.Conflicts,
+		"kept_distinct", mergeOutcome.Distinct,
+		"already_decided", mergeOutcome.Skipped,
+		"candidates", len(candidates),
+	)
+
 	if err := d.logDreamSession(now, len(candidates), consolidated, pruned, digested, digests); err != nil {
 		// Don't fail the run for a log-entry error; just warn.
 		d.logger.Warn("dream: failed to log session", "err", err)

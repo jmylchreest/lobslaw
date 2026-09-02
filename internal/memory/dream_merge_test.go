@@ -360,3 +360,31 @@ func TestMergeOutcomeSeparatesIdleFromDecided(t *testing.T) {
 		t.Errorf("keep-distinct counted as something destructive: %+v", decided)
 	}
 }
+
+// Both callers of a pass must learn the same thing.
+//
+// The completion line lived in the scheduler handler, so a nap
+// reported the summariser's counts and said nothing about
+// adjudication — the half somebody triggering one on demand is
+// usually asking about. Run logs it now, so the tool path and the
+// nightly pass cannot drift.
+func TestRunReportsTheMergeOutcome(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	seedPair(t, svc.store, "a", "user:test", "john plays guitar", []float32{1, 0, 0}, fixedNow())
+	seedPair(t, svc.store, "b", "user:test", "john is learning guitar", []float32{1, 0, 0}, fixedNow())
+
+	adj := &stubAdjudicator{verdict: &Adjudication{Verdict: VerdictKeepDistinct, Reason: "different claims"}}
+	d := mergeRunner(t, svc, adj)
+
+	result, err := d.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Merge.Clusters == 0 {
+		t.Error("Run did not carry the cluster count out of the merge phase")
+	}
+	if result.Merge.Distinct == 0 {
+		t.Error("a keep-distinct verdict is invisible in the result the callers read")
+	}
+}

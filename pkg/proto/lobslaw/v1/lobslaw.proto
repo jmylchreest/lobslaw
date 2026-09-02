@@ -618,6 +618,22 @@ message DreamRequest {}
 message DreamResponse {
   int32 consolidated = 1;
   int32 pruned = 2;
+
+  // The adjudication half of the pass. Absent until now, so an
+  // on-demand nap — the path somebody reaches for precisely when they
+  // want to see what dream does — reported the summariser's work and
+  // said nothing about near-duplicates at all.
+  //
+  // clusters distinguishes "nothing to examine" from "examined and
+  // left alone": both used to be two zeroes.
+  int32 clusters = 3;
+  int32 merged = 4;
+  int32 superseded = 5;
+  int32 conflicts = 6;
+  int32 kept_distinct = 7;
+  // already_decided counts clusters settled on an earlier pass and
+  // deliberately not re-asked.
+  int32 already_decided = 8;
 }
 
 message ForgetRequest {

@@ -244,6 +244,13 @@ func (s *Service) Dream(ctx context.Context, _ *lobslawv1.DreamRequest) (*lobsla
 	return &lobslawv1.DreamResponse{
 		Consolidated: int32(result.Consolidated),
 		Pruned:       int32(result.Pruned),
+		//nolint:gosec // pass counts are bounded by the store, not by a caller
+		Clusters:       int32(result.Merge.Clusters),
+		Merged:         int32(result.Merge.Merged),
+		Superseded:     int32(result.Merge.Superseded),
+		Conflicts:      int32(result.Merge.Conflicts),
+		KeptDistinct:   int32(result.Merge.Distinct),
+		AlreadyDecided: int32(result.Merge.Skipped),
 	}, nil
 }
 

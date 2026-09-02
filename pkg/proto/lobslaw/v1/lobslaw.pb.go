@@ -4138,11 +4138,26 @@ func (*DreamRequest) Descriptor() ([]byte, []int) {
 }
 
 type DreamResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Consolidated  int32                  `protobuf:"varint,1,opt,name=consolidated,proto3" json:"consolidated,omitempty"`
-	Pruned        int32                  `protobuf:"varint,2,opt,name=pruned,proto3" json:"pruned,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Consolidated int32                  `protobuf:"varint,1,opt,name=consolidated,proto3" json:"consolidated,omitempty"`
+	Pruned       int32                  `protobuf:"varint,2,opt,name=pruned,proto3" json:"pruned,omitempty"`
+	// The adjudication half of the pass. Absent until now, so an
+	// on-demand nap — the path somebody reaches for precisely when they
+	// want to see what dream does — reported the summariser's work and
+	// said nothing about near-duplicates at all.
+	//
+	// clusters distinguishes "nothing to examine" from "examined and
+	// left alone": both used to be two zeroes.
+	Clusters     int32 `protobuf:"varint,3,opt,name=clusters,proto3" json:"clusters,omitempty"`
+	Merged       int32 `protobuf:"varint,4,opt,name=merged,proto3" json:"merged,omitempty"`
+	Superseded   int32 `protobuf:"varint,5,opt,name=superseded,proto3" json:"superseded,omitempty"`
+	Conflicts    int32 `protobuf:"varint,6,opt,name=conflicts,proto3" json:"conflicts,omitempty"`
+	KeptDistinct int32 `protobuf:"varint,7,opt,name=kept_distinct,json=keptDistinct,proto3" json:"kept_distinct,omitempty"`
+	// already_decided counts clusters settled on an earlier pass and
+	// deliberately not re-asked.
+	AlreadyDecided int32 `protobuf:"varint,8,opt,name=already_decided,json=alreadyDecided,proto3" json:"already_decided,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DreamResponse) Reset() {
@@ -4185,6 +4200,48 @@ func (x *DreamResponse) GetConsolidated() int32 {
 func (x *DreamResponse) GetPruned() int32 {
 	if x != nil {
 		return x.Pruned
+	}
+	return 0
+}
+
+func (x *DreamResponse) GetClusters() int32 {
+	if x != nil {
+		return x.Clusters
+	}
+	return 0
+}
+
+func (x *DreamResponse) GetMerged() int32 {
+	if x != nil {
+		return x.Merged
+	}
+	return 0
+}
+
+func (x *DreamResponse) GetSuperseded() int32 {
+	if x != nil {
+		return x.Superseded
+	}
+	return 0
+}
+
+func (x *DreamResponse) GetConflicts() int32 {
+	if x != nil {
+		return x.Conflicts
+	}
+	return 0
+}
+
+func (x *DreamResponse) GetKeptDistinct() int32 {
+	if x != nil {
+		return x.KeptDistinct
+	}
+	return 0
+}
+
+func (x *DreamResponse) GetAlreadyDecided() int32 {
+	if x != nil {
+		return x.AlreadyDecided
 	}
 	return 0
 }
@@ -12324,10 +12381,18 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x06record\x18\x01 \x01(\v2\x1a.lobslaw.v1.EpisodicRecordR\x06record\"%\n" +
 	"\x13EpisodicAddResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x0e\n" +
-	"\fDreamRequest\"K\n" +
+	"\fDreamRequest\"\x8b\x02\n" +
 	"\rDreamResponse\x12\"\n" +
 	"\fconsolidated\x18\x01 \x01(\x05R\fconsolidated\x12\x16\n" +
-	"\x06pruned\x18\x02 \x01(\x05R\x06pruned\"\xb6\x01\n" +
+	"\x06pruned\x18\x02 \x01(\x05R\x06pruned\x12\x1a\n" +
+	"\bclusters\x18\x03 \x01(\x05R\bclusters\x12\x16\n" +
+	"\x06merged\x18\x04 \x01(\x05R\x06merged\x12\x1e\n" +
+	"\n" +
+	"superseded\x18\x05 \x01(\x05R\n" +
+	"superseded\x12\x1c\n" +
+	"\tconflicts\x18\x06 \x01(\x05R\tconflicts\x12#\n" +
+	"\rkept_distinct\x18\a \x01(\x05R\fkeptDistinct\x12'\n" +
+	"\x0falready_decided\x18\b \x01(\x05R\x0ealreadyDecided\"\xb6\x01\n" +
 	"\rForgetRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x122\n" +
 	"\x06before\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x06before\x12\x12\n" +

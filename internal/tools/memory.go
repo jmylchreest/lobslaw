@@ -202,7 +202,7 @@ func MemoryToolDefs() []*types.ToolDef {
 		{
 			Name:        "dream_nap",
 			Path:        compute.BuiltinScheme + "dream_nap",
-			Description: "Trigger an on-demand Dream/REM consolidation pass right now (the 'nap' before the scheduled nightly dream). Scores recent memories, consolidates clusters into summaries when a Summarizer is wired, and prunes fired one-shot commitments + stale episodic chatter. Leader-only — followers return a hint to retry at the leader. Returns summarised_groups (how many owner-groups were handed to the summariser, NOT a count of records written) and pruned. Near-duplicate merge verdicts are a separate mechanism, read with dream_recap. Use when the user asks 'consolidate now', 'take a nap', 'forget the stuff that already happened' — or before a memory_recent / commitment_list call when they want fresh state.",
+			Description: "Trigger an on-demand Dream/REM consolidation pass right now (the 'nap' before the scheduled nightly dream). Scores recent memories, consolidates clusters into summaries when a Summarizer is wired, and prunes fired one-shot commitments + stale episodic chatter. Leader-only — followers return a hint to retry at the leader. Returns summarised_groups (how many owner-groups were handed to the summariser, NOT a count of records written) and pruned, plus what near-duplicate adjudication decided: clusters examined, merged, superseded, conflicts raised, kept_distinct, already_decided. clusters=0 means nothing was eligible to examine, which is different from examining some and leaving them alone. Use when the user asks 'consolidate now', 'take a nap', 'forget the stuff that already happened' — or before a memory_recent / commitment_list call when they want fresh state.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},
@@ -763,9 +763,24 @@ func newDreamNapHandler(svc memoryDreamer) compute.BuiltinFunc {
 		// recap truthfully report nothing, and the pair is unreadable —
 		// an agent asked to explain it said so, and could only report
 		// that it could not reconcile the two.
+		//
+		// The adjudication counts are reported alongside rather than
+		// instead. Naming the summariser's number precisely was the
+		// fix for the collision; carrying both is what makes the pair
+		// reconcilable in the first place, since a reader can now see
+		// the two mechanisms side by side rather than inferring one
+		// from the other's silence. clusters is what separates
+		// "nothing was eligible to examine" from "examined some and
+		// left them alone".
 		out, err := json.Marshal(map[string]any{
 			"summarised_groups": resp.Consolidated,
 			"pruned":            resp.Pruned,
+			"clusters":          resp.Clusters,
+			"merged":            resp.Merged,
+			"superseded":        resp.Superseded,
+			"conflicts":         resp.Conflicts,
+			"kept_distinct":     resp.KeptDistinct,
+			"already_decided":   resp.AlreadyDecided,
 		})
 		if err != nil {
 			return nil, 1, err
