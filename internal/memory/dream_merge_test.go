@@ -320,3 +320,43 @@ func TestMergePhaseLeavesUnownedClustersAlone(t *testing.T) {
 		t.Errorf("skipped = %d, want 1", out.Skipped)
 	}
 }
+
+// The outcome has to distinguish "nothing to examine" from "examined
+// and left alone".
+//
+// The pass logged only merged and conflicts, so both cases printed
+// zeroes and answering "did dream do anything" meant reading the
+// store by hand and counting retention tiers. Clusters and Distinct
+// were already computed; they were simply not reported.
+func TestMergeOutcomeSeparatesIdleFromDecided(t *testing.T) {
+	t.Parallel()
+
+	// Nothing eligible: no long-term records at all.
+	svc := newTestServiceStack(t)
+	adj := &stubAdjudicator{verdict: &Adjudication{Verdict: VerdictKeepDistinct}}
+	idle, err := mergeRunner(t, svc, adj).mergePhase(context.Background(), fixedNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idle.Clusters != 0 || idle.Distinct != 0 {
+		t.Fatalf("idle pass = %+v; want every count zero", idle)
+	}
+
+	// Two clusterable records the adjudicator leaves alone.
+	svc2 := newTestServiceStack(t)
+	seedPair(t, svc2.store, "a", "user:test", "john plays guitar", []float32{1, 0, 0}, fixedNow())
+	seedPair(t, svc2.store, "b", "user:test", "john is learning guitar", []float32{1, 0, 0}, fixedNow())
+	decided, err := mergeRunner(t, svc2, adj).mergePhase(context.Background(), fixedNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decided.Clusters == 0 {
+		t.Error("a clusterable pair reported no clusters")
+	}
+	if decided.Distinct == 0 {
+		t.Error("a keep-distinct verdict is invisible in the outcome, which is the ambiguity this fixes")
+	}
+	if decided.Merged != 0 || decided.Conflicts != 0 {
+		t.Errorf("keep-distinct counted as something destructive: %+v", decided)
+	}
+}

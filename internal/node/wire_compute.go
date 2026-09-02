@@ -628,12 +628,28 @@ func (n *Node) registerDreamHandler() {
 				// Non-leader soft-skip — runner already logged.
 				return nil
 			}
+			// The whole outcome, not the two destructive counts.
+			//
+			// merged=0 conflicts=0 was printed both when adjudication
+			// found nothing to examine and when it examined ten
+			// clusters and left them all distinct. Answering "did
+			// dream do anything" then meant reading the store by
+			// hand and counting retention tiers, which is the dig the
+			// consolidation log exists to prevent.
+			//
+			// candidates is the ids, so it goes last: a line whose
+			// readable numbers sit behind forty ULIDs is one nobody
+			// reads to the end.
 			n.log.Info("scheduler: dream pass completed",
-				"candidates", result.Candidates,
 				"consolidated", result.Consolidated,
 				"pruned", result.Pruned,
+				"clusters", result.Merge.Clusters,
 				"merged", result.Merge.Merged,
+				"superseded", result.Merge.Superseded,
 				"conflicts", result.Merge.Conflicts,
+				"kept_distinct", result.Merge.Distinct,
+				"already_decided", result.Merge.Skipped,
+				"candidates", result.Candidates,
 			)
 			// A contradiction is only worth finding if somebody is
 			// asked about it. The notice path reaches whoever speaks
