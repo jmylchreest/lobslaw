@@ -102,15 +102,16 @@ type GrantTarget struct {
 	// offers Approve and Deny, without "always".
 	Grantable bool
 
-	// Risk is what the operation DOES, as classified by ClassifyRisk.
+	// Labels is everything the operation DOES, as classified by
+	// ClassifyRisk.
 	//
 	// Carried alongside the key rather than folded into it, because the
 	// two answer different questions and have different lifetimes: the
-	// resource names one command forever, while the tier is a property
-	// of this invocation that policy conditions on and the prompt
-	// reports. Empty means the resolver does not classify, which a rule
-	// conditioned on a tier must treat as "does not apply".
-	Risk CommandRisk
+	// resource names one command forever, while the labels are a
+	// property of this invocation that policy conditions on and the
+	// prompt reports. Empty means the resolver does not classify, which
+	// a rule conditioned on labels must treat as "does not apply".
+	Labels []RiskLabel
 }
 
 // grantActions is every action a resolver may name. A closed set, not
@@ -154,10 +155,10 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 		return nil
 	}
 	action, resource, grantable := gate.action, gate.resource, true
-	risk := CommandRisk("")
+	var labels []RiskLabel
 	if gate.resolve != nil {
 		t := gate.resolve(params)
-		resource, grantable, risk = t.Resource, t.Grantable, t.Risk
+		resource, grantable, labels = t.Resource, t.Grantable, t.Labels
 		// An unrecognised action falls back to the registered one
 		// rather than being trusted. A resolver is in-tree code, but
 		// the whole point of the closed set is that a mistake here
@@ -167,12 +168,24 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 			action = t.Action
 		}
 	}
-	// The tier goes on the context before the engine is asked, because
-	// that is where a condition evaluator reads it. Set from the
-	// resolver's classification of the PARAMETERS, never from anything
-	// the model wrote in prose — the same provenance rule the turn
-	// identity follows.
-	ctx = WithCommandRisk(ctx, risk)
+
+	// Labels this conversation has already approved are SUBTRACTED
+	// before policy is asked.
+	//
+	// That is what makes a tapped grant compose with a configured mode:
+	// a command carrying reads+writes where the mode approves reads and
+	// the conversation approved writes has nothing left to ask about,
+	// and the condition sees an empty remainder. Doing it the other way
+	// — checking grants after the rule refused — would need the mode's
+	// set here, which is policy's business rather than the gate's.
+	remaining := e.unapprovedLabels(ctx, action, labels)
+
+	// On the context before the engine is asked, because that is where
+	// the condition evaluator reads it. Set from the resolver's
+	// classification of the PARAMETERS, never from anything the model
+	// wrote as prose — the same provenance rule the turn identity
+	// follows.
+	ctx = WithCommandLabels(ctx, remaining)
 
 	err := e.PolicyAllow(ctx, claims, action, resource)
 	if err == nil {
@@ -186,9 +199,20 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 	if !errors.Is(err, ErrRequireConfirm) {
 		return err
 	}
+	// Everything this command does was already granted in this
+	// conversation, so there is nothing left to ask about.
+	//
+	// Checked AFTER policy rather than instead of it: a deny still
+	// denies, and a session grant must never talk past a rule an
+	// operator wrote. It is only a confirmation — the question "is this
+	// worth asking about" — that an empty remainder answers, and it
+	// answers it with "you already did".
+	if len(labels) > 0 && len(remaining) == 0 {
+		return nil
+	}
 	req := &ConfirmationRequest{
 		inner: err, Action: action, Resource: resource, Grantable: grantable,
-		Risk: risk,
+		Labels: labels,
 	}
 	if gate.summarise != nil {
 		req.Summary = gate.summarise(ctx, params)
@@ -235,7 +259,7 @@ type ConfirmationRequest struct {
 	//
 	// Empty for a gate that does not classify, in which case no tier
 	// button is offered.
-	Risk CommandRisk
+	Labels []RiskLabel
 }
 
 func (c *ConfirmationRequest) Error() string {
@@ -295,4 +319,26 @@ func MemoryWriteApprovalDefault() types.PolicyRule {
 		Effect:   types.EffectRequireConfirmation,
 		Priority: -1 << 30,
 	}
+}
+
+// unapprovedLabels drops the labels this conversation has already
+// granted, returning what is still to be asked about.
+//
+// An empty result means everything the command does was already
+// approved here, and the condition evaluator sees no labels to object
+// to. A nil approvals store subtracts nothing, so the zero value is
+// the safe one.
+func (e *Executor) unapprovedLabels(ctx context.Context, action string, labels []RiskLabel) []RiskLabel {
+	if e.approvals == nil || len(labels) == 0 {
+		return labels
+	}
+	remaining := make([]RiskLabel, 0, len(labels))
+	for _, l := range labels {
+		key := RiskGrantResource(l)
+		if key != "" && e.approvals.Granted(ctx, action, key) {
+			continue
+		}
+		remaining = append(remaining, l)
+	}
+	return remaining
 }

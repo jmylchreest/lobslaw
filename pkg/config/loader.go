@@ -447,6 +447,7 @@ func decoderConfig() *mapstructure.DecoderConfig {
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.TextUnmarshallerHookFunc(),
 			stringToRoleConfigHook(),
+			mapstructure.StringToSliceHookFunc(","),
 		),
 		Metadata:         nil,
 		WeaklyTypedInput: true,

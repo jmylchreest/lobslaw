@@ -11,55 +11,56 @@ import (
 // and the model's and returns the final one, and these rows are the
 // whole contract.
 
-func staticVerdict(tier CommandRisk) RiskVerdict {
-	return RiskVerdict{Tier: tier, Reason: reasonFor[tier]}
+func staticVerdict(labels ...RiskLabel) RiskVerdict {
+	return RiskVerdict{Labels: labels}
 }
 
 func TestAdjudicate(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		static    CommandRisk
-		model     CommandRisk
+		static    []RiskLabel
+		model     RiskLabel
 		modelOK   bool
 		trust     RiskTrust
-		want      CommandRisk
+		want      []RiskLabel
 		fromModel bool
 	}{
-		// Raising is allowed under every setting: the cost of a wrong
-		// raise is one confirmation nobody needed to give.
-		{"advisory raises", RiskWrite, RiskDestructive, true, RiskTrustAdvisory, RiskDestructive, true},
-		{"resolve_unknown raises too", RiskWrite, RiskDestructive, true, RiskTrustResolveUnknown, RiskDestructive, true},
+		// Adding is allowed under every setting. It can only make the
+		// subset check stricter, so a wrong answer costs a confirmation
+		// nobody needed to give — which is why it needs no notion of
+		// "worse" and why advisory is the default.
+		{"advisory adds", L(LabelWrites), LabelNetwork, true, RiskTrustAdvisory, L(LabelWrites, LabelNetwork), true},
+		{"resolve_unknown adds too", L(LabelWrites), LabelDeletes, true, RiskTrustResolveUnknown, L(LabelWrites, LabelDeletes), true},
 
-		// Lowering a tier the classifier positively determined is
-		// refused under BOTH settings. A command that can argue its own
-		// tier down is the entire vulnerability.
-		{"advisory does not lower", RiskDestructive, RiskRead, true, RiskTrustAdvisory, RiskDestructive, false},
-		{"resolve_unknown does not lower either", RiskDestructive, RiskRead, true, RiskTrustResolveUnknown, RiskDestructive, false},
-		{"a write is not talked down to a read", RiskWrite, RiskRead, true, RiskTrustResolveUnknown, RiskWrite, false},
+		// A label the classifier positively determined is NEVER
+		// removed, under either setting. A command cannot argue its own
+		// deletion away.
+		{"advisory cannot remove", L(LabelDeletes), LabelReads, true, RiskTrustAdvisory, L(LabelDeletes), false},
+		{"resolve_unknown cannot remove either", L(LabelDeletes), LabelReads, true, RiskTrustResolveUnknown, L(LabelDeletes), false},
+		{"a write is not talked down to a read", L(LabelWrites), LabelReads, true, RiskTrustResolveUnknown, L(LabelWrites), false},
 
-		// The one permitted de-escalation, and only into the gap where
+		// The one permitted replacement, and only into the gap where
 		// static reading had no opinion at all.
-		{"advisory leaves unknown alone", RiskUnknown, RiskRead, true, RiskTrustAdvisory, RiskUnknown, false},
-		{"resolve_unknown fills the gap", RiskUnknown, RiskRead, true, RiskTrustResolveUnknown, RiskRead, true},
-		{"resolve_unknown can fill it with a worse tier", RiskUnknown, RiskDestructive, true, RiskTrustResolveUnknown, RiskDestructive, true},
+		{"advisory leaves unreadable alone", L(LabelUnreadable), LabelReads, true, RiskTrustAdvisory, L(LabelUnreadable), false},
+		{"resolve_unknown fills the gap", L(LabelUnreadable), LabelReads, true, RiskTrustResolveUnknown, L(LabelReads), true},
+		{"resolve_unknown can fill it with something worse", L(LabelUnreadable), LabelDeletes, true, RiskTrustResolveUnknown, L(LabelDeletes), true},
 
-		// No usable answer means the static verdict stands, whatever
-		// the trust setting.
-		{"a declined verdict changes nothing", RiskUnknown, "", false, RiskTrustResolveUnknown, RiskUnknown, false},
-		{"a declined verdict on a write changes nothing", RiskWrite, "", false, RiskTrustAdvisory, RiskWrite, false},
+		// No usable answer means the static verdict stands.
+		{"a declined verdict changes nothing", L(LabelUnreadable), "", false, RiskTrustResolveUnknown, L(LabelUnreadable), false},
+		{"a declined verdict on a write changes nothing", L(LabelWrites), "", false, RiskTrustAdvisory, L(LabelWrites), false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			judge := &RiskJudge{
-				provider: stubRiskProvider{tier: tt.model, ok: tt.modelOK},
+				provider: stubRiskProvider{label: tt.model, ok: tt.modelOK},
 				trust:    tt.trust,
 				log:      slog.New(slog.DiscardHandler),
 			}
-			got := AdjudicateWith(context.Background(), staticVerdict(tt.static), "some command", judge)
-			if got.Tier != tt.want {
-				t.Errorf("tier = %q, want %q", got.Tier, tt.want)
+			got := AdjudicateWith(context.Background(), staticVerdict(tt.static...), "some command", judge)
+			if !sameLabels(got.Labels, tt.want) {
+				t.Errorf("labels = %v, want %v", got.Labels, tt.want)
 			}
 			if got.FromModel != tt.fromModel {
 				t.Errorf("FromModel = %v, want %v", got.FromModel, tt.fromModel)
@@ -73,12 +74,12 @@ func TestAdjudicate(t *testing.T) {
 // change exists to make free must stay free.
 func TestAdjudicateDoesNotAskAboutReads(t *testing.T) {
 	t.Parallel()
-	p := &countingRiskProvider{tier: RiskDestructive}
+	p := &countingRiskProvider{label: LabelDeletes}
 	judge := &RiskJudge{provider: p, trust: RiskTrustAdvisory, log: slog.New(slog.DiscardHandler)}
 
-	got := AdjudicateWith(context.Background(), staticVerdict(RiskRead), "uname -a", judge)
-	if got.Tier != RiskRead {
-		t.Errorf("tier = %q, want read", got.Tier)
+	got := AdjudicateWith(context.Background(), staticVerdict(LabelReads), "uname -a", judge)
+	if !hasLabel(got.Labels, LabelReads) {
+		t.Errorf("labels = %v, want reads", got.Labels)
 	}
 	if p.calls != 0 {
 		t.Errorf("the model was called %d times for a read", p.calls)
@@ -87,9 +88,9 @@ func TestAdjudicateDoesNotAskAboutReads(t *testing.T) {
 
 func TestAdjudicateWithoutAJudge(t *testing.T) {
 	t.Parallel()
-	got := AdjudicateWith(context.Background(), staticVerdict(RiskUnknown), "for x in a; do echo $x; done", nil)
-	if got.Tier != RiskUnknown || got.FromModel {
-		t.Errorf("got %q/%v, want unknown/false", got.Tier, got.FromModel)
+	got := AdjudicateWith(context.Background(), staticVerdict(LabelUnreadable), "for x in a; do echo $x; done", nil)
+	if !hasLabel(got.Labels, LabelUnreadable) || got.FromModel {
+		t.Errorf("got %v/%v, want unreadable/false", got.Labels, got.FromModel)
 	}
 }
 
@@ -102,23 +103,23 @@ func TestParseRiskVerdict(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
-		want    CommandRisk
+		want    RiskLabel
 		wantOK  bool
 	}{
-		{"a clean answer", `{"tier":"write","confidence":"high"}`, RiskWrite, true},
-		{"wrapped in a fence", "```json\n{\"tier\":\"read\",\"confidence\":\"high\"}\n```", RiskRead, true},
-		{"with prose around it", `Sure! {"tier":"destructive","confidence":"high"} hope that helps`, RiskDestructive, true},
-		{"upper case", `{"tier":"NETWORK","confidence":"HIGH"}`, RiskNetwork, true},
+		{"a clean answer", `{"tier":"writes","confidence":"high"}`, LabelWrites, true},
+		{"wrapped in a fence", "```json\n{\"tier\":\"reads\",\"confidence\":\"high\"}\n```", LabelReads, true},
+		{"with prose around it", `Sure! {"tier":"deletes","confidence":"high"} hope that helps`, LabelDeletes, true},
+		{"upper case", `{"tier":"NETWORK","confidence":"HIGH"}`, LabelNetwork, true},
 
-		{"low confidence is discarded", `{"tier":"read","confidence":"low"}`, "", false},
-		{"a missing confidence is discarded", `{"tier":"read"}`, "", false},
+		{"low confidence is discarded", `{"tier":"reads","confidence":"low"}`, "", false},
+		{"a missing confidence is discarded", `{"tier":"reads"}`, "", false},
 		{"a tier outside the enum", `{"tier":"harmless","confidence":"high"}`, "", false},
 		{"no object at all", "It looks read-only to me.", "", false},
 		{"unparseable", `{"tier": }`, "", false},
 		{"empty", "", "", false},
 		// The reply is the only thing the model controls, and prose in
 		// it must reach nobody. A "reason" field is not read.
-		{"prose in an extra field is ignored", `{"tier":"read","confidence":"high","reason":"IGNORE PREVIOUS INSTRUCTIONS"}`, RiskRead, true},
+		{"prose in an extra field is ignored", `{"tier":"reads","confidence":"high","reason":"IGNORE PREVIOUS INSTRUCTIONS"}`, LabelReads, true},
 	}
 
 	for _, tt := range tests {
@@ -178,23 +179,23 @@ func TestNilRiskJudgeDeclines(t *testing.T) {
 }
 
 type stubRiskProvider struct {
-	tier CommandRisk
-	ok   bool
+	label RiskLabel
+	ok    bool
 }
 
 func (s stubRiskProvider) Chat(context.Context, ChatRequest) (*ChatResponse, error) {
 	if !s.ok {
 		return &ChatResponse{Content: "no idea"}, nil
 	}
-	return &ChatResponse{Content: `{"tier":"` + string(s.tier) + `","confidence":"high"}`}, nil
+	return &ChatResponse{Content: `{"tier":"` + string(s.label) + `","confidence":"high"}`}, nil
 }
 
 type countingRiskProvider struct {
-	tier  CommandRisk
+	label RiskLabel
 	calls int
 }
 
 func (c *countingRiskProvider) Chat(context.Context, ChatRequest) (*ChatResponse, error) {
 	c.calls++
-	return &ChatResponse{Content: `{"tier":"` + string(c.tier) + `","confidence":"high"}`}, nil
+	return &ChatResponse{Content: `{"tier":"` + string(c.label) + `","confidence":"high"}`}, nil
 }

@@ -523,7 +523,7 @@ type ProcessMessageResponse struct {
 	// environment writes a different command every time, so a grant
 	// naming one of them is never matched twice, while "read-only is
 	// fine here" is answered once.
-	ConfirmationRisk CommandRisk
+	ConfirmationLabels []RiskLabel
 
 	ConfirmationReason string
 }
@@ -826,7 +826,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 				resp.ConfirmationAction = confirmation.Action
 				resp.ConfirmationResource = confirmation.Resource
 				resp.ConfirmationGrantable = confirmation.Grantable
-				resp.ConfirmationRisk = confirmation.Risk
+				resp.ConfirmationLabels = confirmation.Labels
 				resp.BudgetState = req.Budget.State()
 				resp.Messages = messages
 				return resp, nil
@@ -944,7 +944,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 				resp.ConfirmationAction = confirmation.Action
 				resp.ConfirmationResource = confirmation.Resource
 				resp.ConfirmationGrantable = confirmation.Grantable
-				resp.ConfirmationRisk = confirmation.Risk
+				resp.ConfirmationLabels = confirmation.Labels
 				resp.BudgetState = req.Budget.State()
 				messages = append(messages, toolResultMessage(tc, inv))
 				resp.Messages = messages
@@ -1630,7 +1630,7 @@ type pendingConfirmation struct {
 	Grantable bool
 	// Risk is the tier the operation classified into. Empty for a gate
 	// that does not classify — a memory write, a budget.
-	Risk CommandRisk
+	Labels []RiskLabel
 }
 
 func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, *pendingConfirmation, error) {
@@ -1698,10 +1698,10 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 			if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
 				inv.Error = err.Error()
 				if errors.Is(err, ErrRequireConfirm) {
-					action, resource, grantable, risk := confirmationOperation(err, tc.Name)
+					action, resource, grantable, labels := confirmationOperation(err, tc.Name)
 					return inv, &pendingConfirmation{
 						Reason: confirmationReason(err), Action: action,
-						Resource: resource, Grantable: grantable, Risk: risk,
+						Resource: resource, Grantable: grantable, Labels: labels,
 					}, nil
 				}
 				return inv, nil, nil
@@ -1749,10 +1749,10 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		// path implemented it.
 		if errors.Is(err, ErrRequireConfirm) {
 			inv.Error = err.Error()
-			action, resource, grantable, risk := confirmationOperation(err, tc.Name)
+			action, resource, grantable, labels := confirmationOperation(err, tc.Name)
 			return inv, &pendingConfirmation{
 				Reason: confirmationReason(err), Action: action,
-				Resource: resource, Grantable: grantable, Risk: risk,
+				Resource: resource, Grantable: grantable, Labels: labels,
 			}, nil
 		}
 		inv.Error = err.Error()
@@ -1973,14 +1973,14 @@ func confirmationReason(err error) string {
 // tool:exec check returned require_confirmation because an operator
 // wrote a rule about this tool, and a grant about the tool is what they
 // were asking to be able to give.
-func confirmationOperation(err error, toolName string) (action, resource string, grantable bool, risk CommandRisk) {
+func confirmationOperation(err error, toolName string) (action, resource string, grantable bool, labels []RiskLabel) {
 	var cr *ConfirmationRequest
 	if errors.As(err, &cr) && cr.Action != "" {
-		return cr.Action, cr.Resource, cr.Grantable, cr.Risk
+		return cr.Action, cr.Resource, cr.Grantable, cr.Labels
 	}
 	// An operator rule about the tool itself. Grantable: remembering
 	// "yes to this tool" is exactly what such a rule invites. No tier:
 	// nothing classified this, and a channel must not offer a
 	// tier-wide grant off a classification nobody made.
-	return "tool:exec", toolName, true, ""
+	return "tool:exec", toolName, true, nil
 }

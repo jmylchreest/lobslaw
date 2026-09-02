@@ -347,16 +347,19 @@ enabled = true
 # so the resolver falls through to first-provider selection. Add
 # chains + set default_chain if you want multi-provider routing.
 
-# Which shell commands are worth asking about, by what they DO:
-#   strict   — ask about every command.
-#   standard — ask about everything except commands that only read.
-#   trusted  — additionally allow ordinary local writes.
+# What runs WITHOUT being asked about, as a set of labels. Approval is
+# a subset check: every label a command carries must be in this set.
 #
-# Nothing runs unasked in any mode if it reaches the network, deletes,
-# changes the machine, runs as root, or cannot be read — and no mode
-# reaches the hardline floor. Run
+#   "strict"                        approves nothing
+#   "standard"                      approves reads (the default)
+#   "trusted"                       approves reads and writes
+#   ["reads", "writes", "deletes"]  or say exactly what you mean
+#
+# Labels are reads, writes, deletes, disrupts, network and privilege.
+# "unreadable" cannot be approved, and no mode reaches the hardline
+# floor. Run
 #     lobslaw policy classify '<command>'
-# to see how any command is read, and what each mode does with it.
+# to see how any command is read, and what each preset does with it.
 approval_mode = "standard"
 
 # Tools matching these globs are never registered, so the agent does

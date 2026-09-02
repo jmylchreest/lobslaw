@@ -60,7 +60,7 @@ func RemoteGrantResourceFor(hostOf RemoteHostLookup) func(map[string]string) Gra
 		// The command's own tier is not consulted: `uptime` run here
 		// and `uptime` run on somebody else's box are not the same
 		// operation, and only one of them leaves this machine.
-		t.Risk = RiskNetwork
+		t.Labels = L(LabelNetwork)
 		return t
 	}
 }
@@ -107,7 +107,7 @@ func resolveRemoteHost(hostOf RemoteHostLookup, name string) (string, bool) {
 func RemoteCopyGrantResourceFor(hostOf RemoteHostLookup) func(map[string]string) GrantTarget {
 	return func(params map[string]string) GrantTarget {
 		t := remoteCopyGrant(hostOf, params)
-		t.Risk = RiskNetwork
+		t.Labels = L(LabelNetwork)
 		return t
 	}
 }

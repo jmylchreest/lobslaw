@@ -44,17 +44,15 @@ func (n *Node) wireApprovalGates() error {
 	// walks its defaults in order and both sit at the same floor
 	// priority. Nothing for strict: that mode is the ABSENCE of these
 	// rules rather than a second rule restating the one below.
-	mode := n.approvalMode()
+	approved := n.approvedLabels()
 	if n.shellIsRegistered() && n.executor != nil && n.policyEngine != nil {
-		if modeRules := compute.ApprovalModeDefaults(mode); len(modeRules) > 0 {
+		if modeRules := compute.ApprovalModeDefaults(approved); len(modeRules) > 0 {
 			defaults = append(defaults, modeRules...)
 			n.log.Info("compute: shell commands are approved by what they do",
-				"approval_mode", mode,
-				"runs_without_asking", mode.AutoAllowed(),
+				"runs_without_asking", compute.RenderLabels(compute.SortedLabels(approved)),
 				"override", `set [compute] approval_mode = "strict" to ask about everything`)
 		} else {
-			n.log.Info("compute: every shell command is asked about",
-				"approval_mode", mode)
+			n.log.Info("compute: every shell command is asked about", "approval_mode", "strict")
 		}
 	}
 
@@ -162,13 +160,13 @@ func (n *Node) remoteHostLookup() compute.RemoteHostLookup {
 // unrecognised value is logged as an error and the shipped default
 // applies — the same treatment a malformed rule gets, rather than a
 // silent reinterpretation of what the operator wrote.
-func (n *Node) approvalMode() compute.ApprovalMode {
-	mode, err := compute.ParseApprovalMode(n.cfg.Compute.ApprovalMode)
+func (n *Node) approvedLabels() map[compute.RiskLabel]bool {
+	approved, err := compute.ApprovedLabels(n.cfg.Compute.ApprovalMode)
 	if err != nil {
 		n.log.Error("compute: unrecognised approval_mode; using the default",
-			"error", err, "using", mode)
+			"error", err, "using", compute.RenderLabels(compute.SortedLabels(approved)))
 	}
-	return mode
+	return approved
 }
 
 // applyCommandRisks installs the operator's classification entries and
@@ -190,29 +188,59 @@ func (n *Node) applyCommandRisks() {
 	}
 	table := make(map[string]compute.CommandRiskRule, len(risks))
 	for name, c := range risks {
-		rule := compute.CommandRiskRule{
-			Tier:        compute.CommandRisk(strings.TrimSpace(c.Tier)),
-			Targets:     c.Targets,
-			ScratchTier: compute.CommandRisk(strings.TrimSpace(c.ScratchTier)),
-		}
-		if len(c.Subcommands) > 0 {
-			rule.Sub = make(map[string]compute.CommandRisk, len(c.Subcommands))
-			for sub, tier := range c.Subcommands {
-				rule.Sub[strings.TrimSpace(sub)] = compute.CommandRisk(strings.TrimSpace(tier))
-			}
-		}
-		if len(c.Escalate) > 0 {
-			rule.Escalate = make(map[string]compute.CommandRisk, len(c.Escalate))
-			for tok, tier := range c.Escalate {
-				rule.Escalate[strings.TrimSpace(tok)] = compute.CommandRisk(strings.TrimSpace(tier))
-			}
-		}
-		// An unrecognised tier is refused rather than stored: it would
+		// An unrecognised label is refused rather than stored: it would
 		// match no rule condition and read, from the prompt, exactly
 		// like a command nobody classified.
-		if rule.Tier != "" && !rule.Tier.Valid() {
-			n.log.Error("compute: command_risks entry has an unrecognised tier; ignoring it",
-				"command", name, "tier", c.Tier)
+		parse := func(in []string) ([]compute.RiskLabel, bool) {
+			out := make([]compute.RiskLabel, 0, len(in))
+			for _, raw := range in {
+				l := compute.RiskLabel(strings.ToLower(strings.TrimSpace(raw)))
+				if !l.Valid() {
+					n.log.Error("compute: command_risks entry has an unrecognised label; ignoring the entry",
+						"command", name, "label", raw)
+					return nil, false
+				}
+				out = append(out, l)
+			}
+			return out, true
+		}
+		labels, ok := parse(c.Labels)
+		if !ok {
+			continue
+		}
+		scratch, ok := parse(c.ScratchLabels)
+		if !ok {
+			continue
+		}
+		rule := compute.CommandRiskRule{
+			Labels:        labels,
+			Targets:       c.Targets,
+			ScratchLabels: scratch,
+		}
+		bad := false
+		if len(c.Subcommands) > 0 {
+			rule.Sub = make(map[string][]compute.RiskLabel, len(c.Subcommands))
+			for sub, raw := range c.Subcommands {
+				set, ok := parse(raw)
+				if !ok {
+					bad = true
+					break
+				}
+				rule.Sub[strings.TrimSpace(sub)] = set
+			}
+		}
+		if !bad && len(c.Escalate) > 0 {
+			rule.Escalate = make(map[string][]compute.RiskLabel, len(c.Escalate))
+			for tok, raw := range c.Escalate {
+				set, ok := parse(raw)
+				if !ok {
+					bad = true
+					break
+				}
+				rule.Escalate[strings.TrimSpace(tok)] = set
+			}
+		}
+		if bad {
 			continue
 		}
 		table[strings.TrimSpace(name)] = rule

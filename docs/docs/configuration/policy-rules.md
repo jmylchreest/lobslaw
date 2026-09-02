@@ -122,9 +122,17 @@ The agent pauses, the channel asks `[Yes / No]`, the human decides. This is the 
 the gate asks, and the shipped default already runs read-only commands without asking. If you are
 being asked about `uname -a` and `git status`, the mode is doing something other than the default;
 if you are being asked about ordinary local writes and would rather not be, `approval_mode =
-"trusted"` is the one-line answer. See [the policy engine](/security/policy-engine) for the tiers.
-No mode ever waves through the network, a deletion, a change to the machine, or a command the
-classifier could not read — those are what the rules below are for.
+"trusted"` is the one-line answer.
+
+Approval is a **subset check** against a set of labels, so it is not limited to the three presets:
+
+```toml
+approval_mode = ["reads", "writes", "deletes"]   # a throwaway build box
+```
+
+See [the policy engine](/security/policy-engine) for the label vocabulary. `unreadable` cannot be
+approved by any spelling, and a command carrying several labels needs all of them approved — so
+the rules below remain the way to say something narrower than a whole label.
 
 Every `shell_command` call is then asked about individually, and *Always allow* grants that one
 command — so approving `git status --short` leaves `git push --force` still asked about. That is
@@ -153,10 +161,13 @@ evaluate under the reserved resource `!unclassified`; an `allow` on it is the ex
 asking me about compound commands".
 
 Those are exactly the commands an environment-probing agent produces, which is why a confirmation
-also offers **Allow read-only here** / **Allow local writes here** when the command classifies
-into one of those tiers. A tier is nameable even when the command is not, and the grant is scoped
-to the conversation like any other session grant. It is never offered for anything that reaches
-the network, deletes, changes the machine, or could not be read.
+also offers **Allow reads + writes here** when every label the command carries is one a tap may
+approve. A label is nameable even when the command is not, and the grant is recorded per label and
+scoped to the conversation like any other session grant — so a mode approving `reads` plus a
+tapped grant of `writes` satisfies a command doing both.
+
+It is never offered when any label is `deletes`, `disrupts`, `network`, `privilege` or
+`unreadable` — including when the rest of the set would have been fine on its own.
 
 ### Allow a public visitor to call read-only tools
 

