@@ -28,9 +28,29 @@ type MCPRegistry interface {
 type MCPServerView struct {
 	Name      string   `json:"name"`
 	Command   string   `json:"command"`
+	URL       string   `json:"url,omitempty"`
 	Args      []string `json:"args,omitempty"`
 	ToolCount int      `json:"tool_count"`
-	Healthy   bool     `json:"healthy"`
+
+	// Healthy reports whether the LAST CALL SUCCEEDED, or — when
+	// nothing has been called yet — that the handshake did.
+	//
+	// It used to be the constant true, with a comment saying MCP has
+	// no cheap liveness probe. That is accurate about MCP and wrong
+	// as an answer: a server whose session had expired reported
+	// healthy while every call returned 404, and the operator reading
+	// it went looking for the fault somewhere else.
+	Healthy bool `json:"healthy"`
+
+	// LastError is the last failure, empty when the last call
+	// worked. What "unhealthy" actually meant, rather than leaving
+	// the reader to guess between a dead host and a bad argument.
+	LastError string `json:"last_error,omitempty"`
+
+	// LastCallAt is when a tool was last invoked, RFC3339. Empty
+	// means never: health then describes the handshake at startup
+	// and nothing since, which is worth being able to tell apart.
+	LastCallAt string `json:"last_call_at,omitempty"`
 }
 
 // MCPManagementConfig wires the builtins. Nil registry skips
@@ -63,7 +83,7 @@ func MCPManagementToolDefs() []*types.ToolDef {
 		{
 			Name:        "mcp_list",
 			Path:        compute.BuiltinScheme + "mcp_list",
-			Description: "List MCP (Model Context Protocol) servers running on this node. Returns {name, command, args, tool_count, healthy} per server. Use when the user asks what integrations are available; always call this before mcp_add so you can pick a unique name. Present as a markdown table.",
+			Description: "List MCP (Model Context Protocol) servers running on this node. Returns {name, command, url, args, tool_count, healthy, last_error, last_call_at} per server. healthy reports whether the LAST CALL succeeded — or, when last_call_at is empty, only that the server completed its handshake at startup; it is not a live probe, so a server can be listed healthy and fail the next call. Use when the user asks what integrations are available; always call this before mcp_add so you can pick a unique name. Present as a markdown table.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},

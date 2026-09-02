@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -76,11 +78,12 @@ func newExpiringServer(t *testing.T, expireAfter int) (*expiringSSEServer, *http
 			return
 		}
 
+		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.Unmarshal(body, &req)
 		w.WriteHeader(http.StatusAccepted)
 
 		f.mu.Lock()
@@ -91,8 +94,18 @@ func newExpiringServer(t *testing.T, expireAfter int) (*expiringSSEServer, *http
 			reply = fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05",`+
 				`"capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"}}}`, req.ID)
 		case "tools/list":
-			reply = fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping"}]}}`, req.ID)
+			reply = fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,`+
+				`"result":{"tools":[{"name":"ping"},{"name":"boom"}]}}`, req.ID)
 		case "tools/call":
+			if strings.Contains(string(body), `"boom"`) {
+				reply = fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,`+
+					`"error":{"code":-32000,"message":"the kettle is empty"}}`, req.ID)
+				f.mu.Unlock()
+				if ch := f.streamFor(id); ch != nil {
+					ch <- reply
+				}
+				return
+			}
 			f.calls++
 			if f.expireAfter > 0 && f.calls >= f.expireAfter {
 				// Forget every session: the next POST 404s.
@@ -110,6 +123,12 @@ func newExpiringServer(t *testing.T, expireAfter int) (*expiringSSEServer, *http
 	}))
 	t.Cleanup(srv.Close)
 	return f, srv
+}
+
+func (f *expiringSSEServer) streamFor(id string) chan string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.streams[id]
 }
 
 func (f *expiringSSEServer) sessionCount() int {
@@ -185,5 +204,55 @@ func TestRebuildIsAttemptedOnce(t *testing.T) {
 	// never a retry loop inside a single call.
 	if got := fake.sessionCount(); got > 4 {
 		t.Errorf("sessions opened = %d; a single call retried more than once", got)
+	}
+}
+
+// Health must describe the last call, not a constant.
+//
+// It was hardcoded true, so a server whose session had expired listed
+// as healthy while every call returned 404 — and the operator reading
+// mcp_list went looking for the fault somewhere else.
+func TestHealthReflectsTheLastCall(t *testing.T) {
+	t.Parallel()
+	_, srv := newExpiringServer(t, 0) // never expires
+
+	l := NewLoader(LoaderConfig{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := l.StartDirect(ctx, map[string]ServerConfig{"fake": {URL: srv.URL + "/sse"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+
+	// Before any call: healthy on the strength of the handshake, and
+	// last_call_at empty so a reader can tell the two apart.
+	view := l.ListServers()[0]
+	if !view.Healthy || view.LastCallAt != "" {
+		t.Fatalf("view before any call = %+v; want healthy with no call recorded", view)
+	}
+	if view.URL == "" {
+		t.Error("a remote server's view does not say where it is")
+	}
+
+	if _, err := l.Invoke(ctx, compute.SkillInvokeRequest{Name: "fake.ping"}); err != nil {
+		t.Fatal(err)
+	}
+	view = l.ListServers()[0]
+	if !view.Healthy || view.LastCallAt == "" || view.LastError != "" {
+		t.Fatalf("view after a good call = %+v", view)
+	}
+
+	// A failure AT THE SERVER has to show, and say what it was. A
+	// tool that does not exist locally never reaches the server and
+	// says nothing about its health.
+	if _, err := l.Invoke(ctx, compute.SkillInvokeRequest{Name: "fake.boom"}); err == nil {
+		t.Fatal("a server-side error was reported as success")
+	}
+	view = l.ListServers()[0]
+	if view.Healthy {
+		t.Error("still healthy after a failed call")
+	}
+	if view.LastError == "" {
+		t.Error("unhealthy with no reason given, which is the state this replaced")
 	}
 }
