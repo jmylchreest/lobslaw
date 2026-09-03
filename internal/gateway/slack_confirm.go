@@ -59,7 +59,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 	// Offered without grantability, for the reason the Telegram path
 	// explains: a command with no stable form cannot be named by a
 	// grant, but its tier can, and those are the commands that repeat.
-	perTier := resp.ConfirmationAction != "" && riskGrantOffered(resp.ConfirmationRisk)
+	perTier := resp.ConfirmationAction != "" && riskGrantOffered(resp.ConfirmationLabels)
 
 	if perCommand || perTier {
 		subject := grantSubject(req.Claims)
@@ -68,7 +68,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 			action:   resp.ConfirmationAction,
 			resource: resp.ConfirmationResource,
 			subject:  subject,
-			risk:     resp.ConfirmationRisk,
+			labels:   resp.ConfirmationLabels,
 		}
 		h.pendingScopeMu.Unlock()
 
@@ -77,7 +77,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 		}
 		if perTier {
 			buttons = append(buttons,
-				button(riskGrantLabel(resp.ConfirmationRisk), "prompt:approve-session-risk:"+p.ID, ""))
+				button(riskGrantLabel(resp.ConfirmationLabels), "prompt:approve-session-risk:"+p.ID, ""))
 		}
 		if perCommand && subject != "" && h.cfg.ApprovalRules != nil {
 			buttons = append(buttons, button("Always allow", "prompt:approve-always:"+p.ID, ""))
@@ -289,27 +289,39 @@ func (h *SlackHandler) grantForRisk(ctx context.Context, promptID, convID string
 	// Re-checked rather than trusted from the tap: in a Slack channel
 	// the buttons are visible to the room and the action_id is not a
 	// secret.
-	if !riskGrantOffered(op.risk) {
-		h.log.Warn("slack: refusing a tier grant for an unofferable tier",
-			"action", op.action, "risk", op.risk)
+	if !riskGrantOffered(op.labels) {
+		h.log.Warn("slack: refusing a label grant: not every label is grantable",
+			"action", op.action, "labels", op.labels)
 		return ""
 	}
-	key := compute.RiskGrantResource(op.risk)
-	if key == "" {
+	// One grant per label, so a conversation that has approved reads
+	// and later approves writes satisfies a command carrying both —
+	// without anybody having granted that exact pair.
+	keys := make([]string, 0, len(op.labels))
+	for _, l := range op.labels {
+		key := compute.RiskGrantResource(l)
+		if key == "" {
+			return ""
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
 		return ""
 	}
 	grantCtx := turn.WithIdentity(ctx, turn.Identity{
 		Channel:   ChannelSlack,
 		ChannelID: convID,
 	})
-	if !h.cfg.Approvals.Grant(grantCtx, op.action, key) {
-		h.log.Warn("slack: could not record tier approval",
-			"action", op.action, "risk", op.risk)
-		return ""
+	for _, key := range keys {
+		if !h.cfg.Approvals.Grant(grantCtx, op.action, key) {
+			h.log.Warn("slack: could not record label approval",
+				"action", op.action, "label", key)
+			return ""
+		}
 	}
-	h.log.Info("slack: risk tier approved for this conversation",
-		"action", op.action, "risk", op.risk, "conversation", convID)
-	return op.risk.Label()
+	h.log.Info("slack: labels approved for this conversation",
+		"action", op.action, "labels", op.labels, "conversation", convID)
+	return compute.RenderLabels(op.labels)
 }
 
 func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID string) string {

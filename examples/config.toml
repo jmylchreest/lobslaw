@@ -67,14 +67,16 @@ enabled = true
 enabled             = true
 default_chain       = "fast"
 
-# Which shell commands are worth asking about, by what they DO.
-#   strict   — ask about every command.
-#   standard — ask about everything except commands that only read.
-#   trusted  — additionally allow ordinary local writes.
-# Nothing runs unasked in any mode if it reaches the network, deletes,
-# changes the machine, runs as root, or cannot be read; and no mode
-# reaches the hardline floor. `lobslaw policy classify '<cmd>'` shows
-# what any command is classified as.
+# What runs WITHOUT being asked about, as a set of labels. Approval is
+# a subset check: every label a command carries must be in this set.
+#   "strict"    approves nothing
+#   "standard"  approves reads          (the default)
+#   "trusted"   approves reads, writes
+#   ["reads", "writes", "deletes"]      or say exactly what you mean
+#
+# Labels: reads, writes, deletes, disrupts, network, privilege.
+# "unreadable" cannot be approved. No mode reaches the hardline floor.
+# `lobslaw policy classify '<cmd>'` shows how any command is read.
 approval_mode       = "standard"
 
 # OpenRouter as the default example provider. Public trust tier.

@@ -84,7 +84,7 @@ func ShellGrantResource(params map[string]string) GrantTarget {
 	// what the command does are different questions, and the most
 	// common case — a compound probe with no stable form — is exactly
 	// the one where the tier is the only thing anybody can act on.
-	t.Risk = ClassifyRisk(params["command"]).Tier
+	t.Labels = ClassifyRisk(params["command"]).Labels
 	return t
 }
 

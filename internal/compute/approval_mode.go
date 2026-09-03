@@ -23,18 +23,23 @@ import (
 // outranks them, and `lobslaw policy list` shows the whole posture in
 // one place rather than half of it being invisible behaviour in Go.
 
-// ApprovalMode is the shipped posture for shell command approval.
+// ApprovalMode is a NAMED SET of labels, not a point on a scale.
+//
+// The tiers this replaces were ranked, so an approved set had to be a
+// PREFIX of that ranking: you could have reads, or reads and writes,
+// but not reads and deletes without also taking everything ranked
+// between them. Labels are a set, so an operator says exactly what
+// they mean and nothing else comes along with it.
 type ApprovalMode string
 
 const (
-	// ApprovalStrict asks about every command, whatever it does. What
-	// the system did before there was a classifier, kept so an
-	// operator who wants it can say so rather than having it taken
-	// away.
+	// ApprovalStrict approves nothing. Every command is asked about,
+	// which is what the system did before it could classify anything —
+	// kept so an operator who wants it can say so rather than having
+	// it taken away.
 	ApprovalStrict ApprovalMode = "strict"
 
-	// ApprovalStandard asks about everything except commands that only
-	// read. The shipped default.
+	// ApprovalStandard approves reads. The shipped default.
 	//
 	// Not a loosening of the gate so much as a repair of it: a gate
 	// that asks eight times in four minutes is answered by reflex, and
@@ -42,16 +47,9 @@ const (
 	// be asked is what makes the remaining ones legible.
 	ApprovalStandard ApprovalMode = "standard"
 
-	// ApprovalTrusted additionally allows ordinary local writes, and
-	// still asks about anything that reaches the network, deletes,
-	// changes the machine, runs as root, or cannot be read.
-	//
-	// For a node whose shell already runs inside a sandbox it can
-	// afford to lose. Note what this does NOT relax: the scratch-path
-	// de-escalation in the classifier only ever turns a deletion into
-	// a write, so this is the one mode where that de-escalation can
-	// cause something to run unasked — which is why it is opt-in and
-	// says so in the documentation.
+	// ApprovalTrusted approves reads and ordinary local writes, and
+	// still asks about anything that deletes, disrupts, reaches the
+	// network, touches privilege, or could not be read.
 	ApprovalTrusted ApprovalMode = "trusted"
 )
 
@@ -59,57 +57,111 @@ const (
 // otherwise.
 const DefaultApprovalMode = ApprovalStandard
 
-// Valid reports whether m is one of the three.
+// approvalPresets is what each named mode expands to.
+//
+// LabelUnreadable appears in none of them and must not be added to
+// one. A command nobody could read is the case the whole gate exists
+// for; approving that class by name would be approving everything.
+var approvalPresets = map[ApprovalMode][]RiskLabel{
+	ApprovalStrict:   {},
+	ApprovalStandard: {LabelReads},
+	ApprovalTrusted:  {LabelReads, LabelWrites},
+}
+
+// Valid reports whether m is one of the shipped presets.
 func (m ApprovalMode) Valid() bool {
-	switch m {
-	case ApprovalStrict, ApprovalStandard, ApprovalTrusted:
-		return true
-	}
-	return false
+	_, ok := approvalPresets[m]
+	return ok
 }
 
-// AutoAllowed is the tiers this mode runs without asking.
+// ApprovedLabels resolves an operator's setting into the set of labels
+// that run without asking.
 //
-// Network, destructive and unknown are absent from every mode, and
-// there is no mode that includes them. A posture that waves through a
-// command nobody could read is not a posture, and if somebody wants
-// one they can write the policy rule and own it.
-func (m ApprovalMode) AutoAllowed() []CommandRisk {
-	switch m {
-	case ApprovalStandard:
-		return []CommandRisk{RiskRead}
-	case ApprovalTrusted:
-		return []CommandRisk{RiskRead, RiskWrite}
-	default:
-		return nil
-	}
-}
-
-// ParseApprovalMode reads an operator's setting, reporting whether it
-// was recognised. An empty setting takes the default; anything else
-// unrecognised is an error rather than a silent fallback, because a
-// typo that quietly selected a posture nobody chose is the failure
-// this whole area is trying to remove.
-func ParseApprovalMode(s string) (ApprovalMode, error) {
-	trimmed := ApprovalMode(strings.ToLower(strings.TrimSpace(s)))
-	if trimmed == "" {
-		return DefaultApprovalMode, nil
-	}
-	if !trimmed.Valid() {
-		return DefaultApprovalMode, fmt.Errorf(
-			"unknown approval_mode %q (want %q, %q or %q)",
-			s, ApprovalStrict, ApprovalStandard, ApprovalTrusted)
-	}
-	return trimmed, nil
-}
-
-// CommandRiskCondition is the policy condition key a rule uses to
-// name a tier:
+// Accepts either a preset name or an explicit list:
 //
-//	conditions = [{ key = "command_risk", op = "in", value = "read,write" }]
+//	approval_mode = "trusted"
+//	approval_mode = ["reads", "writes", "deletes"]
+//
+// An explicit list is not second-class. It is how a deployment says
+// something the three presets cannot — "deletion inside this
+// throwaway box is fine, but I still want to hear about egress" — and
+// the presets are sugar for the common shapes rather than the only
+// vocabulary.
+//
+// An unrecognised entry is an ERROR rather than a silent drop. A typo
+// that quietly approved less would be merely annoying; one that
+// quietly approved nothing looks exactly like the gate working, and
+// this codebase has spent enough time finding config that was
+// discarded without a word.
+func ApprovedLabels(setting []string) (map[RiskLabel]bool, error) {
+	trimmed := make([]string, 0, len(setting))
+	for _, s := range setting {
+		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
+			trimmed = append(trimmed, s)
+		}
+	}
+	if len(trimmed) == 0 {
+		return labelSet(approvalPresets[DefaultApprovalMode]), nil
+	}
+	// One entry that names a preset expands to it. Two entries never
+	// do: ["standard", "deletes"] is a category error rather than a
+	// shorthand, and guessing which the operator meant is worse than
+	// telling them.
+	if len(trimmed) == 1 {
+		if preset, ok := approvalPresets[ApprovalMode(trimmed[0])]; ok {
+			return labelSet(preset), nil
+		}
+	}
+	out := map[RiskLabel]bool{}
+	for _, s := range trimmed {
+		l := RiskLabel(s)
+		if !l.Valid() {
+			return labelSet(approvalPresets[DefaultApprovalMode]),
+				fmt.Errorf("unknown approval_mode entry %q (want a preset %q/%q/%q, or labels from %s)",
+					s, ApprovalStrict, ApprovalStandard, ApprovalTrusted, RenderLabels(AllRiskLabels))
+		}
+		if l == LabelUnreadable {
+			return labelSet(approvalPresets[DefaultApprovalMode]),
+				fmt.Errorf("approval_mode cannot approve %q: a command nobody could read is the case the gate exists for", l)
+		}
+		out[l] = true
+	}
+	return out, nil
+}
+
+// labelSet turns a slice into the membership map the gate uses.
+func labelSet(labels []RiskLabel) map[RiskLabel]bool {
+	out := make(map[RiskLabel]bool, len(labels))
+	for _, l := range labels {
+		out[l] = true
+	}
+	return out
+}
+
+// SortedLabels renders a set deterministically, for logging and
+// for building a rule's condition value.
+func SortedLabels(set map[RiskLabel]bool) []RiskLabel {
+	out := make([]RiskLabel, 0, len(set))
+	for _, l := range AllRiskLabels {
+		if set[l] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// CommandRiskCondition is the policy condition key a rule uses to name
+// the labels it approves:
+//
+//	conditions = [{ key = "command_risk", op = "in", value = "reads,writes" }]
 const CommandRiskCondition = "command_risk"
 
 // EvaluateCommandRisk is the condition evaluator for CommandRiskCondition.
+//
+// A SUBSET CHECK: the condition holds when EVERY label the command
+// carries is named in the value. Not "the tier is one of these" —
+// there is no tier, and a command that reads and deletes is not
+// approved by a rule naming only reads.
 //
 // Registered on the policy engine at wiring time. Until this existed
 // no evaluator was registered anywhere in the tree, and
@@ -117,26 +169,33 @@ const CommandRiskCondition = "command_risk"
 // — so this must be registered BEFORE that audit runs or a working
 // rule is logged as broken at every boot.
 //
-// A request that carries no tier yields (false, nil): "this rule does
+// A request carrying no labels yields (false, nil): "this rule does
 // not apply". Deliberately not an error, because an error on a
 // restrictive rule applies it anyway (see Engine.Evaluate), and a
 // memory write is not a shell command that failed to classify — it is
 // a different question entirely.
 func EvaluateCommandRisk(ctx context.Context, cond types.Condition) (bool, error) {
-	tier, ok := CommandRiskFrom(ctx)
-	if !ok {
+	labels, ok := CommandLabelsFrom(ctx)
+	if !ok || len(labels) == 0 {
 		return false, nil
 	}
-	want := parseRiskList(cond.Value)
+	want := parseLabelList(cond.Value)
 	if len(want) == 0 {
-		return false, fmt.Errorf("condition %q has no tiers in its value %q",
+		return false, fmt.Errorf("condition %q names no labels in its value %q",
 			CommandRiskCondition, cond.Value)
+	}
+	subset := true
+	for _, l := range labels {
+		if !want[l] {
+			subset = false
+			break
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(cond.Op)) {
 	case "in", "":
-		return want[tier], nil
+		return subset, nil
 	case "not_in":
-		return !want[tier], nil
+		return !subset, nil
 	default:
 		// Fail-closed on an operator's typo rather than guessing: an
 		// unknown operator on an allow rule must not be read as "in".
@@ -144,39 +203,37 @@ func EvaluateCommandRisk(ctx context.Context, cond types.Condition) (bool, error
 	}
 }
 
-// parseRiskList reads a comma-separated tier list, dropping anything
-// outside the enum.
-func parseRiskList(value string) map[CommandRisk]bool {
-	out := map[CommandRisk]bool{}
+// parseLabelList reads a comma-separated label list, dropping anything
+// outside the closed set.
+func parseLabelList(value string) map[RiskLabel]bool {
+	out := map[RiskLabel]bool{}
 	for _, part := range strings.Split(value, ",") {
-		tier := CommandRisk(strings.ToLower(strings.TrimSpace(part)))
-		if tier.Valid() {
-			out[tier] = true
+		if l := RiskLabel(strings.ToLower(strings.TrimSpace(part))); l.Valid() {
+			out[l] = true
 		}
 	}
 	return out
 }
 
-// ApprovalModeDefaults is the rules a mode installs.
+// ApprovalModeDefaults is the rule an approved-label set installs.
 //
-// They must be evaluated BEFORE ShellApprovalDefault, and the engine
-// walks its defaults in slice order — so callers append these first.
+// It must be evaluated BEFORE ShellApprovalDefault, and the engine
+// walks its defaults in slice order — so callers append this first.
 // Ordering rather than priority because both sit at the same floor,
 // and a default that could outrank an operator's rule by winning a
 // priority race would not be a default.
 //
-// Strict returns nothing, which is the same shape a node had before
-// modes existed rather than a rule saying "ask", so switching to
-// strict removes behaviour rather than adding a second rule that
-// duplicates the one already there.
-func ApprovalModeDefaults(mode ApprovalMode) []types.PolicyRule {
-	tiers := mode.AutoAllowed()
-	if len(tiers) == 0 {
+// An empty approved set returns nothing, which is the same shape a
+// node had before modes existed rather than a rule saying "ask" that
+// duplicates the one below it.
+func ApprovalModeDefaults(approved map[RiskLabel]bool) []types.PolicyRule {
+	labels := SortedLabels(approved)
+	if len(labels) == 0 {
 		return nil
 	}
-	names := make([]string, 0, len(tiers))
-	for _, t := range tiers {
-		names = append(names, string(t))
+	names := make([]string, 0, len(labels))
+	for _, l := range labels {
+		names = append(names, string(l))
 	}
 	return []types.PolicyRule{{
 		ID:       "config:compute.approval_mode",

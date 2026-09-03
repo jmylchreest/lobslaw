@@ -83,20 +83,20 @@ func policyClassify(args []string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(struct {
 			Command  string                `json:"command"`
-			Tier     compute.CommandRisk   `json:"tier"`
-			Reason   string                `json:"reason"`
+			Labels   []compute.RiskLabel   `json:"labels"`
+			Why      string                `json:"why,omitempty"`
 			Headline string                `json:"headline"`
 			Scratch  []string              `json:"scratch_paths"`
 			Steps    []compute.RiskSegment `json:"steps"`
 			Modes    map[string]string     `json:"approval_modes"`
 		}{
 			Command:  command,
-			Tier:     v.Tier,
-			Reason:   v.Reason,
+			Labels:   v.Labels,
+			Why:      v.Why,
 			Headline: compute.RiskHeadline(v),
 			Scratch:  compute.ActiveScratchPaths(),
 			Steps:    v.Segments,
-			Modes:    modeOutcomes(v.Tier),
+			Modes:    modeOutcomes(v),
 		})
 	}
 
@@ -107,13 +107,14 @@ func policyClassify(args []string) error {
 	if len(v.Segments) > 1 {
 		fmt.Println()
 		fmt.Println("steps:")
-		for i, s := range v.Segments {
-			fmt.Printf("  %2d  %-12s %-34s %s\n", i+1, s.Tier, s.Reason, s.Raw)
+		for i, seg := range v.Segments {
+			fmt.Printf("  %2d  %-28s %-20s %s\n",
+				i+1, compute.RenderLabels(seg.Labels), seg.Why, seg.Raw)
 		}
 	}
 	fmt.Println()
 	fmt.Println("under each approval mode:")
-	outcomes := modeOutcomes(v.Tier)
+	outcomes := modeOutcomes(v)
 	for _, mode := range []compute.ApprovalMode{
 		compute.ApprovalStrict, compute.ApprovalStandard, compute.ApprovalTrusted,
 	} {
@@ -127,24 +128,6 @@ func policyClassify(args []string) error {
 	fmt.Println("scratch roots:", strings.Join(compute.ActiveScratchPaths(), ", "))
 	fmt.Println("(* is the shipped default; the hardline floor applies in every mode)")
 	return nil
-}
-
-// modeOutcomes says what each mode would do with this tier.
-func modeOutcomes(tier compute.CommandRisk) map[string]string {
-	out := map[string]string{}
-	for _, mode := range []compute.ApprovalMode{
-		compute.ApprovalStrict, compute.ApprovalStandard, compute.ApprovalTrusted,
-	} {
-		outcome := "asks"
-		for _, allowed := range mode.AutoAllowed() {
-			if allowed == tier {
-				outcome = "runs without asking"
-				break
-			}
-		}
-		out[string(mode)] = outcome
-	}
-	return out
 }
 
 // classifyWithModel asks the configured command_risk model and folds
@@ -217,4 +200,28 @@ func timeoutLabel(d time.Duration) string {
 		return "(call-site default)"
 	}
 	return d.String()
+}
+
+// modeOutcomes says what each shipped preset would do with this
+// verdict.
+//
+// Approval is a subset check, so the answer is simply whether every
+// label the command carries is one that preset approves — no
+// comparison, no ranking.
+func modeOutcomes(v compute.RiskVerdict) map[string]string {
+	out := map[string]string{}
+	for _, mode := range []compute.ApprovalMode{
+		compute.ApprovalStrict, compute.ApprovalStandard, compute.ApprovalTrusted,
+	} {
+		approved, err := compute.ApprovedLabels([]string{string(mode)})
+		if err != nil {
+			continue
+		}
+		outcome := "asks"
+		if v.Approved(approved) {
+			outcome = "runs without asking"
+		}
+		out[string(mode)] = outcome
+	}
+	return out
 }

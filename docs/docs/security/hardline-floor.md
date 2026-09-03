@@ -35,10 +35,10 @@ a human can answer. The floor did not move: it is checked before policy and befo
 reaches past it.
 
 Nothing about **risk classification** reaches it either. `[compute] approval_mode` decides which
-tiers are worth asking a human about, `scratch_paths` decides where a deletion counts as a write,
+labels are worth asking a human about, `scratch_paths` decides where a deletion counts as a write,
 and an optional model may offer a second opinion on commands the classifier cannot read — all of
 which happen *after* the floor has already refused what it refuses. A command the floor denies is
-never classified, never prompted about, and never granted, in any mode.
+never classified, never prompted about, and never granted, under any approval_mode — including one that names every label.
 
 ## What it refuses
 

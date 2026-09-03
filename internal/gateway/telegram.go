@@ -737,7 +737,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	// are exactly the ones an environment-probing agent produces, so
 	// the per-command button is missing precisely when the repetition
 	// is worst. A tier is nameable even when the command is not.
-	perTier := resp.ConfirmationAction != "" && riskGrantOffered(resp.ConfirmationRisk)
+	perTier := resp.ConfirmationAction != "" && riskGrantOffered(resp.ConfirmationLabels)
 
 	if perCommand || perTier {
 		subject := grantSubject(req.Claims)
@@ -746,7 +746,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 			action:   resp.ConfirmationAction,
 			resource: resp.ConfirmationResource,
 			subject:  subject,
-			risk:     resp.ConfirmationRisk,
+			labels:   resp.ConfirmationLabels,
 		}
 		h.pendingScopeMu.Unlock()
 
@@ -757,7 +757,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 		}
 		if perTier {
 			buttons = append(buttons, map[string]string{
-				"text":          riskGrantLabel(resp.ConfirmationRisk),
+				"text":          riskGrantLabel(resp.ConfirmationLabels),
 				"callback_data": "prompt:approve-session-risk:" + p.ID,
 			})
 		}
@@ -1713,7 +1713,7 @@ type scopedOperation struct {
 	resource string
 	// risk is the tier the operation classified into, for the button
 	// that grants the whole tier rather than this one command.
-	risk compute.CommandRisk
+	labels []compute.RiskLabel
 	// subject is the principal an "always" grant binds to, captured
 	// when the prompt was raised rather than read off the callback.
 	// A callback is attacker-shaped input; the turn that triggered
@@ -1778,27 +1778,39 @@ func (h *TelegramHandler) grantForRisk(ctx context.Context, promptID string, q *
 	// Re-checked here rather than trusted from the tap. The button is
 	// only rendered for the offerable tiers, but a callback is
 	// attacker-shaped input and the id in it is guessable.
-	if !riskGrantOffered(op.risk) {
-		h.log.Warn("telegram: refusing a tier grant for an unofferable tier",
-			"action", op.action, "risk", op.risk)
+	if !riskGrantOffered(op.labels) {
+		h.log.Warn("telegram: refusing a label grant: not every label is grantable",
+			"action", op.action, "labels", op.labels)
 		return ""
 	}
-	key := compute.RiskGrantResource(op.risk)
-	if key == "" {
+	// One grant per label, so a conversation that has approved reads
+	// and later approves writes satisfies a command carrying both —
+	// without anybody having granted that exact pair.
+	keys := make([]string, 0, len(op.labels))
+	for _, l := range op.labels {
+		key := compute.RiskGrantResource(l)
+		if key == "" {
+			return ""
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
 		return ""
 	}
 	grantCtx := turn.WithIdentity(ctx, turn.Identity{
 		Channel:   "telegram",
 		ChannelID: strconv.FormatInt(q.Message.Chat.ID, 10),
 	})
-	if !h.cfg.Approvals.Grant(grantCtx, op.action, key) {
-		h.log.Warn("telegram: could not record tier approval",
-			"action", op.action, "risk", op.risk)
-		return ""
+	for _, key := range keys {
+		if !h.cfg.Approvals.Grant(grantCtx, op.action, key) {
+			h.log.Warn("telegram: could not record label approval",
+				"action", op.action, "label", key)
+			return ""
+		}
 	}
-	h.log.Info("telegram: risk tier approved for this chat",
-		"action", op.action, "risk", op.risk, "chat_id", q.Message.Chat.ID)
-	return op.risk.Label()
+	h.log.Info("telegram: labels approved for this chat",
+		"action", op.action, "labels", op.labels, "chat_id", q.Message.Chat.ID)
+	return compute.RenderLabels(op.labels)
 }
 
 // grantForSession records "approved for the rest of this chat" for the

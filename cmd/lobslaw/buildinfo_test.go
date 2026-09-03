@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -75,9 +76,27 @@ func TestUnparseableBuildTimeSurvives(t *testing.T) {
 	}
 }
 
+// stampMu serialises the tests that swap the linker-set globals.
+//
+// Version, Commit and BuildDate are package-level and set by -ldflags,
+// so a test that wants to see a particular stamp has to write them —
+// and every test here is t.Parallel(), so two of them writing at once
+// is a data race the detector finds roughly one run in six. It failed
+// on CI for the first time on an unrelated pull request, which is the
+// way these are usually met.
+//
+// A mutex rather than dropping t.Parallel(): the parallelism is not the
+// bug, the unsynchronised global is, and the tests are fast enough that
+// serialising just this critical section costs nothing.
+var stampMu sync.Mutex
+
 func stampFor(t *testing.T, version, commit, built string) func() {
 	t.Helper()
+	stampMu.Lock()
 	oldV, oldC, oldB := Version, Commit, BuildDate
 	Version, Commit, BuildDate = version, commit, built
-	return func() { Version, Commit, BuildDate = oldV, oldC, oldB }
+	return func() {
+		Version, Commit, BuildDate = oldV, oldC, oldB
+		stampMu.Unlock()
+	}
 }

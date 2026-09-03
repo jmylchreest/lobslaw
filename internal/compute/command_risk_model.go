@@ -85,19 +85,21 @@ func ParseRiskTrust(s string) (RiskTrust, error) {
 // than one.
 const riskJudgeSystemPrompt = `You classify a shell command by what it DOES. Reply with JSON only, no prose, no code fences:
 
-{"tier": "read"|"write"|"network"|"destructive"|"unknown", "confidence": "high"|"low"}
+{"tier": "reads"|"writes"|"deletes"|"disrupts"|"network"|"privilege"|"unreadable", "confidence": "high"|"low"}
 
-read: inspects state and changes nothing.
-write: creates, copies, appends to or edits files in ordinary places.
+reads: inspects state and changes nothing.
+writes: creates, copies, appends to or edits files, recoverably.
+deletes: removes data. Undone by a backup, or not at all.
+disrupts: takes something down — restarts or stops a service, kills a process, unmounts a filesystem, flushes a firewall. Undone by the opposite command, in seconds.
 network: contacts another host — fetching, uploading, or running something remotely.
-destructive: deletes data, kills processes, changes machine or system state, or runs as root.
-unknown: you cannot tell what it does.
+privilege: runs as root, or changes who may become root.
+unreadable: you cannot tell what it does.
 
-Judge the WHOLE command line — every step of a pipeline, a ;-list or an &&-chain — and answer with the MOST SEVERE tier any step reaches.
+Judge the WHOLE command line — every step of a pipeline, a ;-list or an &&-chain — and answer with the SINGLE most significant thing it does.
 
-Deleting under a throwaway directory is "write"; deleting anything else is "destructive". Writing into /etc, /usr, /bin, /boot or / is "destructive" whatever the program.
+Deleting under a throwaway directory is "writes"; deleting anything else is "deletes". Writing into /etc, /usr, /bin, /boot or / is "privilege" whatever the program, because whoever controls what root runs controls the machine.
 
-Answer "unknown" if any part is something you cannot read: a variable whose value you cannot see, a command substitution, or code fetched and piped into a shell.
+Answer "unreadable" if any part is something you cannot read: a variable whose value you cannot see, a command substitution, or code fetched and piped into a shell.
 
 confidence: "low" whenever you are guessing. A low-confidence answer is thrown away, so guessing gains you nothing.`
 
@@ -165,7 +167,7 @@ func (j *RiskJudge) Trust() RiskTrust {
 // every failure mode collapsed into one: no judge, no provider, a
 // timeout, unparseable JSON, a tier outside the enum, or an answer the
 // model itself marked low-confidence.
-func (j *RiskJudge) Classify(ctx context.Context, command string) (CommandRisk, bool) {
+func (j *RiskJudge) Classify(ctx context.Context, command string) (RiskLabel, bool) {
 	cmd := strings.TrimSpace(command)
 	if j == nil || j.provider == nil || cmd == "" || len(cmd) > riskCommandMax {
 		return "", false
@@ -196,7 +198,7 @@ func (j *RiskJudge) Classify(ctx context.Context, command string) (CommandRisk, 
 
 // parseRiskVerdict reads the model's object, discarding anything it
 // got wrong rather than propagating it.
-func parseRiskVerdict(content string, log *slog.Logger) (CommandRisk, bool) {
+func parseRiskVerdict(content string, log *slog.Logger) (RiskLabel, bool) {
 	raw := extractObject(content)
 	if raw == "" {
 		log.Debug("command risk: no JSON object in the reply")
@@ -216,12 +218,12 @@ func parseRiskVerdict(content string, log *slog.Logger) (CommandRisk, bool) {
 	if strings.ToLower(strings.TrimSpace(parsed.Confidence)) != "high" {
 		return "", false
 	}
-	tier := CommandRisk(strings.ToLower(strings.TrimSpace(parsed.Tier)))
-	if !tier.Valid() {
-		log.Debug("command risk: verdict outside the enum", "tier", parsed.Tier)
+	label := RiskLabel(strings.ToLower(strings.TrimSpace(parsed.Tier)))
+	if !label.Valid() {
+		log.Debug("command risk: verdict outside the enum", "label", parsed.Tier)
 		return "", false
 	}
-	return tier, true
+	return label, true
 }
 
 // activeRiskJudge is the judge in force. A package var for the reason
@@ -254,38 +256,64 @@ func VerdictFor(ctx context.Context, params map[string]string) RiskVerdict {
 // AdjudicateWith combines a static verdict with a model's, under the
 // trust setting.
 //
-// Split out from VerdictFor so the combination rules — the part that
-// decides whether something runs unasked — are testable without a
-// provider, and so `lobslaw policy classify --with-model` folds the
-// verdict in through THIS code rather than a second implementation
-// that could disagree with the running node.
+// Labels make this markedly simpler than the tiers did. There is no
+// ordering to reason about, because the two settings are now set
+// operations:
+//
+//   - advisory ADDS the model's label to the set. Adding a label can
+//     only make the subset check stricter, so a wrong answer costs a
+//     confirmation nobody needed to give and can never let something
+//     through. That is why it is the default and why it needs no
+//     notion of "worse".
+//   - resolve_unknown additionally REPLACES a set that is nothing but
+//     unreadable. That is the one case where the classifier had no
+//     opinion at all, so there is nothing to lower — and it is the
+//     case that makes an `if`/`for` probe stop asking every time.
+//
+// Where the static classifier positively determined a label, that
+// label stays. A command cannot argue its own deletion away.
+//
+// Split out from VerdictFor so the rules — the part that decides
+// whether something runs unasked — are testable without a provider,
+// and so `policy classify --with-model` folds the verdict in through
+// THIS code rather than a second implementation that could disagree
+// with the running node.
 func AdjudicateWith(ctx context.Context, static RiskVerdict, command string, judge *RiskJudge) RiskVerdict {
 	if judge == nil {
 		return static
 	}
-	// Nothing to gain: a read verdict cannot be lowered and asking
-	// costs a model call on the path that is meant to be free.
-	if static.Tier == RiskRead {
+	// Nothing to gain: a read-only verdict is already the cheapest
+	// answer there is, and asking would spend a model call on the path
+	// this whole feature exists to make free.
+	if len(static.Labels) == 1 && static.Labels[0] == LabelReads {
 		return static
 	}
-	tier, ok := judge.Classify(ctx, command)
+	label, ok := judge.Classify(ctx, command)
 	if !ok {
 		return static
 	}
 
+	onlyUnreadable := len(static.Labels) == 1 && static.Labels[0] == LabelUnreadable
 	switch {
-	case tier.Rank() > static.Tier.Rank():
-		// Raising is allowed under every trust setting. The cost of a
-		// wrong raise is a confirmation somebody did not need to give.
-		static.Tier = tier
-		static.Reason = reasonFor[tier]
+	case onlyUnreadable && judge.Trust() == RiskTrustResolveUnknown && label != LabelUnreadable:
+		static.Labels = L(label)
+		static.Why = "model_verdict"
 		static.FromModel = true
-	case static.Tier == RiskUnknown && judge.Trust() == RiskTrustResolveUnknown && tier != RiskUnknown:
-		// The one permitted de-escalation, and only into the gap where
-		// the static classifier had no opinion at all.
-		static.Tier = tier
-		static.Reason = reasonFor[tier]
-		static.FromModel = true
+	case !hasLabel(static.Labels, label):
+		// Advisory, and the only move it may make: add. Under
+		// resolve_unknown this is also what happens to a verdict the
+		// classifier DID read, which is the guarantee that setting
+		// cannot weaken a positive determination.
+		//
+		// Compared before and after rather than assumed, because
+		// merging can be a no-op: "reads" beside a stronger label is
+		// dropped, so a model answering "reads" about a deletion
+		// changes nothing and must not be reported as though it had.
+		merged := mergeLabels(static.Labels, L(label))
+		if len(merged) != len(static.Labels) {
+			static.Labels = merged
+			static.FromModel = true
+		}
 	}
 	return static
 }

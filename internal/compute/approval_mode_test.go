@@ -24,7 +24,7 @@ import (
 // appends its defaults AFTER sorting, so slice order is the tiebreak
 // between an allow and the require_confirmation it sits in front of.
 
-func modeGatedExecutor(t *testing.T, mode ApprovalMode, rules ...*lobslawv1.PolicyRule) (*Executor, *SessionApprovals) {
+func modeGatedExecutor(t *testing.T, approve []string, rules ...*lobslawv1.PolicyRule) (*Executor, *SessionApprovals) {
 	t.Helper()
 	dir := t.TempDir()
 	key, err := crypto.GenerateKey()
@@ -55,7 +55,11 @@ func modeGatedExecutor(t *testing.T, mode ApprovalMode, rules ...*lobslawv1.Poli
 	eng := policy.NewEngine(store, slog.New(slog.DiscardHandler))
 	// Exactly what wireApprovalGates does, in the order it does it.
 	eng.RegisterCondition(CommandRiskCondition, EvaluateCommandRisk)
-	defaults := append(ApprovalModeDefaults(mode), ShellApprovalDefault(),
+	approved, err := ApprovedLabels(approve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := append(ApprovalModeDefaults(approved), ShellApprovalDefault(),
 		// The reaching-off-the-box defaults go in for the same reason
 		// wireApprovalGates installs them whenever the shell is
 		// registered: `curl` from shell_command resolves to net:fetch,
@@ -109,7 +113,7 @@ func TestApprovalModeDecidesWhatRunsUnasked(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.mode), func(t *testing.T) {
 			t.Parallel()
-			e, _ := modeGatedExecutor(t, tt.mode)
+			e, _ := modeGatedExecutor(t, []string{string(tt.mode)})
 			for _, cmd := range tt.allowed {
 				if err := checkShell(context.Background(), t, e, cmd); err != nil {
 					t.Errorf("%q was asked about under %s: %v", cmd, tt.mode, err)
@@ -128,13 +132,16 @@ func TestApprovalModeDecidesWhatRunsUnasked(t *testing.T) {
 // No mode waves through the network, a deletion, or something nobody
 // could read. If this ever passes for one of them, the mode table has
 // grown a tier it should not have.
-func TestNoModeAllowsTheDangerousTiers(t *testing.T) {
+func TestNoPresetApprovesTheDangerousLabels(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []ApprovalMode{ApprovalStrict, ApprovalStandard, ApprovalTrusted} {
-		for _, tier := range mode.AutoAllowed() {
-			switch tier {
-			case RiskNetwork, RiskDestructive, RiskUnknown:
-				t.Errorf("mode %q auto-allows %q", mode, tier)
+		approved, err := ApprovedLabels([]string{string(mode)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range []RiskLabel{LabelDeletes, LabelDisrupts, LabelNetwork, LabelPrivilege, LabelUnreadable} {
+			if approved[l] {
+				t.Errorf("preset %q approves %q", mode, l)
 			}
 		}
 	}
@@ -144,7 +151,7 @@ func TestNoModeAllowsTheDangerousTiers(t *testing.T) {
 // sits at the floor priority so anything written down beats it.
 func TestAnOperatorRuleOutranksTheMode(t *testing.T) {
 	t.Parallel()
-	e, _ := modeGatedExecutor(t, ApprovalStandard, &lobslawv1.PolicyRule{
+	e, _ := modeGatedExecutor(t, []string{"standard"}, &lobslawv1.PolicyRule{
 		Id: "operator-no-uname", Subject: "*",
 		Action: ShellAction, Resource: "uname -a",
 		Effect: "require_confirmation", Priority: 10,
@@ -160,7 +167,7 @@ func TestAnOperatorRuleOutranksTheMode(t *testing.T) {
 // asked about either.
 func TestATierGrantCoversTheNextCommandToo(t *testing.T) {
 	t.Parallel()
-	e, approvals := modeGatedExecutor(t, ApprovalStrict)
+	e, approvals := modeGatedExecutor(t, []string{"strict"})
 	ctx := turn.WithIdentity(context.Background(), turn.Identity{
 		Channel: "telegram", ChannelID: "42",
 	})
@@ -168,7 +175,7 @@ func TestATierGrantCoversTheNextCommandToo(t *testing.T) {
 	if err := checkShell(ctx, t, e, "uname -a"); !errors.Is(err, ErrRequireConfirm) {
 		t.Fatalf("strict mode did not ask: %v", err)
 	}
-	if !approvals.Grant(ctx, ShellAction, RiskGrantResource(RiskRead)) {
+	if !approvals.Grant(ctx, ShellAction, RiskGrantResource(LabelReads)) {
 		t.Fatal("the tier grant was not recorded")
 	}
 	// A DIFFERENT read command. The per-command grant could never have
@@ -186,7 +193,7 @@ func TestATierGrantCoversTheNextCommandToo(t *testing.T) {
 // A tier grant given in one conversation must not answer for another.
 func TestATierGrantIsScopedToItsConversation(t *testing.T) {
 	t.Parallel()
-	e, approvals := modeGatedExecutor(t, ApprovalStrict)
+	e, approvals := modeGatedExecutor(t, []string{"strict"})
 	here := turn.WithIdentity(context.Background(), turn.Identity{
 		Channel: "telegram", ChannelID: "42",
 	})
@@ -194,7 +201,7 @@ func TestATierGrantIsScopedToItsConversation(t *testing.T) {
 		Channel: "telegram", ChannelID: "99",
 	})
 
-	approvals.Grant(here, ShellAction, RiskGrantResource(RiskRead))
+	approvals.Grant(here, ShellAction, RiskGrantResource(LabelReads))
 	if err := checkShell(elsewhere, t, e, "uname -a"); !errors.Is(err, ErrRequireConfirm) {
 		t.Errorf("a grant leaked into another conversation: %v", err)
 	}
@@ -205,7 +212,7 @@ func TestEvaluateCommandRisk(t *testing.T) {
 	cond := func(op, value string) types.Condition {
 		return types.Condition{Key: CommandRiskCondition, Op: op, Value: value}
 	}
-	read := WithCommandRisk(context.Background(), RiskRead)
+	read := WithCommandLabels(context.Background(), L(LabelReads))
 
 	tests := []struct {
 		name    string
@@ -214,18 +221,18 @@ func TestEvaluateCommandRisk(t *testing.T) {
 		want    bool
 		wantErr bool
 	}{
-		{"matches its tier", read, cond("in", "read"), true, false},
-		{"matches within a list", read, cond("in", "read,write"), true, false},
-		{"does not match another tier", read, cond("in", "write"), false, false},
-		{"an empty op reads as in", read, cond("", "read"), true, false},
-		{"not_in inverts", read, cond("not_in", "write"), true, false},
-		{"not_in excludes", read, cond("not_in", "read"), false, false},
+		{"matches its tier", read, cond("in", "reads"), true, false},
+		{"matches within a list", read, cond("in", "reads,writes"), true, false},
+		{"does not match another tier", read, cond("in", "writes"), false, false},
+		{"an empty op reads as in", read, cond("", "reads"), true, false},
+		{"not_in inverts", read, cond("not_in", "writes"), true, false},
+		{"not_in excludes", read, cond("not_in", "reads"), false, false},
 		// Not an error: a memory write is a different question, not a
 		// shell command that failed to classify. An error here would
 		// APPLY a restrictive rule rather than skip it.
-		{"an unclassified request does not match", context.Background(), cond("in", "read"), false, false},
+		{"an unclassified request does not match", context.Background(), cond("in", "reads"), false, false},
 		// Fail-closed on an operator's typo rather than guessing.
-		{"an unknown op errors", read, cond("above", "read"), false, true},
+		{"an unknown op errors", read, cond("above", "reads"), false, true},
 		{"an empty value errors", read, cond("in", ""), false, true},
 		{"a value of only junk errors", read, cond("in", "bananas"), false, true},
 	}
@@ -243,30 +250,49 @@ func TestEvaluateCommandRisk(t *testing.T) {
 	}
 }
 
-func TestParseApprovalMode(t *testing.T) {
+func TestApprovedLabels(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		in      string
-		want    ApprovalMode
+		name    string
+		in      []string
+		want    []RiskLabel
 		wantErr bool
 	}{
-		{"", DefaultApprovalMode, false},
-		{"strict", ApprovalStrict, false},
-		{"STANDARD", ApprovalStandard, false},
-		{"  trusted  ", ApprovalTrusted, false},
-		// A typo must not quietly select a posture nobody chose, and
-		// the fallback is the shipped default rather than the loosest.
-		{"trused", DefaultApprovalMode, true},
-		{"yolo", DefaultApprovalMode, true},
+		{"unset takes the default", nil, L(LabelReads), false},
+		{"a preset expands", []string{"trusted"}, L(LabelReads, LabelWrites), false},
+		{"strict approves nothing", []string{"strict"}, nil, false},
+		{"case and space are forgiven", []string{"  STANDARD "}, L(LabelReads), false},
+		// The thing presets cannot say.
+		{"an explicit set", []string{"reads", "writes", "deletes"}, L(LabelReads, LabelWrites, LabelDeletes), false},
+		// A typo must not quietly approve the wrong thing, in either
+		// direction.
+		{"an unknown label errors", []string{"reads", "delete"}, L(LabelReads), true},
+		{"a preset mixed with labels errors", []string{"standard", "deletes"}, L(LabelReads), true},
+		// Never, by any spelling.
+		{"unreadable is refused", []string{"reads", "unreadable"}, L(LabelReads), true},
 	}
 	for _, tt := range tests {
-		got, err := ParseApprovalMode(tt.in)
-		if (err != nil) != tt.wantErr {
-			t.Errorf("ParseApprovalMode(%q) err = %v, wantErr %v", tt.in, err, tt.wantErr)
-		}
-		if got != tt.want {
-			t.Errorf("ParseApprovalMode(%q) = %q, want %q", tt.in, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ApprovedLabels(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				// The fallback is the shipped default, not the loosest.
+				if !got[LabelReads] || got[LabelWrites] {
+					t.Errorf("on error the fallback was %v, want the default", SortedLabels(got))
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", SortedLabels(got), tt.want)
+			}
+			for _, l := range tt.want {
+				if !got[l] {
+					t.Errorf("got %v, want %v", SortedLabels(got), tt.want)
+				}
+			}
+		})
 	}
 }
 
@@ -275,18 +301,24 @@ func TestParseApprovalMode(t *testing.T) {
 // two rules saying the same thing and one of them unexplained.
 func TestStrictInstallsNoRules(t *testing.T) {
 	t.Parallel()
-	if got := ApprovalModeDefaults(ApprovalStrict); len(got) != 0 {
+	strict, _ := ApprovedLabels([]string{"strict"})
+	if got := ApprovalModeDefaults(strict); len(got) != 0 {
 		t.Errorf("strict installed %d rules, want 0", len(got))
 	}
-	if got := ApprovalModeDefaults(ApprovalStandard); len(got) != 1 {
-		t.Fatalf("standard installed %d rules, want 1", len(got))
+	standard, _ := ApprovedLabels([]string{"standard"})
+	rules := ApprovalModeDefaults(standard)
+	if len(rules) != 1 {
+		t.Fatalf("standard installed %d rules, want 1", len(rules))
 	}
-	rule := ApprovalModeDefaults(ApprovalStandard)[0]
+	rule := rules[0]
 	if rule.Effect != types.EffectAllow || rule.Action != ShellAction {
 		t.Errorf("rule = %s/%s, want allow/%s", rule.Effect, rule.Action, ShellAction)
 	}
 	if len(rule.Conditions) != 1 || rule.Conditions[0].Key != CommandRiskCondition {
 		t.Errorf("rule conditions = %+v, want one %q", rule.Conditions, CommandRiskCondition)
+	}
+	if rule.Conditions[0].Value != "reads" {
+		t.Errorf("condition value = %q, want reads", rule.Conditions[0].Value)
 	}
 	// At the floor, so an operator's rule always outranks it.
 	if rule.Priority != -1<<30 {

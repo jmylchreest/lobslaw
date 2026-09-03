@@ -527,17 +527,29 @@ type ComputeConfig struct {
 	// full transcript replay are not the same wait.
 	ModelTimeout time.Duration `koanf:"model_timeout,omitempty"`
 
-	// ApprovalMode is which shell commands are worth asking about:
-	// "strict", "standard" or "trusted".
+	// ApprovalMode is what runs without being asked about, as a SET of
+	// labels — not a point on a scale.
 	//
-	//	strict   — ask about every command, whatever it does.
-	//	standard — ask about everything except commands that only read.
-	//	trusted  — additionally allow ordinary local writes.
+	// Either a shipped preset or an explicit list:
 	//
-	// Empty takes "standard". Nothing runs unasked in any mode if it
-	// reaches the network, deletes, changes the machine, runs as root,
-	// or cannot be read — and no mode touches the hardline floor.
-	ApprovalMode string `koanf:"approval_mode,omitempty"`
+	//	approval_mode = "standard"                        # reads
+	//	approval_mode = "trusted"                         # reads, writes
+	//	approval_mode = "strict"                          # nothing
+	//	approval_mode = ["reads", "writes", "deletes"]    # say exactly what you mean
+	//
+	// The labels are reads, writes, deletes, disrupts, network and
+	// privilege. "unreadable" is deliberately not approvable: a command
+	// nobody could read is the case the gate exists for.
+	//
+	// A set rather than a tier because the things a command does are
+	// orthogonal — is restarting a service worse than fetching a URL? —
+	// and ranking them meant an approved set had to be a PREFIX of that
+	// ranking. You could not approve deletes without also taking
+	// everything ranked below it.
+	//
+	// Empty takes "standard". Approval is a subset check: every label a
+	// command carries must be in this set, or it asks.
+	ApprovalMode []string `koanf:"approval_mode,omitempty"`
 
 	// ShellApproval tunes how a command is classified before it is
 	// asked about.
@@ -1234,11 +1246,15 @@ type CommandClassConfig struct {
 
 // CommandRiskConfig is one entry of [compute.command_risks].
 type CommandRiskConfig struct {
-	// Tier is what the command does: "read", "write", "network",
-	// "destructive" or "unknown". An empty tier with no other field
-	// set removes a shipped entry, which makes the command unreadable
-	// and therefore always asked about.
-	Tier string `koanf:"tier,omitempty"`
+	// Labels are what the command does: any of reads, writes, deletes,
+	// disrupts, network, privilege, unreadable. An empty entry with no
+	// other field set removes a shipped one, which makes the command
+	// unreadable and therefore always asked about.
+	//
+	// A list because commands do more than one thing: `podman rm`
+	// deletes an image and stops a container, and saying only one of
+	// those describes half of it.
+	Labels []string `koanf:"labels,omitempty"`
 
 	// Subcommands classifies by the first non-flag argument, for a
 	// program that is really a family:
@@ -1246,18 +1262,18 @@ type CommandRiskConfig struct {
 	//	terraform = { tier = "read", subcommands = { apply = "destructive" } }
 	//
 	// A subcommand not named here is unreadable rather than taking
-	// Tier: a verb nobody classified could be anything.
-	Subcommands map[string]string `koanf:"subcommands,omitempty"`
+	// Labels: a verb nobody classified could be anything.
+	Subcommands map[string][]string `koanf:"subcommands,omitempty"`
 
-	// Escalate raises the tier when a token appears in the argv. Keys
-	// match exactly, or as a prefix when they end in "*".
-	Escalate map[string]string `koanf:"escalate,omitempty"`
+	// Escalate adds labels when a token appears in the argv. Keys match
+	// exactly, or as a prefix when they end in "*".
+	Escalate map[string][]string `koanf:"escalate,omitempty"`
 
 	// Targets marks a command whose risk depends on the paths it is
-	// pointed at, and ScratchTier the tier it drops to when every one
-	// of those paths is under a scratch root.
-	Targets     bool   `koanf:"targets,omitempty"`
-	ScratchTier string `koanf:"scratch_tier,omitempty"`
+	// pointed at, and ScratchLabels what it drops to when every one of
+	// those paths is under a scratch root.
+	Targets       bool     `koanf:"targets,omitempty"`
+	ScratchLabels []string `koanf:"scratch_labels,omitempty"`
 }
 
 // ShellApprovalConfig is the [compute.shell_approval] section: how a

