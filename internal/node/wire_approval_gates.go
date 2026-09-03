@@ -1,8 +1,10 @@
 package node
 
 import (
+	"maps"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -49,7 +51,7 @@ func (n *Node) wireApprovalGates() error {
 		if modeRules := compute.ApprovalModeDefaults(approved); len(modeRules) > 0 {
 			defaults = append(defaults, modeRules...)
 			n.log.Info("compute: shell commands are approved by what they do",
-				"runs_without_asking", compute.RenderLabels(compute.SortedLabels(approved)),
+				"runs_without_asking", commandrisk.RenderLabels(compute.SortedLabels(approved)),
 				"override", `set [compute] approval_mode = "strict" to ask about everything`)
 		} else {
 			n.log.Info("compute: every shell command is asked about", "approval_mode", "strict")
@@ -160,11 +162,11 @@ func (n *Node) remoteHostLookup() compute.RemoteHostLookup {
 // unrecognised value is logged as an error and the shipped default
 // applies — the same treatment a malformed rule gets, rather than a
 // silent reinterpretation of what the operator wrote.
-func (n *Node) approvedLabels() map[compute.RiskLabel]bool {
+func (n *Node) approvedLabels() map[commandrisk.RiskLabel]bool {
 	approved, err := compute.ApprovedLabels(n.cfg.Compute.ApprovalMode)
 	if err != nil {
 		n.log.Error("compute: unrecognised approval_mode; using the default",
-			"error", err, "using", compute.RenderLabels(compute.SortedLabels(approved)))
+			"error", err, "using", commandrisk.RenderLabels(compute.SortedLabels(approved)))
 	}
 	return approved
 }
@@ -175,76 +177,37 @@ func (n *Node) approvedLabels() map[compute.RiskLabel]bool {
 // Merged over the shipped table rather than replacing it — see
 // SetCommandRisks for why this contract differs from the one
 // applyCommandClasses follows.
-func (n *Node) applyCommandRisks() {
+func (n *Node) applyCommandRisks(fromClasses map[string]commandrisk.CommandRiskRule) {
 	if paths := n.cfg.Compute.ShellApproval.ScratchPaths; len(paths) > 0 {
-		compute.SetScratchPaths(paths)
+		commandrisk.SetScratchPaths(paths)
 		n.log.Info("compute: deleting under these roots is classified as a write, not a loss",
-			"scratch_paths", compute.ActiveScratchPaths())
+			"scratch_paths", commandrisk.ActiveScratchPaths())
 	}
 
+	// Both sources in ONE call, because SetCommandRisks rebuilds from
+	// the shipped catalogue each time and a second call would discard
+	// the first. An operator who declares a network command class and
+	// no command_risks still gets it labelled network.
+	table := make(map[string]commandrisk.CommandRiskRule, len(fromClasses)+len(n.cfg.Compute.CommandRisks))
+	maps.Copy(table, fromClasses)
+
 	risks := n.cfg.Compute.CommandRisks
-	if len(risks) == 0 {
-		return
-	}
-	table := make(map[string]compute.CommandRiskRule, len(risks))
 	for name, c := range risks {
 		// An unrecognised label is refused rather than stored: it would
 		// match no rule condition and read, from the prompt, exactly
 		// like a command nobody classified.
-		parse := func(in []string) ([]compute.RiskLabel, bool) {
-			out := make([]compute.RiskLabel, 0, len(in))
-			for _, raw := range in {
-				l := compute.RiskLabel(strings.ToLower(strings.TrimSpace(raw)))
-				if !l.Valid() {
-					n.log.Error("compute: command_risks entry has an unrecognised label; ignoring the entry",
-						"command", name, "label", raw)
-					return nil, false
-				}
-				out = append(out, l)
-			}
-			return out, true
-		}
-		labels, ok := parse(c.Labels)
-		if !ok {
-			continue
-		}
-		scratch, ok := parse(c.ScratchLabels)
-		if !ok {
-			continue
-		}
-		rule := compute.CommandRiskRule{
-			Labels:        labels,
-			Targets:       c.Targets,
-			ScratchLabels: scratch,
-		}
-		bad := false
-		if len(c.Subcommands) > 0 {
-			rule.Sub = make(map[string][]compute.RiskLabel, len(c.Subcommands))
-			for sub, raw := range c.Subcommands {
-				set, ok := parse(raw)
-				if !ok {
-					bad = true
-					break
-				}
-				rule.Sub[strings.TrimSpace(sub)] = set
-			}
-		}
-		if !bad && len(c.Escalate) > 0 {
-			rule.Escalate = make(map[string][]compute.RiskLabel, len(c.Escalate))
-			for tok, raw := range c.Escalate {
-				set, ok := parse(raw)
-				if !ok {
-					bad = true
-					break
-				}
-				rule.Escalate[strings.TrimSpace(tok)] = set
-			}
-		}
-		if bad {
+		rule, err := commandrisk.RuleFromConfig(name, c, risks)
+		if err != nil {
+			n.log.Error("compute: command_risks entry rejected; leaving the command unreadable",
+				"command", name, "err", err)
 			continue
 		}
 		table[strings.TrimSpace(name)] = rule
 	}
-	compute.SetCommandRisks(table)
-	n.log.Info("compute: command classification extended by config", "commands", len(table))
+	if len(table) == 0 {
+		return
+	}
+	commandrisk.SetCommandRisks(table)
+	n.log.Info("compute: command classification extended",
+		"from_config", len(risks), "from_classes", len(fromClasses))
 }

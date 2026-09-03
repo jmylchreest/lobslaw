@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/promptguard"
@@ -523,7 +525,7 @@ type ProcessMessageResponse struct {
 	// environment writes a different command every time, so a grant
 	// naming one of them is never matched twice, while "read-only is
 	// fine here" is answered once.
-	ConfirmationLabels []RiskLabel
+	ConfirmationLabels []commandrisk.RiskLabel
 
 	ConfirmationReason string
 }
@@ -1630,7 +1632,7 @@ type pendingConfirmation struct {
 	Grantable bool
 	// Risk is the tier the operation classified into. Empty for a gate
 	// that does not classify — a memory write, a budget.
-	Labels []RiskLabel
+	Labels []commandrisk.RiskLabel
 }
 
 func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, *pendingConfirmation, error) {
@@ -1973,7 +1975,7 @@ func confirmationReason(err error) string {
 // tool:exec check returned require_confirmation because an operator
 // wrote a rule about this tool, and a grant about the tool is what they
 // were asking to be able to give.
-func confirmationOperation(err error, toolName string) (action, resource string, grantable bool, labels []RiskLabel) {
+func confirmationOperation(err error, toolName string) (action, resource string, grantable bool, labels []commandrisk.RiskLabel) {
 	var cr *ConfirmationRequest
 	if errors.As(err, &cr) && cr.Action != "" {
 		return cr.Action, cr.Resource, cr.Grantable, cr.Labels

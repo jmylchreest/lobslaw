@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -103,7 +105,7 @@ type GrantTarget struct {
 	Grantable bool
 
 	// Labels is everything the operation DOES, as classified by
-	// ClassifyRisk.
+	// commandrisk.ClassifyRisk.
 	//
 	// Carried alongside the key rather than folded into it, because the
 	// two answer different questions and have different lifetimes: the
@@ -111,7 +113,7 @@ type GrantTarget struct {
 	// property of this invocation that policy conditions on and the
 	// prompt reports. Empty means the resolver does not classify, which
 	// a rule conditioned on labels must treat as "does not apply".
-	Labels []RiskLabel
+	Labels []commandrisk.RiskLabel
 }
 
 // grantActions is every action a resolver may name. A closed set, not
@@ -155,7 +157,7 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 		return nil
 	}
 	action, resource, grantable := gate.action, gate.resource, true
-	var labels []RiskLabel
+	var labels []commandrisk.RiskLabel
 	if gate.resolve != nil {
 		t := gate.resolve(params)
 		resource, grantable, labels = t.Resource, t.Grantable, t.Labels
@@ -259,7 +261,7 @@ type ConfirmationRequest struct {
 	//
 	// Empty for a gate that does not classify, in which case no tier
 	// button is offered.
-	Labels []RiskLabel
+	Labels []commandrisk.RiskLabel
 }
 
 func (c *ConfirmationRequest) Error() string {
@@ -328,11 +330,11 @@ func MemoryWriteApprovalDefault() types.PolicyRule {
 // approved here, and the condition evaluator sees no labels to object
 // to. A nil approvals store subtracts nothing, so the zero value is
 // the safe one.
-func (e *Executor) unapprovedLabels(ctx context.Context, action string, labels []RiskLabel) []RiskLabel {
+func (e *Executor) unapprovedLabels(ctx context.Context, action string, labels []commandrisk.RiskLabel) []commandrisk.RiskLabel {
 	if e.approvals == nil || len(labels) == 0 {
 		return labels
 	}
-	remaining := make([]RiskLabel, 0, len(labels))
+	remaining := make([]commandrisk.RiskLabel, 0, len(labels))
 	for _, l := range labels {
 		key := RiskGrantResource(l)
 		if key != "" && e.approvals.Granted(ctx, action, key) {

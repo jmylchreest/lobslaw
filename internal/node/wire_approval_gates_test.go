@@ -8,9 +8,11 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/tools"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -132,5 +134,40 @@ func TestNeitherGateIsSafe(t *testing.T) {
 	}
 	if got := effectFor(t, eng, compute.ShellAction, "git status"); got == types.EffectRequireConfirmation {
 		t.Error("a shell default survived a node that wired neither gate")
+	}
+}
+
+// A command class that reaches off the box is also a network command
+// to the classifier, and config says it once.
+//
+// This regressed twice while the package was being extracted, both
+// times invisibly: applyCommandRisks took the derived rules as a
+// parameter and never read it, which Go compiles without complaint.
+// Every other test still passed, because the symptom is a command that
+// classifies as "unreadable" — which asks, and so looks exactly like
+// the gate working. The two sources have to arrive in ONE
+// SetCommandRisks call, since it rebuilds from the shipped catalogue on
+// every call and the second would drop the first.
+func TestDeclaredNetworkCommandsAreLabelledNetwork(t *testing.T) {
+	t.Cleanup(func() {
+		commandrisk.SetCommandRisks(nil)
+		compute.SetCommandClasses(nil)
+	})
+
+	n, _ := approvalGateNode(t, false, true)
+	n.cfg.Compute.CommandClasses = map[string]config.CommandClassConfig{
+		"mytool": {Action: string(compute.NetFetchAction)},
+	}
+	// Deliberately no [compute.command_risks]: the derived rules used to
+	// be discarded entirely unless config also carried an unrelated
+	// section.
+	n.applyCommandRisks(n.applyCommandClasses())
+
+	if got := commandrisk.ClassifyRisk("mytool https://example.com").Labels; !commandrisk.HasLabel(got, commandrisk.LabelNetwork) {
+		t.Errorf("declared net:fetch command classified %v, want network", got)
+	}
+	// The shipped catalogue must survive the merge.
+	if got := commandrisk.ClassifyRisk("ls -la").Labels; !commandrisk.HasLabel(got, commandrisk.LabelReads) {
+		t.Errorf("ls classified %v after merge, want reads; the shipped table was lost", got)
 	}
 }

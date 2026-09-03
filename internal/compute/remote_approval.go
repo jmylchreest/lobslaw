@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -60,7 +62,7 @@ func RemoteGrantResourceFor(hostOf RemoteHostLookup) func(map[string]string) Gra
 		// The command's own tier is not consulted: `uptime` run here
 		// and `uptime` run on somebody else's box are not the same
 		// operation, and only one of them leaves this machine.
-		t.Labels = L(LabelNetwork)
+		t.Labels = commandrisk.L(commandrisk.LabelNetwork)
 		return t
 	}
 }
@@ -107,7 +109,7 @@ func resolveRemoteHost(hostOf RemoteHostLookup, name string) (string, bool) {
 func RemoteCopyGrantResourceFor(hostOf RemoteHostLookup) func(map[string]string) GrantTarget {
 	return func(params map[string]string) GrantTarget {
 		t := remoteCopyGrant(hostOf, params)
-		t.Labels = L(LabelNetwork)
+		t.Labels = commandrisk.L(commandrisk.LabelNetwork)
 		return t
 	}
 }

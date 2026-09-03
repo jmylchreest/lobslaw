@@ -1,9 +1,8 @@
 package gateway
 
 import (
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"strings"
-
-	"github.com/jmylchreest/lobslaw/internal/compute"
 )
 
 // The button that grants a whole KIND of command rather than one
@@ -28,9 +27,9 @@ import (
 // everything I could not read" is not a decision at all. An operator
 // who genuinely wants either writes a policy rule, where it is visible
 // in `lobslaw policy list` and revocable.
-var grantableLabels = map[compute.RiskLabel]bool{
-	compute.LabelReads:  true,
-	compute.LabelWrites: true,
+var grantableLabels = map[commandrisk.RiskLabel]bool{
+	commandrisk.LabelReads:  true,
+	commandrisk.LabelWrites: true,
 }
 
 // riskGrantOffered reports whether a tap may approve this command's
@@ -40,7 +39,7 @@ var grantableLabels = map[compute.RiskLabel]bool{
 // offers nothing, because approving "the kind of thing this is" would
 // approve the deletion — and a button whose text is a summary of two
 // things is a button nobody reads carefully.
-func riskGrantOffered(labels []compute.RiskLabel) bool {
+func riskGrantOffered(labels []commandrisk.RiskLabel) bool {
 	if len(labels) == 0 {
 		return false
 	}
@@ -58,7 +57,7 @@ func riskGrantOffered(labels []compute.RiskLabel) bool {
 // user is being asked about a class, and a button reading "Approve for
 // this chat" beside one reading "Allow reads + writes here" has to make
 // the difference obvious at a glance.
-func riskGrantLabel(labels []compute.RiskLabel) string {
+func riskGrantLabel(labels []commandrisk.RiskLabel) string {
 	if !riskGrantOffered(labels) {
 		return ""
 	}

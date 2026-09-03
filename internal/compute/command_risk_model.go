@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 )
 
 // Asking a model what a command does, without letting it decide.
@@ -167,7 +169,7 @@ func (j *RiskJudge) Trust() RiskTrust {
 // every failure mode collapsed into one: no judge, no provider, a
 // timeout, unparseable JSON, a tier outside the enum, or an answer the
 // model itself marked low-confidence.
-func (j *RiskJudge) Classify(ctx context.Context, command string) (RiskLabel, bool) {
+func (j *RiskJudge) Classify(ctx context.Context, command string) (commandrisk.RiskLabel, bool) {
 	cmd := strings.TrimSpace(command)
 	if j == nil || j.provider == nil || cmd == "" || len(cmd) > riskCommandMax {
 		return "", false
@@ -198,7 +200,7 @@ func (j *RiskJudge) Classify(ctx context.Context, command string) (RiskLabel, bo
 
 // parseRiskVerdict reads the model's object, discarding anything it
 // got wrong rather than propagating it.
-func parseRiskVerdict(content string, log *slog.Logger) (RiskLabel, bool) {
+func parseRiskVerdict(content string, log *slog.Logger) (commandrisk.RiskLabel, bool) {
 	raw := extractObject(content)
 	if raw == "" {
 		log.Debug("command risk: no JSON object in the reply")
@@ -218,7 +220,7 @@ func parseRiskVerdict(content string, log *slog.Logger) (RiskLabel, bool) {
 	if strings.ToLower(strings.TrimSpace(parsed.Confidence)) != "high" {
 		return "", false
 	}
-	label := RiskLabel(strings.ToLower(strings.TrimSpace(parsed.Tier)))
+	label := commandrisk.RiskLabel(strings.ToLower(strings.TrimSpace(parsed.Tier)))
 	if !label.Valid() {
 		log.Debug("command risk: verdict outside the enum", "label", parsed.Tier)
 		return "", false
@@ -249,8 +251,8 @@ func ActiveRiskJudge() *RiskJudge { return activeRiskJudge.Load() }
 //
 // This is what the prompt and the gate both read, so there is exactly
 // one place the two verdicts are combined.
-func VerdictFor(ctx context.Context, params map[string]string) RiskVerdict {
-	return AdjudicateWith(ctx, ClassifyRisk(params["command"]), params["command"], ActiveRiskJudge())
+func VerdictFor(ctx context.Context, params map[string]string) commandrisk.RiskVerdict {
+	return AdjudicateWith(ctx, commandrisk.ClassifyRisk(params["command"]), params["command"], ActiveRiskJudge())
 }
 
 // AdjudicateWith combines a static verdict with a model's, under the
@@ -278,14 +280,14 @@ func VerdictFor(ctx context.Context, params map[string]string) RiskVerdict {
 // and so `policy classify --with-model` folds the verdict in through
 // THIS code rather than a second implementation that could disagree
 // with the running node.
-func AdjudicateWith(ctx context.Context, static RiskVerdict, command string, judge *RiskJudge) RiskVerdict {
+func AdjudicateWith(ctx context.Context, static commandrisk.RiskVerdict, command string, judge *RiskJudge) commandrisk.RiskVerdict {
 	if judge == nil {
 		return static
 	}
 	// Nothing to gain: a read-only verdict is already the cheapest
 	// answer there is, and asking would spend a model call on the path
 	// this whole feature exists to make free.
-	if len(static.Labels) == 1 && static.Labels[0] == LabelReads {
+	if len(static.Labels) == 1 && static.Labels[0] == commandrisk.LabelReads {
 		return static
 	}
 	label, ok := judge.Classify(ctx, command)
@@ -293,13 +295,13 @@ func AdjudicateWith(ctx context.Context, static RiskVerdict, command string, jud
 		return static
 	}
 
-	onlyUnreadable := len(static.Labels) == 1 && static.Labels[0] == LabelUnreadable
+	onlyUnreadable := len(static.Labels) == 1 && static.Labels[0] == commandrisk.LabelUnreadable
 	switch {
-	case onlyUnreadable && judge.Trust() == RiskTrustResolveUnknown && label != LabelUnreadable:
-		static.Labels = L(label)
+	case onlyUnreadable && judge.Trust() == RiskTrustResolveUnknown && label != commandrisk.LabelUnreadable:
+		static.Labels = commandrisk.L(label)
 		static.Why = "model_verdict"
 		static.FromModel = true
-	case !hasLabel(static.Labels, label):
+	case !commandrisk.HasLabel(static.Labels, label):
 		// Advisory, and the only move it may make: add. Under
 		// resolve_unknown this is also what happens to a verdict the
 		// classifier DID read, which is the guarantee that setting
@@ -309,7 +311,7 @@ func AdjudicateWith(ctx context.Context, static RiskVerdict, command string, jud
 		// merging can be a no-op: "reads" beside a stronger label is
 		// dropped, so a model answering "reads" about a deletion
 		// changes nothing and must not be reported as though it had.
-		merged := mergeLabels(static.Labels, L(label))
+		merged := commandrisk.MergeLabels(static.Labels, commandrisk.L(label))
 		if len(merged) != len(static.Labels) {
 			static.Labels = merged
 			static.FromModel = true

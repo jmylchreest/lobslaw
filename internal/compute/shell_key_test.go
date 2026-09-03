@@ -357,7 +357,7 @@ func TestTheCommentExploitCannotShareAKey(t *testing.T) {
 }
 
 // A cwd that cannot be shown safely must not be printed raw into the
-// prompt — that is the display deception isInvisible exists to stop.
+// prompt — that is the display deception IsInvisible exists to stop.
 func TestAnUnprintableCwdIsNotRenderedIntoThePrompt(t *testing.T) {
 	t.Parallel()
 	params := map[string]string{"command": "rm -rf build", "cwd": "/home/x/safe\u202Eevil"}

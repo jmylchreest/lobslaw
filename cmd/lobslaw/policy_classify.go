@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"log/slog"
 	"os"
 	"strings"
@@ -60,13 +61,13 @@ func policyClassify(args []string) error {
 		return fmt.Errorf("usage: lobslaw policy classify [--json] [--scratch /a,/b] '<command>'")
 	}
 	if *scratch != "" {
-		compute.SetScratchPaths(strings.Split(*scratch, ","))
+		commandrisk.SetScratchPaths(strings.Split(*scratch, ","))
 	}
 
 	// The static verdict is always shown on its own first: it is
 	// reproducible, and a reader needs to see what the classifier knew
 	// unaided before seeing what a model did to it.
-	v := compute.ClassifyRisk(command)
+	v := commandrisk.ClassifyRisk(command)
 
 	// --with-model is the only way to exercise the model path without
 	// going through a real confirmation. That matters more than it
@@ -82,19 +83,19 @@ func policyClassify(args []string) error {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(struct {
-			Command  string                `json:"command"`
-			Labels   []compute.RiskLabel   `json:"labels"`
-			Why      string                `json:"why,omitempty"`
-			Headline string                `json:"headline"`
-			Scratch  []string              `json:"scratch_paths"`
-			Steps    []compute.RiskSegment `json:"steps"`
-			Modes    map[string]string     `json:"approval_modes"`
+			Command  string                    `json:"command"`
+			Labels   []commandrisk.RiskLabel   `json:"labels"`
+			Why      string                    `json:"why,omitempty"`
+			Headline string                    `json:"headline"`
+			Scratch  []string                  `json:"scratch_paths"`
+			Steps    []commandrisk.RiskSegment `json:"steps"`
+			Modes    map[string]string         `json:"approval_modes"`
 		}{
 			Command:  command,
 			Labels:   v.Labels,
 			Why:      v.Why,
-			Headline: compute.RiskHeadline(v),
-			Scratch:  compute.ActiveScratchPaths(),
+			Headline: commandrisk.RiskHeadline(v),
+			Scratch:  commandrisk.ActiveScratchPaths(),
 			Steps:    v.Segments,
 			Modes:    modeOutcomes(v),
 		})
@@ -103,13 +104,13 @@ func policyClassify(args []string) error {
 	if modelErr != nil {
 		fmt.Fprintf(os.Stderr, "model verdict unavailable: %v\n\n", modelErr)
 	}
-	fmt.Println(compute.RiskHeadline(v))
+	fmt.Println(commandrisk.RiskHeadline(v))
 	if len(v.Segments) > 1 {
 		fmt.Println()
 		fmt.Println("steps:")
 		for i, seg := range v.Segments {
 			fmt.Printf("  %2d  %-28s %-20s %s\n",
-				i+1, compute.RenderLabels(seg.Labels), seg.Why, seg.Raw)
+				i+1, commandrisk.RenderLabels(seg.Labels), seg.Why, seg.Raw)
 		}
 	}
 	fmt.Println()
@@ -125,7 +126,7 @@ func policyClassify(args []string) error {
 		fmt.Printf("  %s %-9s %s\n", marker, mode, outcomes[string(mode)])
 	}
 	fmt.Println()
-	fmt.Println("scratch roots:", strings.Join(compute.ActiveScratchPaths(), ", "))
+	fmt.Println("scratch roots:", strings.Join(commandrisk.ActiveScratchPaths(), ", "))
 	fmt.Println("(* is the shipped default; the hardline floor applies in every mode)")
 	return nil
 }
@@ -137,7 +138,7 @@ func policyClassify(args []string) error {
 // the question is "does this role answer, in time, in the enum", and
 // standing up raft to find out would make the answer depend on a dozen
 // things that are not being asked about.
-func classifyWithModel(configPath, command string, static compute.RiskVerdict) (compute.RiskVerdict, error) {
+func classifyWithModel(configPath, command string, static commandrisk.RiskVerdict) (commandrisk.RiskVerdict, error) {
 	cfg, err := config.Load(config.LoadOptions{Path: configPath})
 	if err != nil {
 		return static, err
@@ -208,7 +209,7 @@ func timeoutLabel(d time.Duration) string {
 // Approval is a subset check, so the answer is simply whether every
 // label the command carries is one that preset approves — no
 // comparison, no ranking.
-func modeOutcomes(v compute.RiskVerdict) map[string]string {
+func modeOutcomes(v commandrisk.RiskVerdict) map[string]string {
 	out := map[string]string{}
 	for _, mode := range []compute.ApprovalMode{
 		compute.ApprovalStrict, compute.ApprovalStandard, compute.ApprovalTrusted,

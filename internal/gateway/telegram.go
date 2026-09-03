@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1713,7 +1714,7 @@ type scopedOperation struct {
 	resource string
 	// risk is the tier the operation classified into, for the button
 	// that grants the whole tier rather than this one command.
-	labels []compute.RiskLabel
+	labels []commandrisk.RiskLabel
 	// subject is the principal an "always" grant binds to, captured
 	// when the prompt was raised rather than read off the callback.
 	// A callback is attacker-shaped input; the turn that triggered
@@ -1810,7 +1811,7 @@ func (h *TelegramHandler) grantForRisk(ctx context.Context, promptID string, q *
 	}
 	h.log.Info("telegram: labels approved for this chat",
 		"action", op.action, "labels", op.labels, "chat_id", q.Message.Chat.ID)
-	return compute.RenderLabels(op.labels)
+	return commandrisk.RenderLabels(op.labels)
 }
 
 // grantForSession records "approved for the rest of this chat" for the

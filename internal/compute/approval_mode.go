@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -59,13 +61,13 @@ const DefaultApprovalMode = ApprovalStandard
 
 // approvalPresets is what each named mode expands to.
 //
-// LabelUnreadable appears in none of them and must not be added to
+// commandrisk.LabelUnreadable appears in none of them and must not be added to
 // one. A command nobody could read is the case the whole gate exists
 // for; approving that class by name would be approving everything.
-var approvalPresets = map[ApprovalMode][]RiskLabel{
+var approvalPresets = map[ApprovalMode][]commandrisk.RiskLabel{
 	ApprovalStrict:   {},
-	ApprovalStandard: {LabelReads},
-	ApprovalTrusted:  {LabelReads, LabelWrites},
+	ApprovalStandard: {commandrisk.LabelReads},
+	ApprovalTrusted:  {commandrisk.LabelReads, commandrisk.LabelWrites},
 }
 
 // Valid reports whether m is one of the shipped presets.
@@ -93,7 +95,7 @@ func (m ApprovalMode) Valid() bool {
 // quietly approved nothing looks exactly like the gate working, and
 // this codebase has spent enough time finding config that was
 // discarded without a word.
-func ApprovedLabels(setting []string) (map[RiskLabel]bool, error) {
+func ApprovedLabels(setting []string) (map[commandrisk.RiskLabel]bool, error) {
 	trimmed := make([]string, 0, len(setting))
 	for _, s := range setting {
 		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
@@ -112,15 +114,15 @@ func ApprovedLabels(setting []string) (map[RiskLabel]bool, error) {
 			return labelSet(preset), nil
 		}
 	}
-	out := map[RiskLabel]bool{}
+	out := map[commandrisk.RiskLabel]bool{}
 	for _, s := range trimmed {
-		l := RiskLabel(s)
+		l := commandrisk.RiskLabel(s)
 		if !l.Valid() {
 			return labelSet(approvalPresets[DefaultApprovalMode]),
 				fmt.Errorf("unknown approval_mode entry %q (want a preset %q/%q/%q, or labels from %s)",
-					s, ApprovalStrict, ApprovalStandard, ApprovalTrusted, RenderLabels(AllRiskLabels))
+					s, ApprovalStrict, ApprovalStandard, ApprovalTrusted, commandrisk.RenderLabels(commandrisk.AllRiskLabels))
 		}
-		if l == LabelUnreadable {
+		if l == commandrisk.LabelUnreadable {
 			return labelSet(approvalPresets[DefaultApprovalMode]),
 				fmt.Errorf("approval_mode cannot approve %q: a command nobody could read is the case the gate exists for", l)
 		}
@@ -130,8 +132,8 @@ func ApprovedLabels(setting []string) (map[RiskLabel]bool, error) {
 }
 
 // labelSet turns a slice into the membership map the gate uses.
-func labelSet(labels []RiskLabel) map[RiskLabel]bool {
-	out := make(map[RiskLabel]bool, len(labels))
+func labelSet(labels []commandrisk.RiskLabel) map[commandrisk.RiskLabel]bool {
+	out := make(map[commandrisk.RiskLabel]bool, len(labels))
 	for _, l := range labels {
 		out[l] = true
 	}
@@ -140,9 +142,9 @@ func labelSet(labels []RiskLabel) map[RiskLabel]bool {
 
 // SortedLabels renders a set deterministically, for logging and
 // for building a rule's condition value.
-func SortedLabels(set map[RiskLabel]bool) []RiskLabel {
-	out := make([]RiskLabel, 0, len(set))
-	for _, l := range AllRiskLabels {
+func SortedLabels(set map[commandrisk.RiskLabel]bool) []commandrisk.RiskLabel {
+	out := make([]commandrisk.RiskLabel, 0, len(set))
+	for _, l := range commandrisk.AllRiskLabels {
 		if set[l] {
 			out = append(out, l)
 		}
@@ -205,10 +207,10 @@ func EvaluateCommandRisk(ctx context.Context, cond types.Condition) (bool, error
 
 // parseLabelList reads a comma-separated label list, dropping anything
 // outside the closed set.
-func parseLabelList(value string) map[RiskLabel]bool {
-	out := map[RiskLabel]bool{}
+func parseLabelList(value string) map[commandrisk.RiskLabel]bool {
+	out := map[commandrisk.RiskLabel]bool{}
 	for _, part := range strings.Split(value, ",") {
-		if l := RiskLabel(strings.ToLower(strings.TrimSpace(part))); l.Valid() {
+		if l := commandrisk.RiskLabel(strings.ToLower(strings.TrimSpace(part))); l.Valid() {
 			out[l] = true
 		}
 	}
@@ -226,7 +228,7 @@ func parseLabelList(value string) map[RiskLabel]bool {
 // An empty approved set returns nothing, which is the same shape a
 // node had before modes existed rather than a rule saying "ask" that
 // duplicates the one below it.
-func ApprovalModeDefaults(approved map[RiskLabel]bool) []types.PolicyRule {
+func ApprovalModeDefaults(approved map[commandrisk.RiskLabel]bool) []types.PolicyRule {
 	labels := SortedLabels(approved)
 	if len(labels) == 0 {
 		return nil

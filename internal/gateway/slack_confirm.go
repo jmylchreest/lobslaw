@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"strings"
 	"time"
 
@@ -321,7 +322,7 @@ func (h *SlackHandler) grantForRisk(ctx context.Context, promptID, convID string
 	}
 	h.log.Info("slack: labels approved for this conversation",
 		"action", op.action, "labels", op.labels, "conversation", convID)
-	return compute.RenderLabels(op.labels)
+	return commandrisk.RenderLabels(op.labels)
 }
 
 func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID string) string {

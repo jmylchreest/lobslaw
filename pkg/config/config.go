@@ -1246,6 +1246,15 @@ type CommandClassConfig struct {
 
 // CommandRiskConfig is one entry of [compute.command_risks].
 type CommandRiskConfig struct {
+	// Extends inherits another entry, field by field, so a family that
+	// behaves identically is stated once. Names an entry in the shipped
+	// catalogue or another config entry.
+	//
+	// A child's own fields override the parent's, key by key for the
+	// maps, so extending a shipped rule and correcting one verb is a
+	// two-line entry rather than a restatement.
+	Extends string `koanf:"extends,omitempty" toml:"extends"`
+
 	// Labels are what the command does: any of reads, writes, deletes,
 	// disrupts, network, privilege, unreadable. An empty entry with no
 	// other field set removes a shipped one, which makes the command
@@ -1254,26 +1263,49 @@ type CommandRiskConfig struct {
 	// A list because commands do more than one thing: `podman rm`
 	// deletes an image and stops a container, and saying only one of
 	// those describes half of it.
-	Labels []string `koanf:"labels,omitempty"`
+	Labels []string `koanf:"labels,omitempty" toml:"labels"`
 
 	// Subcommands classifies by the first non-flag argument, for a
 	// program that is really a family:
 	//
-	//	terraform = { tier = "read", subcommands = { apply = "destructive" } }
+	//	terraform = { labels = ["reads"], subcommands = { destroy = ["deletes"] } }
 	//
 	// A subcommand not named here is unreadable rather than taking
 	// Labels: a verb nobody classified could be anything.
-	Subcommands map[string][]string `koanf:"subcommands,omitempty"`
+	Subcommands map[string][]string `koanf:"subcommands,omitempty" toml:"subcommands"`
+
+	// FlagSubcommands classifies by the first flag instead, for the
+	// programs whose verb IS a flag — pacman -S, rpm -e, dpkg -i.
+	//
+	// Same fail-closed rule as Subcommands: a flag nobody enumerated is
+	// unreadable, never the base Labels. This is why `pacman -Rdd` asks.
+	FlagSubcommands map[string][]string `koanf:"flag_subcommands,omitempty" toml:"flag_subcommands"`
 
 	// Escalate adds labels when a token appears in the argv. Keys match
 	// exactly, or as a prefix when they end in "*".
-	Escalate map[string][]string `koanf:"escalate,omitempty"`
+	Escalate map[string][]string `koanf:"escalate,omitempty" toml:"escalate"`
+
+	// OperandLabels are added when the command is given any non-flag
+	// operand, for programs that are inert alone and act when pointed
+	// at something — `mount` bare lists mounts, `mount /dev/sda1 /mnt`
+	// does not.
+	OperandLabels []string `koanf:"operand_labels,omitempty" toml:"operand_labels"`
 
 	// Targets marks a command whose risk depends on the paths it is
 	// pointed at, and ScratchLabels what it drops to when every one of
 	// those paths is under a scratch root.
-	Targets       bool     `koanf:"targets,omitempty"`
-	ScratchLabels []string `koanf:"scratch_labels,omitempty"`
+	Targets       bool     `koanf:"targets,omitempty" toml:"targets"`
+	ScratchLabels []string `koanf:"scratch_labels,omitempty" toml:"scratch_labels"`
+
+	// TargetLast considers only the final operand a path, for the
+	// commands whose earlier operands are something else: `cp a b c/`
+	// and `ln -s target link` write to the last one.
+	TargetLast bool `koanf:"target_last,omitempty" toml:"target_last"`
+
+	// Why is the short reason shown in a prompt when the entry makes a
+	// command unreadable, so it can say "runs code this classifier has
+	// not read" rather than "unrecognised".
+	Why string `koanf:"why,omitempty" toml:"why"`
 }
 
 // ShellApprovalConfig is the [compute.shell_approval] section: how a

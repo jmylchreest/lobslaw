@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"log/slog"
 	"os/exec"
 	"path/filepath"
@@ -46,9 +47,9 @@ import (
 // section that omits ssh really means "do not classify ssh" — the same
 // contract disabled_tools has, for the same reason: a merge cannot
 // express removal.
-func (n *Node) applyCommandClasses() {
+func (n *Node) applyCommandClasses() map[string]commandrisk.CommandRiskRule {
 	if len(n.cfg.Compute.CommandClasses) == 0 {
-		return
+		return nil
 	}
 	table := make(map[string]compute.CommandClass, len(n.cfg.Compute.CommandClasses))
 	for name, c := range n.cfg.Compute.CommandClasses {
@@ -58,15 +59,31 @@ func (n *Node) applyCommandClasses() {
 		}
 	}
 	compute.SetCommandClasses(table)
+
+	// A command declared as reaching off the box is also a NETWORK
+	// command to the classifier, and an operator should say it once.
+	//
+	// Returned rather than installed here: SetCommandRisks rebuilds
+	// from the shipped table on every call, so two callers would mean
+	// whichever ran second silently discarded the first. One call, one
+	// merged map — the same trap wireApprovalGates' comment describes
+	// about SetDefaults.
+	risks := make(map[string]commandrisk.CommandRiskRule, len(table))
+	for name, class := range table {
+		switch class.Action {
+		case compute.RemoteAction, compute.RemoteCopyAction, compute.NetFetchAction:
+			risks[name] = commandrisk.CommandRiskRule{Labels: commandrisk.L(commandrisk.LabelNetwork)}
+		}
+	}
 	n.log.Info("compute: command classification table replaced by config",
-		"commands", len(table))
+		"commands", len(table), "also_labelled_network", len(risks))
+	return risks
 }
 
 func (n *Node) wireCompute() error {
 	// Before any gate resolves a command, so the first call is judged
 	// by the operator's tables rather than the defaults.
-	n.applyCommandClasses()
-	n.applyCommandRisks()
+	n.applyCommandRisks(n.applyCommandClasses())
 
 	// hooks.Dispatcher from config.Hooks. NewDispatcher expects the
 	// keyed-by-event map shape; the config's HooksConfig already
