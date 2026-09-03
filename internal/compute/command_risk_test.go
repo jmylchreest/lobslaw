@@ -219,8 +219,8 @@ func TestClassifyRiskTable(t *testing.T) {
 		{"systemctl status nginx", L(LabelReads)},
 		{"systemctl restart nginx", L(LabelDisrupts)},
 		{"apt-get --version", L(LabelReads)},
-		{"apt-get install curl", L(LabelNetwork)},
-		{"apt-get purge curl", L(LabelDeletes)},
+		{"apt-get install curl", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"apt-get purge curl", L(LabelDeletes, LabelPrivilege)},
 		{"sed s/a/b/ f", L(LabelReads)},
 		{"sed -i s/a/b/ f", L(LabelWrites)},
 		{"sed -i.bak s/a/b/ f", L(LabelWrites)},
@@ -501,5 +501,100 @@ func TestRiskHeadlineNamesThePrograms(t *testing.T) {
 		if !strings.Contains(head, prog) {
 			t.Errorf("headline = %q, want it to mention %q", head, prog)
 		}
+	}
+}
+
+// Package managers, which the table barely covered and got wrong where
+// it did. Five models across three vendors were polled on what these
+// commands actually do; the rows below are that consensus after review,
+// and the one place I declined to follow it is noted in the table.
+func TestClassifyRiskPackageManagers(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		cmd  string
+		want []RiskLabel
+	}{
+		// Installing a system package needs root. The table said
+		// "network" alone until every model polled said otherwise.
+		{"apt-get install -y curl", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"apt-get remove curl", L(LabelDeletes, LabelPrivilege)},
+		{"apt-get update", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"dnf install curl", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"apk add curl", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"apk del curl", L(LabelDeletes, LabelPrivilege)},
+
+		// pacman takes its verb as a flag.
+		{"pacman -Q", L(LabelReads)},
+		{"pacman -Ss firefox", L(LabelReads)},
+		{"pacman -S firefox", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"pacman -Syu", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"pacman -Rns firefox", L(LabelDeletes, LabelPrivilege)},
+		{"pacman -Sc", L(LabelDeletes, LabelPrivilege)},
+		{"pacman -U ./local.pkg.tar.zst", L(LabelPrivilege, LabelWrites)},
+
+		// The AUR helpers are pacman plus a network hop, including on
+		// a search, which pacman does locally and paru does not.
+		{"yay -S firefox", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		// reads is dropped beside a stronger label, so an AUR search
+		// reports the fact that matters: it reaches off the box.
+		{"paru -Ss firefox", L(LabelNetwork)},
+		{"yay -Q", L(LabelReads)},
+
+		// Flag-driven, and now failing closed.
+		{"rpm -qa", L(LabelReads)},
+		{"rpm -i pkg.rpm", L(LabelPrivilege, LabelWrites)},
+		{"rpm -e pkg", L(LabelDeletes, LabelPrivilege)},
+		{"dpkg -l", L(LabelReads)},
+		{"dpkg -i pkg.deb", L(LabelPrivilege, LabelWrites)},
+		{"dpkg --purge pkg", L(LabelDeletes, LabelPrivilege)},
+
+		// PRIVILEGE is the axis that separates these. emerge and snap
+		// need root; brew, nix, gem and pipx install into a user prefix
+		// and do not. The models were consistent about which is which.
+		{"emerge www-client/firefox", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"snap install code", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"xbps-install -S firefox", L(LabelNetwork, LabelPrivilege, LabelWrites)},
+		{"brew install wget", L(LabelNetwork, LabelWrites)},
+		{"brew uninstall wget", L(LabelDeletes)},
+		{"nix profile install nixpkgs#firefox", L(LabelNetwork, LabelWrites)},
+		{"gem install rails", L(LabelNetwork, LabelWrites)},
+		{"pipx install black", L(LabelNetwork, LabelWrites)},
+		{"cargo install ripgrep", L(LabelNetwork, LabelWrites)},
+		{"flatpak install flathub org.gimp.GIMP", L(LabelNetwork, LabelWrites)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			if got := ClassifyRisk(tt.cmd); !sameLabels(got.Labels, tt.want) {
+				t.Errorf("ClassifyRisk(%q) = %v (%s), want %v",
+					tt.cmd, got.Labels, got.Why, tt.want)
+			}
+		})
+	}
+}
+
+// A flag nobody enumerated is unreadable, NOT the entry's base label.
+//
+// This is the whole reason these moved from Escalate to FlagSub.
+// `pacman -Rdd` removes a package ignoring its dependencies; under the
+// additive Escalate it inherited "reads" from the base entry and read
+// as harmless.
+func TestUnenumeratedFlagsFailClosed(t *testing.T) {
+	t.Parallel()
+	for _, cmd := range []string{
+		"pacman -Qkk",
+		"rpm --setperms pkg",
+		"dpkg --force-all -i pkg.deb",
+	} {
+		got := ClassifyRisk(cmd)
+		if !hasLabel(got.Labels, LabelUnreadable) {
+			t.Errorf("ClassifyRisk(%q) = %v, want unreadable", cmd, got.Labels)
+		}
+		if got.Why != "unrecognised_flag" {
+			t.Errorf("ClassifyRisk(%q).Why = %q, want unrecognised_flag", cmd, got.Why)
+		}
+	}
+	// A flag that IS enumerated still classifies normally.
+	if got := ClassifyRisk("pacman -Rdd firefox"); !sameLabels(got.Labels, L(LabelDeletes, LabelPrivilege)) {
+		t.Errorf("pacman -Rdd = %v, want deletes+privilege", got.Labels)
 	}
 }
