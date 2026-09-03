@@ -20,7 +20,7 @@
 # heavy toolchains (git, python3, ruby) should still use
 # Dockerfile.tools — that ships ~120MB with the broader runtime.
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.27
 
 # ---- Build stage ---------------------------------------------------
 FROM golang:${GO_VERSION} AS build

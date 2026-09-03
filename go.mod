@@ -1,6 +1,6 @@
 module github.com/jmylchreest/lobslaw
 
-go 1.26.2
+go 1.27.0
 
 require (
 	github.com/Jille/raft-grpc-transport v1.6.1

@@ -26,8 +26,8 @@ func gemmTile(a, wp, c []float32, i, p, k, n int) {
 	b0, b1, b2, b3 := a0, a0, a0, a0
 
 	for x := range k {
-		lo := archsimd.LoadFloat32x8Slice(wp[x*nr:])
-		hi := archsimd.LoadFloat32x8Slice(wp[x*nr+8:])
+		lo := archsimd.LoadFloat32x8(wp[x*nr:])
+		hi := archsimd.LoadFloat32x8(wp[x*nr+8:])
 
 		v0 := archsimd.BroadcastFloat32x8(a[i*k+x])
 		v1 := archsimd.BroadcastFloat32x8(a[(i+1)*k+x])
@@ -46,8 +46,8 @@ func gemmTile(a, wp, c []float32, i, p, k, n int) {
 
 	var buf [nr]float32
 	store := func(r int, lo, hi archsimd.Float32x8) {
-		lo.StoreSlice(buf[:8])
-		hi.StoreSlice(buf[8:])
+		lo.Store(buf[:8])
+		hi.Store(buf[8:])
 		base := (i+r)*n + p*nr
 		for jj := range nr {
 			if p*nr+jj >= n {

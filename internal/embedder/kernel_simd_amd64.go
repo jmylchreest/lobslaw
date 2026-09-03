@@ -48,17 +48,17 @@ func dotSIMD(a, b []float32) float32 {
 
 	i := 0
 	for ; i+4*lanes <= len(a); i += 4 * lanes {
-		acc0 = archsimd.LoadFloat32x8Slice(a[i:]).MulAdd(archsimd.LoadFloat32x8Slice(b[i:]), acc0)
-		acc1 = archsimd.LoadFloat32x8Slice(a[i+lanes:]).MulAdd(archsimd.LoadFloat32x8Slice(b[i+lanes:]), acc1)
-		acc2 = archsimd.LoadFloat32x8Slice(a[i+2*lanes:]).MulAdd(archsimd.LoadFloat32x8Slice(b[i+2*lanes:]), acc2)
-		acc3 = archsimd.LoadFloat32x8Slice(a[i+3*lanes:]).MulAdd(archsimd.LoadFloat32x8Slice(b[i+3*lanes:]), acc3)
+		acc0 = archsimd.LoadFloat32x8(a[i:]).MulAdd(archsimd.LoadFloat32x8(b[i:]), acc0)
+		acc1 = archsimd.LoadFloat32x8(a[i+lanes:]).MulAdd(archsimd.LoadFloat32x8(b[i+lanes:]), acc1)
+		acc2 = archsimd.LoadFloat32x8(a[i+2*lanes:]).MulAdd(archsimd.LoadFloat32x8(b[i+2*lanes:]), acc2)
+		acc3 = archsimd.LoadFloat32x8(a[i+3*lanes:]).MulAdd(archsimd.LoadFloat32x8(b[i+3*lanes:]), acc3)
 	}
 	for ; i+lanes <= len(a); i += lanes {
-		acc0 = archsimd.LoadFloat32x8Slice(a[i:]).MulAdd(archsimd.LoadFloat32x8Slice(b[i:]), acc0)
+		acc0 = archsimd.LoadFloat32x8(a[i:]).MulAdd(archsimd.LoadFloat32x8(b[i:]), acc0)
 	}
 
 	var buf [lanes]float32
-	acc0.Add(acc1).Add(acc2.Add(acc3)).StoreSlice(buf[:])
+	acc0.Add(acc1).Add(acc2.Add(acc3)).Store(buf[:])
 	sum := ((buf[0] + buf[1]) + (buf[2] + buf[3])) + ((buf[4] + buf[5]) + (buf[6] + buf[7]))
 	return sum + dotGeneric(a[i:], b[i:])
 }
