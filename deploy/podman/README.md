@@ -182,6 +182,7 @@ commented examples at the bottom of the policy section in
 | `LOBSLAW_BIND`            | `127.0.0.1`                    |
 | `LOBSLAW_GATEWAY_PORT`    | `8443`                         |
 | `LOBSLAW_CLUSTER_PORT`    | `7443`                         |
+| `LOBSLAW_PPROF_PORT`      | *(empty — pprof off)*          |
 | `LOBSLAW_NETWORK`         | *(empty — publish ports)*      |
 | `LOBSLAW_MOUNT_OPTS`      | *(empty; use `,Z` on SELinux)* |
 | `LOBSLAW_LOG_LEVEL`       | `info`                         |
@@ -213,3 +214,32 @@ building the binary with the host Go toolchain and assembling the image
 with `podman run` + `podman commit`, which only needs the storage
 driver. The result is the same image. Rebooting into the installed
 kernel restores the normal path.
+
+## Profiling a running node
+
+```console
+$ LOBSLAW_PPROF_PORT=6060 ./lobslaw-local restart
+==> pprof    http://127.0.0.1:6060/debug/pprof/   (no auth — a profile is a memory dump)
+
+$ go tool pprof -top http://127.0.0.1:6060/debug/pprof/heap
+$ curl -s 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=2'        # stacks
+$ curl -s 'http://127.0.0.1:6060/debug/pprof/goroutineleak?debug=1'    # Go 1.27
+```
+
+Two addresses are involved and the difference is the point. Inside the
+container pprof binds `0.0.0.0`, because a container's loopback is reachable
+only from inside it — a profiler bound there could not be reached by the host
+that wants to profile it. The isolation comes from the publish, which exposes
+the port on `$LOBSLAW_BIND` (`127.0.0.1` by default) and nowhere else. The node
+logs a warning about the `0.0.0.0` bind every time it starts; that warning is
+correct and worth leaving legible, because the only thing between a pprof
+endpoint and a network is a publish rule nobody re-reads.
+
+pprof has no authentication and a heap or goroutine profile can contain
+decrypted state, tokens in flight and prompt text. Do not set
+`LOBSLAW_BIND=0.0.0.0` while `LOBSLAW_PPROF_PORT` is set.
+
+The setting is not sticky: `./lobslaw-local restart` recreates the container, so
+the variable has to be present each time. For a node that should always expose
+it, put `pprof_addr` under `[debug]` in the node's `config.toml` instead and
+publish 6060 by keeping `LOBSLAW_PPROF_PORT` set.
