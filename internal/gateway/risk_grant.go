@@ -1,8 +1,9 @@
 package gateway
 
 import (
-	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"strings"
+
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 )
 
 // The button that grants a whole KIND of command rather than one

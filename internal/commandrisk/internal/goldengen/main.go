@@ -88,7 +88,7 @@ func main() {
 		"id && echo x && uname -a && df -h /",
 		"touch /tmp/.w && echo ok && rm /workspace/.w",
 		"curl -sS -m 10 -i https://example.com/api/ 2>&1 | head -20",
-		"ls‮status", "ls​status", "ls -l", "ls -l\x00rm -rf /",
+		"ls\u202estatus", "ls\u200bstatus", "ls -l", "ls -l\x00rm -rf /",
 	} {
 		add(c)
 	}

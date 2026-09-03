@@ -1,10 +1,11 @@
 package gateway
 
 import (
-	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/turn"

@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"log/slog"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/tools"

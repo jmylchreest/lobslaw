@@ -2,9 +2,10 @@ package gateway
 
 import (
 	"context"
-	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/policy"

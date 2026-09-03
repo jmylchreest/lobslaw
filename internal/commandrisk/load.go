@@ -57,13 +57,6 @@ func mustLoadEmbedded() map[string]CommandRiskRule {
 	return table
 }
 
-// ParseTable reads a TOML catalogue, resolving extends and checking
-// every label against the closed set.
-//
-// An unknown label is an ERROR rather than a dropped field. A typo that
-// quietly removed a "deletes" would leave the command classified as
-// whatever remained, and that is the one failure this whole subsystem
-// exists to prevent.
 // RuleFromConfig converts one operator-authored entry, resolving
 // extends against the shipped catalogue that config merges over.
 //
@@ -91,6 +84,13 @@ func RuleFromConfig(name string, r Rule, peers map[string]Rule) (CommandRiskRule
 	return resolve(name, r, shipped, 0)
 }
 
+// ParseTable reads a TOML catalogue, resolving extends and checking
+// every label against the closed set.
+//
+// An unknown label is an ERROR rather than a dropped field. A typo that
+// quietly removed a "deletes" would leave the command classified as
+// whatever remained, and that is the one failure this whole subsystem
+// exists to prevent.
 func ParseTable(data []byte) (map[string]CommandRiskRule, error) {
 	var f tableFile
 	if err := toml.Unmarshal(data, &f); err != nil {

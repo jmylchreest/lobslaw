@@ -1,3 +1,22 @@
+// Package commandrisk answers one question about a shell command:
+// what does it DO?
+//
+// The answer is a SET of labels, not a rank. An nginx restart is not a
+// write and not a read — it is a disruption — and a scheme that forces
+// every command onto one ordered scale has to file it as something it
+// is not. Approval is then a subset check (labels ⊆ approved) with no
+// ordering anywhere in the decision path, so an operator can approve
+// writes without thereby approving deletions.
+//
+// Being wrong safely is the whole design. A program nobody catalogued
+// is unreadable, and so is a subcommand or flag nobody enumerated —
+// never the base labels, because `pacman -Rdd` must not read as "reads"
+// on the strength of `pacman` alone. Unreadable is approvable by
+// nothing and always asks.
+//
+// The catalogue itself is data: commands.toml, embedded at build time
+// and written in the same grammar an operator uses for
+// [compute.command_risks].
 package commandrisk
 
 import (

@@ -6,11 +6,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/config"
