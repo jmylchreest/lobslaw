@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 )
 
 // What a shell approval is allowed to name.
@@ -70,7 +72,7 @@ func NormaliseCommand(raw string) (string, bool) {
 			// Newlines, carriage returns, NUL. A key spanning two
 			// lines is two commands wearing one name.
 			return "", false
-		case isInvisible(r):
+		case commandrisk.IsInvisible(r):
 			// A key that DISPLAYS as "git status" but IS
 			// "git‮status" would be consent obtained by
 			// misdirection. The user cannot see the difference and the
@@ -116,14 +118,14 @@ func NormaliseCommand(raw string) (string, bool) {
 	// A VAR=value prefix runs the command in a different environment,
 	// so "PATH=/tmp git status" is not "git status" and must not
 	// inherit its grant.
-	if isEnvAssignment(tokens[0]) {
+	if commandrisk.IsEnvAssignment(tokens[0]) {
 		return "", false
 	}
 	// A reserved word in front position means the shell, not a program.
 	// `time ls` and `'time' ls` render identically and do different
 	// things — the first is the shell builtin, the second is
 	// /usr/bin/time — so no single key describes both.
-	if shellReservedWords[tokens[0]] {
+	if commandrisk.ReservedWords[tokens[0]] {
 		return "", false
 	}
 
@@ -214,48 +216,6 @@ func renderToken(tok string) string {
 		return tok
 	}
 	return "'" + strings.ReplaceAll(tok, "'", `'\''`) + "'"
-}
-
-// shellReservedWords are the words the shell interprets itself rather
-// than executing. Quoting one changes what runs while leaving the
-// rendered token identical, so a key cannot distinguish the two.
-var shellReservedWords = map[string]bool{
-	"time": true, "do": true, "done": true, "if": true, "then": true,
-	"else": true, "elif": true, "fi": true, "case": true, "esac": true,
-	"while": true, "until": true, "for": true, "in": true,
-	"function": true, "select": true, "coproc": true,
-}
-
-// isInvisible reports the format, bidi and zero-width runes that can
-// make one string display as another.
-func isInvisible(r rune) bool {
-	switch {
-	case r >= 0x200B && r <= 0x200F: // zero-width, LRM/RLM
-		return true
-	case r >= 0x202A && r <= 0x202E: // bidi embedding and override
-		return true
-	case r >= 0x2066 && r <= 0x2069: // bidi isolates
-		return true
-	case r == 0xFEFF: // BOM / zero-width no-break space
-		return true
-	}
-	return false
-}
-
-func isEnvAssignment(tok string) bool {
-	eq := strings.IndexByte(tok, '=')
-	if eq <= 0 {
-		return false
-	}
-	for i, r := range tok[:eq] {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
-		case i > 0 && r >= '0' && r <= '9':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // hasNonASCII reports whether a key carries runes that could be

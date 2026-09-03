@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -139,7 +141,7 @@ func TestNoPresetApprovesTheDangerousLabels(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, l := range []RiskLabel{LabelDeletes, LabelDisrupts, LabelNetwork, LabelPrivilege, LabelUnreadable} {
+		for _, l := range []commandrisk.RiskLabel{commandrisk.LabelDeletes, commandrisk.LabelDisrupts, commandrisk.LabelNetwork, commandrisk.LabelPrivilege, commandrisk.LabelUnreadable} {
 			if approved[l] {
 				t.Errorf("preset %q approves %q", mode, l)
 			}
@@ -175,7 +177,7 @@ func TestATierGrantCoversTheNextCommandToo(t *testing.T) {
 	if err := checkShell(ctx, t, e, "uname -a"); !errors.Is(err, ErrRequireConfirm) {
 		t.Fatalf("strict mode did not ask: %v", err)
 	}
-	if !approvals.Grant(ctx, ShellAction, RiskGrantResource(LabelReads)) {
+	if !approvals.Grant(ctx, ShellAction, RiskGrantResource(commandrisk.LabelReads)) {
 		t.Fatal("the tier grant was not recorded")
 	}
 	// A DIFFERENT read command. The per-command grant could never have
@@ -201,7 +203,7 @@ func TestATierGrantIsScopedToItsConversation(t *testing.T) {
 		Channel: "telegram", ChannelID: "99",
 	})
 
-	approvals.Grant(here, ShellAction, RiskGrantResource(LabelReads))
+	approvals.Grant(here, ShellAction, RiskGrantResource(commandrisk.LabelReads))
 	if err := checkShell(elsewhere, t, e, "uname -a"); !errors.Is(err, ErrRequireConfirm) {
 		t.Errorf("a grant leaked into another conversation: %v", err)
 	}
@@ -212,7 +214,7 @@ func TestEvaluateCommandRisk(t *testing.T) {
 	cond := func(op, value string) types.Condition {
 		return types.Condition{Key: CommandRiskCondition, Op: op, Value: value}
 	}
-	read := WithCommandLabels(context.Background(), L(LabelReads))
+	read := WithCommandLabels(context.Background(), commandrisk.L(commandrisk.LabelReads))
 
 	tests := []struct {
 		name    string
@@ -255,21 +257,21 @@ func TestApprovedLabels(t *testing.T) {
 	tests := []struct {
 		name    string
 		in      []string
-		want    []RiskLabel
+		want    []commandrisk.RiskLabel
 		wantErr bool
 	}{
-		{"unset takes the default", nil, L(LabelReads), false},
-		{"a preset expands", []string{"trusted"}, L(LabelReads, LabelWrites), false},
+		{"unset takes the default", nil, commandrisk.L(commandrisk.LabelReads), false},
+		{"a preset expands", []string{"trusted"}, commandrisk.L(commandrisk.LabelReads, commandrisk.LabelWrites), false},
 		{"strict approves nothing", []string{"strict"}, nil, false},
-		{"case and space are forgiven", []string{"  STANDARD "}, L(LabelReads), false},
+		{"case and space are forgiven", []string{"  STANDARD "}, commandrisk.L(commandrisk.LabelReads), false},
 		// The thing presets cannot say.
-		{"an explicit set", []string{"reads", "writes", "deletes"}, L(LabelReads, LabelWrites, LabelDeletes), false},
+		{"an explicit set", []string{"reads", "writes", "deletes"}, commandrisk.L(commandrisk.LabelReads, commandrisk.LabelWrites, commandrisk.LabelDeletes), false},
 		// A typo must not quietly approve the wrong thing, in either
 		// direction.
-		{"an unknown label errors", []string{"reads", "delete"}, L(LabelReads), true},
-		{"a preset mixed with labels errors", []string{"standard", "deletes"}, L(LabelReads), true},
+		{"an unknown label errors", []string{"reads", "delete"}, commandrisk.L(commandrisk.LabelReads), true},
+		{"a preset mixed with labels errors", []string{"standard", "deletes"}, commandrisk.L(commandrisk.LabelReads), true},
 		// Never, by any spelling.
-		{"unreadable is refused", []string{"reads", "unreadable"}, L(LabelReads), true},
+		{"unreadable is refused", []string{"reads", "unreadable"}, commandrisk.L(commandrisk.LabelReads), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -279,7 +281,7 @@ func TestApprovedLabels(t *testing.T) {
 			}
 			if tt.wantErr {
 				// The fallback is the shipped default, not the loosest.
-				if !got[LabelReads] || got[LabelWrites] {
+				if !got[commandrisk.LabelReads] || got[commandrisk.LabelWrites] {
 					t.Errorf("on error the fallback was %v, want the default", SortedLabels(got))
 				}
 				return

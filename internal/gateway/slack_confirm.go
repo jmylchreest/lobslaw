@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/turn"
@@ -321,7 +323,7 @@ func (h *SlackHandler) grantForRisk(ctx context.Context, promptID, convID string
 	}
 	h.log.Info("slack: labels approved for this conversation",
 		"action", op.action, "labels", op.labels, "conversation", convID)
-	return compute.RenderLabels(op.labels)
+	return commandrisk.RenderLabels(op.labels)
 }
 
 func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID string) string {

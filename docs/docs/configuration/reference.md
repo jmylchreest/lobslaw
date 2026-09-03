@@ -411,9 +411,23 @@ verdict_trust = "advisory"
   terraform = { labels = ["reads"], subcommands = { apply = ["writes", "disrupts"], destroy = ["deletes", "disrupts"] } }
   our-tool  = { labels = ["writes"], targets = true, scratch_labels = ["writes"] }
 
-# `subcommands` reads the first non-flag word; a verb it does not name
-# is unreadable rather than falling back to `labels`. The shipped table
-# uses the same shape for flag-driven programs like pacman and rpm.
+  # A flag-driven program, where the verb IS a flag: pacman -S, rpm -e.
+  mypkg     = { labels = ["reads"], flag_subcommands = { "-i" = ["network", "privilege", "writes"] } }
+
+  # Inherit a shipped entry instead of restating thirty flags. A child's
+  # own fields override the parent's, key by key.
+  mywrapper = { extends = "pacman" }
+
+# `subcommands` reads the first non-flag word and `flag_subcommands` the
+# first flag; a verb neither names is unreadable rather than falling back
+# to `labels`, so `pacman -Rdd` asks. `operand_labels` adds labels only
+# when the command is given a non-flag operand, for programs that are
+# inert alone — `mount` bare lists mounts. `target_last` treats only the
+# final operand as a path, for `cp a b c/` and `ln -s target link`.
+#
+# This is the same grammar the shipped catalogue is written in
+# (internal/commandrisk/commands.toml), parsed by the same code, so
+# anything it can express a deployment can express too.
 ```
 
 Check any command against the table without running it:

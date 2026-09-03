@@ -38,6 +38,7 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/DataDog/datadog-go v4.5.1+incompatible // indirect
 	github.com/Microsoft/go-winio v0.4.17 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect

@@ -1,0 +1,830 @@
+# The catalogue: what each program DOES.
+#
+# Data, and the same grammar an operator writes. [compute.command_risks]
+# is unmarshalled by the same code into the same type, so a deployment
+# can express anything this file can — that was not true when this was a
+# Go map and the config was a struct hand-maintained to mirror it.
+#
+# EXTENDING IT DOES NOT REQUIRE EDITING THIS FILE:
+#
+#     [compute.command_risks]
+#     terraform = { labels = ["reads"], subcommands = { destroy = ["deletes", "disrupts"] } }
+#
+# A pull request here is for entries everyone should have; config is for
+# the ones only you have.
+#
+# Two rules govern every entry, and both are about being wrong safely:
+#
+#   - A program that is not here is UNREADABLE, so an incomplete
+#     catalogue asks rather than waves through. Entries are added when
+#     somebody has thought about what the program does with every flag
+#     it might carry, not to make the list look finished.
+#   - A program whose verb is a subcommand or a flag, and whose verb is
+#     not listed, is unreadable too — never the base labels. `pacman
+#     -Rdd` must not read as "reads" because nobody enumerated -Rdd.
+#
+# Labels are exactly: reads, writes, deletes, disrupts, network,
+# privilege, unreadable. An unknown label fails the build, rather than
+# being dropped — a typo that silently removed a "deletes" would leave
+# the command classified as whatever remained.
+#
+# `extends` inherits another entry, field by field, so a family that
+# behaves identically is stated once and cannot drift apart.
+
+[commands."."]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."["]
+labels = ["reads"]
+
+[commands."ag"]
+labels = ["reads"]
+
+[commands."apk"]
+labels = ["reads"]
+subcommands = { "add" = ["network", "privilege", "writes"], "autoremove" = ["deletes", "privilege"], "clean" = ["deletes", "privilege"], "del" = ["deletes", "privilege"], "depends" = ["reads"], "dist-upgrade" = ["network", "privilege", "writes"], "download" = ["network", "writes"], "erase" = ["deletes", "privilege"], "full-upgrade" = ["network", "privilege", "writes"], "info" = ["reads"], "install" = ["network", "privilege", "writes"], "list" = ["reads"], "policy" = ["reads"], "provides" = ["reads"], "purge" = ["deletes", "privilege"], "reinstall" = ["network", "privilege", "writes"], "remove" = ["deletes", "privilege"], "search" = ["reads"], "show" = ["reads"], "source" = ["network", "writes"], "update" = ["network", "privilege", "writes"], "upgrade" = ["network", "privilege", "writes"], "why" = ["reads"] }
+
+[commands."apt"]
+extends = "apk"
+
+[commands."apt-cache"]
+labels = ["reads"]
+
+[commands."apt-get"]
+extends = "apk"
+
+[commands."aurutils"]
+labels = ["reads"]
+flag_subcommands = { "--database" = ["privilege", "writes"], "--query" = ["reads"], "--remove" = ["deletes", "privilege"], "--sync" = ["network", "privilege", "writes"], "--upgrade" = ["privilege", "writes"], "-D" = ["privilege", "writes"], "-F" = ["reads"], "-Fl" = ["reads"], "-Q" = ["reads"], "-Qdt" = ["reads"], "-Qe" = ["reads"], "-Qi" = ["reads"], "-Ql" = ["reads"], "-Qm" = ["reads"], "-Qn" = ["reads"], "-Qo" = ["reads"], "-Qs" = ["reads"], "-Qu" = ["reads"], "-R" = ["deletes", "privilege"], "-Rcns" = ["deletes", "privilege"], "-Rdd" = ["deletes", "privilege"], "-Rn" = ["deletes", "privilege"], "-Rns" = ["deletes", "privilege"], "-Rs" = ["deletes", "privilege"], "-Rsc" = ["deletes", "privilege"], "-S" = ["network", "privilege", "writes"], "-Sc" = ["deletes", "privilege"], "-Scc" = ["deletes", "privilege"], "-Sg" = ["reads", "network"], "-Si" = ["reads", "network"], "-Sl" = ["reads", "network"], "-Sp" = ["reads", "network"], "-Ss" = ["reads", "network"], "-Su" = ["network", "privilege", "writes"], "-Sw" = ["network", "writes"], "-Sy" = ["network", "privilege", "writes"], "-Syu" = ["network", "privilege", "writes"], "-Syyu" = ["network", "privilege", "writes"], "-Syyuu" = ["network", "privilege", "writes"], "-T" = ["reads"], "-U" = ["privilege", "writes"] }
+
+[commands."awk"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."b2sum"]
+labels = ["reads"]
+
+[commands."basename"]
+labels = ["reads"]
+
+[commands."bash"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."brew"]
+labels = ["reads"]
+subcommands = { "cleanup" = ["deletes"], "doctor" = ["reads"], "info" = ["reads"], "install" = ["network", "writes"], "list" = ["reads"], "outdated" = ["network", "reads"], "remove" = ["deletes"], "search" = ["network", "reads"], "tap" = ["network", "writes"], "uninstall" = ["deletes"], "update" = ["network", "writes"], "upgrade" = ["network", "writes"] }
+
+[commands."bun"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."cal"]
+labels = ["reads"]
+
+[commands."cargo"]
+labels = ["unreadable"]
+subcommands = { "clean" = ["deletes"], "fetch" = ["network", "writes"], "install" = ["network", "writes"], "search" = ["network", "reads"], "tree" = ["reads"], "uninstall" = ["deletes"] }
+
+[commands."cat"]
+labels = ["reads"]
+
+[commands."cc"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."chgrp"]
+labels = ["writes"]
+escalate = { "--recursive" = ["writes", "privilege"], "-R*" = ["writes", "privilege"] }
+targets = true
+
+[commands."chmod"]
+labels = ["writes"]
+escalate = { "--recursive" = ["writes", "privilege"], "-R*" = ["writes", "privilege"] }
+targets = true
+
+[commands."chown"]
+labels = ["writes"]
+escalate = { "--recursive" = ["writes", "privilege"], "-R*" = ["writes", "privilege"] }
+targets = true
+
+[commands."chroot"]
+labels = ["unreadable"]
+why = "runs_in_new_namespace"
+
+[commands."cksum"]
+labels = ["reads"]
+
+[commands."cmake"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."cmp"]
+labels = ["reads"]
+
+[commands."column"]
+labels = ["reads"]
+
+[commands."comm"]
+labels = ["reads"]
+
+[commands."command"]
+labels = ["reads"]
+
+[commands."cp"]
+labels = ["writes"]
+targets = true
+target_last = true
+
+[commands."crontab"]
+labels = ["privilege", "writes"]
+
+[commands."curl"]
+labels = ["network"]
+
+[commands."cut"]
+labels = ["reads"]
+
+[commands."dash"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."date"]
+labels = ["reads"]
+
+[commands."dd"]
+labels = ["deletes", "disrupts"]
+
+[commands."deno"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."df"]
+labels = ["reads"]
+
+[commands."diff"]
+labels = ["reads"]
+
+[commands."dig"]
+labels = ["network"]
+
+[commands."dir"]
+labels = ["reads"]
+
+[commands."dirname"]
+labels = ["reads"]
+
+[commands."dmesg"]
+labels = ["reads"]
+
+[commands."dnf"]
+extends = "apk"
+
+[commands."docker"]
+labels = ["reads"]
+subcommands = { "attach" = ["unreadable"], "build" = ["writes"], "commit" = ["writes"], "cp" = ["writes"], "create" = ["writes"], "diff" = ["reads"], "exec" = ["unreadable"], "image" = ["reads"], "images" = ["reads"], "info" = ["reads"], "inspect" = ["reads"], "kill" = ["disrupts"], "load" = ["writes"], "login" = ["network"], "logs" = ["reads"], "network" = ["disrupts"], "port" = ["reads"], "prune" = ["deletes"], "ps" = ["reads"], "pull" = ["network"], "push" = ["network"], "rm" = ["deletes", "disrupts"], "rmi" = ["deletes"], "run" = ["unreadable"], "save" = ["writes"], "search" = ["network"], "start" = ["unreadable"], "stats" = ["reads"], "stop" = ["disrupts"], "system" = ["deletes", "disrupts"], "tag" = ["writes"], "top" = ["reads"], "version" = ["reads"], "volume" = ["deletes"] }
+
+[commands."dpkg"]
+labels = ["reads"]
+flag_subcommands = { "--audit" = ["reads"], "--configure" = ["privilege", "writes"], "--install" = ["privilege", "writes"], "--list" = ["reads"], "--listfiles" = ["reads"], "--print-architecture" = ["reads"], "--purge" = ["deletes", "privilege"], "--remove" = ["deletes", "privilege"], "--search" = ["reads"], "--status" = ["reads"], "--unpack" = ["privilege", "writes"], "--verify" = ["reads"], "-I" = ["reads"], "-L" = ["reads"], "-P" = ["deletes", "privilege"], "-S" = ["reads"], "-c" = ["reads"], "-i" = ["privilege", "writes"], "-l" = ["reads"], "-p" = ["reads"], "-r" = ["deletes", "privilege"], "-s" = ["reads"] }
+
+[commands."dpkg-query"]
+labels = ["reads"]
+
+[commands."dpkg-reconfigure"]
+labels = ["privilege", "writes"]
+
+[commands."du"]
+labels = ["reads"]
+
+[commands."echo"]
+labels = ["reads"]
+
+[commands."egrep"]
+labels = ["reads"]
+
+[commands."emerge"]
+labels = ["network", "privilege", "writes"]
+escalate = { "--depclean" = ["deletes"], "--search" = ["reads"], "--unmerge" = ["deletes"], "-C" = ["deletes"], "-c" = ["deletes"], "-s" = ["reads"] }
+
+[commands."eval"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."exec"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."false"]
+labels = ["reads"]
+
+[commands."fdisk"]
+labels = ["deletes", "disrupts"]
+
+[commands."fgrep"]
+labels = ["reads"]
+
+[commands."file"]
+labels = ["reads"]
+
+[commands."find"]
+labels = ["reads"]
+escalate = { "-delete" = ["deletes"], "-exec" = ["unreadable"], "-execdir" = ["unreadable"], "-fprint*" = ["writes"], "-ok" = ["unreadable"], "-okdir" = ["unreadable"] }
+
+[commands."fish"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."flatpak"]
+labels = ["reads"]
+subcommands = { "info" = ["reads"], "install" = ["network", "writes"], "list" = ["reads"], "remote-add" = ["network", "writes"], "search" = ["network", "reads"], "uninstall" = ["deletes"], "update" = ["network", "writes"] }
+
+[commands."fold"]
+labels = ["reads"]
+
+[commands."free"]
+labels = ["reads"]
+
+[commands."ftp"]
+labels = ["network"]
+
+[commands."gawk"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."gcc"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."gem"]
+labels = ["reads"]
+subcommands = { "install" = ["network", "writes"], "list" = ["reads"], "search" = ["network", "reads"], "uninstall" = ["deletes"], "update" = ["network", "writes"] }
+
+[commands."getconf"]
+labels = ["reads"]
+
+[commands."getent"]
+labels = ["reads"]
+
+[commands."git"]
+labels = ["reads"]
+subcommands = { "add" = ["writes"], "am" = ["writes"], "apply" = ["writes"], "blame" = ["reads"], "branch" = ["reads"], "checkout" = ["writes"], "cherry-pick" = ["writes"], "clean" = ["deletes"], "clone" = ["network"], "commit" = ["writes"], "config" = ["reads"], "describe" = ["reads"], "diff" = ["reads"], "fetch" = ["network"], "filter-branch" = ["deletes"], "gc" = ["deletes"], "init" = ["writes"], "log" = ["reads"], "ls-files" = ["reads"], "ls-remote" = ["network"], "merge" = ["writes"], "prune" = ["deletes"], "pull" = ["network"], "push" = ["network"], "rebase" = ["writes"], "remote" = ["network"], "reset" = ["writes"], "restore" = ["writes"], "rev-parse" = ["reads"], "revert" = ["writes"], "shortlog" = ["reads"], "show" = ["reads"], "stash" = ["writes"], "status" = ["reads"], "submodule" = ["network"], "switch" = ["writes"], "tag" = ["writes"], "worktree" = ["writes"] }
+escalate = { "--force" = ["deletes"], "--hard" = ["deletes"], "-f" = ["deletes"] }
+
+[commands."go"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."grep"]
+labels = ["reads"]
+
+[commands."groupadd"]
+labels = ["privilege"]
+
+[commands."groupdel"]
+labels = ["privilege"]
+
+[commands."groups"]
+labels = ["reads"]
+
+[commands."gunzip"]
+labels = ["writes"]
+
+[commands."gzip"]
+labels = ["writes"]
+
+[commands."halt"]
+labels = ["disrupts"]
+
+[commands."hash"]
+labels = ["reads"]
+
+[commands."head"]
+labels = ["reads"]
+
+[commands."hexdump"]
+labels = ["reads"]
+
+[commands."host"]
+labels = ["network"]
+
+[commands."hostname"]
+labels = ["reads"]
+
+[commands."id"]
+labels = ["reads"]
+
+[commands."insmod"]
+labels = ["disrupts", "privilege"]
+
+[commands."install"]
+labels = ["writes"]
+targets = true
+target_last = true
+
+[commands."iostat"]
+labels = ["reads"]
+
+[commands."ip"]
+labels = ["reads"]
+operand_labels = ["reads"]
+
+[commands."iptables"]
+labels = ["disrupts", "privilege"]
+
+[commands."javac"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."join"]
+labels = ["reads"]
+
+[commands."journalctl"]
+labels = ["reads"]
+
+[commands."jq"]
+labels = ["reads"]
+
+[commands."kill"]
+labels = ["disrupts"]
+
+[commands."killall"]
+labels = ["disrupts"]
+
+[commands."ksh"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."ldd"]
+labels = ["reads"]
+
+[commands."ln"]
+labels = ["writes"]
+targets = true
+
+[commands."locale"]
+labels = ["reads"]
+
+[commands."logname"]
+labels = ["reads"]
+
+[commands."ls"]
+labels = ["reads"]
+
+[commands."lsblk"]
+labels = ["reads"]
+
+[commands."lscpu"]
+labels = ["reads"]
+
+[commands."lsmod"]
+labels = ["reads"]
+
+[commands."lsns"]
+labels = ["reads"]
+
+[commands."lspci"]
+labels = ["reads"]
+
+[commands."lsusb"]
+labels = ["reads"]
+
+[commands."make"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."mawk"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."md5sum"]
+labels = ["reads"]
+
+[commands."mkdir"]
+labels = ["writes"]
+targets = true
+
+[commands."mkfifo"]
+labels = ["writes"]
+targets = true
+
+[commands."mkfs"]
+labels = ["deletes", "disrupts"]
+
+[commands."mktemp"]
+labels = ["writes"]
+
+[commands."modprobe"]
+labels = ["disrupts", "privilege"]
+
+[commands."mount"]
+labels = ["reads"]
+operand_labels = ["disrupts"]
+
+[commands."mv"]
+labels = ["writes"]
+targets = true
+
+[commands."nc"]
+labels = ["network"]
+
+[commands."ncat"]
+labels = ["network"]
+
+[commands."nerdctl"]
+extends = "docker"
+
+[commands."nft"]
+labels = ["disrupts", "privilege"]
+
+[commands."nix"]
+labels = ["reads"]
+subcommands = { "build" = ["network", "writes"], "develop" = ["unreadable"], "profile" = ["network", "writes"], "run" = ["unreadable"], "search" = ["network", "reads"], "shell" = ["unreadable"], "show" = ["reads"] }
+
+[commands."nix-env"]
+labels = ["network", "writes"]
+
+[commands."nix-shell"]
+labels = ["unreadable"]
+
+[commands."nl"]
+labels = ["reads"]
+
+[commands."nm"]
+labels = ["reads"]
+
+[commands."node"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."npm"]
+labels = ["unreadable"]
+subcommands = { "ci" = ["network"], "install" = ["network"], "list" = ["reads"], "ls" = ["reads"], "outdated" = ["network"], "prune" = ["writes"], "publish" = ["network"], "uninstall" = ["writes"], "view" = ["network"] }
+
+[commands."nsenter"]
+labels = ["unreadable"]
+why = "runs_in_new_namespace"
+
+[commands."nslookup"]
+labels = ["network"]
+
+[commands."od"]
+labels = ["reads"]
+
+[commands."pacman"]
+labels = ["reads"]
+flag_subcommands = { "--database" = ["privilege", "writes"], "--query" = ["reads"], "--remove" = ["deletes", "privilege"], "--sync" = ["network", "privilege", "writes"], "--upgrade" = ["privilege", "writes"], "-D" = ["privilege", "writes"], "-F" = ["reads"], "-Fl" = ["reads"], "-Q" = ["reads"], "-Qdt" = ["reads"], "-Qe" = ["reads"], "-Qi" = ["reads"], "-Ql" = ["reads"], "-Qm" = ["reads"], "-Qn" = ["reads"], "-Qo" = ["reads"], "-Qs" = ["reads"], "-Qu" = ["reads"], "-R" = ["deletes", "privilege"], "-Rcns" = ["deletes", "privilege"], "-Rdd" = ["deletes", "privilege"], "-Rn" = ["deletes", "privilege"], "-Rns" = ["deletes", "privilege"], "-Rs" = ["deletes", "privilege"], "-Rsc" = ["deletes", "privilege"], "-S" = ["network", "privilege", "writes"], "-Sc" = ["deletes", "privilege"], "-Scc" = ["deletes", "privilege"], "-Sg" = ["reads"], "-Si" = ["reads"], "-Sl" = ["reads"], "-Sp" = ["reads"], "-Ss" = ["reads"], "-Su" = ["network", "privilege", "writes"], "-Sw" = ["network", "writes"], "-Sy" = ["network", "privilege", "writes"], "-Syu" = ["network", "privilege", "writes"], "-Syyu" = ["network", "privilege", "writes"], "-Syyuu" = ["network", "privilege", "writes"], "-T" = ["reads"], "-U" = ["privilege", "writes"] }
+
+[commands."pamac"]
+extends = "aurutils"
+
+[commands."parallel"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."parted"]
+labels = ["deletes", "disrupts"]
+
+[commands."paru"]
+extends = "aurutils"
+
+[commands."passwd"]
+labels = ["privilege"]
+
+[commands."paste"]
+labels = ["reads"]
+
+[commands."patch"]
+labels = ["writes"]
+targets = true
+
+[commands."perl"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."pgrep"]
+labels = ["reads"]
+
+[commands."php"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."pidof"]
+labels = ["reads"]
+
+[commands."pikaur"]
+extends = "aurutils"
+
+[commands."ping"]
+labels = ["network"]
+
+[commands."pip"]
+labels = ["reads"]
+subcommands = { "check" = ["reads"], "config" = ["reads"], "download" = ["network"], "freeze" = ["reads"], "install" = ["network"], "list" = ["reads"], "show" = ["reads"], "uninstall" = ["deletes"], "wheel" = ["network"] }
+
+[commands."pip3"]
+extends = "pip"
+
+[commands."pipx"]
+labels = ["reads"]
+subcommands = { "install" = ["network", "writes"], "list" = ["reads"], "run" = ["unreadable"], "runpip" = ["network", "writes"], "uninstall" = ["deletes"], "upgrade" = ["network", "writes"] }
+
+[commands."pkill"]
+labels = ["disrupts"]
+
+[commands."podman"]
+extends = "docker"
+
+[commands."poweroff"]
+labels = ["disrupts"]
+
+[commands."printenv"]
+labels = ["reads"]
+
+[commands."printf"]
+labels = ["reads"]
+
+[commands."ps"]
+labels = ["reads"]
+
+[commands."pwd"]
+labels = ["reads"]
+
+[commands."python"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."python3"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."rclone"]
+labels = ["network"]
+
+[commands."readlink"]
+labels = ["reads"]
+
+[commands."realpath"]
+labels = ["reads"]
+
+[commands."reboot"]
+labels = ["disrupts"]
+
+[commands."rev"]
+labels = ["reads"]
+
+[commands."rg"]
+labels = ["reads"]
+
+[commands."rm"]
+labels = ["deletes"]
+targets = true
+scratch_labels = ["writes"]
+
+[commands."rmdir"]
+labels = ["deletes"]
+targets = true
+scratch_labels = ["writes"]
+
+[commands."rmmod"]
+labels = ["disrupts", "privilege"]
+
+[commands."rpm"]
+labels = ["reads"]
+flag_subcommands = { "--checksig" = ["reads"], "--erase" = ["deletes", "privilege"], "--freshen" = ["privilege", "writes"], "--install" = ["privilege", "writes"], "--query" = ["reads"], "--upgrade" = ["privilege", "writes"], "--verify" = ["reads"], "-F" = ["privilege", "writes"], "-K" = ["reads"], "-U" = ["privilege", "writes"], "-Uvh" = ["privilege", "writes"], "-V" = ["reads"], "-e" = ["deletes", "privilege"], "-i" = ["privilege", "writes"], "-ivh" = ["privilege", "writes"], "-q" = ["reads"], "-qa" = ["reads"], "-qf" = ["reads"], "-qi" = ["reads"], "-ql" = ["reads"], "-qp" = ["reads"] }
+
+[commands."rpm-ostree"]
+labels = ["reads"]
+subcommands = { "db" = ["reads"], "install" = ["network", "privilege", "writes"], "rollback" = ["privilege", "disrupts"], "status" = ["reads"], "uninstall" = ["deletes", "privilege"], "upgrade" = ["network", "privilege", "writes"] }
+
+[commands."rsync"]
+labels = ["network"]
+
+[commands."ruby"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."rustc"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."scp"]
+labels = ["network"]
+
+[commands."sed"]
+labels = ["reads"]
+escalate = { "--in-place*" = ["writes"], "-i*" = ["writes"] }
+
+[commands."seq"]
+labels = ["reads"]
+
+[commands."sfdisk"]
+labels = ["deletes", "disrupts"]
+
+[commands."sftp"]
+labels = ["network"]
+
+[commands."sh"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."sha1sum"]
+labels = ["reads"]
+
+[commands."sha256sum"]
+labels = ["reads"]
+
+[commands."shred"]
+labels = ["deletes"]
+targets = true
+scratch_labels = ["writes"]
+
+[commands."shutdown"]
+labels = ["disrupts"]
+
+[commands."snap"]
+labels = ["reads"]
+subcommands = { "disable" = ["disrupts", "privilege"], "enable" = ["disrupts", "privilege"], "find" = ["network", "reads"], "info" = ["reads"], "install" = ["network", "privilege", "writes"], "list" = ["reads"], "refresh" = ["network", "privilege", "writes"], "remove" = ["deletes", "privilege"] }
+
+[commands."socat"]
+labels = ["network"]
+
+[commands."sort"]
+labels = ["reads"]
+
+[commands."source"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."split"]
+labels = ["writes"]
+targets = true
+
+[commands."ssh"]
+labels = ["network"]
+
+[commands."stat"]
+labels = ["reads"]
+
+[commands."strings"]
+labels = ["reads"]
+
+[commands."swapon"]
+labels = ["reads"]
+operand_labels = ["disrupts"]
+
+[commands."systemctl"]
+labels = ["reads"]
+subcommands = { "cat" = ["reads"], "daemon-reload" = ["disrupts"], "disable" = ["disrupts", "writes"], "enable" = ["disrupts", "writes"], "is-active" = ["reads"], "is-enabled" = ["reads"], "list-unit-files" = ["reads"], "list-units" = ["reads"], "mask" = ["disrupts", "writes"], "reload" = ["disrupts"], "restart" = ["disrupts"], "show" = ["reads"], "start" = ["disrupts"], "status" = ["reads"], "stop" = ["disrupts"], "unmask" = ["disrupts", "writes"] }
+
+[commands."tac"]
+labels = ["reads"]
+
+[commands."tail"]
+labels = ["reads"]
+
+[commands."tar"]
+labels = ["reads"]
+escalate = { "--create" = ["writes"], "--delete" = ["deletes"], "--extract" = ["writes"], "-c*" = ["writes"], "-x*" = ["writes"] }
+
+[commands."tee"]
+labels = ["writes"]
+targets = true
+
+[commands."telnet"]
+labels = ["network"]
+
+[commands."test"]
+labels = ["reads"]
+
+[commands."touch"]
+labels = ["writes"]
+targets = true
+
+[commands."tr"]
+labels = ["reads"]
+
+[commands."traceroute"]
+labels = ["network"]
+
+[commands."trizen"]
+extends = "aurutils"
+
+[commands."true"]
+labels = ["reads"]
+
+[commands."truncate"]
+labels = ["deletes"]
+targets = true
+scratch_labels = ["writes"]
+
+[commands."type"]
+labels = ["reads"]
+
+[commands."ulimit"]
+labels = ["reads"]
+
+[commands."umount"]
+labels = ["disrupts"]
+
+[commands."uname"]
+labels = ["reads"]
+
+[commands."uniq"]
+labels = ["reads"]
+
+[commands."unshare"]
+labels = ["unreadable"]
+why = "runs_in_new_namespace"
+
+[commands."unzip"]
+labels = ["writes"]
+
+[commands."uptime"]
+labels = ["reads"]
+
+[commands."useradd"]
+labels = ["privilege"]
+
+[commands."userdel"]
+labels = ["privilege", "deletes"]
+
+[commands."usermod"]
+labels = ["privilege"]
+
+[commands."vdir"]
+labels = ["reads"]
+
+[commands."visudo"]
+labels = ["privilege"]
+
+[commands."vmstat"]
+labels = ["reads"]
+
+[commands."watch"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."wc"]
+labels = ["reads"]
+
+[commands."wget"]
+labels = ["network"]
+
+[commands."whereis"]
+labels = ["reads"]
+
+[commands."which"]
+labels = ["reads"]
+
+[commands."whoami"]
+labels = ["reads"]
+
+[commands."wipefs"]
+labels = ["deletes", "disrupts"]
+
+[commands."xargs"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."xbps-install"]
+labels = ["network", "privilege", "writes"]
+
+[commands."xbps-query"]
+labels = ["reads"]
+
+[commands."xbps-remove"]
+labels = ["deletes", "privilege"]
+
+[commands."xkill"]
+labels = ["disrupts"]
+
+[commands."xxd"]
+labels = ["reads"]
+
+[commands."yay"]
+extends = "aurutils"
+
+[commands."yes"]
+labels = ["reads"]
+
+[commands."yq"]
+labels = ["reads"]
+
+[commands."yum"]
+extends = "apk"
+
+[commands."zcat"]
+labels = ["reads"]
+
+[commands."zip"]
+labels = ["writes"]
+
+[commands."zsh"]
+labels = ["unreadable"]
+why = "runs_unread_code"
+
+[commands."zypper"]
+extends = "apk"
+

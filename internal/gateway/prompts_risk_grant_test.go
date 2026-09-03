@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -22,7 +24,7 @@ import (
 // records nothing looks exactly like one that worked, and a button
 // offered on a destructive command grants far more than anybody read.
 
-func raiseRiskConfirmation(t *testing.T, h *tgPromptHarness, resource string, grantable bool, labels []compute.RiskLabel) {
+func raiseRiskConfirmation(t *testing.T, h *tgPromptHarness, resource string, grantable bool, labels []commandrisk.RiskLabel) {
 	t.Helper()
 	budget, err := compute.NewTurnBudget(compute.BudgetCaps{})
 	if err != nil {
@@ -71,7 +73,7 @@ func TestTheTierButtonIsOfferedWhenTheCommandCannotBeGranted(t *testing.T) {
 		Approvals:        compute.NewSessionApprovals(),
 	})
 
-	raiseRiskConfirmation(t, h, compute.UnclassifiedResource, false, compute.L(compute.LabelReads))
+	raiseRiskConfirmation(t, h, compute.UnclassifiedResource, false, commandrisk.L(commandrisk.LabelReads))
 
 	calls := h.capturedCalls()
 	if got := callbackDataFor(t, calls, "approve-session-risk"); got == "" {
@@ -93,7 +95,7 @@ func TestTappingTheTierButtonGrantsTheTier(t *testing.T) {
 		Approvals:        approvals,
 	})
 
-	raiseRiskConfirmation(t, h, compute.UnclassifiedResource, false, compute.L(compute.LabelReads))
+	raiseRiskConfirmation(t, h, compute.UnclassifiedResource, false, commandrisk.L(commandrisk.LabelReads))
 	promptID := callbackDataFor(t, h.capturedCalls(), "approve-session-risk")
 	if promptID == "" {
 		t.Fatal("no tier button")
@@ -101,11 +103,11 @@ func TestTappingTheTierButtonGrantsTheTier(t *testing.T) {
 	tapRiskGrant(t, h, "920", promptID)
 
 	ctx := turn.WithIdentity(t.Context(), turn.Identity{Channel: "telegram", ChannelID: "99"})
-	if !approvals.Granted(ctx, compute.ShellAction, compute.RiskGrantResource(compute.LabelReads)) {
+	if !approvals.Granted(ctx, compute.ShellAction, compute.RiskGrantResource(commandrisk.LabelReads)) {
 		t.Error("no read-tier grant was recorded")
 	}
 	// Bounded by the tier it named.
-	if approvals.Granted(ctx, compute.ShellAction, compute.RiskGrantResource(compute.LabelWrites)) {
+	if approvals.Granted(ctx, compute.ShellAction, compute.RiskGrantResource(commandrisk.LabelWrites)) {
 		t.Error("a read grant also covered writes")
 	}
 	// And the reply says what was given, because this offer is broader
@@ -129,14 +131,14 @@ func TestTappingTheTierButtonGrantsTheTier(t *testing.T) {
 // should not have.
 func TestTheTierButtonIsNeverOfferedForTheDangerousTiers(t *testing.T) {
 	t.Parallel()
-	for _, labels := range [][]compute.RiskLabel{
-		compute.L(compute.LabelNetwork), compute.L(compute.LabelDeletes),
-		compute.L(compute.LabelUnreadable), nil,
+	for _, labels := range [][]commandrisk.RiskLabel{
+		commandrisk.L(commandrisk.LabelNetwork), commandrisk.L(commandrisk.LabelDeletes),
+		commandrisk.L(commandrisk.LabelUnreadable), nil,
 		// A set with ANY ungrantable label offers nothing, even when the
 		// rest would have been fine on their own.
-		compute.L(compute.LabelReads, compute.LabelDeletes),
+		commandrisk.L(commandrisk.LabelReads, commandrisk.LabelDeletes),
 	} {
-		t.Run(compute.RenderLabels(labels), func(t *testing.T) {
+		t.Run(commandrisk.RenderLabels(labels), func(t *testing.T) {
 			h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{
 				UnknownUserScope: "public",
 				Approvals:        compute.NewSessionApprovals(),
@@ -162,7 +164,7 @@ func TestATappedTierGrantIsRecheckedAgainstTheTier(t *testing.T) {
 	// Grantable per command, so a prompt exists and carries a pending
 	// scope — but the tier is destructive, so no tier button was
 	// rendered. Tapping the verb anyway must record nothing.
-	raiseRiskConfirmation(t, h, "rm -rf /etc/hosts", true, compute.L(compute.LabelDeletes))
+	raiseRiskConfirmation(t, h, "rm -rf /etc/hosts", true, commandrisk.L(commandrisk.LabelDeletes))
 	promptID := callbackDataFor(t, h.capturedCalls(), "approve-session")
 	if promptID == "" {
 		t.Fatal("no per-command session button to borrow a prompt id from")
@@ -170,7 +172,7 @@ func TestATappedTierGrantIsRecheckedAgainstTheTier(t *testing.T) {
 	tapRiskGrant(t, h, "930", promptID)
 
 	ctx := turn.WithIdentity(t.Context(), turn.Identity{Channel: "telegram", ChannelID: "99"})
-	if approvals.Granted(ctx, compute.ShellAction, compute.RiskGrantResource(compute.LabelDeletes)) {
+	if approvals.Granted(ctx, compute.ShellAction, compute.RiskGrantResource(commandrisk.LabelDeletes)) {
 		t.Fatal("a destructive tier was granted by a forged callback")
 	}
 }
@@ -178,21 +180,21 @@ func TestATappedTierGrantIsRecheckedAgainstTheTier(t *testing.T) {
 func TestRiskGrantOffered(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		labels []compute.RiskLabel
+		labels []commandrisk.RiskLabel
 		want   bool
 	}{
-		{compute.L(compute.LabelReads), true},
-		{compute.L(compute.LabelWrites), true},
-		{compute.L(compute.LabelReads, compute.LabelWrites), true},
-		{compute.L(compute.LabelNetwork), false},
-		{compute.L(compute.LabelDeletes), false},
-		{compute.L(compute.LabelDisrupts), false},
-		{compute.L(compute.LabelPrivilege), false},
-		{compute.L(compute.LabelUnreadable), false},
+		{commandrisk.L(commandrisk.LabelReads), true},
+		{commandrisk.L(commandrisk.LabelWrites), true},
+		{commandrisk.L(commandrisk.LabelReads, commandrisk.LabelWrites), true},
+		{commandrisk.L(commandrisk.LabelNetwork), false},
+		{commandrisk.L(commandrisk.LabelDeletes), false},
+		{commandrisk.L(commandrisk.LabelDisrupts), false},
+		{commandrisk.L(commandrisk.LabelPrivilege), false},
+		{commandrisk.L(commandrisk.LabelUnreadable), false},
 		// EVERY label must be grantable. A command that reads and
 		// deletes offers nothing, because approving "this kind of
 		// thing" would approve the deletion.
-		{compute.L(compute.LabelReads, compute.LabelDeletes), false},
+		{commandrisk.L(commandrisk.LabelReads, commandrisk.LabelDeletes), false},
 		{nil, false},
 	}
 	for _, tc := range cases {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -84,7 +86,7 @@ func ShellGrantResource(params map[string]string) GrantTarget {
 	// what the command does are different questions, and the most
 	// common case — a compound probe with no stable form — is exactly
 	// the one where the tier is the only thing anybody can act on.
-	t.Labels = ClassifyRisk(params["command"]).Labels
+	t.Labels = commandrisk.ClassifyRisk(params["command"]).Labels
 	return t
 }
 
@@ -182,7 +184,7 @@ func ShellCommandSummary(ctx context.Context, params map[string]string) string {
 	// than replacing it: a prompt that only paraphrases what is about
 	// to run cannot be checked, and the whole design rests on the user
 	// seeing exactly what runs.
-	if head := RiskHeadline(VerdictFor(ctx, params)); head != "" {
+	if head := commandrisk.RiskHeadline(VerdictFor(ctx, params)); head != "" {
 		b.WriteString(head)
 		b.WriteString("\n")
 	}
@@ -236,7 +238,7 @@ func cwdUsableInKey(cwd string) bool {
 		return false
 	}
 	for _, r := range cwd {
-		if r < 0x20 || isInvisible(r) || r == ')' {
+		if r < 0x20 || commandrisk.IsInvisible(r) || r == ')' {
 			return false
 		}
 	}
