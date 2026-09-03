@@ -198,6 +198,18 @@ type CommandRiskRule struct {
 	// /mnt` does not.
 	OperandLabels []RiskLabel
 
+	// FlagSub classifies by the first FLAG, for programs whose verbs are
+	// flags rather than words: `pacman -S`, `rpm -e`, `dpkg -i`.
+	//
+	// The flag equivalent of Sub, with the same fail-closed rule and for
+	// the same reason: a flag nobody named is UNREADABLE rather than
+	// taking Labels. `pacman -Rdd foo` removes a package ignoring its
+	// dependencies, and a table that has not heard of `-Rdd` must not
+	// answer "reads" because the base entry happens to say so. There
+	// are more pacman flag combinations than anybody will enumerate, so
+	// the unenumerated case has to be the safe one.
+	FlagSub map[string][]RiskLabel
+
 	// Targets marks a program whose risk is decided by WHAT IT IS
 	// POINTED AT rather than by its name.
 	//
@@ -383,15 +395,105 @@ var DefaultCommandRisks = map[string]CommandRiskRule{
 	}},
 	"apt-get": packageRisk, "apt": packageRisk, "apt-cache": {Labels: L(LabelReads)},
 	"dnf": packageRisk, "yum": packageRisk, "zypper": packageRisk,
-	"pacman": {Labels: L(LabelUnreadable)}, "apk": packageRisk,
-	"dpkg": {Labels: L(LabelReads), Escalate: map[string][]RiskLabel{
-		"-i": L(LabelWrites), "--install": L(LabelWrites),
-		"-r": L(LabelDeletes), "--remove": L(LabelDeletes), "--purge": L(LabelDeletes),
+	"apk": packageRisk,
+	// Arch, and the AUR helpers that wrap it.
+	"pacman": pacmanRisk, "paru": aurRisk, "yay": aurRisk, "pikaur": aurRisk,
+	"pamac": aurRisk, "trizen": aurRisk, "aurutils": aurRisk,
+	// dpkg and rpm take their verb as a flag, so they use FlagSub: a
+	// spelling nobody enumerated is unreadable rather than inheriting
+	// "reads". They were Escalate before, which is additive — so
+	// `dpkg --audit` or any unlisted flag read as harmless.
+	"dpkg": {Labels: L(LabelReads), FlagSub: map[string][]RiskLabel{
+		"-l": L(LabelReads), "--list": L(LabelReads),
+		"-L": L(LabelReads), "--listfiles": L(LabelReads),
+		"-S": L(LabelReads), "--search": L(LabelReads),
+		"-s": L(LabelReads), "--status": L(LabelReads),
+		"-p": L(LabelReads), "-I": L(LabelReads), "-c": L(LabelReads),
+		"--audit": L(LabelReads), "--verify": L(LabelReads), "--print-architecture": L(LabelReads),
+		// Installing a .deb runs its maintainer scripts as root.
+		"-i": L(LabelPrivilege, LabelWrites), "--install": L(LabelPrivilege, LabelWrites),
+		"--unpack":    L(LabelPrivilege, LabelWrites),
+		"--configure": L(LabelPrivilege, LabelWrites),
+		"-r":          L(LabelDeletes, LabelPrivilege), "--remove": L(LabelDeletes, LabelPrivilege),
+		"-P": L(LabelDeletes, LabelPrivilege), "--purge": L(LabelDeletes, LabelPrivilege),
 	}},
-	"rpm": {Labels: L(LabelReads), Escalate: map[string][]RiskLabel{
-		"-i": L(LabelWrites), "--install": L(LabelWrites),
-		"-e": L(LabelDeletes), "--erase": L(LabelDeletes),
+	"dpkg-query":       {Labels: L(LabelReads)},
+	"dpkg-reconfigure": {Labels: L(LabelPrivilege, LabelWrites)},
+	"rpm": {Labels: L(LabelReads), FlagSub: map[string][]RiskLabel{
+		"-q": L(LabelReads), "-qa": L(LabelReads), "-qi": L(LabelReads),
+		"-ql": L(LabelReads), "-qf": L(LabelReads), "-qp": L(LabelReads),
+		"--query": L(LabelReads), "-V": L(LabelReads), "--verify": L(LabelReads),
+		"-K": L(LabelReads), "--checksig": L(LabelReads),
+		// %post scriptlets, as root.
+		"-i": L(LabelPrivilege, LabelWrites), "--install": L(LabelPrivilege, LabelWrites),
+		"-U": L(LabelPrivilege, LabelWrites), "--upgrade": L(LabelPrivilege, LabelWrites),
+		"-F": L(LabelPrivilege, LabelWrites), "--freshen": L(LabelPrivilege, LabelWrites),
+		"-ivh": L(LabelPrivilege, LabelWrites), "-Uvh": L(LabelPrivilege, LabelWrites),
+		"-e": L(LabelDeletes, LabelPrivilege), "--erase": L(LabelDeletes, LabelPrivilege),
 	}},
+	"rpm-ostree": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"status": L(LabelReads), "db": L(LabelReads),
+		"install":   L(LabelNetwork, LabelPrivilege, LabelWrites),
+		"upgrade":   L(LabelNetwork, LabelPrivilege, LabelWrites),
+		"uninstall": L(LabelDeletes, LabelPrivilege),
+		"rollback":  L(LabelPrivilege, LabelDisrupts),
+	}},
+
+	// Source-building and user-scope managers. The distinction that
+	// matters is PRIVILEGE: emerge and snap need root, while brew,
+	// cargo, nix, go and pipx install into a user prefix and do not.
+	// Five models were polled and were consistent about which is which.
+	"emerge": {Labels: L(LabelNetwork, LabelPrivilege, LabelWrites), Escalate: map[string][]RiskLabel{
+		"--depclean": L(LabelDeletes), "-c": L(LabelDeletes),
+		"--unmerge": L(LabelDeletes), "-C": L(LabelDeletes),
+		"--search": L(LabelReads), "-s": L(LabelReads),
+	}},
+	"xbps-install": {Labels: L(LabelNetwork, LabelPrivilege, LabelWrites)},
+	"xbps-remove":  {Labels: L(LabelDeletes, LabelPrivilege)},
+	"xbps-query":   {Labels: L(LabelReads)},
+	"snap": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"list": L(LabelReads), "find": L(LabelNetwork, LabelReads), "info": L(LabelReads),
+		"install": L(LabelNetwork, LabelPrivilege, LabelWrites),
+		"refresh": L(LabelNetwork, LabelPrivilege, LabelWrites),
+		"remove":  L(LabelDeletes, LabelPrivilege),
+		"disable": L(LabelDisrupts, LabelPrivilege), "enable": L(LabelDisrupts, LabelPrivilege),
+	}},
+	"flatpak": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"list": L(LabelReads), "info": L(LabelReads), "search": L(LabelNetwork, LabelReads),
+		"install": L(LabelNetwork, LabelWrites), "update": L(LabelNetwork, LabelWrites),
+		"uninstall": L(LabelDeletes), "remote-add": L(LabelNetwork, LabelWrites),
+	}},
+	"brew": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"list": L(LabelReads), "info": L(LabelReads), "search": L(LabelNetwork, LabelReads),
+		"doctor": L(LabelReads), "outdated": L(LabelNetwork, LabelReads),
+		"install": L(LabelNetwork, LabelWrites), "upgrade": L(LabelNetwork, LabelWrites),
+		"update": L(LabelNetwork, LabelWrites), "tap": L(LabelNetwork, LabelWrites),
+		"uninstall": L(LabelDeletes), "remove": L(LabelDeletes), "cleanup": L(LabelDeletes),
+	}},
+	"nix-env":   {Labels: L(LabelNetwork, LabelWrites)},
+	"nix-shell": {Labels: L(LabelUnreadable)},
+	"nix": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"search": L(LabelNetwork, LabelReads), "show": L(LabelReads),
+		"build": L(LabelNetwork, LabelWrites), "profile": L(LabelNetwork, LabelWrites),
+		"develop": L(LabelUnreadable), "run": L(LabelUnreadable), "shell": L(LabelUnreadable),
+	}},
+	"cargo": {Labels: L(LabelUnreadable), Sub: map[string][]RiskLabel{
+		"tree": L(LabelReads), "search": L(LabelNetwork, LabelReads),
+		"fetch": L(LabelNetwork, LabelWrites), "install": L(LabelNetwork, LabelWrites),
+		"uninstall": L(LabelDeletes), "clean": L(LabelDeletes),
+	}},
+	"gem": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"list": L(LabelReads), "search": L(LabelNetwork, LabelReads),
+		"install": L(LabelNetwork, LabelWrites), "update": L(LabelNetwork, LabelWrites),
+		"uninstall": L(LabelDeletes),
+	}},
+	"pipx": {Labels: L(LabelReads), Sub: map[string][]RiskLabel{
+		"list":    L(LabelReads),
+		"install": L(LabelNetwork, LabelWrites), "upgrade": L(LabelNetwork, LabelWrites),
+		"uninstall": L(LabelDeletes), "runpip": L(LabelNetwork, LabelWrites),
+		"run": L(LabelUnreadable),
+	}},
+
 	"pip": pipRisk, "pip3": pipRisk,
 	"npm": {Labels: L(LabelUnreadable), Sub: map[string][]RiskLabel{
 		"ls": L(LabelReads), "list": L(LabelReads), "view": L(LabelNetwork), "outdated": L(LabelNetwork),
@@ -408,7 +510,7 @@ var DefaultCommandRisks = map[string]CommandRiskRule{
 	"awk": runsCode, "gawk": runsCode, "mawk": runsCode, "perl": runsCode,
 	"python": runsCode, "python3": runsCode, "ruby": runsCode, "php": runsCode,
 	"node": runsCode, "deno": runsCode, "bun": runsCode,
-	"make": runsCode, "cmake": runsCode, "cargo": runsCode, "go": runsCode,
+	"make": runsCode, "cmake": runsCode, "go": runsCode,
 	"gcc": runsCode, "cc": runsCode, "rustc": runsCode, "javac": runsCode,
 	"unshare": newNamespace, "nsenter": newNamespace, "chroot": newNamespace,
 }
@@ -428,18 +530,111 @@ var containerRisk = CommandRiskRule{Labels: L(LabelReads), Sub: map[string][]Ris
 	"volume": L(LabelDeletes), "network": L(LabelDisrupts),
 }}
 
-// packageRisk covers the distro package managers, which all reach the
-// network to install and remove things locally to uninstall.
+// packageRisk covers the SUBCOMMAND-driven distro package managers:
+// apt, dnf, zypper, apk.
+//
+// Every mutating verb carries privilege, which this table missed until
+// five models were polled about it and all five said so. They are
+// right: installing or removing a system package needs root, and a
+// classification that called `apt-get install` merely "network" was
+// describing the smaller half of what happens.
+//
+// Deliberately NOT unreadable, though several models reached for it —
+// a package install does run maintainer scripts as root, which is
+// genuinely code nobody has read. But unreadable means "the classifier
+// could not read this COMMAND", it is approvable by no configuration,
+// and resolve_unknown treats a bare unreadable as the gap a model may
+// fill. Overloading it with "runs third-party code" would give one
+// label two meanings, which is the fault the label set exists to fix.
+// network + privilege already says it: fetching from a remote and
+// running as root IS arbitrary remote code as root.
 var packageRisk = CommandRiskRule{Labels: L(LabelReads), Sub: map[string][]RiskLabel{
-	"list": L(LabelReads), "show": L(LabelReads), "search": L(LabelReads), "policy": L(LabelReads),
-	"info": L(LabelReads), "depends": L(LabelReads),
-	"update": L(LabelNetwork), "install": L(LabelNetwork), "upgrade": L(LabelNetwork),
-	"dist-upgrade": L(LabelNetwork), "download": L(LabelNetwork), "source": L(LabelNetwork),
-	"remove": L(LabelDeletes), "purge": L(LabelDeletes), "autoremove": L(LabelDeletes),
-	"erase": L(LabelDeletes), "clean": L(LabelDeletes),
+	"list": L(LabelReads), "show": L(LabelReads), "search": L(LabelReads),
+	"policy": L(LabelReads), "info": L(LabelReads), "depends": L(LabelReads),
+	"why": L(LabelReads), "provides": L(LabelReads),
+
+	"update":       L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"install":      L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"add":          L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"reinstall":    L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"upgrade":      L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"dist-upgrade": L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"full-upgrade": L(LabelNetwork, LabelPrivilege, LabelWrites),
+	// A download writes to the cache and needs no root.
+	"download": L(LabelNetwork, LabelWrites),
+	"source":   L(LabelNetwork, LabelWrites),
+
+	"remove":     L(LabelDeletes, LabelPrivilege),
+	"del":        L(LabelDeletes, LabelPrivilege),
+	"purge":      L(LabelDeletes, LabelPrivilege),
+	"autoremove": L(LabelDeletes, LabelPrivilege),
+	"erase":      L(LabelDeletes, LabelPrivilege),
+	"clean":      L(LabelDeletes, LabelPrivilege),
 }}
 
-// pipRisk is the python package manager, whose install reaches out and
+// pacmanRisk is the flag-driven Arch family.
+//
+// FlagSub rather than Escalate, so an operation nobody enumerated is
+// unreadable instead of inheriting the base "reads". `pacman -Rdd foo`
+// removes a package and ignores its dependencies; there are more flag
+// combinations than anybody will list, and the unlisted ones must not
+// read as harmless.
+var pacmanRisk = CommandRiskRule{Labels: L(LabelReads), FlagSub: map[string][]RiskLabel{
+	// Query: local database, no root, no network.
+	"-Q": L(LabelReads), "-Qi": L(LabelReads), "-Ql": L(LabelReads),
+	"-Qo": L(LabelReads), "-Qe": L(LabelReads), "-Qm": L(LabelReads),
+	"-Qn": L(LabelReads), "-Qs": L(LabelReads), "-Qdt": L(LabelReads),
+	"-Qu": L(LabelReads), "--query": L(LabelReads),
+	"-T": L(LabelReads), "-F": L(LabelReads), "-Fl": L(LabelReads),
+
+	// Sync: searching is a read of a synced database; anything that
+	// installs needs root and reaches a mirror.
+	"-Ss": L(LabelReads), "-Si": L(LabelReads), "-Sg": L(LabelReads),
+	"-Sl": L(LabelReads), "-Sp": L(LabelReads),
+	"-S":     L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"-Sy":    L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"-Su":    L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"-Syu":   L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"-Syyu":  L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"-Syyuu": L(LabelNetwork, LabelPrivilege, LabelWrites),
+	"-Sw":    L(LabelNetwork, LabelWrites),
+	"--sync": L(LabelNetwork, LabelPrivilege, LabelWrites),
+	// Cache cleaning throws packages away.
+	"-Sc": L(LabelDeletes, LabelPrivilege), "-Scc": L(LabelDeletes, LabelPrivilege),
+
+	// Remove, in its several depth-of-destruction spellings.
+	"-R": L(LabelDeletes, LabelPrivilege), "-Rs": L(LabelDeletes, LabelPrivilege),
+	"-Rn": L(LabelDeletes, LabelPrivilege), "-Rns": L(LabelDeletes, LabelPrivilege),
+	"-Rsc": L(LabelDeletes, LabelPrivilege), "-Rdd": L(LabelDeletes, LabelPrivilege),
+	"-Rcns": L(LabelDeletes, LabelPrivilege), "--remove": L(LabelDeletes, LabelPrivilege),
+
+	// A local package file, installed with its scriptlets, as root.
+	"-U": L(LabelPrivilege, LabelWrites), "--upgrade": L(LabelPrivilege, LabelWrites),
+	"-D": L(LabelPrivilege, LabelWrites), "--database": L(LabelPrivilege, LabelWrites),
+}}
+
+// aurRisk wraps pacman for the AUR helpers.
+//
+// Same operations, plus a network hop for anything that touches the
+// AUR — including a search, which pacman does locally and paru does
+// over the wire.
+var aurRisk = CommandRiskRule{Labels: L(LabelReads), FlagSub: aurFlags()}
+
+// aurFlags is pacmanRisk's table with the searches given a network
+// label, built rather than restated so the two cannot drift.
+func aurFlags() map[string][]RiskLabel {
+	out := make(map[string][]RiskLabel, len(pacmanRisk.FlagSub))
+	for flag, labels := range pacmanRisk.FlagSub {
+		if len(labels) == 1 && labels[0] == LabelReads && strings.HasPrefix(flag, "-S") {
+			out[flag] = L(LabelReads, LabelNetwork)
+			continue
+		}
+		out[flag] = labels
+	}
+	return out
+}
+
+// pipRisk is the python package manager// pipRisk is the python package manager, whose install reaches out and
 // whose uninstall does not.
 var pipRisk = CommandRiskRule{Labels: L(LabelReads), Sub: map[string][]RiskLabel{
 	"list": L(LabelReads), "show": L(LabelReads), "freeze": L(LabelReads), "check": L(LabelReads),
@@ -658,6 +853,23 @@ type wrapperSpec struct {
 	// unreadable — it runs in an environment we did not read, for the
 	// reason NormaliseCommand refuses an assignment prefix.
 	refuseAssign bool
+
+	// bareLabels is what the wrapper does on its own, when it wraps
+	// nothing. `env` with no command prints the environment, which is
+	// a read; treating that as unreadable made a common probe ask for
+	// no reason. Nil means a bare invocation is still unknown.
+	bareLabels []RiskLabel
+}
+
+// wrapsSomething reports whether the wrapper was given anything at all
+// beyond its own flags — as opposed to being invoked bare.
+func (w wrapperSpec) wrapsSomething(args []riskToken) bool {
+	for _, a := range args {
+		if !strings.HasPrefix(a.text, "-") {
+			return true
+		}
+	}
+	return false
 }
 
 var wrapperCommands = map[string]wrapperSpec{
@@ -672,7 +884,7 @@ var wrapperCommands = map[string]wrapperSpec{
 	"ionice":  {valueFlags: map[string]bool{"-c": true, "-n": true, "-p": true}},
 	"nohup":   {},
 	"stdbuf":  {valueFlags: map[string]bool{"-i": true, "-o": true, "-e": true}},
-	"env":     {refuseAssign: true},
+	"env":     {refuseAssign: true, bareLabels: L(LabelReads)},
 	"setsid":  {},
 }
 
@@ -831,6 +1043,15 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 		}
 		rest, ok := unwrap(tokens[1:], w)
 		if !ok {
+			// A wrapper with nothing to wrap is not unreadable, it is
+			// the program itself: bare `env` prints the environment and
+			// `nohup` alone is a usage message. Only a wrapper that
+			// carries something it will not let us read — an
+			// assignment prefix, an unresolvable tail — is unknown.
+			if w.bareLabels != nil && !w.wrapsSomething(tokens[1:]) {
+				out.Labels, out.Why = w.bareLabels, ""
+				return out
+			}
 			return unreadable(name, "unreadable_wrapper")
 		}
 		if w.root {
@@ -876,25 +1097,11 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 	out.Why = rule.Why
 	args := tokens[1:]
 
-	if len(rule.Sub) > 0 {
-		sub, expands, ok := firstOperand(args)
-		switch {
-		case !ok:
-			// Bare invocation: `git` on its own prints usage.
-		case expands:
-			return unreadable(name, "variable_subcommand")
-		default:
-			named, ok := rule.Sub[sub]
-			if !ok {
-				return unreadable(name, "unrecognised_subcommand")
-			}
-			labels = named
-		}
-	} else if len(rule.OperandLabels) > 0 {
-		if _, _, ok := firstOperand(args); ok {
-			labels = mergeLabels(labels, rule.OperandLabels)
-		}
+	verb, why := verbLabels(rule, labels, args)
+	if why != "" {
+		return unreadable(name, why)
 	}
+	labels = verb
 
 	for _, tok := range args {
 		for pattern, esc := range rule.Escalate {
@@ -965,6 +1172,70 @@ func targetOperands(args []riskToken, lastOnly bool) []riskToken {
 }
 
 // firstOperand returns the first non-flag argument.
+// verbLabels resolves the labels a rule's VERB selects — a flag for
+// pacman, a word for git, an operand's presence for mount — leaving the
+// base labels alone when the rule names no verbs.
+//
+// Split out of classifyRiskSegment because it is the one part with
+// three independent dispatch shapes, and inlining all three put that
+// function over the complexity the linter allows for a reason.
+//
+// A non-empty second return is a refusal: the verb was there and
+// nobody had catalogued it, which is unreadable rather than whatever
+// the base happened to say.
+func verbLabels(rule CommandRiskRule, base []RiskLabel, args []riskToken) ([]RiskLabel, string) {
+	switch {
+	case len(rule.FlagSub) > 0:
+		flag, ok := firstFlag(args)
+		if !ok {
+			return base, "" // bare invocation prints usage
+		}
+		named, found := rule.FlagSub[flag]
+		if !found {
+			return nil, "unrecognised_flag"
+		}
+		return named, ""
+
+	case len(rule.Sub) > 0:
+		sub, expands, ok := firstOperand(args)
+		switch {
+		case !ok:
+			return base, "" // `git` on its own prints usage
+		case expands:
+			return nil, "variable_subcommand"
+		}
+		named, found := rule.Sub[sub]
+		if !found {
+			return nil, "unrecognised_subcommand"
+		}
+		return named, ""
+
+	case len(rule.OperandLabels) > 0:
+		if _, _, ok := firstOperand(args); ok {
+			return mergeLabels(base, rule.OperandLabels), ""
+		}
+	}
+	return base, ""
+}
+
+// firstFlag returns the first token that looks like a flag.
+//
+// The first one only: `pacman -S --noconfirm foo` is a sync, and the
+// tokens after it modify how rather than what. A program whose meaning
+// changes on a LATER flag wants Escalate, which is additive, on top.
+func firstFlag(args []riskToken) (string, bool) {
+	for _, a := range args {
+		if !strings.HasPrefix(a.text, "-") || a.text == "-" || a.text == "--" {
+			continue
+		}
+		if a.expands {
+			return "", false
+		}
+		return a.text, true
+	}
+	return "", false
+}
+
 func firstOperand(args []riskToken) (text string, expands, ok bool) {
 	for _, a := range args {
 		if strings.HasPrefix(a.text, "-") {

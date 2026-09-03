@@ -124,6 +124,28 @@ The classification is **fail-closed**: a program the table does not name is
 `unreadable`, an argument whose value cannot be seen is `unreadable`, and
 `unreadable` is approvable by no configuration at all.
 
+That extends to verbs. A program whose meaning lives in a subcommand (`git`,
+`apt-get`, `brew`) or in a flag (`pacman -S`, `rpm -e`, `dpkg -i`) is read by
+that verb, and **a verb nobody catalogued is `unreadable` rather than whatever
+the program's base entry said**. `pacman -Rdd` removes a package ignoring its
+dependencies; there are more pacman flag combinations than anybody will
+enumerate, so the unenumerated ones must not read as harmless.
+
+Package managers are catalogued down to the verb, including the flag-driven
+ones (`pacman`, `paru`, `yay`, `rpm`, `dpkg`) and the user-scope ones. The
+distinction that matters most is `privilege`: `apt-get install`, `pacman -S`,
+`emerge` and `snap install` need root, while `brew`, `nix`, `cargo`, `gem` and
+`pipx` install into a user prefix and do not.
+
+Note what these are deliberately *not* labelled. Installing a package runs
+maintainer scripts as root, which is genuinely code nobody has read — but
+`unreadable` means "the classifier could not read this **command**", it is
+approvable by no configuration, and `resolve_unknown` treats a bare
+`unreadable` as the gap a model may fill. Overloading it with "runs
+third-party code" would give one label two meanings, which is the fault this
+label set exists to fix. `network + privilege` already says it: fetching from
+a remote and running as root **is** arbitrary remote code as root.
+
 **What a command is pointed at counts, not only what it is called.** The
 operands of a targeting program are read as paths:
 

@@ -410,6 +410,10 @@ verdict_trust = "advisory"
 [compute.command_risks]
   terraform = { labels = ["reads"], subcommands = { apply = ["writes", "disrupts"], destroy = ["deletes", "disrupts"] } }
   our-tool  = { labels = ["writes"], targets = true, scratch_labels = ["writes"] }
+
+# `subcommands` reads the first non-flag word; a verb it does not name
+# is unreadable rather than falling back to `labels`. The shipped table
+# uses the same shape for flag-driven programs like pacman and rpm.
 ```
 
 Check any command against the table without running it:
