@@ -102,6 +102,20 @@ hooks: hook-tools
 # credential in a public repo does not. (A minimum-version floor isn't an
 # option either — `go install` builds report their version as "dev", since the
 # real one is stamped by the upstream release build.)
+# Built with HOOK_TOOLCHAIN rather than the repo's Go, because these are
+# tools and not the product: what compiles them is incidental, and one of
+# them transitively depends on go-json-experiment/json, whose older
+# versions alias encoding/json/v2 symbols (SkipFunc,
+# DiscardUnknownMembers) that were removed before Go 1.27 shipped. That
+# combination does not compile, and it took out the secret scan — the one
+# check whose job is to keep credentials out of the repository.
+#
+# Pinned rather than diagnosed further because the scanner floats at
+# @latest deliberately (see above) and its dependency graph is not ours
+# to fix. Drop this and let it follow LINT_TOOLCHAIN once betterleaks
+# builds clean on the repo's Go.
+HOOK_TOOLCHAIN := go1.26.2
+
 hook-tools:
-	@go install github.com/evilmartians/lefthook@latest
-	@go install github.com/betterleaks/betterleaks@latest
+	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/evilmartians/lefthook@latest
+	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/betterleaks/betterleaks@latest
