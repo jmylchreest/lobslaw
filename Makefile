@@ -9,7 +9,7 @@ export PATH := $(GOBIN):$(PATH)
 # and google.golang.org/grpc in go.mod.
 # Keep in step with the version pinned in .github/workflows/lint.yml,
 # so a local `make lint` reports what CI will.
-GOLANGCI_LINT_VERSION      := v2.12.2
+GOLANGCI_LINT_VERSION      := v2.13.2
 
 # The Go toolchain the linter is built with AND run under, taken from
 # go.mod so it cannot drift from CI, which selects the same one via
