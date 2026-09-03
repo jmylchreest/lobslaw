@@ -10,6 +10,20 @@ export PATH := $(GOBIN):$(PATH)
 # Keep in step with the version pinned in .github/workflows/lint.yml,
 # so a local `make lint` reports what CI will.
 GOLANGCI_LINT_VERSION      := v2.12.2
+
+# The Go toolchain the linter is built with AND run under, taken from
+# go.mod so it cannot drift from CI, which selects the same one via
+# `go-version-file: go.mod`.
+#
+# Pinning the linter version alone was not enough. golangci-lint bundles
+# staticcheck, whose IR builder has to understand the stdlib SOURCE it
+# parses, so a distro Go newer than the bundled staticcheck supports
+# makes it panic ("unexpected expr: *ast.KeyValueExpr" on internal/poll)
+# rather than report findings. The failure is quiet in the worst way:
+# `make lint` exits non-zero having run none of the staticcheck or revive
+# checks, so a contributor on a newer Go sees a crash they assume is
+# environmental, skips it, and CI finds the real issues instead.
+LINT_TOOLCHAIN             := go$(shell awk '/^go /{print $$2; exit}' go.mod)
 PROTOC_GEN_GO_VERSION      := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION := v1.5.1
 
@@ -50,16 +64,16 @@ smoke:
 # rejects config keys that `golangci-lint run` silently tolerates — without it
 # an invalid key passes locally and fails CI.
 lint: lint-tools
-	@go vet ./...
+	@GOTOOLCHAIN=$(LINT_TOOLCHAIN) go vet ./...
 	@gofmt -l . | (! grep .) || (echo "gofmt needed on files above" && exit 1)
-	@golangci-lint config verify
-	@golangci-lint run ./...
+	@GOTOOLCHAIN=$(LINT_TOOLCHAIN) golangci-lint config verify
+	@GOTOOLCHAIN=$(LINT_TOOLCHAIN) golangci-lint run ./...
 
 # Pinned so `make lint` reports exactly what CI reports. Unlike the
 # secret scanner, which floats at @latest: a stale style linter is
 # harmless, a stale secret scanner is a missed credential.
 lint-tools:
-	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@GOTOOLCHAIN=$(LINT_TOOLCHAIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 tidy:
 	@go mod tidy
