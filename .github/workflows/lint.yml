@@ -36,7 +36,7 @@ jobs:
           # 138 goconst findings that v2.10 did not. Keep in step with
           # GOLANGCI_LINT_VERSION in the Makefile, which is what `make
           # lint` installs locally.
-          version: v2.12.2
+          version: v2.13.2
 
       - name: go vet
         run: go vet ./...

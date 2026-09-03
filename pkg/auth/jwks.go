@@ -341,20 +341,41 @@ func parseECKey(e jwkEntry) (*ecdsa.PublicKey, string, error) {
 	if e.Alg != "" {
 		alg = e.Alg
 	}
-	x, err := decodeB64URLBigInt(e.X)
+	xb, err := decodeB64URLBytes(e.X)
 	if err != nil {
 		return nil, "", fmt.Errorf("decode x: %w", err)
 	}
-	y, err := decodeB64URLBigInt(e.Y)
+	yb, err := decodeB64URLBytes(e.Y)
 	if err != nil {
 		return nil, "", fmt.Errorf("decode y: %w", err)
 	}
-	// Skip the explicit on-curve check (elliptic.IsOnCurve is deprecated
-	// and the SEC1-encoded replacement in crypto/ecdh doesn't compose
-	// cleanly with ecdsa.PublicKey{X,Y}). ecdsa.Verify rejects off-curve
-	// points internally — every token signed by a malformed IdP key
-	// just fails validation, which is the safe outcome.
-	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, alg, nil
+	// SEC1 uncompressed point (0x04 || X || Y), which is what
+	// ParseUncompressedPublicKey wants.
+	//
+	// It replaces ecdsa.PublicKey{Curve, X, Y}, deprecated since Go 1.26
+	// because raw coordinates can be assembled into invalid keys. That
+	// is not merely a tidiness fix here: the old code could not check
+	// the point was on the curve, and said so, resting instead on
+	// ecdsa.Verify rejecting off-curve points later. This validates at
+	// PARSE time, so a malformed IdP key is a startup error naming the
+	// key rather than every token mysteriously failing to validate.
+	size := (curve.Params().BitSize + 7) / 8
+	if len(xb) > size || len(yb) > size {
+		return nil, "", fmt.Errorf("EC JWK coordinates are %d/%d bytes, too long for %s", len(xb), len(yb), e.Crv)
+	}
+	// Left-pad rather than demand exact width. RFC 7518 requires the
+	// full coordinate length, but encoders that strip leading zero bytes
+	// exist in the wild and the value is unambiguous either way.
+	buf := make([]byte, 1+2*size)
+	buf[0] = 4
+	copy(buf[1+size-len(xb):], xb)
+	copy(buf[1+2*size-len(yb):], yb)
+
+	pub, err := ecdsa.ParseUncompressedPublicKey(curve, buf)
+	if err != nil {
+		return nil, "", fmt.Errorf("EC JWK is not a valid point on %s: %w", e.Crv, err)
+	}
+	return pub, alg, nil
 }
 
 // parseEdDSAKey extracts the 32-byte Ed25519 public key. Only the
@@ -380,6 +401,14 @@ func parseEdDSAKey(e jwkEntry) (ed25519.PublicKey, error) {
 // decodeB64URLBigInt decodes a base64url-encoded big-endian integer.
 // JWK fields use the "unpadded" variant; tolerate padding just in
 // case an IdP sends it.
+// decodeB64URLBytes returns the raw octets, for values whose width
+// carries meaning — an EC coordinate is a fixed-size field element, and
+// routing it through big.Int would discard the leading zeros that make
+// it one.
+func decodeB64URLBytes(s string) ([]byte, error) {
+	return base64.RawURLEncoding.DecodeString(strings.TrimRight(s, "="))
+}
+
 func decodeB64URLBigInt(s string) (*big.Int, error) {
 	b, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(s, "="))
 	if err != nil {

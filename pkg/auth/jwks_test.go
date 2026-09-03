@@ -486,3 +486,41 @@ func TestAsymmetricMethodsPopulated(t *testing.T) {
 	}
 	_ = fmt.Sprint // keep fmt referenced if future edits drop usage
 }
+
+// An EC JWK whose coordinates are not a point on the named curve is
+// rejected when the key is parsed.
+//
+// It used to be accepted. The key was assembled from raw coordinates,
+// which cannot check the point, and the code said as much — it leaned
+// on ecdsa.Verify rejecting off-curve points later. The outcome was the
+// same in the end, but the diagnosis was not: a malformed IdP key
+// looked like every token from that issuer silently failing to
+// validate, rather than one error naming the key.
+func TestJWKSRejectsOffCurveECPoint(t *testing.T) {
+	t.Parallel()
+	// A valid P-256 x, paired with a y that does not satisfy the curve.
+	b64 := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+	x := make([]byte, 32)
+	y := make([]byte, 32)
+	x[31] = 1 // (1, 1) is not on P-256
+	y[31] = 1
+
+	_, _, err := parseJWK(jwkEntry{Kty: "EC", Crv: "P-256", X: b64(x), Y: b64(y)})
+	if err == nil {
+		t.Fatal("an off-curve point was accepted as a public key")
+	}
+}
+
+// A coordinate wider than the curve is refused rather than silently
+// truncated or wrapped.
+func TestJWKSRejectsOversizedECCoordinate(t *testing.T) {
+	t.Parallel()
+	b64 := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+	_, _, err := parseJWK(jwkEntry{
+		Kty: "EC", Crv: "P-256",
+		X: b64(make([]byte, 33)), Y: b64(make([]byte, 32)),
+	})
+	if err == nil {
+		t.Fatal("a 33-byte coordinate was accepted for P-256")
+	}
+}
