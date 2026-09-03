@@ -563,6 +563,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		Creds:               creds,
 		MemoryKey:           memKey,
 		Compute:             cfg.Compute,
+		Debug:               cfg.Debug,
 		Hooks:               cfg.Hooks,
 		Auth:                cfg.Auth,
 		Gateway:             cfg.Gateway,

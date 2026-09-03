@@ -686,6 +686,40 @@ widening. Confirmation is not offered: two of the three call sites run
 with no user in front of them to ask, and an effect chosen to slow
 something down must not become the one that speeds it up.
 
+## `[debug]`
+
+Diagnostics that stay off unless asked for.
+
+```toml
+[debug]
+# Start a pprof server. Unset (the default) starts nothing.
+pprof_addr = "127.0.0.1:6060"
+```
+
+pprof has **no authentication**, and its dumps are not innocuous: a heap or
+goroutine profile of this process can contain decrypted memory, tokens in
+flight, and prompt text. Treat the address as granting read access to
+everything the node knows.
+
+Bind loopback wherever loopback is reachable. A container is the case where it
+is not — the host cannot reach the container's loopback — so profiling one
+means `0.0.0.0:6060` with the port published only to the host. That is allowed
+and logged as a warning every time it starts.
+
+`LOBSLAW_PPROF_ADDR` overrides the setting, for attaching to a node that is
+already misbehaving without editing its config and restarting it.
+
+```console
+$ curl -s http://127.0.0.1:6060/debug/pprof/goroutine?debug=2   # dump goroutines
+$ go tool pprof http://127.0.0.1:6060/debug/pprof/heap          # heap profile
+$ curl -s http://127.0.0.1:6060/debug/pprof/goroutineleak?debug=1  # leaked goroutines
+```
+
+The last one is Go 1.27's leak profile: goroutines blocked on a primitive that
+can no longer be unblocked, found by the garbage collector's reachability
+analysis. Nothing registers it here — `pprof.Index` looks profiles up when the
+request arrives, so profiles a newer Go adds appear on their own.
+
 ## Other sections
 
 `[discovery]`, `[observability]`, `[hooks]` — see `pkg/config/config.go` for the full schema. These are stable but rarely-touched.
