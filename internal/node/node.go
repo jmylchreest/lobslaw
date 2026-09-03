@@ -209,6 +209,9 @@ type Config struct {
 	// Typically populated from config.Hooks.
 	Hooks config.HooksConfig
 
+	// Debug is opt-in diagnostics. Zero value starts nothing.
+	Debug config.DebugConfig
+
 	// APIKeyResolver resolves a ProviderConfig.APIKeyRef into a
 	// plaintext API key. Nil → config.ResolveSecret is used as the
 	// default. Injectable for tests that don't want to touch
@@ -630,7 +633,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 		"functions", n.cfg.Functions,
 	)
 
-	// pprof under build tag `debug` only — see pprof_debug.go.
+	// pprof when [debug] pprof_addr is set — see pprof.go.
 	n.startPprof(ctx)
 
 	// Reaper for orphaned OAuth flows + synthetic credentials. Per-

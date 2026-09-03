@@ -25,6 +25,7 @@ type Config struct {
 	Audit     AuditConfig      `koanf:"audit"`
 	Skills    SkillsConfig     `koanf:"skills"`
 	Logging   LoggingConfig    `koanf:"logging"`
+	Debug     DebugConfig      `koanf:"debug"`
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
 	Secrets   SecretsConfig    `koanf:"secrets"`
@@ -1242,6 +1243,29 @@ type CommandClassConfig struct {
 	// action classifies the command but extracts no host, which makes
 	// every call confirmable and none grantable.
 	HostFrom string `koanf:"host_from,omitempty"`
+}
+
+// DebugConfig is [debug]: diagnostics that are off unless asked for.
+type DebugConfig struct {
+	// PprofAddr starts a pprof server on this address. Empty — the
+	// default — starts nothing.
+	//
+	// pprof has NO AUTHENTICATION, and its dumps are not innocuous: a
+	// heap or goroutine profile of this process can contain decrypted
+	// memory, tokens in flight, and prompt text. Treat the address as
+	// granting full read access to the node's memory.
+	//
+	// So bind loopback ("127.0.0.1:6060") wherever loopback is
+	// reachable. A container is the case where it is not — the host
+	// cannot reach the container's loopback — so profiling one means
+	// binding "0.0.0.0:6060" and publishing the port only to the host.
+	// That is allowed, and logged as a warning every time, because the
+	// difference between that and exposing it to a network is one
+	// firewall rule nobody re-reads.
+	//
+	// LOBSLAW_PPROF_ADDR overrides this, for attaching to a node that
+	// is already misbehaving without editing its config.
+	PprofAddr string `koanf:"pprof_addr,omitempty"`
 }
 
 // CommandRiskConfig is one entry of [compute.command_risks].
