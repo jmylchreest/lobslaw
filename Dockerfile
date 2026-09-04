@@ -41,13 +41,32 @@ ARG COMMIT=unknown
 # without it still says something true rather than nothing.
 ARG BUILD_DATE=
 
+# The AVX2 embedding kernel, which is off unless asked for.
+#
+# internal/embedder carries a hand-written AVX2 dot product and matmul
+# behind GOEXPERIMENT=simd, and without this the image shipped the
+# scalar fallback while the fast path sat in the repository being
+# tested by CI and used by nobody. It is not a marginal difference on
+# this workload: a profile of a Dream consolidation pass spent 84% of
+# its CPU in embedder.dotGeneric, and the SIMD kernel is ~1.9x on the
+# same benchmarks (dot768 148ns -> 79ns, matmul 1.84-1.97x).
+#
+# An ARG rather than a hardcoded value because simd is a GOEXPERIMENT
+# and archsimd's API is explicitly unstable — Go 1.27 renamed the load
+# and store helpers, which broke this build until the kernels were
+# ported. If a future toolchain breaks it again, `--build-arg
+# GOEXPERIMENT=` ships the scalar path rather than blocking the image.
+# On non-amd64 the kernel's build tags exclude it anyway and this is
+# inert.
+ARG GOEXPERIMENT=simd
+
 # Pure-Go build: CGO_ENABLED=0 so the binary is statically linked
 # and runs against any libc without dynamic linking surprises.
 # -trimpath strips local paths for reproducibility; -s -w drops debug
 # info (~30% smaller binary).
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS=linux GOEXPERIMENT=${GOEXPERIMENT} go build \
         -trimpath \
         -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
         -o /out/lobslaw \
