@@ -1,6 +1,9 @@
 package commandrisk
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Shell facts the classifier and the grant-key builder both need.
 //
@@ -21,20 +24,42 @@ var ReservedWords = map[string]bool{
 	"function": true, "select": true, "coproc": true,
 }
 
-// IsInvisible reports the format, bidi and zero-width runes that can
-// make one string display as another.
+// IsInvisible reports runes that can make one string display as
+// another.
+//
+// The whole Cf (format) category, not a hand-listed set of ranges. The
+// list this replaces named twenty-odd codepoints — the zero-width
+// spaces, the bidi overrides and isolates, the BOM — and missed 155
+// others that Unicode 17 also classifies as format characters. Two of
+// the misses were the same trick as entries that WERE covered:
+// U+061C ARABIC LETTER MARK is a bidi control exactly like the LRM and
+// RLM beside it, and U+2060 WORD JOINER is zero-width exactly like the
+// U+200B on the list. A command carrying either rendered identically to
+// one without it and stayed grantable.
+//
+// A category rather than a longer list, because the longer list has the
+// same defect as the short one: it is right on the day it is written.
+// Cf is maintained upstream and grows with the tables, so the next
+// invisible codepoint is covered before anyone here hears about it.
+//
+// Variation selectors are included as well. They are Mn rather than Cf
+// and so not swept up by the category, but their entire purpose is to
+// change how the preceding character renders without appearing
+// themselves, which is this function's subject exactly. The rest of Mn
+// is NOT included: combining marks are how a great deal of the world
+// writes, and refusing them would reject legitimate paths rather than
+// deceptive ones.
+//
+// Every caller fails closed on a true answer — the command becomes
+// unreadable, or ungrantable, or the cwd unusable as a key — so a rune
+// wrongly included here costs an extra confirmation, and one wrongly
+// left out costs consent obtained by misdirection.
 func IsInvisible(r rune) bool {
-	switch {
-	case r >= 0x200B && r <= 0x200F: // zero-width, LRM/RLM
-		return true
-	case r >= 0x202A && r <= 0x202E: // bidi embedding and override
-		return true
-	case r >= 0x2066 && r <= 0x2069: // bidi isolates
-		return true
-	case r == 0xFEFF: // BOM / zero-width no-break space
+	if unicode.Is(unicode.Cf, r) {
 		return true
 	}
-	return false
+	// Variation selectors: VS1-16, then the supplement.
+	return (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0xE0100 && r <= 0xE01EF)
 }
 
 func IsEnvAssignment(tok string) bool {
