@@ -202,7 +202,7 @@ func MemoryToolDefs() []*types.ToolDef {
 		{
 			Name:        "dream_nap",
 			Path:        compute.BuiltinScheme + "dream_nap",
-			Description: "Trigger an on-demand Dream/REM consolidation pass right now (the 'nap' before the scheduled nightly dream). Scores recent memories, consolidates clusters into summaries when a Summarizer is wired, and prunes fired one-shot commitments + stale episodic chatter. Leader-only — followers return a hint to retry at the leader. Returns counts of consolidated and pruned records. Use when the user asks 'consolidate now', 'take a nap', 'forget the stuff that already happened' — or before a memory_recent / commitment_list call when they want fresh state.",
+			Description: "Trigger an on-demand Dream/REM consolidation pass right now (the 'nap' before the scheduled nightly dream). Scores recent memories, consolidates clusters into summaries when a Summarizer is wired, and prunes fired one-shot commitments + stale episodic chatter. Leader-only — followers return a hint to retry at the leader. Returns summarised_groups (how many owner-groups were handed to the summariser, NOT a count of records written) and pruned. Near-duplicate merge verdicts are a separate mechanism, read with dream_recap. Use when the user asks 'consolidate now', 'take a nap', 'forget the stuff that already happened' — or before a memory_recent / commitment_list call when they want fresh state.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},
@@ -752,9 +752,20 @@ func newDreamNapHandler(svc memoryDreamer) compute.BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("dream_nap: %w", err)
 		}
+		// "summarised_groups", not "consolidated".
+		//
+		// Two different things in this system were called consolidation
+		// and the collision was doing real damage: this count is
+		// owner-groups handed to the summariser, while dream_recap and
+		// `lobslaw memory consolidations` read the near-duplicate
+		// ADJUDICATION log, which a summarisation pass does not write
+		// to. A nap could truthfully report "consolidated 5" and the
+		// recap truthfully report nothing, and the pair is unreadable —
+		// an agent asked to explain it said so, and could only report
+		// that it could not reconcile the two.
 		out, err := json.Marshal(map[string]any{
-			"consolidated": resp.Consolidated,
-			"pruned":       resp.Pruned,
+			"summarised_groups": resp.Consolidated,
+			"pruned":            resp.Pruned,
 		})
 		if err != nil {
 			return nil, 1, err
