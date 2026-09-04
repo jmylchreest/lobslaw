@@ -1266,6 +1266,30 @@ type DebugConfig struct {
 	// LOBSLAW_PPROF_ADDR overrides this, for attaching to a node that
 	// is already misbehaving without editing its config.
 	PprofAddr string `koanf:"pprof_addr,omitempty"`
+
+	// BlockProfileRate turns on the block profile, which records where
+	// goroutines wait on channels, mutexes and network reads. 0 — the
+	// default — leaves it off, and the /debug/pprof/block endpoint then
+	// returns an empty profile rather than an error, which is easy to
+	// read as "nothing is contended" instead of "nothing is recorded".
+	//
+	// The value is a sampling rate in nanoseconds of blocked time: 1
+	// records every event and is expensive enough to change what you
+	// are measuring; 10000 (10µs) is a reasonable starting point on a
+	// node you are actively investigating.
+	//
+	// Off by default because it costs something on every block, and a
+	// profiler you forgot to turn off is a tax you stop noticing.
+	BlockProfileRate int `koanf:"block_profile_rate,omitempty"`
+
+	// MutexProfileFraction turns on the mutex contention profile,
+	// reporting 1/n of contention events. 0 — the default — is off; 1
+	// records everything; 100 samples a hundredth.
+	//
+	// This is the profile that answers "which lock is serialising the
+	// node", which no other profile here can: a goroutine dump shows
+	// what is blocked, and this shows what is blocking them.
+	MutexProfileFraction int `koanf:"mutex_profile_fraction,omitempty"`
 }
 
 // CommandRiskConfig is one entry of [compute.command_risks].

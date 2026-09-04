@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"runtime"
 	"time"
 )
 
@@ -35,15 +36,11 @@ const pprofDefaultAddr = "127.0.0.1:6060"
 //
 //	curl -s http://127.0.0.1:6060/debug/pprof/goroutine?debug=2
 func (n *Node) startPprof(ctx context.Context) {
-	addr := n.cfg.Debug.PprofAddr
-	if env := os.Getenv("LOBSLAW_PPROF_ADDR"); env != "" {
-		addr = env
-	}
-	if addr == "" {
+	n.enableContentionProfiles()
+
+	addr, ok := n.pprofListenAddr()
+	if !ok {
 		return
-	}
-	if addr == "on" || addr == "true" {
-		addr = pprofDefaultAddr
 	}
 
 	mux := http.NewServeMux()
@@ -84,6 +81,61 @@ func (n *Node) startPprof(ctx context.Context) {
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
+}
+
+// pprofListenAddr resolves where pprof should listen, and whether it
+// should listen at all.
+//
+// Split from startPprof so that "off unless asked" is a decision a test
+// can check directly. It was previously asserted by dialling the
+// default port and expecting nothing there, which is only true on a
+// machine that is not already running a node — it passed in CI and
+// failed on a developer's box for the most confusing possible reason,
+// that the software worked.
+func (n *Node) pprofListenAddr() (string, bool) {
+	addr := n.cfg.Debug.PprofAddr
+	if env := os.Getenv("LOBSLAW_PPROF_ADDR"); env != "" {
+		addr = env
+	}
+	switch addr {
+	case "":
+		return "", false
+	case "on", "true":
+		return pprofDefaultAddr, true
+	}
+	return addr, true
+}
+
+// enableContentionProfiles turns on the two profiles the runtime keeps
+// switched off.
+//
+// Block and mutex are the profiles worth opening a profiler for on a
+// node like this one — raft, a gateway and a dozen background loops all
+// contending for the same stores — and they are the two that record
+// nothing unless asked. The failure is quiet in the wrong direction:
+// /debug/pprof/block on a stock build returns a well-formed EMPTY
+// profile, which reads as "no contention" rather than "not recording",
+// so the question looks answered when it was never asked.
+//
+// Deliberately not defaulted on. Both cost time on every block or
+// contended lock, and a profiler left running is overhead nobody
+// remembers adding. Logged when enabled for the same reason.
+//
+// Separate from the HTTP endpoint, and before its early return: a
+// profile can be collected without serving it — a test, or
+// runtime/pprof writing to a file — and tying the recording to the
+// listener would make that impossible.
+func (n *Node) enableContentionProfiles() {
+	if rate := n.cfg.Debug.BlockProfileRate; rate > 0 {
+		runtime.SetBlockProfileRate(rate)
+		n.log.Info("pprof: block profiling on; this samples every blocking operation and is not free",
+			"rate_ns", rate)
+	}
+	if frac := n.cfg.Debug.MutexProfileFraction; frac > 0 {
+		runtime.SetMutexProfileFraction(frac)
+		n.log.Info("pprof: mutex contention profiling on; this samples contended unlocks and is not free",
+			"fraction", frac)
+	}
 }
 
 // pprofAddrIsLoopback reports whether the address reaches only this
