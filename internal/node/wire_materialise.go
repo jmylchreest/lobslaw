@@ -24,13 +24,20 @@ import (
 // identical directories, and neither can affect the other.
 
 // materialiseInterval is how often the cache is reconciled against the
-// store.
+// store WHEN NOTHING HAS HAPPENED.
 //
-// A poll rather than a watch. The store has no change feed, and adding
-// one so a per-node cache can refresh faster would be a large
-// mechanism for a small gain: a skill approved a minute ago being
-// available a minute later is not a problem anybody has. The boot pass
-// is the one that matters, and that is not on a timer.
+// This was a poll, justified on the grounds that the store had no
+// change feed and adding one would be a large mechanism for a small
+// gain. The first half was wrong: the FSM has fired per-bucket change
+// callbacks for some time, and the scheduler, the storage layer and
+// the soul adjuster all already refresh from them. Materialisation was
+// polling past a signal three of its neighbours were using.
+//
+// So the tick is now the safety net rather than the mechanism. It
+// catches the cases an apply callback cannot — a cache directory
+// edited underneath us, a callback dropped during a restart — and the
+// scan it runs is nearly free when nothing changed, because the
+// registry skips directories whose contents it has already parsed.
 const materialiseInterval = time.Minute
 
 // skillsCacheDirName sits under DataDir alongside the raft log, not in
@@ -106,6 +113,17 @@ func (n *Node) startMaterialiser(ctx context.Context) error {
 		n.log.Error("skills: initial materialisation failed", "root", root, "err", err)
 	}
 
+	// Buffered by one and never blocked on, so the FSM callback can
+	// fire under its own lock without waiting for anything here. A
+	// burst of applies collapses to a single pass, which is correct
+	// because the pass is convergent: it reconciles the whole ACTIVE
+	// set, not a delta, so running it once after ten changes does the
+	// same work as running it after one.
+	n.materialiseWake = make(chan struct{}, 1)
+	if n.fsm != nil {
+		n.fsm.SetSelfTaughtChangeCallback(n.notifyMaterialise)
+	}
+
 	go func() {
 		t := time.NewTicker(materialiseInterval)
 		defer t.Stop()
@@ -113,16 +131,33 @@ func (n *Node) startMaterialiser(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return
+			case <-n.materialiseWake:
 			case <-t.C:
-				if err := n.materialiseOnce(); err != nil {
-					n.log.Warn("skills: materialisation failed", "err", err)
-				}
+			}
+			if err := n.materialiseOnce(); err != nil {
+				n.log.Warn("skills: materialisation failed", "err", err)
 			}
 		}
 	}()
 	n.log.Info("skills: self-taught materialiser started",
-		"root", root, "interval", materialiseInterval)
+		"root", root, "backstop_interval", materialiseInterval,
+		"on_raft_apply", n.fsm != nil)
 	return nil
+}
+
+// notifyMaterialise asks for a materialisation pass without waiting for
+// one.
+//
+// Called from FSM.Apply under the FSM's own lock, so it must not block
+// and must not touch anything the mutator might hold across raft.Apply.
+// A non-blocking send does both: if a pass is already queued this is a
+// no-op, and the queued pass will see the newer state anyway because it
+// reads the store when it runs rather than being handed a delta.
+func (n *Node) notifyMaterialise() {
+	select {
+	case n.materialiseWake <- struct{}{}:
+	default:
+	}
 }
 
 // materialiseOnce makes the cache and the registry match the ACTIVE

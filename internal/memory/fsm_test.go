@@ -178,3 +178,75 @@ func TestFSMRejectsUnknownOp(t *testing.T) {
 		t.Error("FSM should have returned an error in Apply response for unknown op")
 	}
 }
+
+// A skill written on another node has to materialise here when its
+// entry replicates, not whenever a poll next happens to run.
+//
+// This is why the signal is a raft apply rather than a filesystem
+// watch: the materialiser's input is raft state, and every node applies
+// every committed entry. A watch on the cache directory it writes would
+// only ever observe this node's own writes.
+func TestSelfTaughtApplyFiresTheChangeCallback(t *testing.T) {
+	t.Parallel()
+	node, fsm := newTestRaft(t)
+
+	fired := make(chan struct{}, 8)
+	fsm.SetSelfTaughtChangeCallback(func() { fired <- struct{}{} })
+
+	apply := func(t *testing.T, entry *lobslawv1.LogEntry) {
+		t.Helper()
+		data, err := proto.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := node.Apply(data, 2*time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	apply(t, &lobslawv1.LogEntry{
+		Op: lobslawv1.LogOp_LOG_OP_PUT,
+		Id: "skill:tidy",
+		Payload: &lobslawv1.LogEntry_SelfTaught{
+			SelfTaught: &lobslawv1.SelfTaughtRecord{
+				Id:    "skill:tidy",
+				Kind:  lobslawv1.SelfTaughtKind_SELF_TAUGHT_KIND_SKILL,
+				State: lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE,
+			},
+		},
+	})
+
+	select {
+	case <-fired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a self-taught apply did not fire the change callback; materialisation would wait for the next tick")
+	}
+
+	// A neighbouring bucket must not wake it, or the callback becomes a
+	// wake-on-anything and the poll it replaced was cheaper.
+	drain := func() {
+		for {
+			select {
+			case <-fired:
+			default:
+				return
+			}
+		}
+	}
+	drain()
+	apply(t, &lobslawv1.LogEntry{
+		Op: lobslawv1.LogOp_LOG_OP_PUT,
+		Id: "rule-x",
+		Payload: &lobslawv1.LogEntry_PolicyRule{
+			PolicyRule: &lobslawv1.PolicyRule{
+				Id: "rule-x", Subject: "user:alice", Action: "memory:read",
+				Resource: "*", Effect: "allow", Priority: 1,
+			},
+		},
+	})
+	select {
+	case <-fired:
+		t.Error("a policy-rule apply woke the materialiser")
+	case <-time.After(300 * time.Millisecond):
+	}
+}

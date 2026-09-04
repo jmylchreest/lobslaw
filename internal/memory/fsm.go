@@ -78,6 +78,12 @@ type FSM struct {
 	// view so a remote leader's mutation propagates without a
 	// process restart.
 	soulTuneChange func()
+
+	// selfTaughtChange fires after every successful apply that touches
+	// a self-taught bucket, so a skill written on ANOTHER node
+	// materialises here when its entry replicates rather than whenever
+	// a poll next happens to run.
+	selfTaughtChange func()
 }
 
 // NewFSM wraps a Store as a Raft FSM.
@@ -115,6 +121,23 @@ func (f *FSM) SetSoulTuneChangeCallback(cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.soulTuneChange = cb
+}
+
+// SetSelfTaughtChangeCallback registers a callback that fires after
+// each FSM.Apply touching a self-taught bucket.
+//
+// Every node applies every committed entry, which is what makes this
+// the right signal: the materialiser's input is raft state, so a
+// filesystem watch on the cache it writes would only ever observe this
+// node's own writes and never a skill taught somewhere else.
+//
+// Same contract as the callbacks above — it runs under f.mu, so it
+// must not block or take a lock the mutator might hold across
+// raft.Apply.
+func (f *FSM) SetSelfTaughtChangeCallback(cb func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selfTaughtChange = cb
 }
 
 // Store returns the underlying store. Intended for read-path code;
@@ -212,6 +235,13 @@ func (f *FSM) Apply(l *raft.Log) any {
 			case BucketSoulTune:
 				if f.soulTuneChange != nil {
 					f.soulTuneChange()
+				}
+			case BucketSelfTaught, BucketSelfTaughtArchive:
+				// Archive too: deactivating a skill moves it out of the
+				// live bucket, and un-materialising it is as much a
+				// change as writing it was.
+				if f.selfTaughtChange != nil {
+					f.selfTaughtChange()
 				}
 			}
 		}

@@ -367,6 +367,9 @@ type Node struct {
 	// node's disposable skill cache. Nil when self-learning is off,
 	// for the same absence-not-a-flag reason the store is.
 	materialiser *skills.Materialiser
+	// materialiseWake carries a coalesced request for a materialisation
+	// pass, sent from the FSM's self-taught change callback.
+	materialiseWake chan struct{}
 
 	// skillStore is the cluster-store authority for imported skills.
 	// Nil on a node with no raft, where nothing can be imported.
