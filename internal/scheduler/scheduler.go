@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -45,6 +46,32 @@ type Config struct {
 	// RaftApplyTimeout is how long a claim proposal waits for Raft
 	// consensus. Zero picks 5 seconds.
 	RaftApplyTimeout time.Duration
+
+	// MinFireInterval is the floor between two attempts to fire.
+	//
+	// computeSleepDuration returns zero for a past-due task so the loop
+	// fires it at once. That is right when the attempt succeeds and a
+	// busy-wait when it cannot: fireDue declines to fire before its
+	// post-election barrier completes, when this node is not the
+	// leader, and when another node holds the claim — and in each of
+	// those the task stays past-due, so the next pass computes zero
+	// again, immediately, for as long as the condition lasts. Each of
+	// those passes reads both buckets.
+	//
+	// The first attempt at a due task is not delayed; only a repeat
+	// inside this window is. Zero picks 250ms.
+	MinFireInterval time.Duration
+
+	// WakeDebounce is how long the loop waits after a store change
+	// before recomputing what is due next, so that a burst of writes
+	// costs one recomputation rather than one per write.
+	//
+	// The recomputation reads both buckets, and the wake fires on every
+	// applied entry touching either — so without this, write volume and
+	// scan volume are the same number. Zero picks 50ms, which is far
+	// below the resolution anything scheduled here cares about and far
+	// above the cost of a burst.
+	WakeDebounce time.Duration
 
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
@@ -95,6 +122,34 @@ type Scheduler struct {
 	// FSM has caught up to the leader's view).
 	barrierMu   sync.Mutex
 	barrierDone bool
+
+	// dueMu guards the cached next-due instant.
+	//
+	// computeSleepDuration used to answer "how long until something is
+	// due" by scanning both buckets and proto-unmarshalling every
+	// record in them, once per pass round the loop. An allocation
+	// profile of a node with four scheduled tasks found 99% of
+	// everything it had ever allocated on that path — 243GB over four
+	// hours — because the loop goes round once per store change, not
+	// once per due time.
+	//
+	// The answer is an absolute instant, so it stays true as time
+	// passes and only a change to the buckets can falsify it. Cached
+	// until something says otherwise.
+	dueMu    sync.Mutex
+	dueAt    time.Time
+	dueValid bool
+
+	// dueScans counts how often the buckets have actually been read to
+	// answer "what is due next".
+	//
+	// Here because the failure this file guards against is invisible
+	// otherwise: a loop that spins produces correct behaviour, no
+	// errors and no log lines, and announces itself only as an
+	// allocation profile nobody was looking at. A number a test can
+	// assert on is the difference between that being caught and being
+	// discovered four hours later.
+	dueScans atomic.Int64
 }
 
 // NewScheduler constructs a scheduler. Fails when required config
@@ -115,6 +170,12 @@ func NewScheduler(cfg Config, raft Raft, handlers *HandlerRegistry) (*Scheduler,
 	}
 	if cfg.MaxSleep <= 0 {
 		cfg.MaxSleep = 60 * time.Second
+	}
+	if cfg.WakeDebounce <= 0 {
+		cfg.WakeDebounce = 50 * time.Millisecond
+	}
+	if cfg.MinFireInterval <= 0 {
+		cfg.MinFireInterval = 250 * time.Millisecond
 	}
 	if cfg.RaftApplyTimeout <= 0 {
 		cfg.RaftApplyTimeout = 5 * time.Second
@@ -181,23 +242,110 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		"claim_ttl", s.cfg.ClaimTTL,
 	)
 
+	var lastFire time.Time
 	for {
-		wait := s.computeSleepDuration(time.Now())
+		now := time.Now()
+		wait := s.computeSleepDuration(now)
+		// Never spin. A zero wait means something is past due; if the
+		// last attempt to fire it was moments ago it did not take, and
+		// hammering the store until it does is how a scheduler with
+		// four tasks allocates gigabytes.
+		if wait <= 0 && !lastFire.IsZero() {
+			if since := now.Sub(lastFire); since < s.cfg.MinFireInterval {
+				wait = s.cfg.MinFireInterval - since
+			}
+		}
 		timer := time.NewTimer(wait)
 
 		select {
 		case <-timer.C:
-			// Fire anything due as of now.
-			s.fireDue(ctx, time.Now())
+			// Fire anything due as of now. Whatever fires moves its own
+			// next-due, so the cached answer is stale by definition.
+			lastFire = time.Now()
+			s.fireDue(ctx, lastFire)
+			s.invalidateNextDue()
 		case <-s.wakeCh:
 			timer.Stop()
-			// Drop back to the top — recompute next-due from scratch.
+			s.invalidateNextDue()
+			// A burst of applies is one change as far as this loop is
+			// concerned. Without the pause, the recomputation below runs
+			// once per applied entry, and it reads both buckets.
+			if !s.settleAfterWake(ctx) {
+				return nil
+			}
 		case <-ctx.Done():
 			timer.Stop()
 			s.log.Info("scheduler: stopping", "err", ctx.Err())
 			return nil
 		}
 	}
+}
+
+// settleAfterWake waits out a burst of store changes, returning false
+// if the context ended while it waited.
+//
+// The wake channel holds one pending signal, so a burst already
+// collapses to a single delivery — but the loop is fast enough to come
+// back round and collect the next one, and the next, each time paying
+// for a full scan of both buckets. The pause bounds that to one scan
+// per debounce window however hard the store is being written.
+func (s *Scheduler) settleAfterWake(ctx context.Context) bool {
+	t := time.NewTimer(s.cfg.WakeDebounce)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+		return false
+	}
+	// Anything that arrived during the pause is covered by the
+	// recomputation about to happen, so drop it rather than going round
+	// again for it.
+	select {
+	case <-s.wakeCh:
+	default:
+	}
+	return true
+}
+
+// invalidateNextDue drops the cached instant.
+func (s *Scheduler) invalidateNextDue() {
+	s.dueMu.Lock()
+	s.dueValid = false
+	s.dueMu.Unlock()
+}
+
+// cachedNextDue returns the next due instant, scanning only when the
+// cached answer has been invalidated.
+//
+// An absolute time rather than a duration, so it survives the passage
+// of time: the loop wakes every MaxSleep whether or not anything is
+// due, and re-deriving the same instant on each of those wakes is the
+// bulk of what this cache removes.
+func (s *Scheduler) cachedNextDue(now time.Time) (time.Time, error) {
+	s.dueMu.Lock()
+	if s.dueValid {
+		at := s.dueAt
+		s.dueMu.Unlock()
+		return at, nil
+	}
+	s.dueMu.Unlock()
+
+	at, err := s.nextDueTime(now)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	s.dueMu.Lock()
+	// Only recorded if nothing invalidated the cache while the scan was
+	// running. A change that landed mid-scan may not be reflected in
+	// what it returned, and caching it would hide that change until the
+	// next one.
+	if !s.dueValid {
+		s.dueAt = at
+		s.dueValid = true
+	}
+	s.dueMu.Unlock()
+	return at, nil
 }
 
 // ensureBarrierDone calls raft.Barrier once per leadership term to
@@ -245,7 +393,7 @@ func (s *Scheduler) computeSleepDuration(now time.Time) time.Duration {
 	if !s.raft.IsLeader() {
 		return s.cfg.MaxSleep
 	}
-	next, err := s.nextDueTime(now)
+	next, err := s.cachedNextDue(now)
 	if err != nil {
 		s.log.Warn("scheduler: compute next-due failed — using MaxSleep", "err", err)
 		return s.cfg.MaxSleep
@@ -268,6 +416,7 @@ func (s *Scheduler) computeSleepDuration(now time.Time) time.Duration {
 // something is already overdue). Returns zero time + nil error when
 // there's nothing scheduled.
 func (s *Scheduler) nextDueTime(now time.Time) (time.Time, error) {
+	s.dueScans.Add(1)
 	var earliest time.Time
 	pick := func(t time.Time) {
 		if t.IsZero() {
