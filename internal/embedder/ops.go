@@ -51,9 +51,12 @@ func layerNorm(x, weight, bias []float32, m, n int, eps float32) {
 // produces embeddings that are subtly and permanently wrong while
 // every test that checks for "reasonable numbers" still passes.
 // config.json says hidden_act=gelu; this is what that means.
+// 1/sqrt(2), so the hot loop multiplies instead of dividing.
+const invSqrt2 = 0.7071067811865476
+
 func gelu(x []float32) {
 	for i, v := range x {
-		x[i] = float32(float64(v) * 0.5 * (1 + math.Erf(float64(v)/math.Sqrt2)))
+		x[i] = v * 0.5 * (1 + erff32(v*invSqrt2))
 	}
 }
 
@@ -77,7 +80,7 @@ func softmaxRows(x []float32, m, n int) {
 
 		var sum float32
 		for j, v := range row {
-			e := float32(math.Exp(float64(v - maxV)))
+			e := expf32(v - maxV)
 			row[j] = e
 			sum += e
 		}
