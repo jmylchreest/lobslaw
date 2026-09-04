@@ -38,6 +38,8 @@
 #   LOBSLAW_LOG_LEVEL      default info
 #   LOBSLAW_LOG_FORMAT     default text
 #   LOBSLAW_CONTAINERFILE  default ../../Dockerfile
+#   LOBSLAW_GOEXPERIMENT   default simd (the AVX2 embedding kernel);
+#                          set empty to ship the scalar fallback
 #   LOBSLAW_EMBED_MODEL    default all-MiniLM-L6-v2 ("" to skip the
 #                          builtin embedder and fall back to lexical recall)
 #   LOBSLAW_EMBED_MODEL_URL base of the HTTP dir the checkpoint comes from
@@ -219,7 +221,10 @@ cmd_build() {
 
   command -v go >/dev/null || die "the fallback build needs a host Go toolchain"
   info "building the binary on the host"
-  ( cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux go build \
+  # GOEXPERIMENT matches the Dockerfile, so the fallback binary is the
+  # same one the normal build would have produced rather than a quietly
+  # slower twin. See the Dockerfile for why it is overridable.
+  ( cd "$REPO_ROOT" && CGO_ENABLED=0 GOOS=linux GOEXPERIMENT="${LOBSLAW_GOEXPERIMENT:-simd}" go build \
       -trimpath \
       -ldflags "-s -w -X main.Version=local -X main.Commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown) -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       -o "$bin" ./cmd/lobslaw )
