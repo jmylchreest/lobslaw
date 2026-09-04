@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -254,15 +255,22 @@ func TestDreamNapDispatchesAndShapesResponse(t *testing.T) {
 	if !dreamer.called {
 		t.Error("Dream was not invoked")
 	}
+	// summarised_groups, because the count is groups handed to the
+	// summariser and not records written — and because "consolidated"
+	// already meant the near-duplicate adjudication log that dream_recap
+	// reads, which this pass does not write to.
 	var payload struct {
-		Consolidated int32 `json:"consolidated"`
-		Pruned       int32 `json:"pruned"`
+		SummarisedGroups int32 `json:"summarised_groups"`
+		Pruned           int32 `json:"pruned"`
 	}
 	if err := json.Unmarshal(out, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Consolidated != 3 || payload.Pruned != 7 {
-		t.Errorf("response = %+v; want consolidated=3 pruned=7", payload)
+	if payload.SummarisedGroups != 3 || payload.Pruned != 7 {
+		t.Errorf("response = %+v; want summarised_groups=3 pruned=7", payload)
+	}
+	if bytes.Contains(out, []byte(`"consolidated"`)) {
+		t.Errorf("the ambiguous key is back: %s", out)
 	}
 }
 

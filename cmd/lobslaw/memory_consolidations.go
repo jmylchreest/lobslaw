@@ -70,7 +70,17 @@ func renderConsolidations(w io.Writer, entries []*lobslawv1.ConsolidationRecord,
 
 	_, _ = fmt.Fprintf(w, "%s\n", source)
 	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(w, "no consolidations recorded.")
+		// Says which log is empty, not just that something is.
+		//
+		// "no consolidations recorded" after a Dream pass that reported
+		// summarising five groups reads as a contradiction, or as data
+		// loss. It is neither: this is the near-duplicate ADJUDICATION
+		// log, which only a merge pass writes to, and summarisation is
+		// a different mechanism that happens to share the word.
+		_, _ = fmt.Fprintln(w, "no near-duplicate adjudications recorded.")
+		_, _ = fmt.Fprintln(w, "(this log holds Dream's merge/supersede/conflict verdicts on")
+		_, _ = fmt.Fprintln(w, " near-duplicate memories. Summarisation is separate and writes")
+		_, _ = fmt.Fprintln(w, " consolidated records into memory itself — see `lobslaw memory list`.)")
 		return nil
 	}
 	for _, e := range entries {
