@@ -41,6 +41,9 @@ type Registry struct {
 	// sandbox layer. compute.Registry satisfies the interface.
 	policySink sandbox.PolicySink
 	log        *slog.Logger
+	// scanned fingerprints directories already parsed, so a scan that
+	// finds nothing changed does no parsing. See scancache.go.
+	scanned map[string]string
 }
 
 // NewRegistry constructs an empty registry with the given logger.
@@ -130,6 +133,7 @@ func (r *Registry) Put(skill *Skill) {
 func (r *Registry) Remove(manifestDir string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.forgetScan(manifestDir)
 	for name, list := range r.candidates {
 		kept := make([]*Skill, 0, len(list))
 		for _, c := range list {
@@ -338,6 +342,9 @@ func (r *Registry) ScanAgent(root string) []error {
 				continue
 			}
 			dir := filepath.Join(root, n.Name(), v.Name())
+			if r.unchanged(dir) {
+				continue
+			}
 			skill, err := ParseAgentSkill(dir)
 			if err != nil {
 				if _, statErr := os.Stat(filepath.Join(dir, "manifest.yaml")); os.IsNotExist(statErr) {
@@ -390,6 +397,9 @@ func (r *Registry) ScanImported(root string, policy SigningPolicy, verifier *Ver
 				continue
 			}
 			dir := filepath.Join(root, n.Name(), v.Name())
+			if r.unchanged(dir) {
+				continue
+			}
 			skill, err := ParseWithPolicy(dir, policy, verifier)
 			if err != nil {
 				if _, statErr := os.Stat(filepath.Join(dir, "manifest.yaml")); os.IsNotExist(statErr) {
