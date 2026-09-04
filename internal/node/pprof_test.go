@@ -5,6 +5,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
+	"runtime/pprof"
+	"sync"
 	"testing"
 	"time"
 )
@@ -21,15 +24,33 @@ func listening(t *testing.T, addr string) bool {
 
 // pprof serves a memory dump to anyone who can reach it, so "off unless
 // asked" is a security property and not a default.
+//
+// Checked on the decision rather than by probing a port: the default
+// address is a fixed one, so a probe answers "is anything on :6060",
+// which on a developer's machine is usually their own running node.
 func TestPprofStaysOffUnlessConfigured(t *testing.T) {
 	t.Setenv("LOBSLAW_PPROF_ADDR", "")
 
 	n, _ := approvalGateNode(t, false, false)
-	n.startPprof(t.Context())
+	if addr, ok := n.pprofListenAddr(); ok {
+		t.Fatalf("pprof would listen on %q with nothing configured", addr)
+	}
 
-	// Nothing configured, so nothing should be listening anywhere.
-	if listening(t, pprofDefaultAddr) {
-		t.Fatalf("pprof is serving on %s with no pprof_addr set", pprofDefaultAddr)
+	n.cfg.Debug.PprofAddr = "on"
+	if addr, ok := n.pprofListenAddr(); !ok || addr != pprofDefaultAddr {
+		t.Errorf(`pprof_addr "on" resolved to (%q, %v), want the loopback default`, addr, ok)
+	}
+
+	n.cfg.Debug.PprofAddr = "0.0.0.0:9999"
+	if addr, _ := n.pprofListenAddr(); addr != "0.0.0.0:9999" {
+		t.Errorf("explicit address resolved to %q", addr)
+	}
+
+	// The env var is the escape hatch for a node already going wrong,
+	// so it has to win over the file.
+	t.Setenv("LOBSLAW_PPROF_ADDR", "127.0.0.1:1234")
+	if addr, _ := n.pprofListenAddr(); addr != "127.0.0.1:1234" {
+		t.Errorf("LOBSLAW_PPROF_ADDR did not override config: %q", addr)
 	}
 }
 
@@ -88,5 +109,61 @@ func TestPprofServesWhenConfigured(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !bytes.Contains(body, []byte("goroutine profile")) {
 		t.Errorf("response is not a goroutine profile: %.80q", body)
+	}
+}
+
+// The block and mutex profiles record nothing unless the runtime is
+// told to, and a stock build serves a well-formed EMPTY profile rather
+// than an error — which reads as "no contention" instead of "not
+// recording". This asserts the difference.
+func TestContentionProfilesRecordOnlyWhenEnabled(t *testing.T) {
+	// Process-global runtime state, so no t.Parallel, and put it back.
+	t.Cleanup(func() {
+		runtime.SetBlockProfileRate(0)
+		runtime.SetMutexProfileFraction(0)
+	})
+
+	contend := func() {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		ch := make(chan struct{})
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				mu.Lock()
+				time.Sleep(time.Millisecond)
+				mu.Unlock()
+				<-ch
+			}()
+		}
+		time.Sleep(20 * time.Millisecond)
+		close(ch)
+		wg.Wait()
+	}
+
+	// Off: the profiles exist and stay empty however hard we contend.
+	n, _ := approvalGateNode(t, false, false)
+	n.startPprof(t.Context()) // no pprof_addr, so this only sets rates
+	contend()
+	if got := pprof.Lookup("block").Count(); got != 0 {
+		t.Errorf("block profile recorded %d events with block_profile_rate unset", got)
+	}
+
+	// On: the same contention is now visible.
+	n.cfg.Debug.BlockProfileRate = 1
+	n.cfg.Debug.MutexProfileFraction = 1
+	n.startPprof(t.Context())
+	contend()
+
+	if got := pprof.Lookup("block").Count(); got == 0 {
+		t.Error("block profile is still empty after block_profile_rate was set; the endpoint would report no contention")
+	}
+	if got := pprof.Lookup("mutex").Count(); got == 0 {
+		t.Error("mutex profile is still empty after mutex_profile_fraction was set")
+	}
+	// SetMutexProfileFraction(-1) reads without changing.
+	if got := runtime.SetMutexProfileFraction(-1); got != 1 {
+		t.Errorf("mutex profile fraction = %d, want 1", got)
 	}
 }

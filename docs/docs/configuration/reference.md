@@ -694,7 +694,19 @@ Diagnostics that stay off unless asked for.
 [debug]
 # Start a pprof server. Unset (the default) starts nothing.
 pprof_addr = "127.0.0.1:6060"
+
+# Contention profiling, off by default. Both cost time on every blocking
+# operation, so turn them on while investigating and off afterwards.
+block_profile_rate    = 10000  # ns of blocked time per sample; 1 records everything
+mutex_profile_fraction = 100   # report 1/n contention events; 1 records everything
 ```
+
+`block` and `mutex` are the profiles worth opening a profiler for on a node
+running raft, a gateway and a dozen background loops — and they are the two the
+runtime keeps switched off. Left off, `/debug/pprof/block` returns a well-formed
+**empty** profile rather than an error, which reads as "no contention" instead
+of "not recording". A goroutine dump shows what is blocked; these show what is
+blocking it.
 
 pprof has **no authentication**, and its dumps are not innocuous: a heap or
 goroutine profile of this process can contain decrypted memory, tokens in
