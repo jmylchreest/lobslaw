@@ -140,6 +140,17 @@ type Scheduler struct {
 	dueAt    time.Time
 	dueValid bool
 
+	// fireAttempts counts calls into fireDue, and lastDecline records
+	// why the most recent one did not fire.
+	//
+	// A scheduler that cannot fire is silent. fireDue returns early on
+	// a follower and before its post-election barrier completes, and
+	// both are normal enough that neither logs — so "no tasks are
+	// running" and "no tasks are due" look identical from outside, and
+	// the difference only shows up as work that never happened.
+	fireAttempts atomic.Int64
+	lastDecline  atomic.Value // string
+
 	// dueScans counts how often the buckets have actually been read to
 	// answer "what is due next".
 	//
@@ -242,8 +253,40 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		"claim_ttl", s.cfg.ClaimTTL,
 	)
 
+	// A scheduler that never fires should say so.
+	//
+	// fireDue declines silently on a follower and before the barrier,
+	// because both are ordinary. What is not ordinary is staying in
+	// either state: the loop keeps running, the logs stay clean, and
+	// nothing scheduled happens — which is indistinguishable from
+	// having nothing to do. This says the difference out loud, once,
+	// after long enough that it cannot be the ordinary case.
+	stallAfter := 3 * s.cfg.MaxSleep
+	started := time.Now()
+	stallReported := false
+
 	var lastFire time.Time
 	for {
+		if !stallReported && time.Since(started) > stallAfter {
+			s.barrierMu.Lock()
+			done := s.barrierDone
+			s.barrierMu.Unlock()
+			if !done {
+				why, _ := s.lastDecline.Load().(string)
+				if why == "" {
+					why = "fireDue has not been reached"
+				}
+				s.log.Warn("scheduler: nothing has been able to fire since startup; scheduled tasks are not running",
+					"for", time.Since(started).Round(time.Second),
+					"reason", why,
+					"fire_attempts", s.fireAttempts.Load(),
+					"is_leader", s.raft.IsLeader(),
+				)
+				stallReported = true
+			} else {
+				stallReported = true
+			}
+		}
 		now := time.Now()
 		wait := s.computeSleepDuration(now)
 		// Never spin. A zero wait means something is past due; if the
@@ -513,13 +556,17 @@ func (s *Scheduler) taskNextRun(t *lobslawv1.ScheduledTaskRecord, now time.Time)
 // race produced the user-observed "commitment fires on every
 // restart" bug.
 func (s *Scheduler) fireDue(ctx context.Context, now time.Time) {
+	s.fireAttempts.Add(1)
 	if !s.raft.IsLeader() {
+		s.lastDecline.Store("not the leader")
 		s.resetBarrierDone()
 		return
 	}
 	if !s.ensureBarrierDone() {
+		s.lastDecline.Store("post-election barrier has not completed")
 		return
 	}
+	s.lastDecline.Store("")
 	tasks, err := s.listScheduledTasks()
 	if err != nil {
 		s.log.Error("scheduler: list tasks failed", "err", err)
