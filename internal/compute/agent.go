@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -263,6 +264,9 @@ type EpisodicTurn struct {
 	AssistReply string
 	TurnID      string
 	CompletedAt time.Time
+	// Via names the tools this turn invoked. See memory.EpisodicTurn
+	// for why a memory records it.
+	Via []string
 }
 
 // SkillDispatcher abstracts the skill invoker so the agent doesn't
@@ -677,7 +681,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 // Failures log WARN and are swallowed. Memory loss on a single
 // turn is preferable to dropping the user's reply for a backend
 // hiccup.
-func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string) {
+func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string, calls []ToolInvocation) {
 	if a.cfg.EpisodicIngester == nil || reply == "" {
 		return
 	}
@@ -693,6 +697,7 @@ func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, 
 		AssistReply: reply,
 		TurnID:      req.TurnID,
 		CompletedAt: time.Now(),
+		Via:         invokedToolNames(calls),
 	}
 	if req.Claims != nil {
 		episode.UserID = req.Claims.UserID
@@ -925,7 +930,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// The FINAL answer, not step 0's draft. What the user
 			// received is what should be remembered; ingesting the
 			// draft would seed memory with a reply nobody saw.
-			a.maybeIngestTurn(ctx, req, final)
+			a.maybeIngestTurn(ctx, req, final, resp.ToolCalls)
 			a.cfg.Review.Consider(ctx, req, resp.Messages, len(resp.ToolCalls))
 			return resp, nil
 		}
@@ -1049,7 +1054,7 @@ func (a *Agent) forceSummaryReply(
 	resp.Reply = StripReasoningTags(chatResp.Content)
 	messages = append(messages, Message{Role: "assistant", Content: chatResp.Content})
 	resp.Messages = messages
-	a.maybeIngestTurn(ctx, req, chatResp.Content)
+	a.maybeIngestTurn(ctx, req, chatResp.Content, resp.ToolCalls)
 	// After the reply is assembled, never before. A learning side
 	// effect must not delay somebody's answer, and Consider does not
 	// block.
@@ -1985,4 +1990,33 @@ func confirmationOperation(err error, toolName string) (action, resource string,
 	// nothing classified this, and a channel must not offer a
 	// tier-wide grant off a classification nobody made.
 	return "tool:exec", toolName, true, nil
+}
+
+// invokedToolNames reduces a turn's invocations to the distinct tool
+// names, sorted.
+//
+// Sorted so the same set of calls always produces the same record —
+// otherwise two identical turns differ by the order the model happened
+// to emit its calls, and dream's near-duplicate adjudication sees a
+// difference that is not one.
+//
+// Deduplicated because the count is not the point. A turn that read
+// the shopping list four times is the same KIND of memory as one that
+// read it once: derived from that tool, and stale when that tool's
+// data changes.
+func invokedToolNames(calls []ToolInvocation) []string {
+	if len(calls) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(calls))
+	out := make([]string, 0, len(calls))
+	for _, c := range calls {
+		if c.ToolName == "" || seen[c.ToolName] {
+			continue
+		}
+		seen[c.ToolName] = true
+		out = append(out, c.ToolName)
+	}
+	sort.Strings(out)
+	return out
 }

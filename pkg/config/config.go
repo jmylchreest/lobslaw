@@ -595,6 +595,29 @@ type ComputeConfig struct {
 	// same thing rather than a guard against the pathological case.
 	MaxRecallTokens int `koanf:"max_recall_tokens,omitempty"`
 
+	// MinRecallScore is the relevance a memory must reach before
+	// passive recall will put it in a turn, as cosine similarity.
+	// Zero takes compute.DefaultMinSemanticScore; negative disables
+	// the floor and restores the old behaviour of always injecting the
+	// nearest MaxRecall records however far away they are.
+	//
+	// The two bounds above are about VOLUME; this one is about
+	// relevance, and it is the one that decides whether a turn with no
+	// topic — a greeting, an acknowledgement — recalls anything at
+	// all. Raise it if the assistant volunteers things nobody asked
+	// about; lower it if it forgets things it should know.
+	MinRecallScore float32 `koanf:"min_recall_score,omitempty"`
+
+	// MinLexicalRecallScore is the same floor for the fallback path
+	// used when no embedder is configured or a vector search fails,
+	// measured as the fraction of query terms present in the record.
+	// Zero takes compute.DefaultMinLexicalScore; negative disables it.
+	//
+	// Separate from MinRecallScore because the two numbers are not the
+	// same measurement and do not transfer: they share the 0..1 range
+	// and nothing else. Most operators should leave both alone.
+	MinLexicalRecallScore float32 `koanf:"min_lexical_recall_score,omitempty"`
+
 	Vision     VisionConfig     `koanf:"vision,omitempty"`
 	Audio      AudioConfig      `koanf:"audio,omitempty"`
 	PDF        PDFConfig        `koanf:"pdf,omitempty"`

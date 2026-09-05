@@ -543,12 +543,14 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Roles:            n.roleMap,
 		Identity:         n.identityResolver(),
 		ContextEngine: compute.NewContextEngine(compute.ContextEngineConfig{
-			Store:           n.store,
-			Embedder:        n.embedder,
-			CrossOwner:      n.crossOwnerAuthz(),
-			Logger:          n.log,
-			MaxRecall:       n.cfg.Compute.MaxRecall,
-			MaxRecallTokens: n.cfg.Compute.MaxRecallTokens,
+			Store:            n.store,
+			Embedder:         n.embedder,
+			CrossOwner:       n.crossOwnerAuthz(),
+			Logger:           n.log,
+			MaxRecall:        n.cfg.Compute.MaxRecall,
+			MaxRecallTokens:  n.cfg.Compute.MaxRecallTokens,
+			MinSemanticScore: n.cfg.Compute.MinRecallScore,
+			MinLexicalScore:  n.cfg.Compute.MinLexicalRecallScore,
 		}),
 		Skills:            skillDispatcherOrNil(n.skillAdapter),
 		SkillsProvider:    n.skillIndexProvider(),
@@ -1336,6 +1338,7 @@ func (a *episodicIngesterAdapter) IngestTurn(ctx context.Context, t compute.Epis
 		AssistReply: t.AssistReply,
 		TurnID:      t.TurnID,
 		CompletedAt: t.CompletedAt,
+		Via:         t.Via,
 	})
 }
 

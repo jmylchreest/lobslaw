@@ -181,6 +181,40 @@ approval_mode = "standard"
 # two good ones.
 model_timeout = "60s"
 
+# PASSIVE RECALL: what memory reaches a turn without the agent asking
+# for it. All four are optional; the defaults are what ships.
+#
+# The first two bound VOLUME — how many memories, and how much of the
+# context window they may take. The tighter of the two wins.
+max_recall        = 3
+max_recall_tokens = 700
+
+# This one bounds RELEVANCE, and it is the one to reach for when the
+# assistant volunteers things nobody asked about. Vector search returns
+# its nearest neighbours, not its near ones, so without a floor a
+# message with no topic — "hey, you there?" — still recalls the top
+# `max_recall` records, however unrelated, and they arrive in the
+# prompt labelled as relevant context.
+#
+# Cosine similarity, 0..1. Raise it if the assistant brings up things
+# unprompted; lower it if it forgets things it should know. Set it
+# NEGATIVE to disable the floor — 0 is a real threshold, not the off
+# switch. The default is measured rather than chosen; see
+# TestCalibrateRecallFloor for the corpus and the trade-off at each
+# value.
+min_recall_score = 0.25
+
+# The same floor for the fallback path used when no embedder is
+# configured or a vector search fails, scored as the fraction of query
+# terms present in the record. A separate number because it is a
+# separate measurement — the two share a range and nothing else.
+#
+# Note this path cannot be made to ignore a bare greeting by tuning:
+# short messages reduce to a single search term, and one term matching
+# scores the same 1.0 as a full-query match. Configure an embedder if
+# that matters.
+min_lexical_recall_score = 0.30
+
 [[compute.providers]]
 label              = "openrouter"
 driver             = "openai"         # openai (default) | anthropic | mock

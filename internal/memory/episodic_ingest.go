@@ -37,6 +37,16 @@ type EpisodicTurn struct {
 	AssistReply string
 	TurnID      string
 	CompletedAt time.Time
+	// Via names the tools the turn invoked, deduplicated and sorted.
+	//
+	// The reason a memory needs it: a reply produced by calling
+	// another system is a claim about that system at the time of the
+	// call, and it expires the moment anyone else changes it. The text
+	// cannot carry that distinction — "added chocolate to the list"
+	// and "prefers terse replies" read identically as prose, and a
+	// timestamp says when both were written, not which one is still
+	// true. Recall renders this so the model can tell them apart.
+	Via []string
 }
 
 // Embedder produces a vector embedding for a piece of text. Kept
@@ -145,6 +155,7 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 		// transcript is capped and independently forgettable, so a dead
 		// pointer means the link is stale, never that the memory is.
 		SessionRef: sessionRefFor(turn.Channel, turn.ChatID),
+		Via:        turn.Via,
 	}
 
 	// Through the one door, which stamps what is missing and writes

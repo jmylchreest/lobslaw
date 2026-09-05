@@ -157,7 +157,20 @@ func Generate(in GenerateInput) string {
 		}
 
 		writeBackgroundSection(&b, "Recent Context", "short-term — from THIS conversation; strongly informs your reply on conflicts with long-term recall", short)
-		writeBackgroundSection(&b, "Recalled Memory", "long-term — from past sessions; may or may not apply to the current topic; short-term context above wins when they disagree", long)
+		// The qualifier names via= explicitly rather than exhorting the
+		// model to weigh timestamps. when= was always rendered and was
+		// always ignored, because a date does not say which memories
+		// expire: "prefers terse replies" and "added chocolate to the
+		// list" are both accurate accounts of the past, and only the
+		// second stops being true when somebody else edits the list. via=
+		// marks that second kind, so the instruction has something
+		// specific to point at instead of asking for general caution.
+		writeBackgroundSection(&b, "Recalled Memory",
+			"long-term — a record of what happened, NOT the current state of anything; "+
+				"may or may not apply to the current topic; short-term context above wins when they disagree. "+
+				"A block tagged via=<tool> came from calling that tool at the time shown in when= — "+
+				"it is what that system said then, so re-read it before stating what is true now",
+			long)
 	}
 
 	return b.String()

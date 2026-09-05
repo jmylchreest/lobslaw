@@ -168,3 +168,60 @@ func TestInvalidTextFromElsewhereStillMarshals(t *testing.T) {
 		t.Fatalf("a record built from invalid input does not marshal: %v", err)
 	}
 }
+
+// Provenance survives ingest.
+//
+// The render side is tested in internal/compute, but a via= that is
+// never written is decoration: the block would be correct and always
+// empty, and every test of the renderer would still pass. This is the
+// half that makes the attribute real.
+func TestEpisodicIngestRecordsToolProvenance(t *testing.T) {
+	t.Parallel()
+	applier := &fakeApplier{}
+	ing, err := NewEpisodicIngester(applier, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ing.IngestTurn(context.Background(), EpisodicTurn{
+		Owner:       "user:alice",
+		Channel:     "telegram",
+		UserMessage: "put galaxy chocolate on the list",
+		AssistReply: "done, it's on the list",
+		CompletedAt: time.Unix(1_700_000_000, 0).UTC(),
+		Via:         []string{"kitchenowl_add_shoppinglist_item"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	epi, ok := applier.entries[0].Payload.(*lobslawv1.LogEntry_EpisodicRecord)
+	if !ok {
+		t.Fatalf("payload = %T", applier.entries[0].Payload)
+	}
+	got := epi.EpisodicRecord.Via
+	if len(got) != 1 || got[0] != "kitchenowl_add_shoppinglist_item" {
+		t.Errorf("via = %v; the tool that produced this memory was not recorded", got)
+	}
+}
+
+// A turn that called nothing leaves the field absent, so "no tool ran"
+// and "a tool ran whose name was lost" stay different states.
+func TestEpisodicIngestLeavesProvenanceEmptyWithoutTools(t *testing.T) {
+	t.Parallel()
+	applier := &fakeApplier{}
+	ing, err := NewEpisodicIngester(applier, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ing.IngestTurn(context.Background(), EpisodicTurn{
+		Owner:       "user:alice",
+		UserMessage: "what do you think about the plan",
+		AssistReply: "it looks reasonable",
+		CompletedAt: time.Unix(1_700_000_000, 0).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	epi := applier.entries[0].Payload.(*lobslawv1.LogEntry_EpisodicRecord)
+	if len(epi.EpisodicRecord.Via) != 0 {
+		t.Errorf("via = %v; want empty for a turn that called no tools", epi.EpisodicRecord.Via)
+	}
+}
