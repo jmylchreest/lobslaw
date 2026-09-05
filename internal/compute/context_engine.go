@@ -48,6 +48,16 @@ type ContextEngine struct {
 	log        *slog.Logger
 
 	maxRecall int
+
+	// Relevance floors, one per strategy. Two rather than one because
+	// the scores are not the same measurement: semantic is cosine
+	// between a query and a passage embedding, lexical is the fraction
+	// of query tokens found as substrings. Both land in 0..1, which is
+	// what makes a single knob tempting and wrong — MiniLM puts
+	// unrelated English around 0.1-0.3, while one surviving query
+	// token matching gives lexical a flat 1.0.
+	minSemanticScore float32
+	minLexicalScore  float32
 }
 
 // ContextEngineConfig wires the engine. A nil store or embedder
@@ -82,6 +92,24 @@ type ContextEngineConfig struct {
 	// token-budgeted since ContextBudget; recall was the one input
 	// still bounded only by cardinality.
 	MaxRecallTokens int
+
+	// MinSemanticScore is the cosine similarity a memory must reach on
+	// the semantic path before it may enter the prompt. Zero takes
+	// DefaultMinSemanticScore; negative disables the floor.
+	//
+	// This is a RELEVANCE gate, and it is the only one there was. The
+	// two existing bounds are both about volume — how many records,
+	// how many tokens — so a turn whose best match was noise still got
+	// the top DefaultMaxRecall of that noise. Vector search returns the
+	// nearest neighbours it has, not the near ones; on a small corpus
+	// the nearest neighbour to "Hey you there?" is whatever happens to
+	// exist.
+	MinSemanticScore float32
+
+	// MinLexicalScore is the same gate for the fallback path, measured
+	// as the fraction of query tokens present in the record. Zero takes
+	// DefaultMinLexicalScore; negative disables the floor.
+	MinLexicalScore float32
 }
 
 // NewContextEngine is safe to call with an empty config; the
@@ -99,14 +127,30 @@ func NewContextEngine(cfg ContextEngineConfig) *ContextEngine {
 	if maxRecallTokens <= 0 {
 		maxRecallTokens = DefaultMaxRecallTokens
 	}
+	// Zero means "unset, take the default" for consistency with the
+	// bounds above; a NEGATIVE value is the explicit off switch. A
+	// floor of 0 cannot be the disable value because 0 is a meaningful
+	// cosine — it is the floor an operator would type meaning "let
+	// anything non-opposed through", and reading that as "use the
+	// default 0.28" would silently ignore them.
+	minSemantic := cfg.MinSemanticScore
+	if minSemantic == 0 {
+		minSemantic = DefaultMinSemanticScore
+	}
+	minLexical := cfg.MinLexicalScore
+	if minLexical == 0 {
+		minLexical = DefaultMinLexicalScore
+	}
 	return &ContextEngine{
-		now:             time.Now,
-		store:           cfg.Store,
-		embedder:        cfg.Embedder,
-		crossOwner:      cfg.CrossOwner,
-		log:             logger,
-		maxRecall:       maxRecall,
-		maxRecallTokens: maxRecallTokens,
+		now:              time.Now,
+		store:            cfg.Store,
+		embedder:         cfg.Embedder,
+		crossOwner:       cfg.CrossOwner,
+		log:              logger,
+		minSemanticScore: minSemantic,
+		minLexicalScore:  minLexical,
+		maxRecall:        maxRecall,
+		maxRecallTokens:  maxRecallTokens,
 	}
 }
 
@@ -209,6 +253,24 @@ func (e *ContextEngine) assemble(entries []recallEntry, strategy string) Context
 		if entry.rec.Timestamp != nil {
 			source += fmt.Sprintf(" when=%s", entry.rec.Timestamp.AsTime().Format("2006-01-02 15:04"))
 		}
+		// PROVENANCE, and the reason when= was not enough on its own.
+		//
+		// A memory whose turn called a tool is a record of what that
+		// system said at that moment, not a durable fact — and the
+		// prose gives no clue which it is. "Added chocolate to the
+		// list" and "prefers terse replies" are both true accounts of
+		// the past; only one of them is still true, and only one of
+		// them has a tool name attached.
+		//
+		// Bounded because the attribute is a hint, not an audit trail:
+		// a turn that called nine tools would push the block's own
+		// metadata past the memory it describes.
+		if via := entry.rec.Via; len(via) > 0 {
+			if len(via) > maxRenderedVia {
+				via = via[:maxRenderedVia]
+			}
+			source += " via=" + strings.Join(via, ",")
+		}
 		// A disputed memory travels with the memory it disagrees
 		// with, in one block, so the model reads both or neither.
 		// Across two blocks the budget could take one and drop the
@@ -252,6 +314,21 @@ func (e *ContextEngine) assemble(entries []recallEntry, strategy string) Context
 	}
 
 	return ContextAssembly{Blocks: blocks, RecallIDs: ids}
+}
+
+// maxRenderedVia bounds how many tool names a recall block names.
+const maxRenderedVia = 3
+
+// recallStats is what a vector recall pass observed, as opposed to
+// what it returned. Only the caller's control flow and the debug log
+// read it; it never reaches the prompt.
+type recallStats struct {
+	// candidates is how many hits the search produced BEFORE the
+	// audience, quarantine and relevance filters.
+	candidates int
+	// bestRejected is the highest score the floor turned away, or 0
+	// when it turned away nothing.
+	bestRejected float32
 }
 
 // recallEntry is one memory chosen for the prompt, with the score
@@ -360,10 +437,27 @@ func (e *ContextEngine) recall(ctx context.Context, audience memory.Audience, us
 		e.log.Warn("context-engine: embed failed; falling back to lexical recall", "err", err)
 		return e.lexicalRecall(audience, userMessage), "lexical (embed failed)"
 	}
-	entries, err := e.vectorRecall(audience, vec)
+	entries, stats, err := e.vectorRecall(audience, vec)
 	if err != nil {
 		e.log.Warn("context-engine: vector search failed; falling back to lexical recall", "err", err)
 		return e.lexicalRecall(audience, userMessage), "lexical (vector search failed)"
+	}
+	// A search that found neighbours and rejected all of them has
+	// ANSWERED the question — nothing stored is relevant to this turn —
+	// and must not fall through to the lexical path, which would
+	// re-admit the same records under a weaker test and make the floor
+	// look like it was working while doing nothing. The fallback below
+	// exists for an unsearchable corpus, which is the case where the
+	// search produces no candidates at all.
+	if len(entries) == 0 && stats.candidates > 0 {
+		// best_score against min_score is the whole diagnostic: a
+		// rejection at 0.24 under a 0.25 floor is a tuning question, a
+		// rejection at 0.05 is the feature working.
+		e.log.Debug("context-engine: recall floored",
+			"candidates", stats.candidates,
+			"best_score", stats.bestRejected,
+			"min_score", e.minSemanticScore)
+		return nil, "semantic (all below floor)"
 	}
 	// ZERO HITS IS A SUCCESS, and that is the trap.
 	//
@@ -388,12 +482,17 @@ func (e *ContextEngine) recall(ctx context.Context, audience memory.Audience, us
 
 // vectorRecall is the semantic path: search the vector store, then
 // dereference each hit to the episodic records it summarises.
-func (e *ContextEngine) vectorRecall(audience memory.Audience, vec []float32) ([]recallEntry, error) {
+// The stats return exists so the caller can tell "the corpus yielded
+// nothing" from "the corpus yielded things and none were relevant
+// enough" — see recall, where only the first of those may fall back —
+// and so an operator tuning the floor can see what it is rejecting.
+func (e *ContextEngine) vectorRecall(audience memory.Audience, vec []float32) ([]recallEntry, recallStats, error) {
 	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2,
 		audience, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
-		return nil, err
+		return nil, recallStats{}, err
 	}
+	stats := recallStats{candidates: len(hits)}
 
 	seen := map[string]bool{}
 	entries := make([]recallEntry, 0, e.maxRecall)
@@ -421,6 +520,25 @@ func (e *ContextEngine) vectorRecall(audience memory.Audience, vec []float32) ([
 			if e.quarantined(&epi) {
 				continue
 			}
+			// Floored on the RAW similarity, before recency weighting
+			// multiplies it down. Relevance decides whether a memory
+			// may be recalled at all; recency only orders what already
+			// qualifies. Applied after the decay instead, a fact that
+			// is perfectly on topic and two years old would drop under
+			// the floor for being old — which is exactly what
+			// recallRecencyFloor exists to prevent, undone one step
+			// later in the pipeline.
+			if h.Score() < e.minSemanticScore {
+				// Tracked, not just dropped. Without the best rejected
+				// score there is no way to tell a floor that is barely
+				// too tight from one that is nowhere near — both log
+				// as "rejected N candidates", and the operator has to
+				// guess which way to move it.
+				if h.Score() > stats.bestRejected {
+					stats.bestRejected = h.Score()
+				}
+				continue
+			}
 			entries = append(entries, recallEntry{rec: &epi, score: h.Score()})
 			if len(entries) >= e.maxRecall {
 				break
@@ -430,7 +548,7 @@ func (e *ContextEngine) vectorRecall(audience memory.Audience, vec []float32) ([
 			break
 		}
 	}
-	return entries, nil
+	return entries, stats, nil
 }
 
 // lexicalRecall is the fallback path: token overlap against the
@@ -459,9 +577,13 @@ func (e *ContextEngine) lexicalRecall(audience memory.Audience, userMessage stri
 		}
 		// Normalised to 0..1 so the rendered score= attribute means
 		// the same kind of thing it does on the semantic path.
+		score := float32(h.score) / float32(tokens)
+		if score < e.minLexicalScore {
+			continue
+		}
 		entries = append(entries, recallEntry{
 			rec:   h.rec,
-			score: float32(h.score) / float32(tokens),
+			score: score,
 		})
 		if len(entries) >= e.maxRecall {
 			break
@@ -503,6 +625,58 @@ const DefaultMaxRecallTokens = 700
 // existed, a larger budget bought more chances for the same stale
 // record to keep winning rather than better recall.
 const DefaultMaxRecall = 3
+
+// DefaultMinSemanticScore and DefaultMinLexicalScore are the relevance
+// floors recall applies when the operator has not said.
+//
+// MEASURED, not chosen. TestCalibrateRecallFloor in
+// context_engine_calibration_test.go embeds a labelled corpus with the
+// real all-MiniLM-L6-v2 checkpoint and reports the score distributions
+// of related and unrelated pairs; the numbers below come from that run
+// and the test prints what it would recommend if the corpus changes.
+// Rerun it with LOBSLAW_EMBEDDER_MODEL set before editing either.
+//
+// The semantic figure is the LOWEST that silences every contentless
+// query in the corpus, not the one that maximises accuracy. The two
+// errors do not cost the same: a memory wrongly admitted is read in
+// context and usually harmless, while one wrongly withheld is
+// invisible — the turn behaves as though it were never stored and
+// nothing logs a miss. So where the sweep offers a range, take the
+// bottom of it.
+//
+// At 0.25 the measured corpus keeps 36 of 37 question-answering
+// pairs, cuts 98.1% of unrelated ones, and leaves all 27 greetings
+// with nothing to recall. Be aware the bands touch: the worst
+// greeting reaches 0.249 and the weakest real match 0.214, so this is
+// a narrow choice inside a contested region rather than a gap in the
+// data. It removes the bulk of the problem; it is not a clean
+// separation, and no single number would be.
+const DefaultMinSemanticScore = 0.25
+
+// DefaultMinLexicalScore is the same floor for the fallback path,
+// measured by TestCalibrateLexicalRecallFloor. At 0.30 that corpus
+// keeps 97.3% of question-answering pairs and cuts 97.8% of unrelated
+// ones.
+//
+// It does NOT silence contentless queries, and no value does. Two
+// properties of the lexical scorer put that out of a threshold's
+// reach, and both are visible in the sweep the test prints:
+//
+//   - TokeniseQuery drops stopwords and tokens of two characters or
+//     fewer, so short messages reach the scorer as a single term. One
+//     term that matches scores exactly 1.0 — the same as a full-query
+//     match — so the two are not separable by any cutoff.
+//   - Matching is strings.Contains against the record text, so a term
+//     matches inside a longer word. "Hey you there?" reduces to "hey",
+//     which is a substring of "they", which appears in several
+//     ordinary records. That is how a greeting scores a perfect 1.0.
+//
+// Both are worth fixing — word-boundary matching, and a minimum term
+// count below which lexical recall declines to answer — but they
+// change what memory_search returns as well as what passive recall
+// injects, so they are a deliberate change rather than a constant.
+// This floor is set where it does the good it can.
+const DefaultMinLexicalScore = 0.30
 
 // Recency weighting for recall ranking.
 //

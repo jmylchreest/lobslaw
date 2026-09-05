@@ -577,6 +577,26 @@ message EpisodicRecord {
   // and independently forgettable, so a stale pointer means the link
   // is dead, never that the memory is wrong.
   string session_ref = 11;
+  // via names the tools this turn invoked, deduplicated and sorted.
+  //
+  // PROVENANCE, so recall can say where a memory came from rather than
+  // only when. A record whose reply was produced by calling out to
+  // another system is a claim about that system AT THE TIME OF THE
+  // CALL, and it stops being evidence the moment anyone else changes
+  // it. Timestamps alone do not carry that: "added chocolate to the
+  // list" and "prefers terse replies" are both true statements about
+  // the past, but only one of them is still true now, and nothing in
+  // the text distinguishes them.
+  //
+  // Derived from what actually ran, never declared. An operator list
+  // of "live" integrations would be wrong the day a tool is added,
+  // and would ask operators to predict which of their data is
+  // volatile. This cannot drift because it is a record of the call.
+  //
+  // Empty for a turn that called nothing, which is the ordinary case
+  // and means the reply came from the model and the conversation
+  // alone.
+  repeated string via = 12;
 }
 
 message StoreRequest {

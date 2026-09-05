@@ -7,14 +7,13 @@
 package lobslawv1
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
@@ -3602,7 +3601,27 @@ type EpisodicRecord struct {
 	// the surrounding conversation. Advisory: the transcript is capped
 	// and independently forgettable, so a stale pointer means the link
 	// is dead, never that the memory is wrong.
-	SessionRef    string `protobuf:"bytes,11,opt,name=session_ref,json=sessionRef,proto3" json:"session_ref,omitempty"`
+	SessionRef string `protobuf:"bytes,11,opt,name=session_ref,json=sessionRef,proto3" json:"session_ref,omitempty"`
+	// via names the tools this turn invoked, deduplicated and sorted.
+	//
+	// PROVENANCE, so recall can say where a memory came from rather than
+	// only when. A record whose reply was produced by calling out to
+	// another system is a claim about that system AT THE TIME OF THE
+	// CALL, and it stops being evidence the moment anyone else changes
+	// it. Timestamps alone do not carry that: "added chocolate to the
+	// list" and "prefers terse replies" are both true statements about
+	// the past, but only one of them is still true now, and nothing in
+	// the text distinguishes them.
+	//
+	// Derived from what actually ran, never declared. An operator list
+	// of "live" integrations would be wrong the day a tool is added,
+	// and would ask operators to predict which of their data is
+	// volatile. This cannot drift because it is a record of the call.
+	//
+	// Empty for a turn that called nothing, which is the ordinary case
+	// and means the reply came from the model and the conversation
+	// alone.
+	Via           []string `protobuf:"bytes,12,rep,name=via,proto3" json:"via,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3712,6 +3731,13 @@ func (x *EpisodicRecord) GetSessionRef() string {
 		return x.SessionRef
 	}
 	return ""
+}
+
+func (x *EpisodicRecord) GetVia() []string {
+	if x != nil {
+		return x.Via
+	}
+	return nil
 }
 
 type StoreRequest struct {
@@ -12341,7 +12367,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"visibility\x12\x12\n" +
 	"\x04norm\x18\v \x01(\x02R\x04norm\x12\x1f\n" +
 	"\vsession_ref\x18\r \x01(\tR\n" +
-	"sessionRef\"\x81\x03\n" +
+	"sessionRef\"\x93\x03\n" +
 	"\x0eEpisodicRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05event\x18\x02 \x01(\tR\x05event\x12\x18\n" +
@@ -12360,7 +12386,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	" \x01(\x0e2\x16.lobslaw.v1.VisibilityR\n" +
 	"visibility\x12\x1f\n" +
 	"\vsession_ref\x18\v \x01(\tR\n" +
-	"sessionRef\"@\n" +
+	"sessionRef\x12\x10\n" +
+	"\x03via\x18\f \x03(\tR\x03via\"@\n" +
 	"\fStoreRequest\x120\n" +
 	"\x06record\x18\x01 \x01(\v2\x18.lobslaw.v1.VectorRecordR\x06record\"\x1f\n" +
 	"\rStoreResponse\x12\x0e\n" +
