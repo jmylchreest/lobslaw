@@ -169,7 +169,7 @@ The prefix is a semantic hint only — the scheduler's `HandlerRegistry` treats 
 
 Registered during `node.New` when both a scheduler and an agent are present. Dispatches the record's `Params["prompt"]` (or for commitments, `Reason` as a fallback) through `compute.Agent.RunToolCallLoop` with synthetic `"scheduler"` scope claims and a fresh `TurnBudget` from `cfg.Compute.Budgets`.
 
-Operators who want "every morning check the weather and summarize" configure a task with `HandlerRef = "agent:turn"` and `Params.prompt = "check the weather and summarize it"`. Natural-language commitments ("remind me to call the plumber in 2 hours") skip `Params` and let `Reason` drive.
+A user who wants "every morning check the weather and summarize" asks the agent, which creates the task through its schedule tool with `HandlerRef = "agent:turn"` and `Params.prompt = "check the weather and summarize it"`. Natural-language commitments ("remind me to call the plumber in 2 hours") skip `Params` and let `Reason` drive.
 
 Handler errors are logged; the next tick retries via the regular cron schedule (for tasks) or not at all (commitments — they're one-shot).
 
@@ -177,13 +177,17 @@ Handler errors are logged; the next tick retries via the regular cron schedule (
 
 Registered during `node.New` when both a scheduler and a `memory.Service` are present (Raft-hosting nodes). Dispatches to `memory.Service.DreamRunner().Run(ctx)`, which performs one Dream/REM pass: score → select-top-N → consolidate (if a Summarizer is wired) → prune → dream-session record. See [MEMORY.md](MEMORY.md) for the pass semantics.
 
+Seeded automatically at boot, not declared in config. Its schedule comes from
+`[memory.dream] schedule` (default `0 2 * * *`):
+
 ```toml
-[[scheduler.tasks]]
-name     = "nightly-dream"
+[memory.dream]
 schedule = "0 3 * * *"
-handler  = "memory:dream"
-enabled  = true
 ```
+
+There is no `[[scheduler.tasks]]`. Tasks reach the store from the built-in seeds
+and from the agent's own schedule tool; a task table in config is not read by
+anything, and one written there is silently ignored.
 
 Cluster behaviour: the scheduler's CAS-claim model means exactly one node per firing wins the claim. The winner's `DreamRunner.Run` then leader-gates — if that node isn't the current Raft leader it soft-skips (returns nil, nil). The next scheduled fire races the claim again, so a leadership change between fires is handled naturally. Worst case on a just-failed-over cluster: one fire silently skipped, the next one succeeds.
 

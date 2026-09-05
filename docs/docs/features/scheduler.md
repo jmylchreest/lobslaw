@@ -62,28 +62,26 @@ Now a task created at 09:30 with "9am daily" fires today (because Next(09:30 yes
 
 ## Firing
 
-The scheduler ticks every `[scheduler] tick_interval` (default 1 min), finds tasks/commitments whose `next_run` ≤ now, and fires them.
+The scheduler sleeps until the next task is due, and wakes early when a task or
+commitment is written anywhere in the cluster — the raft apply is the signal, so
+a task created on another node is picked up when it replicates rather than at the
+next tick. A periodic re-check (60s) backstops a lost wake. None of this is
+configurable.
 
 A fire spawns a fresh agent turn with the task's `prompt` as the user message and `created_for` as the active user. Same path as commitments — see [Commitments](/features/commitments).
 
 ## Storage
 
-```toml
-[scheduler]
-storage = "raft"             # raft | local
-tick_interval = "1m"
-```
-
-`raft` (default) replicates the full task list across the cluster. Survives leader failover; on failover, the new leader's scheduler picks up where the old left off (idempotent — `last_run` prevents double-fire).
-
-`local` stores tasks in a node-local file; useful for single-node dev.
+Tasks live in raft, always. The full list is replicated across the cluster and
+survives leader failover: the new leader's scheduler picks up where the old one
+left off, and `last_run` makes a re-fire idempotent rather than duplicated.
 
 ## Time zones
 
 Cron expressions are interpreted in `user_timezone`:
 
 - User's `[[user]]` pref takes precedence.
-- Cluster default (`[scheduler] default_timezone`) next.
+- Cluster default (`[gateway] default_timezone`) next.
 - UTC if neither is set.
 
 So `0 0 9 * * *` for a user in `Europe/London` fires at 09:00 BST during DST and 09:00 GMT outside it.

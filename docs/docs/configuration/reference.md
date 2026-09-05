@@ -599,11 +599,6 @@ refuses RFC1918 destinations whatever the hostname allowlist says, so
 `security.egress_allow_ranges`. Without it the failure is a proxy
 rejection naming neither the range nor the setting that fixes it.
 
-## `[scheduler]`
-
-```toml
-```
-
 ## `[skills]`
 
 ```toml
