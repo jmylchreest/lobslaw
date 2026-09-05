@@ -207,16 +207,12 @@ auto_init = false
 [soul]
 path = "./SOUL.md"
 
-[scheduler]
-enabled       = true
-tick_interval = "1m"
-claim_lease   = "5m"
-
-[[scheduler.tasks]]
-name     = "daily-dream"
-schedule = "0 3 * * *"
-handler  = "memory:dream"
-enabled  = true
+# The scheduler has no configuration. It always runs, its loop interval
+# and claim lease are internal, and tasks are not declared here.
+#
+# What schedules things:
+#   - [memory.dream] schedule   the nightly consolidation pass
+#   - the agent itself, through its schedule tool, at a user's request
 
 [auth]
 issuer       = "lobslaw"

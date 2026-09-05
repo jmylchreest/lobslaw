@@ -33,7 +33,6 @@ The recommended pattern at that point is a shared base config + a small per-node
 | `[compute]` + `[[compute.providers]]` | LLM provider router |
 | `[gateway]` + `[[gateway.channels]]` | User-facing channels (Telegram, REST, webhooks) |
 | `[mcp.servers.<name>]` | External MCP servers wired into the tool registry |
-| `[scheduler]` | Cron task storage + executor tuning |
 | `[skills]` | Skill discovery + invoker tuning |
 | `[soul]` | SOUL.md path, fragment count, dream cadence |
 | `[hooks]` | Pre/PostToolUse + sessionStart hook scripts |

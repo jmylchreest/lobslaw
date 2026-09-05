@@ -312,10 +312,12 @@ clawhub_binary_hosts = [
 # every install gets tedious while testing.
 clawhub_auto_emit_install_rules = false
 
-[scheduler]
-enabled       = true
-tick_interval = "1m"
-claim_lease   = "5m"
+# The scheduler has no configuration. It always runs, its loop interval
+# and claim lease are internal, and tasks are not declared here.
+#
+# What schedules things:
+#   - [memory.dream] schedule   the nightly consolidation pass
+#   - the agent itself, through its schedule tool, at a user's request
 
 [audit.local]
 enabled     = true

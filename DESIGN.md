@@ -1350,17 +1350,6 @@ node_key = "/etc/lobslaw/node.key"
 path = "./SOUL.md"
 scope = "default"
 
-[scheduler]
-enabled = true
-tick_interval = "1m"
-claim_lease = "5m"
-
-[[scheduler.tasks]]
-name = "daily-dream"
-schedule = "0 3 * * *"
-handler = "memory:dream"
-enabled = true
-
 [auth]
 issuer = "lobslaw"
 jwks_url = "https://accounts.google.com/.well-known/openid-configuration"
