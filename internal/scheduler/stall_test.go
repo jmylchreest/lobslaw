@@ -81,3 +81,50 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 	return s.w.Write(p)
 }
+
+// A wake source faster than MaxSleep must not stop the scheduler
+// firing.
+//
+// This is the bug exactly: a 1s leadership republish against a 60s
+// sleep meant every wake rebuilt the timer before it could expire, so
+// fireDue was reached zero times in three minutes on a healthy leader
+// and nothing scheduled ran.
+func TestFastWakesDoNotStarveFiring(t *testing.T) {
+	t.Parallel()
+	node, _ := singleNodeRaft(t, "n1")
+	s, err := NewScheduler(Config{
+		NodeID:       "node-a",
+		MaxSleep:     300 * time.Millisecond,
+		WakeDebounce: time.Millisecond,
+		Logger:       slog.New(slog.DiscardHandler),
+	}, node, NewHandlerRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Wake far faster than MaxSleep, the way the leadership ticker did.
+	go func() {
+		t := time.NewTicker(20 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.Notify()
+			}
+		}
+	}()
+	go func() { _ = s.Run(ctx) }()
+	<-ctx.Done()
+
+	// 2s at a 300ms deadline is ~6 attempts. Zero is the bug.
+	if got := s.fireAttempts.Load(); got == 0 {
+		t.Fatal("fireDue was never reached under a fast wake source; scheduled tasks would never run")
+	} else {
+		t.Logf("fire attempts under a 50/s wake source: %d", got)
+	}
+}

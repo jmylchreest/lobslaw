@@ -266,6 +266,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	stallReported := false
 
 	var lastFire time.Time
+	// lastAttempt is when fireDue was last REACHED, as opposed to
+	// lastFire which also moves when a fire is deferred by the floor.
+	lastAttempt := time.Now()
 	for {
 		if !stallReported && time.Since(started) > stallAfter {
 			s.barrierMu.Lock()
@@ -298,6 +301,24 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				wait = s.cfg.MinFireInterval - since
 			}
 		}
+		// fireDue runs at least once per MaxSleep, whatever the wake
+		// rate.
+		//
+		// A wake rebuilds the timer from scratch, so a source firing
+		// faster than the timer's duration starves the firing path
+		// completely — and one did: a 1s leadership republish against a
+		// 60s sleep meant fireDue was never reached at all, and nothing
+		// scheduled ran until a due time landed inside the gap between
+		// wakes. The sender is fixed, but a loop whose liveness depends
+		// on nobody calling Notify too often is one bad caller away from
+		// silence, so the deadline is enforced here too.
+		if !lastAttempt.IsZero() {
+			if overdue := time.Since(lastAttempt) - s.cfg.MaxSleep; overdue >= 0 {
+				wait = 0
+			} else if d := -overdue; d < wait {
+				wait = d
+			}
+		}
 		timer := time.NewTimer(wait)
 
 		select {
@@ -305,6 +326,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			// Fire anything due as of now. Whatever fires moves its own
 			// next-due, so the cached answer is stale by definition.
 			lastFire = time.Now()
+			lastAttempt = lastFire
 			s.fireDue(ctx, lastFire)
 			s.invalidateNextDue()
 		case <-s.wakeCh:

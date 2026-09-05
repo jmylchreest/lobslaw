@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -64,14 +65,31 @@ func (n *Node) wireRaft(advertise string) error {
 	// (telegram polling today; future: dream cycles, reindex) take
 	// this gate from n.leaderGate.
 	n.leaderGate = singleton.NewLeaderGate(rNode)
+	// wasLeader makes the scheduler nudge below fire on the TRANSITION
+	// into leadership rather than on every report of it.
+	//
+	// publishLeadership runs on a 1s reconciliation ticker, and its
+	// comment says over-firing is cheap. It is, for the LeaderGate,
+	// which drops a publish whose value has not changed. It was not for
+	// the scheduler: Notify has no such check, so a leader woke its own
+	// scheduler once a second, forever.
+	//
+	// A wake restarts the sleep-until-due timer from scratch, so one
+	// arriving every second means a 60s timer never expires. fireDue
+	// was never reached — 0 attempts in three minutes, on a node that
+	// was leader the whole time — the post-election barrier never
+	// completed, and nothing scheduled ran until the next due time
+	// happened to fall within one second, which is why tasks fired
+	// exactly on the hour and never between.
+	var wasLeader atomic.Bool
 	rNode.SetLeadershipCallback(func(isLeader bool) {
 		n.leaderGate.Publish(isLeader)
-		// Wake the scheduler immediately on leadership gain so the
-		// new leader doesn't sleep MaxSleep before scanning past-due
-		// records. Followers' scheduler loops sleep MaxSleep — without
-		// this nudge they'd miss the chance to fire anything that was
+		// Wake the scheduler on leadership gain so the new leader
+		// doesn't sleep MaxSleep before scanning past-due records.
+		// Followers' scheduler loops sleep MaxSleep — without this
+		// nudge they'd miss the chance to fire anything that was
 		// already overdue at the moment of promotion.
-		if isLeader && n.scheduler != nil {
+		if was := wasLeader.Swap(isLeader); isLeader && !was && n.scheduler != nil {
 			n.scheduler.Notify()
 		}
 	})
