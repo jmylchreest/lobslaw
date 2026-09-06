@@ -19,6 +19,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/trace"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -1640,6 +1641,49 @@ type pendingConfirmation struct {
 	Labels []commandrisk.RiskLabel
 }
 
+// toolFailureDetailMax bounds what a failure line quotes.
+//
+// A refusal is often an HTML error page: the 403 that prompted this
+// was six kilobytes of styled markup, and logging it whole would push
+// everything around it out of a scrollback while saying nothing the
+// first line did not.
+const toolFailureDetailMax = 300
+
+// logToolFailure records that a tool call did not succeed.
+//
+// Nothing did this. A failed invocation reaches the MODEL — as an
+// error string or as stderr on a non-zero exit — and stops there, so
+// the operator log showed a clean turn while the agent was being
+// refused by every site it tried. Diagnosing one meant reconstructing
+// it from stored transcripts after the fact, which requires knowing
+// there was something to look for.
+//
+// WARN rather than ERROR: the turn itself usually survives. The model
+// reads the failure, adapts, and answers anyway — that is the design,
+// and calling it an error would make a routine 404 look like an
+// outage. What it is not is silent.
+//
+// Detail is truncated and never the arguments. A tool's arguments can
+// carry secrets — a URL with a token in the query string is the
+// obvious one — and this line exists to say WHAT failed and roughly
+// why, which the name and the first line of the complaint already do.
+func (a *Agent) logToolFailure(req ProcessMessageRequest, tool, reason string, exitCode int, detail string) {
+	if a.cfg.Logger == nil {
+		return
+	}
+	attrs := []any{"tool", tool, "turn_id", req.TurnID, "reason", reason}
+	if exitCode >= 0 {
+		attrs = append(attrs, "exit_code", exitCode)
+	}
+	// Collapsed to one line before truncating: an HTML error page is
+	// mostly newlines and indentation, so without this the budget is
+	// spent on whitespace and the log entry spans a screen.
+	if d := strings.Join(strings.Fields(detail), " "); d != "" {
+		attrs = append(attrs, "detail", textutil.Truncate(d, "…", toolFailureDetailMax))
+	}
+	a.cfg.Logger.Warn("agent: tool call failed", attrs...)
+}
+
 func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, *pendingConfirmation, error) {
 	budgetDec := req.Budget.RecordToolCall()
 	if budgetDec.Exceeded {
@@ -1726,9 +1770,14 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		})
 		if err != nil {
 			inv.Error = err.Error()
+			a.logToolFailure(req, tc.Name, "skill dispatch failed", -1, err.Error())
 			return inv, nil, nil
 		}
 		inv.ExitCode = skillRes.ExitCode
+		if skillRes.ExitCode != 0 {
+			a.logToolFailure(req, tc.Name, "skill returned a non-zero exit",
+				skillRes.ExitCode, string(skillRes.Stderr))
+		}
 		inv.Output = combineSkillOutputs(skillRes)
 		req.Budget.RecordEgressBytes(int64(len(skillRes.Stdout) + len(skillRes.Stderr)))
 		return inv, nil, nil
@@ -1736,6 +1785,7 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 
 	if a.cfg.Executor == nil {
 		inv.Error = fmt.Sprintf("tool %q not found (no executor or skill dispatcher registered)", tc.Name)
+		a.logToolFailure(req, tc.Name, "no executor or skill dispatcher registered", -1, "")
 		return inv, nil, nil
 	}
 	invReq := InvokeRequest{
@@ -1763,10 +1813,22 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 			}, nil
 		}
 		inv.Error = err.Error()
+		a.logToolFailure(req, tc.Name, "invocation failed", -1, err.Error())
 		return inv, nil, nil
 	}
 
 	inv.ExitCode = result.ExitCode
+	// THE CASE THAT WAS ACTUALLY INVISIBLE.
+	//
+	// A tool that runs and fails does not return an error — it returns
+	// a result carrying a non-zero exit and its complaint on stderr,
+	// which the loop hands to the model and nothing else. So an
+	// operator reading logs saw a turn complete normally while the
+	// agent was being refused by every site it tried.
+	if result.ExitCode != 0 {
+		a.logToolFailure(req, tc.Name, "tool returned a non-zero exit",
+			result.ExitCode, string(result.Stderr))
+	}
 	inv.Output = combineOutputs(result)
 
 	req.Budget.RecordEgressBytes(int64(len(result.Stdout) + len(result.Stderr)))
