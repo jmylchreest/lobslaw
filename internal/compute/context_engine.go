@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
@@ -316,6 +318,24 @@ func (e *ContextEngine) assemble(entries []recallEntry, strategy string) Context
 	return ContextAssembly{Blocks: blocks, RecallIDs: ids}
 }
 
+// minLexicalTerms is how many scoring terms a message must have before
+// passive lexical recall will look at it.
+//
+// Not a floor, because no floor reaches this. The lexical score is
+// matched terms over total terms, so a one-term query is quantised to
+// {0, 1}: the greeting "Hey you there?" survives tokenisation as the
+// single term "hey" and scores a perfect 1.0 on any record that
+// matches it — the identical score a fully-matched query gets. Two
+// values that must be treated differently and are literally equal
+// cannot be separated by comparing them to anything.
+//
+// Two is the smallest number that makes the score carry information at
+// all. Deliberately not configurable: it is not a preference about how
+// much recall you want, it is the point below which the measurement
+// stops meaning anything, and an operator setting it to 1 would be
+// turning the metric off rather than tuning it.
+const minLexicalTerms = 2
+
 // maxRenderedVia bounds how many tool names a recall block names.
 const maxRenderedVia = 3
 
@@ -559,15 +579,29 @@ func (e *ContextEngine) vectorRecall(audience memory.Audience, vec []float32) ([
 // place. That also means it can find records written before any
 // embedder existed, which the semantic path cannot.
 func (e *ContextEngine) lexicalRecall(audience memory.Audience, userMessage string) []recallEntry {
+	// Counted BEFORE the scan, so a query too short to grade costs no
+	// bucket walk at all.
+	tokens := len(TokeniseQuery(userMessage))
+	if tokens < minLexicalTerms {
+		// Includes the zero case. Declining is the whole point: the
+		// score is matched-terms over total-terms, so a single-term
+		// query can only ever score 0 or 1 — and a 1 here means one
+		// word appeared somewhere, which is indistinguishable from a
+		// full-query match and clears any floor an operator could set.
+		//
+		// This is the passive path only. memory_search runs the same
+		// scan through RunSubstringSearch and is deliberately NOT
+		// subject to this: searching for one word is a perfectly good
+		// thing to ask for explicitly. What is not good is a bare
+		// "morning" silently retrieving whatever record happens to
+		// contain that word and presenting it as relevant context.
+		return nil
+	}
 	// Over-fetch for the same reason the vector path does: the
 	// quarantine filter below can empty out an otherwise full page.
 	hits, err := lexicalEpisodicSearch(e.store, audience, userMessage, "", e.maxRecall*2)
 	if err != nil {
 		e.log.Warn("context-engine: lexical recall failed", "err", err)
-		return nil
-	}
-	tokens := len(TokeniseQuery(userMessage))
-	if tokens == 0 {
 		return nil
 	}
 	entries := make([]recallEntry, 0, e.maxRecall)
@@ -658,24 +692,20 @@ const DefaultMinSemanticScore = 0.25
 // keeps 97.3% of question-answering pairs and cuts 97.8% of unrelated
 // ones.
 //
-// It does NOT silence contentless queries, and no value does. Two
-// properties of the lexical scorer put that out of a threshold's
-// reach, and both are visible in the sweep the test prints:
+// The floor alone never silenced a contentless query, and could not:
+// two properties of the scorer put that out of a threshold's reach.
+// Both are now fixed at the source rather than compensated for here —
+// matchesAtWordStart stopped "hey" matching inside "they", and
+// minLexicalTerms declines a query too short to grade. Between them
+// the worst greeting in the measured corpus fell from a perfect 1.0
+// to 0.5, and the number that can match anything at all halved.
 //
-//   - TokeniseQuery drops stopwords and tokens of two characters or
-//     fewer, so short messages reach the scorer as a single term. One
-//     term that matches scores exactly 1.0 — the same as a full-query
-//     match — so the two are not separable by any cutoff.
-//   - Matching is strings.Contains against the record text, so a term
-//     matches inside a longer word. "Hey you there?" reduces to "hey",
-//     which is a substring of "they", which appears in several
-//     ordinary records. That is how a greeting scores a perfect 1.0.
-//
-// Both are worth fixing — word-boundary matching, and a minimum term
-// count below which lexical recall declines to answer — but they
-// change what memory_search returns as well as what passive recall
-// injects, so they are a deliberate change rather than a constant.
-// This floor is set where it does the good it can.
+// What remains at 0.5 is a two-term message where one ordinary word
+// lands — "quick question", "got a sec?". Those need a wider stopword
+// vocabulary, not a different number here, and the words involved are
+// content in other questions, so the list is a judgement call rather
+// than an oversight. TestCalibrateLexicalRecallFloor names every
+// residual so the decision is made against evidence.
 const DefaultMinLexicalScore = 0.30
 
 // Recency weighting for recall ranking.
@@ -767,7 +797,7 @@ func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query,
 		hay := strings.ToLower(r.Event + " " + r.Context)
 		matches := 0
 		for _, tok := range tokens {
-			if strings.Contains(hay, tok) {
+			if matchesAtWordStart(hay, tok) {
 				matches++
 			}
 		}
@@ -795,6 +825,44 @@ func lexicalEpisodicSearch(store *memory.Store, audience memory.Audience, query,
 	return hits, nil
 }
 
+// matchesAtWordStart reports whether tok appears in hay at the start of
+// a word.
+//
+// This was strings.Contains, which matches anywhere — including inside
+// a longer word. That is not a near-miss, it is a different word:
+// "hey" matched "they", so the greeting "Hey you there?" scored a
+// PERFECT 1.0 against any record containing "they", of which there are
+// many in ordinary prose. Every short message had a hidden supply of
+// spurious full-marks matches.
+//
+// Anchored at the start rather than at both ends, so the accidental
+// prefix behaviour survives deliberately: "run" should still find
+// "running", and this package has no stemmer to recover that if the
+// match were made exact. What it no longer does is match a suffix or
+// an interior, which is where every false positive came from.
+func matchesAtWordStart(hay, tok string) bool {
+	for i := 0; i+len(tok) <= len(hay); {
+		j := strings.Index(hay[i:], tok)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		if at == 0 {
+			return true
+		}
+		// The rune BEFORE the match decides it. Decoded rather than
+		// indexed by byte: a multi-byte letter before the match is
+		// still a letter, and treating its trailing byte as a
+		// non-letter would let "hey" match "théy".
+		prev, size := utf8.DecodeLastRuneInString(hay[:at])
+		if size == 0 || !(unicode.IsLetter(prev) || unicode.IsDigit(prev)) {
+			return true
+		}
+		i = at + 1
+	}
+	return false
+}
+
 // TokeniseQuery lowercases + splits on whitespace + drops
 // stopwords and 1-2-char tokens. Preserves original word order
 // (unused today but reserved for phrase-proximity scoring later).
@@ -806,6 +874,20 @@ func TokeniseQuery(query string) []string {
 		f = strings.Trim(f, ".,!?;:'\"()[]")
 		if len(f) <= 2 {
 			continue
+		}
+		// Contractions reduced to their head word BEFORE the stopword
+		// check, or the list silently fails on the forms people
+		// actually type. "what" is a stopword and "what's" was not, so
+		// "what's new?" kept a term the identical question "what is
+		// new?" drops — and the stopword list looked complete while
+		// leaking every apostrophe form in it.
+		//
+		// The head word is also the right token to SEARCH for when it
+		// survives: a possessive like "john's" should match "john".
+		if head, ok := strings.CutSuffix(f, "'s"); ok && len(head) > 2 {
+			f = head
+		} else if head, ok := strings.CutSuffix(f, "n't"); ok && len(head) > 2 {
+			f = head
 		}
 		if memorySearchStopwords[f] {
 			continue

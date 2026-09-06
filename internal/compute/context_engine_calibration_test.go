@@ -405,6 +405,9 @@ func TestCalibrateRecallFloor(t *testing.T) {
 // Needs no checkpoint, so unlike the semantic calibration it always
 // runs.
 func TestCalibrateLexicalRecallFloor(t *testing.T) {
+	// Mirrors lexicalEpisodicSearch exactly, word-start anchoring
+	// included. A calibration that scored differently from production
+	// would be measuring a scorer nobody runs.
 	lexScore := func(query, text string) (float64, int) {
 		toks := TokeniseQuery(query)
 		if len(toks) == 0 {
@@ -413,7 +416,7 @@ func TestCalibrateLexicalRecallFloor(t *testing.T) {
 		hay := strings.ToLower(text)
 		matches := 0
 		for _, tok := range toks {
-			if strings.Contains(hay, tok) {
+			if matchesAtWordStart(hay, tok) {
 				matches++
 			}
 		}
@@ -431,6 +434,13 @@ func TestCalibrateLexicalRecallFloor(t *testing.T) {
 			s, ntok := lexScore(q.text, m.text)
 			if ntok == 1 {
 				singleToken[q.text] = true
+			}
+			// Passive recall declines a query this short BEFORE it
+			// scans, so these recall nothing whatever they would have
+			// scored. Zeroed here so the sweep reports what the
+			// pipeline does rather than what the scorer alone says.
+			if ntok < minLexicalTerms {
+				s = 0
 			}
 			switch {
 			case q.topic == "":
@@ -465,6 +475,14 @@ func TestCalibrateLexicalRecallFloor(t *testing.T) {
 	t.Logf("worst contentless query: %q reaches %.3f", worstQuery, worstContentless)
 	t.Logf("queries reduced to a single token by TokeniseQuery: %d of %d",
 		len(singleToken), len(calibQueries))
+	// Named, not just counted. Each of these is a message with no
+	// topic that can still pull a record, and the terms it survives
+	// tokenisation with are the actionable part — a residual here is
+	// usually a stopword the list is missing rather than anything
+	// about the scorer.
+	for q, sc := range contentlessBest {
+		t.Logf("  contentless still scoring: %-32q %.3f  terms=%v", q, sc, TokeniseQuery(q))
+	}
 
 	t.Logf("threshold  targeted_kept  unrelated_cut  greetings_silenced")
 	for _, th := range []float64{0.20, 0.25, 0.30, 0.34, 0.40, 0.50, 0.60} {
