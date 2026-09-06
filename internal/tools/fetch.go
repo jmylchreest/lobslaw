@@ -30,6 +30,11 @@ type FetchConfig struct {
 	CacheTTL   time.Duration
 	CacheSize  int
 
+	// Antibot optionally points fetch_url at a challenge-solving
+	// service, tried only after a direct fetch has been refused. Zero
+	// value disables it entirely.
+	Antibot AntibotConfig
+
 	// UserAgent is what fetch_url identifies itself as. Empty takes
 	// DefaultFetchUserAgent.
 	//
@@ -62,6 +67,14 @@ func RegisterFetchBuiltin(b *Builtins, cfg FetchConfig) error {
 	if ua == "" {
 		ua = DefaultFetchUserAgent
 	}
+	antibot, err := newAntibotClient(cfg.Antibot)
+	if err != nil {
+		// Refused at registration rather than at first use. A
+		// misconfigured solver that only reveals itself the first time
+		// a site says 403 is a bug an operator finds weeks later,
+		// while looking at a different problem.
+		return err
+	}
 	ttl := cfg.CacheTTL
 	if ttl <= 0 {
 		ttl = 10 * time.Minute
@@ -71,7 +84,7 @@ func RegisterFetchBuiltin(b *Builtins, cfg FetchConfig) error {
 		size = 64
 	}
 	cache := &fetchCache{ttl: ttl, maxSize: size, entries: map[string]*fetchCacheEntry{}}
-	return b.Register("fetch_url", newFetchHandler(client, cache, ua))
+	return b.Register("fetch_url", newFetchHandler(client, cache, ua, antibot))
 }
 
 // FetchToolDef is the ToolDef to register alongside the builtin.
@@ -170,7 +183,7 @@ const (
 	fetchMaxResponseBody = 5 * 1024 * 1024
 )
 
-func newFetchHandler(client *http.Client, cache *fetchCache, userAgent string) compute.BuiltinFunc {
+func newFetchHandler(client *http.Client, cache *fetchCache, userAgent string, antibot *antibotClient) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		raw := strings.TrimSpace(args["url"])
 		if raw == "" {
@@ -212,6 +225,26 @@ func newFetchHandler(client *http.Client, cache *fetchCache, userAgent string) c
 			return nil, 1, fmt.Errorf("fetch_url: read body: %w", err)
 		}
 		if resp.StatusCode >= 400 {
+			// A refusal a browser might get past, and a solver
+			// configured to try. Only here — after a direct fetch has
+			// actually been refused — so pages that do not need a
+			// browser never wait for one.
+			if antibot != nil && shouldRetryViaAntibot(resp.StatusCode) {
+				solved, aerr := antibot.fetch(ctx, raw)
+				if aerr == nil {
+					plain, links := htmlToPlainWithLinks(solved, "text/html", raw)
+					cache.set(raw, plain, links)
+					return packFetchResult(raw, plain, links, maxChars, false)
+				}
+				// The DIRECT status is what the model is told, with the
+				// solver's failure appended. "HTTP 403" is the fact
+				// about the site; that a second attempt also failed is
+				// context, not a replacement — reporting only the
+				// solver's error would hide what the site actually
+				// said.
+				return nil, 1, fmt.Errorf("fetch_url: HTTP %d: %s (antibot retry failed: %v)",
+					resp.StatusCode, compute.TruncateBodyFor(body, 256), aerr)
+			}
 			return nil, 1, fmt.Errorf("fetch_url: HTTP %d: %s", resp.StatusCode, compute.TruncateBodyFor(body, 256))
 		}
 

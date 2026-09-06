@@ -610,6 +610,10 @@ func (n *Node) wireCouncilTools(builtins *tools.Builtins) error {
 func (n *Node) wireFetchTools(builtins *tools.Builtins) error {
 	if err := tools.RegisterFetchBuiltin(builtins, tools.FetchConfig{
 		UserAgent: n.cfg.Compute.FetchUserAgent,
+		Antibot: tools.AntibotConfig{
+			URL:     n.cfg.Compute.FetchAntibotURL,
+			Timeout: n.cfg.Compute.FetchAntibotTimeout,
+		},
 	}); err != nil {
 		return fmt.Errorf("register fetch_url: %w", err)
 	}

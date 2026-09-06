@@ -628,6 +628,26 @@ type ComputeConfig struct {
 	// recourse but a code change.
 	FetchUserAgent string `koanf:"fetch_user_agent,omitempty"`
 
+	// FetchAntibotURL points fetch_url at a challenge-solving service,
+	// tried ONLY after a direct fetch has been refused with 403 or
+	// 503. Empty disables it, and disabled is the default.
+	//
+	// Off by default because turning it on routes some traffic through
+	// a browser somebody operates, which is a decision to make rather
+	// than inherit. The endpoint is exempt from the SSRF guard that
+	// fetch_url otherwise applies — a solver is nearly always on the
+	// same machine — so it must name a service the operator trusts,
+	// and only this one operator-named address is exempt.
+	FetchAntibotURL string `koanf:"fetch_antibot_url,omitempty"`
+
+	// FetchAntibotTimeout bounds one solve. Zero takes
+	// tools.DefaultAntibotTimeout (60s).
+	//
+	// Generous compared to a direct fetch because it is not comparable
+	// work: a challenge means loading a page, running its JavaScript
+	// and waiting out a deliberate delay.
+	FetchAntibotTimeout time.Duration `koanf:"fetch_antibot_timeout,omitempty"`
+
 	Vision     VisionConfig     `koanf:"vision,omitempty"`
 	Audio      AudioConfig      `koanf:"audio,omitempty"`
 	PDF        PDFConfig        `koanf:"pdf,omitempty"`

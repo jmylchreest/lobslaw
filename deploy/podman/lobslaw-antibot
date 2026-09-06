@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#
+# lobslaw-antibot — the challenge-solving service fetch_url falls back to.
+#
+# A headless browser that loads a page, runs its JavaScript and returns
+# the rendered HTML. fetch_url uses it ONLY after a direct fetch has
+# been refused with 403 or 503, so ordinary pages never wait for a
+# browser. Point a node at it with:
+#
+#   [compute]
+#   fetch_antibot_url = "http://127.0.0.1:8191/v1"
+#
+#   ./lobslaw-antibot build     build the image from a checkout
+#   ./lobslaw-antibot up        start it
+#   ./lobslaw-antibot down      stop and remove it
+#   ./lobslaw-antibot restart   down + up
+#   ./lobslaw-antibot status    container state + pool health
+#   ./lobslaw-antibot logs      follow logs (pass -n50 etc.)
+#   ./lobslaw-antibot check URL solve one URL and report
+#
+# Overridable via the environment:
+#   LOBSLAW_ANTIBOT_SRC    checkout to build from; default ../refyne-api/captcha
+#                          relative to this repo's parent
+#   LOBSLAW_ANTIBOT_IMAGE  default lobslaw-antibot:local
+#   LOBSLAW_ANTIBOT_NAME   default lobslaw-antibot
+#   LOBSLAW_ANTIBOT_PORT   default 8191
+#   LOBSLAW_BIND           default 127.0.0.1 (published interface)
+#   LOBSLAW_ANTIBOT_POOL   browsers kept warm; default 2
+#
+# NOT published beyond loopback by default, and that is deliberate. The
+# service takes a URL and fetches it with a real browser, so anything
+# that can reach it can use this machine's network position as its own.
+set -euo pipefail
+
+SRC="${LOBSLAW_ANTIBOT_SRC:-}"
+IMAGE="${LOBSLAW_ANTIBOT_IMAGE:-lobslaw-antibot:local}"
+NAME="${LOBSLAW_ANTIBOT_NAME:-lobslaw-antibot}"
+PORT="${LOBSLAW_ANTIBOT_PORT:-8191}"
+BIND="${LOBSLAW_BIND:-127.0.0.1}"
+POOL="${LOBSLAW_ANTIBOT_POOL:-2}"
+
+here() { cd "$(dirname "${BASH_SOURCE[0]}")" && pwd; }
+info() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31m==> %s\033[0m\n' "$*" >&2; exit 1; }
+
+resolve_src() {
+  if [ -n "$SRC" ]; then
+    printf '%s\n' "$SRC"
+    return
+  fi
+  # deploy/podman -> repo root -> the sibling checkout.
+  printf '%s\n' "$(cd "$(here)/../.." && cd .. && pwd)/refyne-api/captcha"
+}
+
+cmd_build() {
+  local src
+  src="$(resolve_src)"
+  [ -f "$src/Dockerfile" ] || die "no Dockerfile at $src — set LOBSLAW_ANTIBOT_SRC to the captcha-server checkout"
+  info "building $IMAGE from $src"
+  podman build -t "$IMAGE" "$src"
+}
+
+cmd_up() {
+  podman image exists "$IMAGE" || die "image $IMAGE not found — run: $0 build"
+  if podman container exists "$NAME"; then
+    podman rm -f "$NAME" >/dev/null
+  fi
+  info "starting $NAME"
+  # --shm-size: Chromium crashes on podman's 64 MB default for /dev/shm,
+  # and the crash surfaces as an unexplained solve timeout rather than
+  # anything naming shared memory.
+  #
+  # ALLOW_UNAUTHENTICATED: the service otherwise demands a bearer token.
+  # Safe here only because the port is bound to loopback — read the
+  # warning at the top of this file before changing LOBSLAW_BIND.
+  podman run -d --name "$NAME" \
+    -p "${BIND}:${PORT}:8191" \
+    -e ALLOW_UNAUTHENTICATED=true \
+    -e "BROWSER_POOL_SIZE=${POOL}" \
+    --shm-size=1g \
+    --restart unless-stopped \
+    "$IMAGE" >/dev/null
+  info "antibot  http://${BIND}:${PORT}/v1   (health: /health)"
+  info "point a node at it with:  [compute] fetch_antibot_url = \"http://${BIND}:${PORT}/v1\""
+}
+
+cmd_down() {
+  if podman container exists "$NAME"; then
+    info "stopping $NAME"
+    podman rm -f "$NAME" >/dev/null
+  fi
+}
+
+cmd_status() {
+  podman ps -a --filter "name=^${NAME}$" --format '{{.Names}}  {{.Status}}  {{.Image}}'
+  curl -fsS -m 5 "http://${BIND}:${PORT}/health" 2>/dev/null || info "health endpoint not answering"
+  echo
+}
+
+cmd_logs() { podman logs -f "$@" "$NAME"; }
+
+# One real solve, end to end. Worth having as a subcommand: "is it
+# running" and "can it actually get through a challenge" are different
+# questions, and only the second is the one you care about.
+cmd_check() {
+  local url="${1:-https://example.com}"
+  info "solving $url"
+  curl -fsS -m 120 -X POST "http://${BIND}:${PORT}/v1" \
+    -H 'Content-Type: application/json' \
+    -d "{\"cmd\":\"request.get\",\"url\":\"${url}\",\"maxTimeout\":90000}" |
+    python3 -c '
+import json,sys
+d=json.load(sys.stdin); s=d.get("solution") or {}
+print("  status :", d.get("status"), "|", d.get("message"))
+print("  http   :", s.get("status"))
+print("  body   :", len(s.get("response") or ""), "bytes")
+'
+}
+
+cmd_help() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-help}" in
+  build)     shift; cmd_build "$@" ;;
+  up|start)  shift; cmd_up "$@" ;;
+  down|stop) shift; cmd_down "$@" ;;
+  restart)   shift; cmd_down; cmd_up ;;
+  status)    shift; cmd_status "$@" ;;
+  logs)      shift; cmd_logs "$@" ;;
+  check)     shift; cmd_check "$@" ;;
+  *)         cmd_help ;;
+esac
