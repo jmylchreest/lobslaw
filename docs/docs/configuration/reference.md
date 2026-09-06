@@ -226,6 +226,30 @@ min_lexical_recall_score = 0.30
 # refuse, and without this the only recourse is a code change.
 fetch_user_agent = "lobslaw-fetch/1.0 (+https://github.com/jmylchreest/lobslaw)"
 
+# A challenge-solving service fetch_url falls back to — a headless
+# browser that loads the page, runs its JavaScript and returns the
+# rendered HTML. Empty disables it, and disabled is the default.
+#
+# Tried ONLY after a direct fetch is refused with 403 or 503, so pages
+# that do not need a browser never wait for one. Not for 404 (the page
+# is not there for anybody) or 429 (rate limiting — retrying through a
+# browser is futile and rude).
+#
+# Most "this site blocks me" cases are NOT this: fix the User-Agent
+# first and see whether the problem survives. A browser costs seconds
+# where a header costs nothing.
+#
+# The endpoint is exempt from the SSRF guard fetch_url otherwise
+# applies, because a solver is nearly always on the same machine. Only
+# this one operator-named address is exempt, and only for requests the
+# fetch tool itself constructs — the URL a turn asked for travels to
+# the solver as data, never as somewhere lobslaw connects. Name a
+# service you trust: it will fetch whatever it is given.
+#
+# deploy/podman/lobslaw-antibot runs one.
+fetch_antibot_url     = "http://127.0.0.1:8191/v1"
+fetch_antibot_timeout = "60s"
+
 [[compute.providers]]
 label              = "openrouter"
 driver             = "openai"         # openai (default) | anthropic | mock
