@@ -29,7 +29,27 @@ type FetchConfig struct {
 	HTTPClient *http.Client
 	CacheTTL   time.Duration
 	CacheSize  int
+
+	// UserAgent is what fetch_url identifies itself as. Empty takes
+	// DefaultFetchUserAgent.
+	//
+	// A dial because a header is the cheapest thing a site can refuse
+	// and the cheapest thing an operator can change, and the two are
+	// not always predictable: a site that allowlists a specific string
+	// leaves no other recourse.
+	UserAgent string
 }
+
+// DefaultFetchUserAgent is how fetch_url introduces itself.
+//
+// It identifies lobslaw rather than impersonating a browser, and that
+// is a deliberate choice rather than a concession. Measured against
+// the site that prompted this, an honest "lobslaw-fetch/1.0" and a
+// full Chrome string are both accepted — what was refused was Go's
+// default "Go-http-client/2.0". The block is on the stdlib default,
+// not on non-browsers, so there is nothing to buy by pretending and a
+// contact URL to gain by not.
+const DefaultFetchUserAgent = "lobslaw-fetch/1.0 (+https://github.com/jmylchreest/lobslaw)"
 
 // RegisterFetchBuiltin installs fetch_url. Always safe to call —
 // unlike memory/websearch this has no required secret.
@@ -37,6 +57,10 @@ func RegisterFetchBuiltin(b *Builtins, cfg FetchConfig) error {
 	client := cfg.HTTPClient
 	if client == nil {
 		client = defaultFetchClient()
+	}
+	ua := cfg.UserAgent
+	if ua == "" {
+		ua = DefaultFetchUserAgent
 	}
 	ttl := cfg.CacheTTL
 	if ttl <= 0 {
@@ -47,7 +71,7 @@ func RegisterFetchBuiltin(b *Builtins, cfg FetchConfig) error {
 		size = 64
 	}
 	cache := &fetchCache{ttl: ttl, maxSize: size, entries: map[string]*fetchCacheEntry{}}
-	return b.Register("fetch_url", newFetchHandler(client, cache))
+	return b.Register("fetch_url", newFetchHandler(client, cache, ua))
 }
 
 // FetchToolDef is the ToolDef to register alongside the builtin.
@@ -146,7 +170,7 @@ const (
 	fetchMaxResponseBody = 5 * 1024 * 1024
 )
 
-func newFetchHandler(client *http.Client, cache *fetchCache) compute.BuiltinFunc {
+func newFetchHandler(client *http.Client, cache *fetchCache, userAgent string) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		raw := strings.TrimSpace(args["url"])
 		if raw == "" {
@@ -175,7 +199,7 @@ func newFetchHandler(client *http.Client, cache *fetchCache) compute.BuiltinFunc
 		if err != nil {
 			return nil, 1, err
 		}
-		req.Header.Set("User-compute.Agent", "lobslaw-fetch/1.0")
+		req.Header.Set("User-Agent", userAgent)
 		req.Header.Set("Accept", "text/html, text/plain, application/json;q=0.9, */*;q=0.5")
 
 		resp, err := client.Do(req)

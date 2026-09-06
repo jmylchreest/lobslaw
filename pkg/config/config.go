@@ -618,6 +618,16 @@ type ComputeConfig struct {
 	// and nothing else. Most operators should leave both alone.
 	MinLexicalRecallScore float32 `koanf:"min_lexical_recall_score,omitempty"`
 
+	// FetchUserAgent is what the fetch_url tool identifies itself as.
+	// Empty takes tools.DefaultFetchUserAgent, which names lobslaw and
+	// carries a contact URL.
+	//
+	// Worth a dial because a User-Agent is the cheapest thing a site
+	// can refuse and the cheapest thing an operator can change. Some
+	// sites allowlist a specific string, and without this there is no
+	// recourse but a code change.
+	FetchUserAgent string `koanf:"fetch_user_agent,omitempty"`
+
 	Vision     VisionConfig     `koanf:"vision,omitempty"`
 	Audio      AudioConfig      `koanf:"audio,omitempty"`
 	PDF        PDFConfig        `koanf:"pdf,omitempty"`

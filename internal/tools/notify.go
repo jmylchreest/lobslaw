@@ -55,7 +55,7 @@ func NotifyToolDefs() []*types.ToolDef {
 				"type": "object",
 				"properties": {
 					"user_id":     {"type": "string", "description": "Canonical user id. Omit to notify the caller of this turn."},
-					"text":        {"type": "string", "description": "compute.Message body."},
+					"text":        {"type": "string", "description": "Message body."},
 					"ttl_seconds": {"type": "integer", "description": "Expiry in seconds. Default 300 (5 min). Past this, the message is dropped."}
 				},
 				"required": ["text"],
