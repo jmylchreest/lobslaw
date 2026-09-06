@@ -209,10 +209,10 @@ min_recall_score = 0.25
 # terms present in the record. A separate number because it is a
 # separate measurement — the two share a range and nothing else.
 #
-# Note this path cannot be made to ignore a bare greeting by tuning:
-# short messages reduce to a single search term, and one term matching
-# scores the same 1.0 as a full-query match. Configure an embedder if
-# that matters.
+# Tuning this is not what stops a bare greeting recalling something —
+# a message too short to grade is declined before it is scored at all,
+# and terms match only at word starts. This number decides how much of
+# a real query must land.
 min_lexical_recall_score = 0.30
 
 [[compute.providers]]
