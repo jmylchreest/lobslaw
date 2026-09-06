@@ -215,6 +215,17 @@ min_recall_score = 0.25
 # a real query must land.
 min_lexical_recall_score = 0.30
 
+# What the fetch_url tool identifies itself as. Unset takes
+# "lobslaw-fetch/1.0 (+https://github.com/jmylchreest/lobslaw)".
+#
+# It names lobslaw rather than impersonating a browser, deliberately:
+# sites that refuse Go's default "Go-http-client/2.0" accept an honest
+# string just as readily, so there is nothing to buy by pretending and
+# a contact URL to gain by not. Override where a site allowlists one
+# specific string — a User-Agent is the cheapest thing a site can
+# refuse, and without this the only recourse is a code change.
+fetch_user_agent = "lobslaw-fetch/1.0 (+https://github.com/jmylchreest/lobslaw)"
+
 [[compute.providers]]
 label              = "openrouter"
 driver             = "openai"         # openai (default) | anthropic | mock

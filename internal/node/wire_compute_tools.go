@@ -608,7 +608,9 @@ func (n *Node) wireCouncilTools(builtins *tools.Builtins) error {
 // Operators who want to disable it write a deny rule against the
 // fetch_url tool name.
 func (n *Node) wireFetchTools(builtins *tools.Builtins) error {
-	if err := tools.RegisterFetchBuiltin(builtins, tools.FetchConfig{}); err != nil {
+	if err := tools.RegisterFetchBuiltin(builtins, tools.FetchConfig{
+		UserAgent: n.cfg.Compute.FetchUserAgent,
+	}); err != nil {
 		return fmt.Errorf("register fetch_url: %w", err)
 	}
 	if err := n.toolRegistry.Register(tools.FetchToolDef()); err != nil {
