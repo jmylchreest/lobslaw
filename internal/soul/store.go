@@ -18,6 +18,7 @@ import (
 // happens in the adapter wired by the node package; the soul
 // package itself has no proto / raft dependency.
 type TuneState struct {
+	Revision   uint64
 	Name       *string
 	Excitement *int
 	Formality  *int
@@ -83,12 +84,12 @@ func (t *TuneState) Clone() *TuneState {
 // Get returns (nil, nil) when no overlay record exists yet.
 type TuneStore interface {
 	Get(ctx context.Context) (*TuneState, error)
+	// Put compares state.Revision and updates it on success.
 	Put(ctx context.Context, state *TuneState) error
 	Rollback(ctx context.Context, steps int) (*TuneState, error)
 }
 
-// MemoryTuneStore is the in-process implementation used by tests +
-// single-node-no-raft setups. Keeps a ring of past versions so
+// MemoryTuneStore is the in-process implementation used by tests. Keeps a ring of past versions so
 // HistoryRollback works without external state.
 type MemoryTuneStore struct {
 	mu      sync.Mutex
@@ -125,12 +126,26 @@ func (m *MemoryTuneStore) Put(_ context.Context, state *TuneState) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.putLocked(state)
+}
+
+func (m *MemoryTuneStore) putLocked(state *TuneState) error {
+	var revision uint64
 	if m.current != nil {
-		m.history = append(m.history, m.current)
-		if len(m.history) > MaxMemoryTuneHistory {
-			m.history = m.history[len(m.history)-MaxMemoryTuneHistory:]
-		}
+		revision = m.current.Revision
 	}
+	if state.Revision != revision {
+		return errors.New("soul tune: concurrent edit; read current state and retry")
+	}
+	if m.current == nil {
+		m.current = &TuneState{}
+	}
+	m.history = append(m.history, m.current)
+	if len(m.history) > MaxMemoryTuneHistory {
+		m.history = m.history[len(m.history)-MaxMemoryTuneHistory:]
+	}
+	state.Revision = revision + 1
+	state.UpdatedAt = time.Now()
 	m.current = state.Clone()
 	return nil
 }
@@ -138,21 +153,54 @@ func (m *MemoryTuneStore) Put(_ context.Context, state *TuneState) error {
 // Rollback promotes a past version to current. steps=1 is the most
 // recent prior version. Promoted state's UpdatedAt is left as-is so
 // rollback is distinguishable from a fresh edit in audit logs.
-func (m *MemoryTuneStore) Rollback(ctx context.Context, steps int) (*TuneState, error) {
+func (m *MemoryTuneStore) Rollback(_ context.Context, steps int) (*TuneState, error) {
 	if steps < 1 {
 		return nil, errors.New("soul tune: steps must be >= 1")
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if len(m.history) < steps {
 		depth := len(m.history)
-		m.mu.Unlock()
 		return nil, fmt.Errorf("soul tune: only %d history entries; cannot rollback %d steps", depth, steps)
 	}
 	idx := len(m.history) - steps
 	picked := m.history[idx].Clone()
-	m.mu.Unlock()
-	if err := m.Put(ctx, picked); err != nil {
+	picked.Revision = m.current.Revision
+	if err := m.putLocked(picked); err != nil {
 		return nil, err
 	}
 	return picked, nil
+}
+
+// Fields names the explicit overrides, in stable order for introspection.
+func (t *TuneState) Fields() []string {
+	var fields []string
+	if t == nil {
+		return fields
+	}
+	if t.Name != nil {
+		fields = append(fields, "name")
+	}
+	if t.Excitement != nil {
+		fields = append(fields, DimExcitement)
+	}
+	if t.Formality != nil {
+		fields = append(fields, DimFormality)
+	}
+	if t.Directness != nil {
+		fields = append(fields, DimDirectness)
+	}
+	if t.Sarcasm != nil {
+		fields = append(fields, DimSarcasm)
+	}
+	if t.Humor != nil {
+		fields = append(fields, DimHumor)
+	}
+	if t.EmojiUsage != nil {
+		fields = append(fields, "emoji_usage")
+	}
+	if t.Fragments != nil {
+		fields = append(fields, "fragments")
+	}
+	return fields
 }

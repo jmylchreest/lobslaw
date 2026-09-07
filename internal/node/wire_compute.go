@@ -96,10 +96,8 @@ func (n *Node) wireCompute() error {
 	n.hooksDisp = hooks.NewDispatcher(hookEvents, n.log)
 
 	// policy.Engine reads rules from the memory store. When policy
-	// function is on another node, we skip engine wiring and the
-	// Executor runs without policy gating (equivalent to default-
-	// allow; deployments wanting strict policy must run the policy
-	// function locally).
+	// function is on another node, soul tools use a remote policy
+	// evaluator. Other tools still require a local engine.
 	if n.store != nil {
 		n.policyEngine = policy.NewEngine(n.store, n.log)
 	}
@@ -123,7 +121,7 @@ func (n *Node) wireCompute() error {
 	// listed and then loses mid-run is worse than one that was never
 	// there — so the only correct moment is here.
 	n.toolRegistry.SetDisabled(disabledToolPatterns(n.cfg.DisabledTools))
-	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
+	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{PolicyFallback: n.remoteSoulPolicy}, n.log)
 	// One store, shared: the channel records "approve for this chat"
 	// and the executor spends it. Two instances would mean the user
 	// approves and is asked again anyway.
@@ -532,6 +530,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Health:               n.providerHealth,
 		Executor:             n.executor,
 		Registry:             n.toolRegistry,
+		SoulSnapshot:         n.soulSnapshot,
 		Soul: func() *types.SoulConfig {
 			s := n.Soul()
 			if s == nil {

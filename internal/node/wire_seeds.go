@@ -61,6 +61,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	// this map.
 	noSeedTools := map[string]bool{
 		"soul_get":              true,
+		"soul_reset":            true,
 		"soul_tune":             true,
 		"soul_fragment_add":     true,
 		"soul_fragment_remove":  true,

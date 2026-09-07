@@ -335,6 +335,8 @@ func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
 // interface because protoc-gen-go emits getters but no setters.
 func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
+	case *lobslawv1.SoulTuneRecord:
+		return p.Revision, true
 	case *lobslawv1.ScheduledTaskRecord:
 		return p.Revision, true
 	case *lobslawv1.AgentCommitment:
@@ -360,6 +362,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
+	case *lobslawv1.SoulTuneRecord:
+		p.Revision = rev
 	case *lobslawv1.ScheduledTaskRecord:
 		p.Revision = rev
 	case *lobslawv1.AgentCommitment:
@@ -588,6 +592,13 @@ type claimable interface {
 // holder's id as expected_claimer.
 func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
+	case BucketSoulTune:
+		var r lobslawv1.SoulTuneRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
+
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -660,7 +671,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
-		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments:
+		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
 		return true
 	default:
 		return false

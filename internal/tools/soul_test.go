@@ -204,3 +204,6 @@ func TestSoulHistoryRollbackExplicitSteps(t *testing.T) {
 		t.Errorf("steps not propagated: got %d", mut.rollbackSteps)
 	}
 }
+
+func (s *stubSoulMutator) Snapshot(context.Context) (soul.Soul, error) { return s.soul, nil }
+func (s *stubSoulMutator) Reset(context.Context, string) error         { return nil }

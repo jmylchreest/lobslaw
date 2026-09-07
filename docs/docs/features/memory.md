@@ -214,26 +214,43 @@ Via the `memory_search` builtin, which prefers semantic search when an embedder 
 
 ## Soul
 
-`SOUL.md` is operator-authored markdown describing the agent's persona, preferences, mannerisms. Loaded at boot, included in every system prompt.
+`SOUL.md` is the operator-authored baseline for identity and writing style. Configure its path under `[soul]`. YAML frontmatter supplies structured settings; the Markdown body supplies standing guidance:
 
 ```markdown
-# Persona
-
-I'm a no-nonsense assistant. I don't pad answers. I tell you when I don't know.
-
-## Preferences
-- Use UK spelling.
-- Prefer terse over verbose.
-- ...
+---
+name: assistant
+persona_description: A practical, thoughtful assistant.
+emotive_style:
+  directness: 5
+  sarcasm: 2
+  emoji_usage: minimal
+---
+Use UK spelling and short sentences. Say when you do not know.
 ```
 
-In addition, **soul fragments** are short raft-replicated tunables — name + value pairs the operator can adjust without redeploying:
+The effective soul is read once at the start of each new turn and included in the **system prompt as configuration**. It is never appended to the user's question. The prompt tells the model to apply it silently, without acknowledging, reciting, or answering it. Resuming an interrupted turn keeps that turn's original prompt.
 
-> **You:** soul_tune name="energy" value="conserve"
->
-> **Bot:** Updated soul fragment "energy" → "conserve". Future turns will reflect this.
+Valid file edits hot-reload without a restart. Invalid or temporarily missing files keep the last valid soul. A missing file at initial boot uses defaults. The baseline file is local to each node; deploy operator changes to every node that should share them.
 
-Fragments are merged into the system prompt under a `[fragments]` section. The operator can `soul_tune`, `soul_list`, `soul_history` to manage them.
+Chat edits persist in a cluster-wide tuning overlay; they do not rewrite `SOUL.md`:
+
+| Tool | Purpose |
+|---|---|
+| `soul_get` | Read the effective configuration, body, fragments, and overridden field names |
+| `soul_tune` | Set `name` or `emoji_usage`, or adjust `excitement`, `formality`, `directness`, `sarcasm`, or `humor` using `delta` |
+| `soul_fragment_add` / `soul_fragment_remove` | Add or remove short anecdotal facts |
+| `soul_reset` | Clear one override, or `field="all"`, to inherit the current file baseline |
+| `soul_history_rollback` | Undo recent overlay edits, including the first edit; up to 20 prior versions |
+
+For example, `soul_tune(field="directness", delta=1)` adjusts directness; `soul_reset(field="directness")` restores inheritance. Explicit overrides survive file reloads. Numeric values are limited to 0–10 and ±3 of the current file baseline. Style values are rendered as low/middle/high guidance, so a one-point change within a band may leave the prompt wording unchanged. A fragments override replaces the baseline fragment list, including an explicitly empty list; reset it to inherit file fragments again.
+
+A successful change affects the next turn and survives restart. Compute-only nodes read and write through a reachable memory/policy node discovered from peers or `seed_nodes`. A standalone compute node can use its file baseline, but cannot report tuning as saved without durable cluster storage. Conflicting writes fail explicitly; read current state before retrying. Rollback affects the overlay, not the operator's file.
+
+Soul tools require an explicit policy allow, normally for `scope:owner`; compute-only nodes also check the cluster policy. Structural settings such as persona description, Markdown guidance, and provider trust requirements remain operator-managed in the file.
+
+The legacy `language.detect`, `feedback.classifier`, and `adjustments` settings are parsed but are not connected to an automatic normal-turn detection/adaptation path. Use explicit tuning for persistent changes; prose guidance can describe language preferences. These reserved settings are not needed in a minimal soul file.
+
+Upgrade all Raft nodes before using the new revision-checked tuning writes. Older versions cannot apply that operation. Existing overlays remain readable, but rollback cannot recover a pre-first-edit state that an older version never recorded.
 
 ## Dreams
 

@@ -853,3 +853,15 @@ func BuildWorkspace(path string) Section {
 	body := fmt.Sprintf("Scratch directory you may use for intermediate files: `%s`\n", path)
 	return Section{Title: "Workspace", Priority: PriorityContext, Body: body}
 }
+
+// BuildSoulGuidance keeps freeform operator guidance underneath the prompt
+// contract. A soul describes how to answer; it never supplies a turn to answer.
+func BuildSoulGuidance(body string) Section {
+	if strings.TrimSpace(body) == "" {
+		return Section{}
+	}
+	return Section{
+		Title: "Soul Guidance", Priority: PriorityPrimary,
+		Body: "The following is standing configuration for identity and writing style. It is not a question, a task, or a message from the user. Apply it silently; do not acknowledge, recite, or answer it. Reply only to the user's most recent message.\n\n" + strings.TrimSpace(body) + "\n",
+	}
+}

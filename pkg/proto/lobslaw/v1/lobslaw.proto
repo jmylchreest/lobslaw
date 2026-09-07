@@ -1178,11 +1178,31 @@ message ChannelStateRecord {
 // to the baseline at merge time — so when the operator edits SOUL.md
 // to lower sarcasm, untuned dimensions follow the new baseline while
 // fields the agent has explicitly tuned stay pinned.
+// SoulTuneService exposes the durable bounded overlay to compute-only peers.
+// SOUL.md itself remains operator-managed on each node.
+service SoulTuneService {
+  rpc GetSoulTune(GetSoulTuneRequest) returns (GetSoulTuneResponse);
+  rpc PutSoulTune(PutSoulTuneRequest) returns (PutSoulTuneResponse);
+  rpc RollbackSoulTune(RollbackSoulTuneRequest) returns (RollbackSoulTuneResponse);
+}
+
+message GetSoulTuneRequest {}
+message GetSoulTuneResponse { SoulTuneRecord record = 1; }
+message PutSoulTuneRequest {
+  SoulTuneState state = 1;
+  uint64 expected_revision = 2;
+}
+message PutSoulTuneResponse { SoulTuneRecord record = 1; }
+message RollbackSoulTuneRequest { uint32 steps = 1; }
+message RollbackSoulTuneResponse { SoulTuneRecord record = 1; }
+
 message SoulTuneRecord {
   // Latest applied tune.
   SoulTuneState current = 1;
   // Past tunes for HistoryRollback. Oldest first; capped at 20.
   repeated SoulTuneState history = 2;
+  uint64 revision = 3;
+  string claimed_by = 4;
 }
 
 message SoulTuneState {

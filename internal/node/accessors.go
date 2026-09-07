@@ -36,9 +36,15 @@ func (n *Node) Scheduler() *scheduler.Scheduler  { return n.scheduler }
 func (n *Node) Storage() *storage.Manager        { return n.storageMgr }
 func (n *Node) StorageService() *storage.Service { return n.storageSvc }
 func (n *Node) SkillRegistry() *skills.Registry  { return n.skillRegistry }
-func (n *Node) Soul() *soul.Soul                 { return n.soul.Load() }
-func (n *Node) Audit() *audit.AuditLog           { return n.auditLog }
-func (n *Node) Discovery() *discovery.Service    { return n.discSvc }
+func (n *Node) Soul() *soul.Soul {
+	if n.soulAdjuster != nil {
+		snapshot := n.soulAdjuster.Soul()
+		return &snapshot
+	}
+	return n.soul.Load()
+}
+func (n *Node) Audit() *audit.AuditLog        { return n.auditLog }
+func (n *Node) Discovery() *discovery.Service { return n.discSvc }
 
 // planServiceOrNil and skillDispatcherOrNil bridge nil-typed-pointers
 // to interface-typed nils — Go's well-known gotcha where a nil *T

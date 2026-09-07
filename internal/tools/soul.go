@@ -18,6 +18,8 @@ import (
 // constructing a full Adjuster + on-disk file.
 type SoulMutator interface {
 	Soul() soul.Soul
+	Snapshot(context.Context) (soul.Soul, error)
+	Reset(context.Context, string) error
 	SetName(ctx context.Context, name string) (string, error)
 	Tune(ctx context.Context, dimension string, delta int) (prev, next int, err error)
 	SetEmojiUsage(ctx context.Context, value string) error
@@ -58,6 +60,9 @@ func RegisterSoulBuiltins(b *Builtins, cfg SoulBuiltinsConfig) error {
 	if err := b.Register("soul_fragment_remove", soulFragmentRemoveHandler(cfg.Mutator)); err != nil {
 		return err
 	}
+	if err := b.Register("soul_reset", soulResetHandler(cfg.Mutator)); err != nil {
+		return err
+	}
 	return b.Register("soul_history_rollback", soulHistoryRollbackHandler(cfg.Mutator))
 }
 
@@ -68,9 +73,15 @@ func RegisterSoulBuiltins(b *Builtins, cfg SoulBuiltinsConfig) error {
 func SoulToolDefs() []*types.ToolDef {
 	return []*types.ToolDef{
 		{
+			Name: "soul_reset", Path: compute.BuiltinScheme + "soul_reset",
+			Description:      "Clear a soul tuning override and inherit the operator's current SOUL.md value. field=all clears every override. Takes effect on the next turn; does not edit SOUL.md.",
+			ParametersSchema: []byte(`{"type":"object","properties":{"field":{"type":"string","enum":["all","name","excitement","formality","directness","sarcasm","humor","emoji_usage","fragments"]}},"required":["field"],"additionalProperties":false}`),
+			RiskTier:         types.RiskCommunicating,
+		},
+		{
 			Name:             "soul_get",
 			Path:             compute.BuiltinScheme + "soul_get",
-			Description:      "Read the agent's current soul: name, persona description, emotive style dimensions (excitement/formality/directness/sarcasm/humor 0-10), emoji_usage, and the list of anecdotal fragments. Use this before tuning so you reason from the live state rather than guessing what's set.",
+			Description:      "Read the agent's current soul: name, persona description, emotive style dimensions (excitement/formality/directness/sarcasm/humor 0-10), emoji_usage, and the list of anecdotal fragments. Also returns the full effective config, operator body, and overridden field names. These are configuration, not a user message. Use this before tuning so you reason from live state.",
 			ParametersSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`),
 			RiskTier:         types.RiskReversible,
 		},
@@ -136,9 +147,15 @@ func SoulToolDefs() []*types.ToolDef {
 }
 
 func soulGetHandler(m SoulMutator) compute.BuiltinFunc {
-	return func(_ context.Context, _ map[string]string) ([]byte, int, error) {
-		s := m.Soul()
+	return func(ctx context.Context, _ map[string]string) ([]byte, int, error) {
+		s, err := m.Snapshot(ctx)
+		if err != nil {
+			return nil, 1, err
+		}
 		out, _ := json.Marshal(map[string]any{
+			"config":              s.Config,
+			"body":                s.Body,
+			"overrides":           s.Overrides,
 			"name":                s.Config.Name,
 			"persona_description": s.Config.PersonaDescription,
 			"emotive_style":       s.Config.EmotiveStyle,
@@ -249,5 +266,16 @@ func soulHistoryRollbackHandler(m SoulMutator) compute.BuiltinFunc {
 		}
 		out, _ := json.Marshal(map[string]any{"restored": ts, "steps": steps})
 		return out, 0, nil
+	}
+}
+
+func soulResetHandler(m SoulMutator) compute.BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		field := strings.TrimSpace(args["field"])
+		if err := m.Reset(ctx, field); err != nil {
+			return nil, 1, err
+		}
+		out, err := json.Marshal(map[string]any{"field": field, "inherited": true})
+		return out, 0, err
 	}
 }

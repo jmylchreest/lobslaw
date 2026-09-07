@@ -122,16 +122,15 @@ func (n *Node) wireSoulRaft() error {
 	loadedSoul := n.soul.Load()
 	soulTuneSvc := memory.NewSoulTuneService(n.raft, n.store)
 	n.soulTuneSvc = soulTuneSvc
+	lobslawv1.RegisterSoulTuneServiceServer(n.server, &soulTuneServer{n: n})
 	adj, err := soul.NewAdjuster(soul.AdjusterConfig{
 		Soul:  loadedSoul,
 		Store: newRaftSoulTuneStore(soulTuneSvc),
 	})
 	if err != nil {
-		// Non-fatal: log + leave Adjuster nil. Downstream
-		// soul builtins notice and skip registration.
-		n.log.Warn("soul: adjuster construction failed; soul_* tools unavailable", "err", err)
-		return nil
+		return fmt.Errorf("load soul overlay: %w", err)
 	}
+
 	n.soulAdjuster = adj
 	n.fsm.SetSoulTuneChangeCallback(func() {
 		// See fsm.go callback contract: under f.mu, must not take
@@ -287,19 +286,19 @@ func (n *Node) wireAuditStage() error {
 
 // wireSoulFallback runs after wireAuditStage (which is "always") to
 // catch the case where wireSoulRaft didn't fire because this node
-// has no raft stack. A compute-only node still needs a working
-// Adjuster — the in-memory store gives it one without replication.
+// has no raft stack. Compute-only nodes use the cluster overlay;
+// a standalone node can read its baseline but cannot persist tuning.
 func (n *Node) wireSoulFallback() error {
 	if n.soulAdjuster != nil {
 		return nil
 	}
 	adj, err := soul.NewAdjuster(soul.AdjusterConfig{
-		Soul:  n.soul.Load(),
-		Store: soul.NewMemoryTuneStore(),
+		Soul:      n.soul.Load(),
+		Store:     &remoteSoulTuneStore{n: n},
+		DeferLoad: true,
 	})
 	if err != nil {
-		n.log.Warn("soul: in-memory adjuster construction failed; soul_* tools unavailable", "err", err)
-		return nil
+		return fmt.Errorf("construct remote soul adjuster: %w", err)
 	}
 	n.soulAdjuster = adj
 	return nil

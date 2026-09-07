@@ -23,7 +23,7 @@ import (
 // personality stays consistent across nodes.
 type Adjuster struct {
 	mu         sync.RWMutex
-	baseline   *Soul      // operator-curated, immutable for the lifetime of the process
+	baseline   *Soul      // operator-curated, replaced under mu on operator reload
 	tune       *TuneState // cached overlay; refreshed on every Put
 	store      TuneStore  // raft-backed in prod, in-memory in tests
 	classifier Classifier
@@ -53,6 +53,8 @@ type AdjusterConfig struct {
 	Store      TuneStore
 	Classifier Classifier
 	Now        func() time.Time
+	// DeferLoad permits remote stores to wait for discovery before their first read.
+	DeferLoad bool
 }
 
 // NewAdjuster wires the Adjuster. Loads the current tune from the
@@ -81,6 +83,9 @@ func NewAdjuster(cfg AdjusterConfig) (*Adjuster, error) {
 		now:             now,
 		baselineEmotive: cfg.Soul.Config.EmotiveStyle,
 		lastAdjusted:    make(map[string]time.Time),
+	}
+	if cfg.DeferLoad {
+		return a, nil
 	}
 	current, err := cfg.Store.Get(context.Background())
 	if err != nil {
@@ -111,19 +116,19 @@ func (a *Adjuster) mergedLocked() Soul {
 		out.Config.Name = *a.tune.Name
 	}
 	if a.tune.Excitement != nil {
-		out.Config.EmotiveStyle.Excitement = *a.tune.Excitement
+		out.Config.EmotiveStyle.Excitement = clamp(*a.tune.Excitement, a.baselineEmotive.Excitement)
 	}
 	if a.tune.Formality != nil {
-		out.Config.EmotiveStyle.Formality = *a.tune.Formality
+		out.Config.EmotiveStyle.Formality = clamp(*a.tune.Formality, a.baselineEmotive.Formality)
 	}
 	if a.tune.Directness != nil {
-		out.Config.EmotiveStyle.Directness = *a.tune.Directness
+		out.Config.EmotiveStyle.Directness = clamp(*a.tune.Directness, a.baselineEmotive.Directness)
 	}
 	if a.tune.Sarcasm != nil {
-		out.Config.EmotiveStyle.Sarcasm = *a.tune.Sarcasm
+		out.Config.EmotiveStyle.Sarcasm = clamp(*a.tune.Sarcasm, a.baselineEmotive.Sarcasm)
 	}
 	if a.tune.Humor != nil {
-		out.Config.EmotiveStyle.Humor = *a.tune.Humor
+		out.Config.EmotiveStyle.Humor = clamp(*a.tune.Humor, a.baselineEmotive.Humor)
 	}
 	if a.tune.EmojiUsage != nil {
 		out.Config.EmotiveStyle.EmojiUsage = *a.tune.EmojiUsage
@@ -131,6 +136,7 @@ func (a *Adjuster) mergedLocked() Soul {
 	if a.tune.Fragments != nil {
 		out.Config.Fragments = append([]string(nil), (*a.tune.Fragments)...)
 	}
+	out.Overrides = a.tune.Fields()
 	return out
 }
 
@@ -143,35 +149,35 @@ func (a *Adjuster) emotiveValueLocked(name string) (current, baseline int, ok bo
 		baseline = a.baselineEmotive.Excitement
 		current = baseline
 		if a.tune != nil && a.tune.Excitement != nil {
-			current = *a.tune.Excitement
+			current = clamp(*a.tune.Excitement, a.baselineEmotive.Excitement)
 		}
 		return current, baseline, true
 	case DimFormality:
 		baseline = a.baselineEmotive.Formality
 		current = baseline
 		if a.tune != nil && a.tune.Formality != nil {
-			current = *a.tune.Formality
+			current = clamp(*a.tune.Formality, a.baselineEmotive.Formality)
 		}
 		return current, baseline, true
 	case DimDirectness:
 		baseline = a.baselineEmotive.Directness
 		current = baseline
 		if a.tune != nil && a.tune.Directness != nil {
-			current = *a.tune.Directness
+			current = clamp(*a.tune.Directness, a.baselineEmotive.Directness)
 		}
 		return current, baseline, true
 	case DimSarcasm:
 		baseline = a.baselineEmotive.Sarcasm
 		current = baseline
 		if a.tune != nil && a.tune.Sarcasm != nil {
-			current = *a.tune.Sarcasm
+			current = clamp(*a.tune.Sarcasm, a.baselineEmotive.Sarcasm)
 		}
 		return current, baseline, true
 	case DimHumor:
 		baseline = a.baselineEmotive.Humor
 		current = baseline
 		if a.tune != nil && a.tune.Humor != nil {
-			current = *a.tune.Humor
+			current = clamp(*a.tune.Humor, a.baselineEmotive.Humor)
 		}
 		return current, baseline, true
 	}
@@ -223,6 +229,9 @@ func (a *Adjuster) Apply(ctx context.Context, utterance string) (*ApplyResult, e
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
+		return nil, err
+	}
 
 	if last, ok := a.lastAdjusted[fb.Dimension]; ok {
 		elapsed := a.now().Sub(last)
@@ -327,4 +336,42 @@ func (a *Adjuster) CooldownRemaining(dimension string) time.Duration {
 		return 0
 	}
 	return cooldown - elapsed
+}
+
+// ReplaceBaseline publishes an operator edit without discarding explicit
+// tuning. Bounds are applied at read time so replicas never rewrite the
+// cluster overlay merely because their local baseline changed.
+func (a *Adjuster) ReplaceBaseline(baseline *Soul) {
+	if baseline == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.baseline = baseline
+	a.baselineEmotive = baseline.Config.EmotiveStyle
+	a.lastAdjusted = make(map[string]time.Time)
+}
+
+// Snapshot refreshes and merges under one lock. Remote stores are read at
+// turn/tool boundaries, so a compute-only node cannot serve a boot snapshot
+// forever or silently use an empty overlay when its cluster is unavailable.
+func (a *Adjuster) Snapshot(ctx context.Context) (Soul, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
+		return Soul{}, err
+	}
+	return a.mergedLocked(), nil
+}
+
+func (a *Adjuster) refreshLocked(ctx context.Context) error {
+	current, err := a.store.Get(ctx)
+	if err != nil {
+		return err
+	}
+	// A follower may briefly serve an older revision after a forwarded write.
+	if a.tune == nil || current != nil && current.Revision >= a.tune.Revision {
+		a.tune = current
+	}
+	return nil
 }

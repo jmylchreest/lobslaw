@@ -53,9 +53,12 @@ Each routes to a provider with the right capability — see [Providers](/configu
 
 | Tool | Risk | Description |
 |---|---|---|
-| `soul_list` | read | List active soul fragments |
-| `soul_tune` | mutating | Set/unset a soul fragment |
-| `soul_history` | read | Past values of a fragment |
+| `soul_get` | read | Effective soul configuration, body, fragments, and override names |
+| `soul_tune` | mutating | Tune name, emoji usage, or a bounded style dimension |
+| `soul_fragment_add` | mutating | Add a short anecdotal fact |
+| `soul_fragment_remove` | mutating | Remove a fragment by substring |
+| `soul_reset` | mutating | Clear an override and inherit the file baseline |
+| `soul_history_rollback` | mutating | Restore a prior tuning overlay |
 
 Sensitive — operator-only by default. See [Memory](/features/memory).
 
