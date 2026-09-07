@@ -1,7 +1,9 @@
 package soul
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/pemistahl/lingua-go"
 
@@ -103,5 +105,16 @@ func TestNewDetectorRespectsConfig(t *testing.T) {
 	}}
 	if _, ok := NewDetector(on).(*LinguaDetector); !ok {
 		t.Error("detect=true should return *LinguaDetector")
+	}
+}
+
+func TestLanguageSampleIsBoundedUTF8(t *testing.T) {
+	message := strings.Repeat("你", MaxLanguageSampleRunes+1)
+	got := LanguageSample(message)
+	if !utf8.ValidString(got) || utf8.RuneCountInString(got) != MaxLanguageSampleRunes {
+		t.Fatal("sample exceeded bound or split a character")
+	}
+	if LanguageSample("  hello  ") != "hello" {
+		t.Fatal("short sample changed")
 	}
 }

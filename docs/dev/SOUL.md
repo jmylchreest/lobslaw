@@ -55,40 +55,53 @@ sequenceDiagram
 | Markdown body | Rendered as standing soul guidance after the prompt contract | Put detailed writing preferences here. It is not a conversation message. |
 | `scope` | Defaults to `default`; rendered as identity metadata | It does not select among souls or establish authorization. Do not mistake it for a confidentiality boundary. |
 | `culture`, `nationality` | Free-form strings rendered as metadata | There is no validated archetype catalogue or deterministic culture-to-style mapping. Precise prose is more predictable than a label. |
-| `language.default` | Defaults to `en`; rendered in identity | The model sees a default-language hint. |
-| `language.detect` | Parsed; the detector library exists but has no normal-turn caller | The flag does not currently select a detected reply language. Prose can request language matching, but that is model guidance, not an implemented detector path. |
+| `language.default` | Defaults to `en`; rendered as a reply-language instruction | The model sees a default-language hint. |
+| `language.detect` | Selects the default reply language once per new turn, using the lazy, reused Lingua detector | Detection samples only the current user message (up to 2,048 characters), never soul text or history; empty/uncertain results fall back to the default. Explicit requests for another language take precedence. |
 | `emotive_style.emoji_usage` | `minimal`, `moderate`, or `generous`; translated into prose instructions | Effective in prompts and explicitly tunable. |
-| Five numeric `emotive_style` fields | Validated as 0–10; rendered in bands: 1–3 low, 4–7 middle, 8–10 high | Zero currently means “unset” in rendering. Changes within a band may produce identical instructions. Directness also gates interim gateway messages. |
+| Five numeric `emotive_style` fields | Validated as 0–10; rendered in bands: 1–3 low, 4–7 middle, 8–10 high | In legacy files zero means “unset”; schema version 1 renders zero in the low band and defaults omitted dimensions to 5. Changes within a band may produce identical instructions. Directness also gates interim gateway messages. |
 | `fragments` | Baseline list, optionally replaced by a persisted overlay list; rendered as contextual facts | An explicit empty overlay clears fragments. Reset restores inheritance. These are cluster-wide, so personal/private facts belong in appropriately scoped memory. |
 | `adjustments.feedback_coefficient`, `cooldown_period` | Used by the library's `Adjuster.Apply`; no normal-turn feedback hook calls it | Explicit `soul_tune` bypasses these controls. Omitting them from a file does not disable explicit tuning. |
 | `feedback.classifier` | Accepted values `llm` and `regex`; default says `llm`, while node wiring supplies no classifier and the adjuster defaults to regex | The advertised LLM feedback mode is not active in normal turns. |
 | `min_trust_tier` | Enforced by provider validation/routing, and rendered as metadata | This is an operational constraint, not just writing style. Agent tuning cannot modify it. |
 
-Language/feedback evidence: `internal/soul/language.go` and `classifier.go` contain implementations, but their constructors and feedback application have no normal-turn wiring in `internal/node` or `internal/compute`. Explicit owner-authorized tuning through model tool calls is a separate, working path.
+Language detection is wired in `internal/compute/agent.go`. Passive feedback application remains unwired by design; ordinary messages must not silently mutate cluster-wide personality. Explicit owner-authorized tuning through model tool calls is a separate, working path.
 
-## Format issues to resolve before expanding it
+## Versioned format (implemented)
 
-1. **Presence versus zero.** Numeric fields use Go zero values. An omitted style dimension and an explicit zero are indistinguishable. Likewise, zero feedback coefficient/cooldown is replaced by defaults. A future schema should track presence and give zero a documented meaning rather than use it for both inheritance and a value.
-2. **Unknown keys are silently ignored.** YAML decoding does not enable known-field checking. A misspelling can look like an accepted edit. Add diagnostics first for compatibility, then strict validation under an explicit schema version. Unknown version numbers should fail rather than silently degrade.
-3. **Validation is incomplete.** The loader checks style ranges and categorical labels, but not all other frontmatter constraints, such as feedback coefficient bounds. Stronger validation should be shared by startup, reload, and doctor, while reload keeps the last valid state.
-4. **The file mixes voice, facts, and operational policy.** Markdown can describe writing style well without new keys. Per-user facts and project state belong in scoped memory; provider trust belongs to deployment policy even though its existing field must remain compatible.
-5. **Some names overpromise.** `scope` does not route souls, and the language/feedback flags suggest runtime behavior that does not exist. Either wire those behaviors with tests or clearly mark them reserved; more fields will not solve that mismatch.
+YAML plus Markdown remains the format. Add `schema_version: 1` to opt into strict known-field validation, including nested keys. Unsupported version numbers fail. Unversioned files retain legacy parsing/defaults, including silently ignored unknown keys and zero-as-unset style dials; enabling an existing `language.detect` flag now activates detection.
 
-## Recommended evolution
+```yaml
+schema_version: 1
+verbosity: concise
+language:
+  default: en
+  detect: true
+  spelling_locale: en-GB
+emotive_style:
+  sarcasm: 0
+  humor: 2
+```
 
-Keep YAML plus Markdown. Avoid a wholesale format replacement or a mandatory migration as part of the wiring repair.
+Wrap that YAML in `---` delimiters and follow it with writing guidance. In version 1, omitted numeric style dimensions default to **5**; explicit **0** means the low end, including “No sarcasm.” This is an opt-in semantic change: when migrating, specify every dimension whose behaviour matters. Zero feedback coefficient/cooldown stays zero; omitted values retain the existing defaults. Version 1 checks coefficient bounds (finite, 0–1) and nonnegative cooldown. Startup, reload and doctor use the same loader; a failed live reload retains the last valid soul.
 
-| Candidate | Recommendation | Why |
-|---|---|---|
-| Optional `schema_version` | Add before introducing incompatible semantics; unversioned files remain legacy-compatible | Enables strict validation and a deliberate fix for zero/presence behavior. The key is a proposal, not implemented by this repair. |
-| Explicit verbosity | Useful next extension: concise/balanced/detailed | Directness controls how an answer opens, not its length. These are different user preferences. |
-| Spelling locale | Useful next extension: e.g. `en-GB` | More precise than inferring spelling from nationality. Distinguish reply language from spelling conventions. |
-| Output-format preference | Consider only when repeated demand exists | Channel formatting already controls Markdown details; a second format authority needs a clear precedence rule. |
-| More personality sliders | Defer | The current sliders already collapse into coarse bands. More apparent precision would overstate the behavior. |
-| Structured projects, user biography, or current tasks | Keep in scoped memory/task records | They change independently of voice and can cause the soul to be mistaken for the topic of the turn. |
-| Automatic feedback adaptation | Separate implementation with explicit opt-in and policy checks | Do not silently turn ordinary user messages into persistent cluster-wide personality edits. |
+New attributes:
 
-Any new style field must render into the existing configuration section, have defined precedence with prose and channel rules, be visible through introspection, and have a provider-request test proving it never becomes user-message content. No proposed schema keys are added by this repair.
+| Attribute | Values and behaviour |
+|---|---|
+| `schema_version` | Omit for legacy semantics, or `1` for strict validation and versioned defaults. |
+| `verbosity` | `concise`, `balanced`, `detailed`; version 1 defaults to `balanced`. Controls explanatory detail independently of directness. |
+| `language.spelling_locale` | Valid language tag, e.g. `en-GB`. Applies spelling conventions when writing that language; does not force a reply-language switch. |
+
+These new fields are **operator file settings**, visible in `soul_get.config` and hot-reloaded. They are not additional `soul_tune`/`soul_reset` fields. The persisted overlay continues to support its existing bounded dimensions, emoji, name and fragments. All new settings render as system configuration; provider-request tests verify the user question is unchanged.
+
+Explicit user requests for length, language, spelling or format take precedence over style defaults. Channel formatting and operational policy retain their existing priority. Keep Markdown consistent with structured fields; prose is flexible guidance, not a second machine-enforced schema.
+
+## Deliberate limits
+
+- Automatic feedback adaptation stays disabled. `feedback.classifier` and `adjustments` configure the library path, not an active normal-turn feature. A future activation needs explicit opt-in and policy checks.
+- `scope` remains metadata, not soul routing or an authorization boundary.
+- User biography, project state and current tasks belong in scoped memory/task records, not shared personality prose.
+- Further personality sliders and output-format preferences are deferred until there is a concrete need. Current sliders already collapse into broad instruction bands.
 
 ## Deployment and compatibility
 

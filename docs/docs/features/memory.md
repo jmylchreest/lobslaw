@@ -218,6 +218,12 @@ Via the `memory_search` builtin, which prefers semantic search when an embedder 
 
 ```markdown
 ---
+schema_version: 1
+verbosity: concise
+language:
+  default: en
+  detect: true
+  spelling_locale: en-GB
 name: assistant
 persona_description: A practical, thoughtful assistant.
 emotive_style:
@@ -248,7 +254,13 @@ A successful change affects the next turn and survives restart. Compute-only nod
 
 Soul tools require an explicit policy allow, normally for `scope:owner`; compute-only nodes also check the cluster policy. Structural settings such as persona description, Markdown guidance, and provider trust requirements remain operator-managed in the file.
 
-The legacy `language.detect`, `feedback.classifier`, and `adjustments` settings are parsed but are not connected to an automatic normal-turn detection/adaptation path. Use explicit tuning for persistent changes; prose guidance can describe language preferences. These reserved settings are not needed in a minimal soul file.
+`schema_version: 1` opts into strict key checking and explicit-zero semantics. Omitted numeric style fields default to 5; zero is a low score (e.g. `sarcasm: 0` means no sarcasm). Unversioned files retain legacy defaults and zero-as-unset rendering. Unknown versions fail validation.
+
+`verbosity` accepts `concise`, `balanced` (the version 1 default), or `detailed`. `language.spelling_locale`, such as `en-GB`, controls spelling without changing reply language. These fields are operator-managed file settings, visible under `soul_get.config`; they are not new chat-tuning fields. Explicit user requests override these style defaults.
+
+`language.detect: true` now detects the current question's language once per new turn, falling back to `language.default` when uncertain. It never classifies soul guidance or recalled history. Detection uses the existing ten-language Lingua set (English, Spanish, French, German, Italian, Portuguese, Dutch, Russian, Chinese and Japanese).
+
+`feedback.classifier` and `adjustments` remain library configuration with no automatic normal-turn adaptation. Use explicit tuning for persistent changes; ordinary questions do not silently change the shared personality.
 
 Upgrade all Raft nodes before using the new revision-checked tuning writes. Older versions cannot apply that operation. Existing overlays remain readable, but rollback cannot recover a pre-first-edit state that an older version never recorded.
 

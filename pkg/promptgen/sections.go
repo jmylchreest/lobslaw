@@ -193,11 +193,33 @@ func BuildPersonality(soul *types.SoulConfig, tools []ToolInfo) Section {
 	}
 
 	var lines []string
+	switch soul.Verbosity {
+	case types.VerbosityConcise:
+		lines = append(lines, "Keep replies concise; include the detail needed to answer the question.")
+	case types.VerbosityBalanced:
+		lines = append(lines, "Match the amount of explanation to the task; give useful context without padding.")
+	case types.VerbosityDetailed:
+		lines = append(lines, "Explain thoroughly, with supporting reasoning and examples where useful.")
+	}
+	if soul.Language.Default != "" {
+		lines = append(lines, fmt.Sprintf("Use %s as the reply language unless the user explicitly requests another language.", soul.Language.Default))
+	}
+	if soul.Language.SpellingLocale != "" {
+		lines = append(lines, fmt.Sprintf("Use %s spelling conventions when writing in that language; this does not change the reply language.", soul.Language.SpellingLocale))
+	}
+	if soul.Verbosity != "" || soul.Language.SpellingLocale != "" {
+		lines = append(lines, "Follow explicit user requests for length, format or spelling over these defaults. Apply these preferences silently.")
+	}
 	if l := emojiRule(soul.EmotiveStyle.EmojiUsage); l != "" {
 		lines = append(lines, l)
 	}
 	for _, d := range styleDials {
-		if l := d.rule(dialValue(soul.EmotiveStyle, d.name)); l != "" {
+		value := dialValue(soul.EmotiveStyle, d.name)
+		band := bandFor(value)
+		if soul.SchemaVersion == types.SoulSchemaVersion && value == 0 {
+			band = bandLow
+		}
+		if l := d.rule(band); l != "" {
 			lines = append(lines, l)
 		}
 	}
@@ -243,10 +265,10 @@ func bandFor(v int) styleBand {
 // switched so adding a dimension is one entry and cannot forget a band.
 var styleDials = []struct {
 	name string
-	rule func(int) string
+	rule func(styleBand) string
 }{
-	{"formality", func(v int) string {
-		switch bandFor(v) {
+	{"formality", func(band styleBand) string {
+		switch band {
 		case bandLow:
 			return "Write casually — contractions, plain words, no corporate register."
 		case bandMid:
@@ -256,8 +278,8 @@ var styleDials = []struct {
 		}
 		return ""
 	}},
-	{"directness", func(v int) string {
-		switch bandFor(v) {
+	{"directness", func(band styleBand) string {
+		switch band {
 		case bandLow:
 			return "Ease into things. Give the context before the conclusion and soften a hard edge rather than leading with it."
 		case bandMid:
@@ -267,8 +289,8 @@ var styleDials = []struct {
 		}
 		return ""
 	}},
-	{"humor", func(v int) string {
-		switch bandFor(v) {
+	{"humor", func(band styleBand) string {
+		switch band {
 		case bandLow:
 			return "Play it straight; humour is not part of your register."
 		case bandMid:
@@ -278,8 +300,8 @@ var styleDials = []struct {
 		}
 		return ""
 	}},
-	{"sarcasm", func(v int) string {
-		switch bandFor(v) {
+	{"sarcasm", func(band styleBand) string {
+		switch band {
 		case bandLow:
 			return "No sarcasm."
 		case bandMid:
@@ -289,8 +311,8 @@ var styleDials = []struct {
 		}
 		return ""
 	}},
-	{"excitement", func(v int) string {
-		switch bandFor(v) {
+	{"excitement", func(band styleBand) string {
+		switch band {
 		case bandLow:
 			return "Stay level. No exclamation marks and no performed enthusiasm."
 		case bandMid:

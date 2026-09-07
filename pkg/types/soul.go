@@ -5,10 +5,12 @@ import "time"
 // SoulConfig is the YAML frontmatter of SOUL.md. The freeform
 // markdown body is loaded alongside, separately.
 type SoulConfig struct {
-	Name        string `yaml:"name" json:"name"`
-	Scope       string `yaml:"scope" json:"scope"`
-	Culture     string `yaml:"culture" json:"culture"`
-	Nationality string `yaml:"nationality" json:"nationality"`
+	SchemaVersion int    `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
+	Verbosity     string `yaml:"verbosity,omitempty" json:"verbosity,omitempty"`
+	Name          string `yaml:"name" json:"name"`
+	Scope         string `yaml:"scope" json:"scope"`
+	Culture       string `yaml:"culture" json:"culture"`
+	Nationality   string `yaml:"nationality" json:"nationality"`
 
 	Language Language `yaml:"language" json:"language"`
 
@@ -33,9 +35,19 @@ type SoulConfig struct {
 // Language controls which language the agent replies in. When Detect
 // is set, the incoming message's language wins over Default.
 type Language struct {
-	Default string `yaml:"default" json:"default"`
-	Detect  bool   `yaml:"detect" json:"detect"`
+	Default        string `yaml:"default" json:"default"`
+	Detect         bool   `yaml:"detect" json:"detect"`
+	SpellingLocale string `yaml:"spelling_locale,omitempty" json:"spelling_locale,omitempty"`
 }
+
+// SoulSchemaVersion opts into strict decoding and explicit-zero style scores.
+const (
+	SoulSchemaVersion = 1
+	SoulNeutralScore  = 5
+	VerbosityConcise  = "concise"
+	VerbosityBalanced = "balanced"
+	VerbosityDetailed = "detailed"
+)
 
 // EmotiveStyle scores the soul on numeric dimensions (0-10) plus
 // emoji_usage as "minimal" | "moderate" | "generous". Dynamic

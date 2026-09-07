@@ -7,6 +7,22 @@ import (
 	"github.com/pemistahl/lingua-go"
 )
 
+// MaxLanguageSampleRunes bounds the per-turn cost of language detection.
+const MaxLanguageSampleRunes = 2048
+
+// LanguageSample bounds detector work without splitting UTF-8 characters.
+func LanguageSample(message string) string {
+	message = strings.TrimSpace(message)
+	n := 0
+	for i := range message {
+		if n == MaxLanguageSampleRunes {
+			return message[:i]
+		}
+		n++
+	}
+	return message
+}
+
 // Detector is the narrow language-detection interface the agent
 // uses. Narrow so tests can substitute a fake without pulling
 // lingua-go into their import graph, and so the production
