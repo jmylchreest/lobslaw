@@ -229,6 +229,36 @@ func TestProcessBundleRealGogBundle(t *testing.T) {
 	}
 }
 
+// TestSyntheticManifestIncludesVersion checks the manifest bytes
+// directly, independent of ParseWithPolicy, so a future change to
+// validateManifest's rules can't mask a regression in the writer.
+func TestSyntheticManifestIncludesVersion(t *testing.T) {
+	skillMD := `---
+name: versionless
+---
+
+body
+`
+	bundle := makeZipBundle(t, map[string][]byte{"SKILL.md": []byte(skillMD)})
+	dir := t.TempDir()
+	if _, err := ProcessBundle(bundle, dir); err != nil {
+		t.Fatalf("ProcessBundle: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Version string `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parse synthetic manifest: %v", err)
+	}
+	if m.Version != "0.0.0" {
+		t.Errorf("version: got %q, want 0.0.0", m.Version)
+	}
+}
+
 func TestProcessBundleClawhubNoBinsNoSpecs(t *testing.T) {
 	skillMD := `---
 name: prose-only

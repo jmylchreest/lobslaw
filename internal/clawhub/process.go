@@ -201,8 +201,14 @@ func readManifestName(path string) (string, error) {
 // from the install dir at turn time.
 func writeSyntheticManifest(stagingDir string, fm *SkillFrontmatter, cb ClawdbotMetadata) error {
 	manifest := syntheticManifest{
-		SchemaVersion:  1,
-		Name:           fm.Name,
+		SchemaVersion: 1,
+		Name:          fm.Name,
+		// SKILL.md frontmatter has no version field, and validateManifest
+		// rejects an empty one, so without this the skill fails to LOAD,
+		// not merely to export. A fixed literal rather than a content
+		// digest: the local signing path signs these raw bytes, so a
+		// version that moved with every edit would break every signature.
+		Version:        "0.0.0",
 		Description:    fm.Description,
 		Runtime:        "bash",
 		Handler:        "handler.sh",
@@ -252,6 +258,7 @@ func writeSyntheticManifest(stagingDir string, fm *SkillFrontmatter, cb Clawdbot
 type syntheticManifest struct {
 	SchemaVersion  int             `yaml:"schema_version"`
 	Name           string          `yaml:"name"`
+	Version        string          `yaml:"version"`
 	Description    string          `yaml:"description,omitempty"`
 	Runtime        string          `yaml:"runtime"`
 	Handler        string          `yaml:"handler"`
