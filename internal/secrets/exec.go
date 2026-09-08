@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -45,8 +44,19 @@ const pathPlaceholder = "{{path}}"
 // only covers descendants still holding the write end.
 const execWaitDelay = 2 * time.Second
 
-// execOptionKeys are the options this driver understands.
-var execOptionKeys = []string{"trim_whitespace"}
+// subprocessOptionKeys configure the child process rather than the
+// vault, so EVERY command-backed driver understands them, including the
+// compiled vendor ones.
+//
+// Kept in one place because they drifted: the vendor factories validated
+// only their own keys, so `env_passthrough` was refused at boot on
+// exactly the two drivers whose CLIs are most likely to need an unusual
+// variable, while the documentation offered it as the migration path.
+// `trim_whitespace` had the same gap.
+var subprocessOptionKeys = []string{"trim_whitespace", "env_passthrough"}
+
+// execOptionKeys are the options the generic exec driver understands.
+var execOptionKeys = subprocessOptionKeys
 
 // ExecFactory builds the generic command-backed provider.
 func ExecFactory(cfg ProviderConfig) (Provider, error) {
@@ -59,10 +69,20 @@ func ExecFactory(cfg ProviderConfig) (Provider, error) {
 			`secrets: provider %q: driver = "exec" needs command, e.g. command = ["pass", "show", "%s"]`,
 			cfg.Label, pathPlaceholder)
 	}
-	return newExecProvider(cfg), nil
+	return newExecProvider(cfg, vendorEnv{})
 }
 
-func newExecProvider(cfg ProviderConfig) *execProvider {
+// newExecProvider builds the command-backed provider.
+//
+// vendor is contributed by the caller, not the operator: a vendor driver
+// knows which variables its own CLI authenticates with and adds them, so
+// the `export BW_SESSION` and `op signin` workflows its error hints
+// recommend keep working without every operator listing them by hand.
+//
+// Returns an error because env_passthrough is validated here, and a bad
+// value should be a boot failure naming the setting rather than a
+// provider that silently sees less than the operator configured.
+func newExecProvider(cfg ProviderConfig, vendor vendorEnv) (*execProvider, error) {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = DefaultFetchTimeout
@@ -75,21 +95,34 @@ func newExecProvider(cfg ProviderConfig) *execProvider {
 		// a way nothing reports usefully.
 		trim = false
 	}
+	passthrough, err := parseEnvPassthrough(cfg.Label, option(cfg.Options, "env_passthrough"))
+	if err != nil {
+		return nil, err
+	}
 	return &execProvider{
-		label:   cfg.Label,
-		argv:    append([]string(nil), cfg.Command...),
-		env:     cfg.Env,
+		label: cfg.Label,
+		argv:  append([]string(nil), cfg.Command...),
+		env:   cfg.Env,
+		envAllow: vendorEnv{
+			names:    append(append([]string(nil), vendor.names...), passthrough...),
+			prefixes: vendor.prefixes,
+		},
 		timeout: timeout,
 		trim:    trim,
-	}
+	}, nil
 }
 
 type execProvider struct {
-	label   string
-	argv    []string
-	env     map[string]string
-	timeout time.Duration
-	trim    bool
+	label string
+	argv  []string
+	env   map[string]string
+	// envAllow extends baseEnvAllowlist for this provider only: the
+	// vendor driver's own credential variables and prefixes, plus
+	// whatever the operator named in env_passthrough. Operator names go
+	// in names, never prefixes.
+	envAllow vendorEnv
+	timeout  time.Duration
+	trim     bool
 }
 
 func (p *execProvider) Fetch(ctx context.Context, path string) (string, error) {
@@ -109,7 +142,7 @@ func (p *execProvider) Fetch(ctx context.Context, path string) (string, error) {
 	// against a 150ms timeout before this line existed, which on a
 	// boot-time resolve is a node that appears to hang.
 	cmd.WaitDelay = execWaitDelay
-	cmd.Env = mergedEnv(p.env)
+	cmd.Env = allowedEnv(p.env, p.envAllow)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -187,28 +220,6 @@ func substitutePath(argv []string, path string) []string {
 	}
 	if !found {
 		out = append(out, path)
-	}
-	return out
-}
-
-// mergedEnv is the process environment plus the provider's own.
-//
-// Inherited rather than replaced because these CLIs need it: `pass`
-// reads GNUPGHOME and HOME, `op` reads its own config directory, and a
-// provider started with an empty environment fails in ways that look
-// like the vault is broken.
-func mergedEnv(extra map[string]string) []string {
-	if len(extra) == 0 {
-		return os.Environ()
-	}
-	out := append([]string(nil), os.Environ()...)
-	keys := make([]string, 0, len(extra))
-	for k := range extra {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		out = append(out, k+"="+extra[k])
 	}
 	return out
 }

@@ -37,7 +37,9 @@ const (
 	opAuthHint   = "run `op signin`, or set OP_SERVICE_ACCOUNT_TOKEN in the provider's env block"
 )
 
-var bitwardenOptionKeys = []string{"field"}
+// Vendor drivers understand their own options plus the ones that
+// configure the subprocess, which every command-backed driver shares.
+var bitwardenOptionKeys = append([]string{"field"}, subprocessOptionKeys...)
 
 // BitwardenFactory builds a provider over the `bw` CLI.
 //
@@ -58,7 +60,10 @@ func BitwardenFactory(cfg ProviderConfig) (Provider, error) {
 	if len(cfg.Command) == 0 {
 		cfg.Command = []string{"bw", "get", field, pathPlaceholder}
 	}
-	inner := newExecProvider(cfg)
+	inner, err := newExecProvider(cfg, bitwardenEnv)
+	if err != nil {
+		return nil, err
+	}
 	return &vendorProvider{
 		inner: inner,
 		label: cfg.Label,
@@ -71,7 +76,7 @@ func BitwardenFactory(cfg ProviderConfig) (Provider, error) {
 	}, nil
 }
 
-var onePasswordOptionKeys = []string{"account"}
+var onePasswordOptionKeys = append([]string{"account"}, subprocessOptionKeys...)
 
 // OnePasswordFactory builds a provider over the `op` CLI.
 //
@@ -91,7 +96,10 @@ func OnePasswordFactory(cfg ProviderConfig) (Provider, error) {
 		}
 		cfg.Command = append(cfg.Command, "op://"+pathPlaceholder)
 	}
-	inner := newExecProvider(cfg)
+	inner, err := newExecProvider(cfg, onePasswordEnv)
+	if err != nil {
+		return nil, err
+	}
 	return &vendorProvider{
 		inner: inner,
 		label: cfg.Label,
