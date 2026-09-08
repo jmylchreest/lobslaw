@@ -125,6 +125,9 @@ func (c *Config) Validate() error {
 	if err := validateSearchProviders(c.Compute); err != nil {
 		return err
 	}
+	if err := validateChainTriggers(c.Compute); err != nil {
+		return err
+	}
 	if err := validateSecretProviders(c.Secrets); err != nil {
 		return err
 	}
@@ -287,6 +290,32 @@ func validateSecretProviders(c SecretsConfig) error {
 							"(env holds non-secret settings like a config directory or CA path)",
 						types.ErrInvalidConfig, p.Label, k, v)
 				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateChainTriggers rejects a trigger.domains entry that declares
+// nothing.
+//
+// The domains in force are the union of every trigger's, and that union
+// is the list the preflight is told to choose from, so an empty entry is
+// not merely ignored: it makes the rule narrower than what is written.
+// On a trigger that also sets min_complexity it changes the rule from
+// "this complexity AND this subject" to complexity alone, which is a
+// chain firing on turns the operator excluded.
+//
+// Case and surrounding space are NOT rejected: both sides normalise, so
+// "Legal" and " legal " are the tag they look like.
+func validateChainTriggers(c ComputeConfig) error {
+	for _, ch := range c.Chains {
+		for _, d := range ch.Trigger.Domains {
+			if strings.TrimSpace(d) == "" {
+				return fmt.Errorf("%w: chain %q has an empty entry in trigger.domains; "+
+					"a domain is a subject tag the preflight is offered and a chain routes on, "+
+					"so an empty one narrows the rule instead of widening it",
+					types.ErrInvalidConfig, ch.Label)
 			}
 		}
 	}
