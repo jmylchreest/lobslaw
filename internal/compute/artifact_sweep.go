@@ -77,7 +77,7 @@ func sweepGenerated(root string, cfg ArtifactRetention) {
 		pct = 100
 	}
 
-	dir := filepath.Join(root, generatedDir)
+	dir := filepath.Join(root, GeneratedDir)
 	total, err := filesystemBytes(dir)
 	if err != nil {
 		log.Warn("artifact: cannot size the filesystem; skipping the sweep",

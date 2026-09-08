@@ -12,7 +12,7 @@ import (
 // test can state the order the sweep should remove them in.
 func writeAged(t *testing.T, root, name string, size int, age time.Duration) string {
 	t.Helper()
-	dir := filepath.Join(root, generatedDir)
+	dir := filepath.Join(root, GeneratedDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
