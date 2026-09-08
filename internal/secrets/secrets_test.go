@@ -270,6 +270,100 @@ func TestVendorDriversAllowTheirOwnCredentialVars(t *testing.T) {
 	})
 }
 
+// `op signin` exports a per-account session variable, and opAuthHint tells
+// operators to run it. The name is not fixed: 1Password v1 exports
+// OP_SESSION_<shorthand>, so an exact-match allowlist cannot cover it.
+func TestOnePasswordKeepsInteractiveSessionVars(t *testing.T) {
+	stubBin(t, "op", `printenv | sort | tr '\n' ';'`)
+	t.Setenv("OP_SESSION_myaccount", "signin-session")
+	t.Setenv("OP_SESSION", "bare-session")
+	t.Setenv("UNRELATED_SECRET", "not-wanted")
+
+	p := mustProvider(t, OnePasswordFactory, ProviderConfig{Label: "op"})
+	got, err := p.Fetch(context.Background(), "Private/Item/field")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	for _, want := range []string{"OP_SESSION_myaccount=signin-session", "OP_SESSION=bare-session"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s did not reach the subprocess; `op signin` is what opAuthHint recommends", want)
+		}
+	}
+	if strings.Contains(got, "UNRELATED_SECRET") {
+		t.Error("a prefix rule must not reopen the whole environment")
+	}
+}
+
+// A driver-contributed prefix is code, reviewed once. env_passthrough is
+// operator input and stays exact-match, so nobody can write OP_* or
+// SECRET_* and reinstate wholesale inheritance.
+//
+// Refused at boot rather than matched literally: matching literally
+// would be safe but silent, and a setting that parses and then does
+// nothing is the failure this package's option validation exists to
+// prevent.
+func TestEnvPassthroughRefusesPatterns(t *testing.T) {
+	t.Parallel()
+
+	for _, pattern := range []string{"PREFIXED_*", "*", "OP_SESSION_?", "SECRET_[AB]"} {
+		_, err := ExecFactory(ProviderConfig{
+			Label: "v", Command: []string{"true"},
+			Options: map[string]string{"env_passthrough": pattern},
+		})
+		if err == nil {
+			t.Errorf("env_passthrough %q should be refused at boot, not silently matched", pattern)
+			continue
+		}
+		if !strings.Contains(err.Error(), "env_passthrough") {
+			t.Errorf("the error should name the setting; got %v", err)
+		}
+	}
+
+	// An ordinary comma-separated list still parses.
+	if _, err := ExecFactory(ProviderConfig{
+		Label: "v", Command: []string{"true"},
+		Options: map[string]string{"env_passthrough": "PASSWORD_STORE_DIR, GNUPGHOME"},
+	}); err != nil {
+		t.Errorf("a plain name list should be accepted; got %v", err)
+	}
+}
+
+// env_passthrough is the documented migration for a variable the
+// allowlist does not know about. It has to work on the vendor drivers
+// too, which is where a wrapper script or an unusual CLI setting is most
+// likely to need it.
+func TestVendorDriversAcceptEnvPassthrough(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bin  string
+		f    Factory
+		path string
+	}{
+		{"bitwarden", "bw", BitwardenFactory, "app/key"},
+		{"onepassword", "op", OnePasswordFactory, "Private/Item/field"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubBin(t, tc.bin, `printenv | sort | tr '\n' ';'`)
+			t.Setenv("VAULT_EXTRA_FLAG", "wanted")
+
+			p, err := tc.f(ProviderConfig{
+				Label:   tc.name,
+				Options: map[string]string{"env_passthrough": "VAULT_EXTRA_FLAG"},
+			})
+			if err != nil {
+				t.Fatalf("factory rejected env_passthrough: %v", err)
+			}
+			got, err := p.Fetch(context.Background(), tc.path)
+			if err != nil {
+				t.Fatalf("fetch: %v", err)
+			}
+			if !strings.Contains(got, "VAULT_EXTRA_FLAG=wanted") {
+				t.Error("env_passthrough had no effect on the vendor driver")
+			}
+		})
+	}
+}
+
 // The reason bitwarden and onepassword are compiled drivers rather than
 // exec blocks: the CLI's own words do not tell an operator what to do.
 func TestVendorDriversTranslateTheirFailures(t *testing.T) {
