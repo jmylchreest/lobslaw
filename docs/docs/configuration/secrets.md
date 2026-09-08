@@ -1,6 +1,6 @@
 ---
 title: Secrets
-description: Resolve keys and tokens from Bitwarden, 1Password, or any local vault instead of the node's own disk.
+description: Resolve keys and tokens from Bitwarden, 1Password, the desktop keyring, or any local vault instead of the node's own disk.
 ---
 
 # Secrets
@@ -32,13 +32,87 @@ label       = "openrouter"
 api_key_ref = "bw:lobslaw/openrouter"     # ← the vault, not the disk
 ```
 
-Three drivers ship:
+Four drivers ship:
 
-| `driver`      | Backend      | Notes                                                                    |
-| ------------- | ------------ | ------------------------------------------------------------------------ |
-| `bitwarden`   | the `bw` CLI | defaults to the item's `password` field; `options.field` selects another |
-| `onepassword` | the `op` CLI | path is `vault/item/field` — the `op://` URI without its scheme          |
-| `exec`        | any command  | the long tail: `pass`, `gopass`, `sops`, `age`, `systemd-creds`          |
+| `driver`        | Backend                   | Notes                                                                         |
+| --------------- | ------------------------- | ----------------------------------------------------------------------------- |
+| `bitwarden`     | the `bw` CLI              | defaults to the item's `password` field; `options.field` selects another      |
+| `onepassword`   | the `op` CLI              | path is `vault/item/field` — the `op://` URI without its scheme               |
+| `secretservice` | `org.freedesktop.secrets` | gnome-keyring, KWallet, KeePassXC, rosec. Linux only, and no binary on `PATH` |
+| `exec`          | any command               | the long tail: `pass`, `gopass`, `sops`, `age`, `systemd-creds`               |
+
+### The desktop keyring
+
+`secretservice` speaks `org.freedesktop.secrets` over D-Bus, in process. It takes no options and no `command`:
+
+```toml
+[[secrets.providers]]
+label  = "rosec"
+driver = "secretservice"
+
+[[compute.providers]]
+label       = "openrouter"
+api_key_ref = "rosec:lobslaw/openrouter"
+```
+
+One driver, not one vendor. `org.freedesktop.secrets` is the Linux desktop standard, so the same driver reaches **gnome-keyring**, **KWallet**, **KeePassXC** and [**rosec**](https://github.com/jmylchreest/rosec) through the same interface. Whichever one is running in your session is the one it talks to.
+
+It needs no CLI inside whatever runs lobslaw. `exec` needs the vault's binary on `PATH`, which is an install to keep in step with the image; a D-Bus client needs a socket, which is a mount.
+
+#### The reference shape
+
+The path is split on the **last `/`** into the two attributes an item is stored under:
+
+| Reference                       | Service        | Item         |
+| ------------------------------- | -------------- | ------------ |
+| `rosec:lobslaw/openrouter`      | `lobslaw`      | `openrouter` |
+| `rosec:lobslaw/prod/openrouter` | `lobslaw/prod` | `openrouter` |
+| `rosec:openrouter`              | `rosec`        | `openrouter` |
+
+Last rather than first, because the item is the leaf: `lobslaw/prod/openrouter` means the `openrouter` key under the `lobslaw/prod` service, not an item called `prod/openrouter`.
+
+A path with no `/` takes the provider's own **label** as the service, which is the shape a single-application store has. A leading or trailing `/` is refused at boot with an error naming the shape, rather than searching for an item whose name is the empty string.
+
+This is the same `vendor:path/name` shape as `bw:lobslaw/openrouter`, so a reference reads the same however it resolves.
+
+Store an item with whatever your keyring provides. With `secret-tool`, from `libsecret`:
+
+```bash
+secret-tool store --label="lobslaw openrouter" service lobslaw username openrouter
+```
+
+Both attribute names matter: `service` and `username` are what the lookup searches on.
+
+#### When it does not work
+
+| What you see                                             | What it means                                                      | The fix                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `DBUS_SESSION_BUS_ADDRESS is unset or points at nothing` | no session bus, which is a container's default state               | bind-mount the bus socket, below. This is refused at **boot**, not at the first key |
+| `nothing on it is serving org.freedesktop.secrets`       | the bus is there, no keyring is                                    | start one in the same session: `gnome-keyring-daemon`, `kwalletd`, `rosec`          |
+| `the collection is locked`                               | the keyring needs unlocking, and a prompt was dismissed or ignored | unlock it before lobslaw starts. `rosec unlock`, or answer the desktop's own prompt |
+| `no item matched service "x", user "y"`                  | usually the wrong split, occasionally a locked collection          | the error prints the split it derived; check that against the table above           |
+| `needs the org.freedesktop.secrets D-Bus interface`      | the node is macOS or Windows                                       | use `exec` with a platform CLI, e.g. `security find-generic-password` on macOS      |
+
+The last one is refused rather than quietly working. The library underneath falls back to the macOS Keychain and to Windows Credential Manager, so `driver = "secretservice"` **could** have read a different store on every platform. One config line meaning three different vaults depending on where it landed is worse than an error saying so at startup.
+
+A locked collection raises a prompt, and on a headless node there is nothing to raise it to. The fetch is bounded by the provider's `timeout` (default 15s) so a boot fails rather than hanging, and the error names unlocking as the likely cause.
+
+`env`, `secret_env` and `command` are **refused at boot** on this driver. It spawns no process, so all three would parse cleanly and configure nothing. `DBUS_SESSION_BUS_ADDRESS` is read from lobslaw's own environment, which is not filtered by the subprocess allowlist described below, because there is no subprocess.
+
+#### Reaching a host keyring from a container
+
+**A container has no session bus.** `DBUS_SESSION_BUS_ADDRESS` is not set inside `deploy/podman`, and there is no bus behind it if you set it. Reaching the host's keyring means bind-mounting the socket:
+
+```
+--volume $XDG_RUNTIME_DIR/bus:/run/user/1000/bus
+--env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+```
+
+**That hands the container your entire Secret Service, not one item.** Every collection, every item, every application's stored credential, plus the write and delete methods. There is no way to scope the mount to one service or one item, because the scoping unit on that interface is the collection and the bus socket is below it.
+
+So this is a **desktop or laptop node feature first**, where lobslaw runs inside the session that owns the keyring and the reach is the reach the user already has.
+
+For a container, **`exec` plus a CLI stays the documented option.** Its reach is the same in principle, but its blast radius is narrower in practice: the argv names one item, the process gets an [allowlisted environment](#what-the-subprocess-can-see), and it cannot enumerate or delete anything the command does not ask for. A bus socket has no such edge.
 
 ### Any local vault
 

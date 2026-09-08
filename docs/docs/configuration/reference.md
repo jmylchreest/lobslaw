@@ -363,7 +363,7 @@ main = "openrouter"
 # anywhere "env:APP_KEY" does. See /configuration/secrets.
 [[secrets.providers]]
 label  = "bw"
-driver = "bitwarden"                          # or onepassword, or exec
+driver = "bitwarden"                          # or onepassword, secretservice, or exec
 env        = { BW_CONFIG_DIR = "/etc/lobslaw/bw" }  # plaintext
 secret_env = { BW_SESSION = "env:BW_SESSION" }      # refs; the vault's own credential stays on env:/file:
 
@@ -371,6 +371,14 @@ secret_env = { BW_SESSION = "env:BW_SESSION" }      # refs; the vault's own cred
 label   = "pass"
 driver  = "exec"
 command = ["pass", "show", "{{path}}"]
+
+# org.freedesktop.secrets over D-Bus: gnome-keyring, KWallet, KeePassXC
+# or rosec, with no CLI on PATH. Linux only, takes no options, and a
+# container needs the session bus socket bind-mounted before it can
+# reach a host keyring. See /configuration/secrets.
+[[secrets.providers]]
+label  = "rosec"
+driver = "secretservice"
 
 [compute.web_search]
 # Ordered failover chain, naming [[compute.search_providers]] labels.
