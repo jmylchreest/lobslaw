@@ -218,6 +218,12 @@ func (j *Judge) Judge(ctx context.Context, text string, explicit Hint) Judgment 
 	return judgment
 }
 
+// maxOutOfVocabularyToReport bounds how many discarded tags this
+// warning names. A constant of its own, distinct from maxDomains: that
+// one bounds the routing key, this one bounds a log line, and raising
+// either must not silently change the other.
+const maxOutOfVocabularyToReport = 3
+
 // reportOutOfVocabulary says, once, that the model is answering outside
 // the list it was given.
 //
@@ -383,11 +389,11 @@ func normaliseDomain(s string) string {
 
 // normaliseDomains lowercases, trims, and drops blanks, duplicates and
 // anything no chain could route on. The second return is what it
-// dropped as unroutable, capped at maxDomains because a reply can name
-// any number of subjects and the first few already say enough about
-// what it produces. Normalising because these become a routing key:
-// "Code" one turn and "code" the next would route the same question
-// two different ways.
+// dropped as unroutable, capped at maxOutOfVocabularyToReport because a
+// reply can name any number of subjects and the first few already say
+// enough about what it produces. Normalising because these become a
+// routing key: "Code" one turn and "code" the next would route the
+// same question two different ways.
 //
 // NOTHING HERE CAPS HOW MANY TAGS SURVIVE. Every tag reaching kept has
 // already passed the vocabulary filter, so it is routable by
@@ -413,7 +419,7 @@ func normaliseDomains(in []string, allowed domainSet) (kept, outside []string) {
 		if _, ok := allowed[d]; !ok {
 			// Bounded: a reply can name any number of subjects, and the
 			// first few say enough about what it produces.
-			if len(outside) < maxDomains {
+			if len(outside) < maxOutOfVocabularyToReport {
 				outside = append(outside, d)
 			}
 			continue
