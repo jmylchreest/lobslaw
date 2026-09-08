@@ -23,9 +23,9 @@ type ResolveRequest struct {
 	// Chains with a MinComplexity trigger match when Complexity >= trigger.
 	Complexity int
 
-	// Domains are free-form tags surfaced by the complexity estimator
-	// or the user's claims — e.g. "code", "finance", "legal". A chain
-	// with a Domains trigger matches when any domain overlaps.
+	// Domains are subject tags drawn from the operator's declared
+	// vocabulary — the union of every trigger's domains. A chain with a
+	// Domains trigger matches when any domain overlaps.
 	Domains []string
 
 	// Scope is the caller's security scope (e.g. "alice", "team-x").
@@ -108,6 +108,9 @@ type Resolver struct {
 	// resolver returns a single-step chain pointing at the first
 	// provider that meets the trust floor.
 	defaultChain string
+
+	// domains is the union of every trigger's. See DomainVocabulary.
+	domains []string
 }
 
 // NewResolver constructs a Resolver from compute config. Validates
@@ -177,11 +180,47 @@ func NewResolver(cfg *config.ComputeConfig) (*Resolver, error) {
 		return nil, fmt.Errorf("compute config invalid: %v", problems)
 	}
 
+	// Declared domains are normalised in place, because the judgment side
+	// is lowercased unconditionally: a trigger written "Legal" would
+	// otherwise be a rule that can never fire.
+	chains := append([]config.ChainConfig(nil), cfg.Chains...)
+	vocabulary := domainSet{}
+	for i := range chains {
+		declared := newDomainSet(chains[i].Trigger.Domains)
+		chains[i].Trigger.Domains = declared.sorted()
+		for tag := range declared {
+			vocabulary[tag] = struct{}{}
+		}
+	}
+
 	return &Resolver{
 		providers:    providers,
-		chains:       append([]config.ChainConfig(nil), cfg.Chains...),
+		chains:       chains,
 		defaultChain: cfg.DefaultChain,
+		domains:      vocabulary.sorted(),
 	}, nil
+}
+
+// DomainVocabulary is every subject tag this resolver can route on: the
+// union of the chains' triggers, sorted, empty when none declare any.
+//
+// It lives here because this is what MATCHES the tags, so the list the
+// preflight is offered cannot drift from the list a chain can act on.
+// Nil-safe: a node with no providers has no resolver.
+func (r *Resolver) DomainVocabulary() []string {
+	if r == nil {
+		return nil
+	}
+	return append([]string(nil), r.domains...)
+}
+
+// ChainCount reports how many chains are configured, so a caller can
+// tell "no chains" from "chains, and none of them matched".
+func (r *Resolver) ChainCount() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.chains)
 }
 
 // Resolve picks a provider chain for req. Algorithm (from PLAN.md
@@ -373,8 +412,9 @@ func triggerReason(t config.ChainTriggerConfig, req ResolveRequest) string {
 	}
 }
 
-// anyDomainOverlap returns true if a and b share any element.
-// Case-sensitive — domains are operator-chosen tags, not free text.
+// anyDomainOverlap returns true if a and b share any element. A plain
+// comparison: both sides arrive normalised, the declared side at
+// construction and the judged side as it is parsed.
 func anyDomainOverlap(a, b []string) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return false
