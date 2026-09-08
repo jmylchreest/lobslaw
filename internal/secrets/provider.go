@@ -84,6 +84,14 @@ const (
 	// command that fixes it is worth a file.
 	DriverBitwarden   = "bitwarden"
 	DriverOnePassword = "onepassword"
+
+	// DriverSecretService talks org.freedesktop.secrets over D-Bus, in
+	// process. It earns a file on a different argument from the two
+	// above: those wrap one vendor each, whereas the Secret Service is
+	// the Linux desktop standard, so gnome-keyring, KWallet, KeePassXC
+	// and rosec all answer through it. One driver for a whole class of
+	// backend rather than one more entry in this list.
+	DriverSecretService = "secretservice"
 )
 
 // DefaultFetchTimeout bounds one fetch when config names none.
@@ -147,6 +155,13 @@ func DefaultRegistry() *Registry {
 	r.Register(DriverExec, ExecFactory)
 	r.Register(DriverBitwarden, BitwardenFactory)
 	r.Register(DriverOnePassword, OnePasswordFactory)
+	// Registered on every platform even though only Linux can serve it.
+	// The alternative, registering it behind a build tag, would drop it
+	// out of the "available: ..." line on macOS and turn a
+	// wrong-platform config into `unknown driver "secretservice"`, which
+	// reads as a typo. The factory itself refuses to build off Linux and
+	// says which platform it is on.
+	r.Register(DriverSecretService, SecretServiceFactory)
 	return r
 }
 

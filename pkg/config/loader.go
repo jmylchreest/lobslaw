@@ -255,7 +255,8 @@ func validateSecretProviders(c SecretsConfig) error {
 		seen[label] = struct{}{}
 
 		if strings.TrimSpace(p.Driver) == "" {
-			return fmt.Errorf("%w: [[secrets.providers]] %q needs a driver (exec, bitwarden or onepassword)",
+			return fmt.Errorf("%w: [[secrets.providers]] %q needs a driver "+
+				"(exec, bitwarden, onepassword or secretservice)",
 				types.ErrInvalidConfig, p.Label)
 		}
 		for _, arg := range p.Command {
