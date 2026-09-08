@@ -322,8 +322,13 @@ func manifestIdentity(manifest []byte) (name, version string, err error) {
 			}
 		}
 	}
-	if name == "" || version == "" {
-		return "", "", fmt.Errorf("the manifest does not declare both a name and a version")
+	if name == "" {
+		return "", "", fmt.Errorf("the manifest does not declare a name")
+	}
+	if version == "" {
+		// SKILL.md frontmatter has no version field.
+		// 0.0.0 cannot collide with a deliberately chosen semver.
+		version = "0.0.0"
 	}
 	return name, version, nil
 }

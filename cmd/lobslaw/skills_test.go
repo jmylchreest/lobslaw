@@ -61,16 +61,33 @@ func TestANestedNameIsNotTheSkillName(t *testing.T) {
 	}
 }
 
+// A missing NAME is still refused; a manifest with no way to identify
+// what it is cannot be installed or exported under any label. A
+// missing version is not in this list, see
+// TestManifestIdentityDefaultsVersion below.
 func TestAManifestMissingEitherFieldIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, manifest := range []string{
 		"version: 1.2.3\nruntime: python\n",
-		"name: tidy\nruntime: python\n",
 		"",
 	} {
 		if _, _, err := manifestIdentity([]byte(manifest)); err == nil {
 			t.Errorf("%q was accepted", manifest)
 		}
+	}
+}
+
+// A hand-authored SKILL.md has no field to put a version in. Refusing
+// to import or export it over that absence would make an optional fact
+// a hard stop, so manifestIdentity defaults to 0.0.0 instead.
+func TestManifestIdentityDefaultsVersion(t *testing.T) {
+	t.Parallel()
+	name, version, err := manifestIdentity([]byte("name: weather\nruntime: bash\nhandler: h.sh\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "weather" || version != "0.0.0" {
+		t.Errorf("got %q %q, want \"weather\" \"0.0.0\"", name, version)
 	}
 }
 
