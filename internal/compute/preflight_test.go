@@ -3,7 +3,7 @@ package compute
 import (
 	"context"
 	"errors"
-	"strings"
+	"slices"
 	"testing"
 )
 
@@ -171,20 +171,16 @@ func TestComplexityIsClamped(t *testing.T) {
 
 // Domains become a routing key. "Code" one turn and "code" the next
 // would route the same question two different ways.
+//
+// All four declared tags survive: every one of them passed the
+// vocabulary filter, so none is capped away just for being the fourth.
 func TestDomainsAreNormalised(t *testing.T) {
 	t.Parallel()
 	got := parsed(`{"domains": ["  Code ", "CODE", "", "Finance", "legal", "maths"]}`,
 		"code", "finance", "legal", "maths")
-	if len(got.Domains) != maxDomains {
-		t.Fatalf("domains = %v, want %d after dedup and bounding", got.Domains, maxDomains)
-	}
-	for _, d := range got.Domains {
-		if d != strings.ToLower(strings.TrimSpace(d)) {
-			t.Errorf("domain %q was not normalised", d)
-		}
-	}
-	if got.Domains[0] != "code" || got.Domains[1] != "finance" {
-		t.Errorf("domains = %v; order and dedup are wrong", got.Domains)
+	want := []string{"code", "finance", "legal", "maths"}
+	if !slices.Equal(got.Domains, want) {
+		t.Fatalf("domains = %v, want %v after dedup and normalising", got.Domains, want)
 	}
 }
 

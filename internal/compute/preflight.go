@@ -106,8 +106,10 @@ hint: "reasoning" only when the task needs sustained deduction rather than knowl
 const judgeNoDomainsWanted = `domains: always []. Nothing in this deployment routes on them.`
 
 // judgeSystemPrompt builds the instruction for a given vocabulary. It
-// still says "at most 3": a closed list does not stop a model naming all
-// of it, and maxDomains decides which tags survive.
+// still says "at most 3": a closed list does not stop a model naming
+// all of it. What survives is not capped at maxDomains any more; a
+// model that over-names keeps every declared tag it named, because
+// each one is already routable by the time normaliseDomains sees it.
 func judgeSystemPrompt(vocabulary []string) string {
 	domains := judgeNoDomainsWanted
 	if len(vocabulary) > 0 {
@@ -129,7 +131,10 @@ const judgeMaxCompletionTokens = 128
 // hangs yields the neutral judgment and the turn proceeds.
 const judgeTimeout = 8 * time.Second
 
-// maxDomains bounds what a model can put in the routing key.
+// maxDomains is what the prompt asks a model to name, not a hard cap:
+// normaliseDomains no longer discards a declared tag beyond this
+// count, since everything that survives its vocabulary filter is
+// already routable and there is nothing left to protect against.
 const maxDomains = 3
 
 // Judge classifies a turn for routing. A nil *Judge is usable and
@@ -376,14 +381,20 @@ func normaliseDomain(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-// normaliseDomains lowercases, trims, drops blanks, duplicates and
-// anything no chain could route on, and bounds the count. The second
-// return is what it dropped as unroutable. Normalising because these
-// become a routing key: "Code" one turn and "code" the next would route
-// the same question two different ways.
+// normaliseDomains lowercases, trims, and drops blanks, duplicates and
+// anything no chain could route on. The second return is what it
+// dropped as unroutable, capped at maxDomains because a reply can name
+// any number of subjects and the first few already say enough about
+// what it produces. Normalising because these become a routing key:
+// "Code" one turn and "code" the next would route the same question
+// two different ways.
 //
-// THE FILTER RUNS BEFORE THE CAP, or a reply of three invented tags and
-// then "legal" loses the one tag the operator wrote a rule for.
+// NOTHING HERE CAPS HOW MANY TAGS SURVIVE. Every tag reaching kept has
+// already passed the vocabulary filter, so it is routable by
+// construction, and capping it further would drop a declared tag the
+// operator wrote a rule for, to make room for nothing. The prompt
+// still asks for at most maxDomains; a model that ignores that keeps
+// every declared tag it named.
 //
 // An empty vocabulary drops everything and reports nothing: no chain
 // routes on subject, so the tags are dead weight, not a signal.
@@ -392,7 +403,7 @@ func normaliseDomains(in []string, allowed domainSet) (kept, outside []string) {
 		return nil, nil
 	}
 	seen := make(map[string]bool, len(in))
-	kept = make([]string, 0, maxDomains)
+	kept = make([]string, 0, min(len(in), len(allowed)))
 	for _, d := range in {
 		d = normaliseDomain(d)
 		if d == "" || seen[d] {
@@ -408,9 +419,6 @@ func normaliseDomains(in []string, allowed domainSet) (kept, outside []string) {
 			continue
 		}
 		kept = append(kept, d)
-		if len(kept) == maxDomains {
-			break
-		}
 	}
 	if len(kept) == 0 {
 		return nil, outside

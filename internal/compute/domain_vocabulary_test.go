@@ -279,6 +279,20 @@ func TestTheVocabularyFilterRunsBeforeTheCap(t *testing.T) {
 	}
 }
 
+// A vocabulary bigger than three makes a model naming several of its
+// items MORE likely, not less: handing it a menu invites choosing from
+// it. Every one of these four is declared and routable, so none of
+// them is the invented tag the cap existed to guard against.
+func TestACapDoesNotDiscardADeclaredTag(t *testing.T) {
+	t.Parallel()
+	got := parsed(`{"domains": ["billing", "legal", "medical", "tax"]}`,
+		"billing", "legal", "medical", "tax")
+	want := []string{"billing", "legal", "medical", "tax"}
+	if !slices.Equal(got.Domains, want) {
+		t.Errorf("domains = %v, want all four declared tags kept", got.Domains)
+	}
+}
+
 // A model that ignores its list ignores it every turn, and the operator
 // needs to hear that once: their chains declare subjects their preflight
 // model will not produce, so subject routing is inert.
