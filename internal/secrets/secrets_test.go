@@ -3,12 +3,18 @@ package secrets
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	dbus "github.com/godbus/dbus/v5"
+	"github.com/zalando/go-keyring"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -760,6 +766,421 @@ func TestVendorHintMatchesUntruncatedStderr(t *testing.T) {
 	// And the displayed message is still bounded.
 	if len(err.Error()) > 1200 {
 		t.Errorf("displayed error is %d bytes; the cap is not holding", len(err.Error()))
+	}
+}
+
+// None of the secretservice tests below may need a session bus.
+//
+// There is no bus in CI and none on a macOS workstation, so a test that
+// wanted one would be a test that only ever ran on somebody's Linux
+// desktop. What IS testable is everything that decides what an operator
+// sees: the option and block validation, the path split, and the error
+// translation driven by synthetic errors of exactly the types the client
+// library produces. The one test that needs a real keyring is explicitly
+// opt-in at the bottom of the file.
+
+// An option that cannot be honoured must not exist. `collection` is the
+// plausible one to reach for and go-keyring cannot select a collection,
+// so it is refused at boot naming the key rather than parsing and
+// changing nothing.
+func TestSecretServiceFactoryRejectsWhatItCannotHonour(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"collection", "trim_whitespace", "env_passthrough", "field"} {
+		_, err := SecretServiceFactory(ProviderConfig{
+			Label: "rosec", Options: map[string]string{key: "x"},
+		})
+		if err == nil {
+			t.Errorf("option %q should be refused at boot, not silently ignored", key)
+			continue
+		}
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("the error should name %q; got %v", key, err)
+		}
+	}
+}
+
+// `command` and `env` parse on every other driver and configure a
+// subprocess. This one has none, so accepting them would let an operator
+// believe a wrapper script was being run or a credential handed over.
+func TestSecretServiceFactoryRefusesSubprocessConfig(t *testing.T) {
+	t.Parallel()
+
+	_, err := SecretServiceFactory(ProviderConfig{
+		Label: "rosec", Command: []string{"secret-tool", "lookup"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "command") {
+		t.Errorf("a command on a D-Bus driver should be refused, naming it; got %v", err)
+	}
+	// And the error has to point somewhere: `exec` is where a CLI goes.
+	if err != nil && !strings.Contains(err.Error(), DriverExec) {
+		t.Errorf("the error should name the driver that does run a command; got %v", err)
+	}
+
+	_, err = SecretServiceFactory(ProviderConfig{
+		Label: "rosec", Env: map[string]string{"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "DBUS_SESSION_BUS_ADDRESS") {
+		t.Errorf("an env block should be refused with the reason; got %v", err)
+	}
+}
+
+// The reference shape, which is the same vendor:path/name as
+// bw:lobslaw/openrouter. Pure logic, so it is tested directly.
+func TestSplitItemPath(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name            string
+		label, path     string
+		service, user   string
+		wantErrContains string
+	}{
+		{
+			name: "the documented shape", label: "rosec", path: "lobslaw/openrouter",
+			service: "lobslaw", user: "openrouter",
+		},
+		{
+			// The label is already the only other name in the reference,
+			// and a single-application store has no second level.
+			name: "no separator takes the label as the service", label: "rosec", path: "openrouter",
+			service: "rosec", user: "openrouter",
+		},
+		{
+			// Last, not first: the user is the leaf. Splitting on the
+			// first separator would ask for a user called "prod/openrouter".
+			name: "many separators split on the last", label: "rosec", path: "lobslaw/prod/openrouter",
+			service: "lobslaw/prod", user: "openrouter",
+		},
+		{
+			name: "surrounding whitespace is not part of the name", label: "rosec", path: "  lobslaw/openrouter  ",
+			service: "lobslaw", user: "openrouter",
+		},
+		{
+			// A space inside an attribute value is legitimate and stays.
+			name: "an internal space is kept", label: "rosec", path: "My Vault/openrouter",
+			service: "My Vault", user: "openrouter",
+		},
+		{
+			name: "a trailing slash names no item", label: "rosec", path: "lobslaw/",
+			wantErrContains: "does not name an item",
+		},
+		{
+			name: "a leading slash names no service", label: "rosec", path: "/openrouter",
+			wantErrContains: "does not name an item",
+		},
+		{
+			name: "a bare slash is neither", label: "rosec", path: "/",
+			wantErrContains: "does not name an item",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			service, user, err := splitItemPath(tc.label, tc.path)
+			if tc.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("want an error for %q; got service %q, user %q", tc.path, service, user)
+				}
+				if !strings.Contains(err.Error(), tc.wantErrContains) {
+					t.Errorf("error should contain %q; got %v", tc.wantErrContains, err)
+				}
+				// The error has to teach the shape, because a wrong split
+				// is invisible from the config line that caused it.
+				if !strings.Contains(err.Error(), "service/user") {
+					t.Errorf("the error should state the shape; got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("splitItemPath(%q, %q): %v", tc.label, tc.path, err)
+			}
+			if service != tc.service || user != tc.user {
+				t.Errorf("got service %q, user %q; want %q, %q", service, user, tc.service, tc.user)
+			}
+		})
+	}
+}
+
+// The whole reason this is a compiled driver rather than an `exec`
+// block. Driven by synthetic errors of the types the client library
+// actually produces, so it runs with no bus anywhere in sight.
+func TestSecretServiceTranslatesItsFailures(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{
+			// A sentinel, so this match cannot be broken by a rewording.
+			// Wrapped, to prove the check is errors.Is and not equality.
+			name: "item not found names the split",
+			err:  fmt.Errorf("looking up: %w", keyring.ErrNotFound),
+			want: []string{`service "lobslaw"`, `user "openrouter"`, "last slash"},
+		},
+		{
+			// go-keyring's own wording when Unlock comes back without the
+			// collection it asked for, which is what a dismissed prompt
+			// produces.
+			name: "a dismissed prompt is a locked collection",
+			err:  errors.New("failed to unlock correct collection '/org/freedesktop/secrets/collection/login'"),
+			want: []string{"locked", "unlock", "headless"},
+		},
+		{
+			// The name is the stable part of the wire protocol. Note the
+			// body is empty here on purpose: dbus.Error.Error() falls back
+			// to the name only when there is no body, so a match that read
+			// the message text would be matching the wrong field.
+			name: "the D-Bus locked error is matched by name",
+			err:  dbus.Error{Name: "org.freedesktop.Secret.Error.IsLocked"},
+			want: []string{"locked", "unlock"},
+		},
+		{
+			name: "no bus address names the variable and the mount",
+			err:  errors.New("dbus: couldn't determine address of session bus"),
+			want: []string{"DBUS_SESSION_BUS_ADDRESS", "--volume", "/run/user/1000/bus"},
+		},
+		{
+			name: "a dead socket is the same failure",
+			err:  errors.New("dial unix /run/user/1000/bus: connect: no such file or directory"),
+			want: []string{"DBUS_SESSION_BUS_ADDRESS", "bind-mount"},
+		},
+		{
+			// The autostart fallback starts a fresh empty bus where
+			// dbus-launch exists, and fails talking about a binary nobody
+			// configured where it does not.
+			name: "the dbus-launch fallback is not a missing binary",
+			err:  errors.New(`exec: "dbus-launch": executable file not found in $PATH`),
+			want: []string{"DBUS_SESSION_BUS_ADDRESS"},
+		},
+		{
+			// A bus with no keyring on it is its own failure, and the fix
+			// is a daemon rather than a mount.
+			name: "nobody serving the interface is not a missing bus",
+			err: dbus.Error{
+				Name: "org.freedesktop.DBus.Error.ServiceUnknown",
+				Body: []any{"The name org.freedesktop.secrets was not provided by any .service files"},
+			},
+			want: []string{"nothing on it is serving", "gnome-keyring-daemon"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			hint := secretServiceHintFor(tc.err, "lobslaw", "openrouter")
+			if hint == "" {
+				t.Fatalf("no hint for %v; this is the failure the driver exists to translate", tc.err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(hint, want) {
+					t.Errorf("hint should contain %q; got %q", want, hint)
+				}
+			}
+		})
+	}
+
+	// An unrecognised failure gets no hint rather than a guessed one. A
+	// wrong fix costs more than no fix, and the library's own words still
+	// reach the operator either way.
+	if hint := secretServiceHintFor(errors.New("something nobody has seen yet"), "s", "u"); hint != "" {
+		t.Errorf("an unknown failure should not be guessed at; got %q", hint)
+	}
+}
+
+// The hint is added, never substituted. Guessing wrong about which
+// failure this is must not hide what the library said, which is the same
+// rule vendorProvider follows.
+func TestSecretServiceKeepsTheOriginalError(t *testing.T) {
+	t.Parallel()
+
+	p := &secretServiceProvider{
+		label:   "rosec",
+		timeout: time.Second,
+		get: func(string, string) (string, error) {
+			return "", errors.New("failed to unlock correct collection 'login'")
+		},
+	}
+	_, err := p.Fetch(context.Background(), "lobslaw/openrouter")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !strings.Contains(err.Error(), "failed to unlock correct collection") {
+		t.Errorf("the library's own message should survive; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "rosec") {
+		t.Errorf("the error should name the provider; got %v", err)
+	}
+	if !strings.Contains(err.Error(), secretServiceLockedHint) {
+		t.Errorf("the fix should be appended; got %v", err)
+	}
+}
+
+// The path split reaches the client, and an item that exists but holds
+// nothing is a failure rather than a secret.
+func TestSecretServiceFetchesTheSplitPair(t *testing.T) {
+	t.Parallel()
+
+	var gotService, gotUser string
+	p := &secretServiceProvider{
+		label:   "rosec",
+		timeout: time.Second,
+		get: func(service, user string) (string, error) {
+			gotService, gotUser = service, user
+			return "sk-value", nil
+		},
+	}
+	got, err := p.Fetch(context.Background(), "lobslaw/prod/openrouter")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got != "sk-value" {
+		t.Errorf("got %q; want the stored value untouched", got)
+	}
+	if gotService != "lobslaw/prod" || gotUser != "openrouter" {
+		t.Errorf("looked up service %q, user %q; want %q, %q",
+			gotService, gotUser, "lobslaw/prod", "openrouter")
+	}
+
+	empty := &secretServiceProvider{
+		label:   "rosec",
+		timeout: time.Second,
+		get:     func(string, string) (string, error) { return "", nil },
+	}
+	if _, err := empty.Fetch(context.Background(), "lobslaw/openrouter"); err == nil {
+		t.Error("an item holding nothing is a failure, not a secret")
+	}
+}
+
+// A locked collection makes the Secret Service raise a prompt, and
+// go-keyring blocks on the Completed signal with no deadline. On a
+// headless node nothing is listening to raise it, so the wait never
+// ends and a boot-time resolve would hang instead of failing.
+func TestSecretServiceTimesOutRatherThanHangingTheBoot(t *testing.T) {
+	t.Parallel()
+
+	// Released on cleanup so the abandoned lookup does not outlive the
+	// test binary's own accounting.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	p := &secretServiceProvider{
+		label:   "rosec",
+		timeout: 150 * time.Millisecond,
+		get: func(string, string) (string, error) {
+			<-release
+			return "", nil
+		},
+	}
+	start := time.Now()
+	_, err := p.Fetch(context.Background(), "lobslaw/openrouter")
+	if err == nil {
+		t.Fatal("want a timeout")
+	}
+	if !strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("want a timeout error; got %v", err)
+	}
+	// A prompt nobody can answer is the reason it hung, so that is the
+	// fix the timeout names.
+	if !strings.Contains(err.Error(), "locked") {
+		t.Errorf("the timeout should name the likely cause; got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("took %s; the timeout was not enforced", elapsed)
+	}
+}
+
+// A caller's cancellation is honoured too, not just the driver's own
+// timeout.
+func TestSecretServiceHonoursContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	p := &secretServiceProvider{
+		label:   "rosec",
+		timeout: time.Minute,
+		get: func(string, string) (string, error) {
+			<-release
+			return "", nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := p.Fetch(ctx, "lobslaw/openrouter")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("want a cancellation; got %v", err)
+	}
+}
+
+// Registered on every platform, so `Registry.Names()` lists it
+// everywhere. A driver that vanished from the "available: ..." line off
+// Linux would turn a wrong-platform config into `unknown driver
+// "secretservice"`, which reads as a typo rather than as the platform
+// constraint it is.
+func TestSecretServiceIsRegisteredOnEveryPlatform(t *testing.T) {
+	t.Parallel()
+
+	names := DefaultRegistry().Names()
+	if !slices.Contains(names, DriverSecretService) {
+		t.Errorf("%q is not in the default registry: %v", DriverSecretService, names)
+	}
+}
+
+// The platform boundary, asserted from whichever platform the tests are
+// run on rather than from a second build.
+//
+// Off Linux the factory must refuse at boot and name the platform: it
+// could quietly have worked, because go-keyring falls back to the macOS
+// Keychain and to wincred, and that is exactly the silent divergence
+// being refused. On Linux the only thing true of every machine is that a
+// failure is about the bus and not about the platform, because CI has no
+// session bus and a desktop does.
+func TestSecretServicePlatformBoundary(t *testing.T) {
+	t.Parallel()
+
+	_, err := SecretServiceFactory(ProviderConfig{Label: "rosec"})
+
+	if runtime.GOOS == "linux" {
+		if err != nil && !strings.Contains(err.Error(), "DBUS_SESSION_BUS_ADDRESS") {
+			t.Errorf("on Linux a build failure should be about the session bus; got %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("on %s there is no org.freedesktop.secrets; the driver must refuse at boot",
+			runtime.GOOS)
+	}
+	for _, want := range []string{runtime.GOOS, "org.freedesktop.secrets", "Linux only", DriverExec} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error should mention %q; got %v", want, err)
+		}
+	}
+}
+
+// The one test that needs a real keyring, and so the one that is opt-in.
+//
+// Store an item first, then name it:
+//
+//	secret-tool store --label=lobslaw service lobslaw username openrouter
+//	LOBSLAW_SECRETSERVICE_LIVE_PATH=lobslaw/openrouter go test ./internal/secrets/
+func TestSecretServiceAgainstALiveKeyring(t *testing.T) {
+	path := os.Getenv("LOBSLAW_SECRETSERVICE_LIVE_PATH")
+	if path == "" {
+		t.Skip("set LOBSLAW_SECRETSERVICE_LIVE_PATH to a stored service/user item")
+	}
+	p, err := SecretServiceFactory(ProviderConfig{Label: "rosec"})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got, err := p.Fetch(context.Background(), path)
+	if err != nil {
+		t.Fatalf("fetch %q: %v", path, err)
+	}
+	if got == "" {
+		t.Error("fetched an empty value, which should have been an error")
 	}
 }
 
