@@ -168,6 +168,17 @@ func NewResolver(cfg *config.ComputeConfig) (*Resolver, error) {
 		if ch.MinTrustTier != types.TrustUnset && !ch.MinTrustTier.IsValid() {
 			problems = append(problems, fmt.Sprintf("chain %q has invalid min_trust_tier %q", ch.Label, ch.MinTrustTier))
 		}
+		// config.Load already rejects a blank trigger.domains entry
+		// before this runs, but NewResolver is exported and validates
+		// its own coherence independently of that caller. Left
+		// unchecked here, a slice of nothing but blanks normalises to
+		// zero entries, len(t.Domains) == 0 holds in triggerMatches,
+		// and a chain the operator gated on subject silently becomes
+		// complexity-only.
+		if len(ch.Trigger.Domains) > 0 && len(newDomainSet(ch.Trigger.Domains)) == 0 {
+			problems = append(problems, fmt.Sprintf(
+				"chain %q trigger.domains has entries but none of them normalise to a usable tag", ch.Label))
+		}
 	}
 
 	if cfg.DefaultChain != "" {
