@@ -1698,9 +1698,10 @@ type SecretProviderConfig struct {
 	// on the thing it bootstraps.
 	Label string `koanf:"label"`
 
-	// Driver names the implementation: "exec" for any CLI, or
-	// "bitwarden" / "onepassword" for the two whose failure modes are
-	// worth translating.
+	// Driver names the implementation: "exec" for any CLI,
+	// "bitwarden" / "onepassword" for the two vendors whose failure
+	// modes are worth translating, or "secretservice" for the Linux
+	// desktop keyrings that all answer on org.freedesktop.secrets.
 	Driver string `koanf:"driver"`
 
 	// Command overrides the driver's argv. Required by "exec" and

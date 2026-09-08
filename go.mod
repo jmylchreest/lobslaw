@@ -3,11 +3,13 @@ module github.com/jmylchreest/lobslaw
 go 1.27.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/Jille/raft-grpc-transport v1.6.1
 	github.com/coder/websocket v1.8.15
 	github.com/elastic/go-seccomp-bpf v1.6.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-viper/mapstructure/v2 v2.4.0
+	github.com/godbus/dbus/v5 v5.2.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/go-hclog v1.6.2
 	github.com/hashicorp/raft v1.7.3
@@ -23,6 +25,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sirupsen/logrus v1.7.0
 	github.com/stripe/smokescreen v0.0.4
+	github.com/zalando/go-keyring v0.2.8
 	go.etcd.io/bbolt v1.4.3
 	go.opentelemetry.io/proto/otlp v1.11.0
 	golang.org/x/crypto v0.55.0
@@ -38,12 +41,12 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/DataDog/datadog-go v4.5.1+incompatible // indirect
 	github.com/Microsoft/go-winio v0.4.17 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/armon/go-proxyproto v0.0.0-20170620220930-48572f11356f // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
