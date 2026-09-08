@@ -63,11 +63,13 @@ It is an **argv, never a shell string**. A secret path containing a space must n
 | Option            | Default | Meaning                                                         |
 | ----------------- | ------- | --------------------------------------------------------------- |
 | `trim_whitespace` | `true`  | strip surrounding whitespace from stdout                        |
-| `env_passthrough` | —       | comma-separated names of extra environment variables to inherit |
+| `env_passthrough` | none    | comma-separated names of extra environment variables to inherit |
 
-The default is on because a CLI that prints a trailing newline is the norm, and a key with `\n` on the end fails authentication in a way nothing reports usefully. Turn it off for the rare secret whose newline is load-bearing.
+Both are understood by every command-backed driver, including `bitwarden` and `onepassword`.
 
-`env_passthrough` takes **names, never patterns** — see [what the subprocess can see](#what-the-subprocess-can-see) below.
+`trim_whitespace` defaults to on because a CLI that prints a trailing newline is the norm, and a key with `\n` on the end fails authentication in a way nothing reports usefully. Turn it off for the rare secret whose newline is load-bearing.
+
+`env_passthrough` takes **names, never patterns**. See [what the subprocess can see](#what-the-subprocess-can-see) below.
 
 ### Environment for the subprocess
 
@@ -96,27 +98,54 @@ BW_SESSION = "file:/run/secrets/bw-session"
 
 A vault subprocess gets an **allowlisted** slice of the node's environment, plus everything the provider declared. It does not inherit the node's environment wholesale.
 
-It used to. That meant fetching one secret exposed every other one: a node holding the provider API keys, the channel tokens and the memory encryption passphrase in its environment passed all of them to `pass`, to `bw`, and to whatever argv was configured. The command comes from `config.toml` rather than from an attacker, so this was a blast-radius problem rather than a way in — but any one vault CLI, wrapper script, or mistaken argv saw the lot.
+It used to. That meant fetching one secret exposed every other one: a node holding the provider API keys, the channel tokens and the memory encryption passphrase in its environment passed all of them to `pass`, to `bw`, and to whatever argv was configured. The command comes from `config.toml` rather than from an attacker, so this was a blast-radius problem rather than a way in, but any one vault CLI, wrapper script, or mistaken argv saw the lot.
 
 Three routes in, and only three:
 
-1. **The base allowlist** — what a vault CLI needs to run at all. `HOME`, `PATH`, `USER`, `LOGNAME`, `TMPDIR`; the locale variables; the `XDG_*` base directories; `GNUPGHOME` and `GPG_TTY`; and the socket and display addresses a pinentry or an agent is reached through (`SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`). Nothing in it is a credential.
-2. **The driver's own credential variables.** Each compiled vendor driver adds the ones its CLI authenticates with, so the `export BW_SESSION` workflow its own error message recommends keeps working: `bitwarden` allows `BW_SESSION`, `BW_CLIENTID`, `BW_CLIENTSECRET` and `BITWARDENCLI_APPDATA_DIR`; `onepassword` allows `OP_SERVICE_ACCOUNT_TOKEN`, `OP_ACCOUNT`, `OP_CONFIG_DIR`, `OP_CONNECT_HOST` and `OP_CONNECT_TOKEN`.
-3. **`env` and `secret_env`** — declared, so never filtered. Declaring a variable _is_ the authorisation, and a declared value wins over an inherited one of the same name.
+1. **The base allowlist**, what a vault CLI needs to run at all. `HOME`, `PATH`, `USER`, `LOGNAME`, `TMPDIR`; the locale variables; the `XDG_*` base directories; `GNUPGHOME` and `GPG_TTY`; and the socket and display addresses a pinentry or an agent is reached through (`SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`).
 
-For anything else, name it:
+   It holds no secret _values_, which is not the same as holding nothing sensitive. `SSH_AUTH_SOCK` and `DBUS_SESSION_BUS_ADDRESS` are capability handles: the value is a socket path, but a process that can reach the agent can ask it to sign, and one that can reach the session bus can ask the keyring for items. They are allowed because a vault that cannot reach its agent or its keyring cannot answer. If you need a subprocess held tighter than that, give it its own dedicated agent socket rather than the operator's.
 
-```toml
-[[secrets.providers]]
-label   = "pass"
-driver  = "exec"
-command = ["pass", "show", "{{path}}"]
-options = { env_passthrough = "PASSWORD_STORE_DIR,PASSWORD_STORE_GPG_OPTS" }
-```
+2. **The driver's own sign-in variables.** Each compiled vendor driver adds the ones its CLI authenticates with, so the workflows its own error messages recommend keep working:
 
-Names only — no globs. `SECRET_*` or `*` would reinstate wholesale inheritance in a setting that reads as though it is being careful.
+   | Driver        | Allowed                                                                                                                                |
+   | ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+   | `bitwarden`   | `BW_SESSION`, `BW_CLIENTID`, `BW_CLIENTSECRET`, `BITWARDENCLI_APPDATA_DIR`                                                             |
+   | `onepassword` | `OP_SERVICE_ACCOUNT_TOKEN`, `OP_ACCOUNT`, `OP_CONFIG_DIR`, `OP_CONNECT_HOST`, `OP_CONNECT_TOKEN`, `OP_SESSION`, and any `OP_SESSION_*` |
 
-**Prefer `env` over `env_passthrough`** where you can. A declared value is visible in the config; a passthrough depends on whatever happened to be in the node's environment at boot, which is the class of thing that works on one host and not the next.
+   Both sign-in routes work, not just the non-interactive one. `eval $(op signin <shorthand>)` exports `OP_SESSION_<shorthand>`, whose name is not fixed, which is why that one is a prefix.
+
+3. **`env` and `secret_env`**, declared and so never filtered. Declaring a variable _is_ the authorisation, and a declared value wins over an inherited one of the same name.
+
+### Choosing between them
+
+In order of preference:
+
+- **An ordinary setting** (a config directory, a CA bundle path, an account alias) goes in **`env`**. It is plaintext, visible in the config, and the same shape `[mcp.servers.<name>]` already uses.
+- **A credential** (a session token, a service account token, an API key) goes in **`secret_env`**, resolved through the bootstrap schemes. Never put one in `env`, where it is a literal in the config file.
+- **`env_passthrough`** is the last resort, for a variable the allowlist does not know about that you cannot or will not declare:
+
+  ```toml
+  [[secrets.providers]]
+  label   = "pass"
+  driver  = "exec"
+  command = ["pass", "show", "{{path}}"]
+  options = { env_passthrough = "PASSWORD_STORE_DIR,PASSWORD_STORE_GPG_OPTS" }
+  ```
+
+  It works on every command-backed driver, `bitwarden` and `onepassword` included. Exact names only, comma separated. A value containing `*`, `?` or `[` is **refused at boot** with an error naming the setting, rather than matched literally: a glob there would reinstate wholesale inheritance in a setting that reads as though it is being careful.
+
+  Prefer `env` or `secret_env` where you can. A declared value is visible in the config; a passthrough depends on whatever happened to be in the node's environment at boot, which is the class of thing that works on one host and not the next.
+
+### Migrating an existing provider
+
+If a provider stops finding a variable after this change, it was relying on wholesale inheritance. Work down the list:
+
+1. Is it a **credential**? Move it to `secret_env`. This is the right answer for `BW_SESSION`, `OP_SERVICE_ACCOUNT_TOKEN` and anything like them if you are not exporting them into the node's environment already.
+2. Is it an **ordinary setting**? Move it to `env`.
+3. Is it neither, or set by a tool you do not control? Name it in `env_passthrough`.
+
+`lobslaw doctor` resolves one real reference through every provider, so it will tell you which provider is unhappy before a turn does.
 
 ## The bootstrap floor
 
