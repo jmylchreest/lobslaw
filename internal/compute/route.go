@@ -97,6 +97,18 @@ func (a *Agent) resolveRoute(ctx context.Context, req ProcessMessageRequest) *Ro
 	// overrides the primary only when a chain actually matched.
 
 	if decision.ChainLabel == "" {
+		// Said out loud, at the same level as the selection below, so at
+		// DEBUG an operator sees every routing decision and a chain that
+		// never fires stops looking like one that fired and agreed with
+		// the default. Quiet when NO chain is configured, which is most
+		// deployments and nobody's decision.
+		if configured := a.cfg.Resolver.ChainCount(); configured > 0 {
+			a.cfg.Logger.Debug("routing: no chain matched; starting at the primary",
+				"chains", configured,
+				"complexity", judgment.Complexity,
+				"hint", judgment.Hint,
+				"domains", judgment.Domains)
+		}
 		return nil
 	}
 
