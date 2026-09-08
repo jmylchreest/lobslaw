@@ -159,7 +159,7 @@ func TestExecSurfacesFailures(t *testing.T) {
 
 // The subprocess gets what it needs to work and nothing else.
 //
-// Before this, mergedEnv handed the vault CLI all of os.Environ() — so a
+// Before this, the vault CLI was handed all of os.Environ() — so a
 // node holding an Anthropic key, a Telegram bot token and a Slack signing
 // secret in its environment passed every one of them to `pass`, to `bw`,
 // and to whatever argv an operator put in config.toml. Fetching one
@@ -189,8 +189,8 @@ func TestExecEnvIsAllowlisted(t *testing.T) {
 			t.Errorf("%s reached the vault subprocess; the environment is not allowlisted", leaked)
 		}
 	}
-	// The allowlist has to be functional, not empty. mergedEnv's own
-	// comment gives the reason: `pass` reads GNUPGHOME and HOME, and a
+	// The allowlist has to be functional, not empty. The reason the
+	// environment was inherited holds: `pass` reads GNUPGHOME and HOME, and a
 	// provider started with a bare environment fails in a way that looks
 	// like the vault is broken.
 	for _, needed := range []string{"PATH=", "HOME=", "GNUPGHOME=/home/agent/.gnupg"} {

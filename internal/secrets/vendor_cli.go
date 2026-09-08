@@ -58,7 +58,7 @@ func BitwardenFactory(cfg ProviderConfig) (Provider, error) {
 	if len(cfg.Command) == 0 {
 		cfg.Command = []string{"bw", "get", field, pathPlaceholder}
 	}
-	inner := newExecProvider(cfg)
+	inner := newExecProvider(cfg, bitwardenEnvAllowlist...)
 	return &vendorProvider{
 		inner: inner,
 		label: cfg.Label,
@@ -91,7 +91,7 @@ func OnePasswordFactory(cfg ProviderConfig) (Provider, error) {
 		}
 		cfg.Command = append(cfg.Command, "op://"+pathPlaceholder)
 	}
-	inner := newExecProvider(cfg)
+	inner := newExecProvider(cfg, onePasswordEnvAllowlist...)
 	return &vendorProvider{
 		inner: inner,
 		label: cfg.Label,

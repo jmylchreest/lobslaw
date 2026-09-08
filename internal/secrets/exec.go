@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -46,7 +45,7 @@ const pathPlaceholder = "{{path}}"
 const execWaitDelay = 2 * time.Second
 
 // execOptionKeys are the options this driver understands.
-var execOptionKeys = []string{"trim_whitespace"}
+var execOptionKeys = []string{"trim_whitespace", "env_passthrough"}
 
 // ExecFactory builds the generic command-backed provider.
 func ExecFactory(cfg ProviderConfig) (Provider, error) {
@@ -62,7 +61,13 @@ func ExecFactory(cfg ProviderConfig) (Provider, error) {
 	return newExecProvider(cfg), nil
 }
 
-func newExecProvider(cfg ProviderConfig) *execProvider {
+// newExecProvider builds the command-backed provider.
+//
+// extraEnvAllowed is contributed by the caller, not the operator: a
+// vendor driver knows which variables its own CLI authenticates with
+// and adds them, so the `export BW_SESSION` workflow its error hint
+// recommends keeps working without every operator listing it by hand.
+func newExecProvider(cfg ProviderConfig, extraEnvAllowed ...string) *execProvider {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = DefaultFetchTimeout
@@ -76,20 +81,26 @@ func newExecProvider(cfg ProviderConfig) *execProvider {
 		trim = false
 	}
 	return &execProvider{
-		label:   cfg.Label,
-		argv:    append([]string(nil), cfg.Command...),
-		env:     cfg.Env,
+		label: cfg.Label,
+		argv:  append([]string(nil), cfg.Command...),
+		env:   cfg.Env,
+		envAllow: append(append([]string(nil), extraEnvAllowed...),
+			parseEnvPassthrough(option(cfg.Options, "env_passthrough"))...),
 		timeout: timeout,
 		trim:    trim,
 	}
 }
 
 type execProvider struct {
-	label   string
-	argv    []string
-	env     map[string]string
-	timeout time.Duration
-	trim    bool
+	label string
+	argv  []string
+	env   map[string]string
+	// envAllow extends baseEnvAllowlist for this provider only: the
+	// vendor driver's own credential variables, plus whatever the
+	// operator named in env_passthrough.
+	envAllow []string
+	timeout  time.Duration
+	trim     bool
 }
 
 func (p *execProvider) Fetch(ctx context.Context, path string) (string, error) {
@@ -109,7 +120,7 @@ func (p *execProvider) Fetch(ctx context.Context, path string) (string, error) {
 	// against a 150ms timeout before this line existed, which on a
 	// boot-time resolve is a node that appears to hang.
 	cmd.WaitDelay = execWaitDelay
-	cmd.Env = mergedEnv(p.env)
+	cmd.Env = allowedEnv(p.env, p.envAllow)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -187,28 +198,6 @@ func substitutePath(argv []string, path string) []string {
 	}
 	if !found {
 		out = append(out, path)
-	}
-	return out
-}
-
-// mergedEnv is the process environment plus the provider's own.
-//
-// Inherited rather than replaced because these CLIs need it: `pass`
-// reads GNUPGHOME and HOME, `op` reads its own config directory, and a
-// provider started with an empty environment fails in ways that look
-// like the vault is broken.
-func mergedEnv(extra map[string]string) []string {
-	if len(extra) == 0 {
-		return os.Environ()
-	}
-	out := append([]string(nil), os.Environ()...)
-	keys := make([]string, 0, len(extra))
-	for k := range extra {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		out = append(out, k+"="+extra[k])
 	}
 	return out
 }
