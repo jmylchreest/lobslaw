@@ -157,6 +157,119 @@ func TestExecSurfacesFailures(t *testing.T) {
 	})
 }
 
+// The subprocess gets what it needs to work and nothing else.
+//
+// Before this, mergedEnv handed the vault CLI all of os.Environ() — so a
+// node holding an Anthropic key, a Telegram bot token and a Slack signing
+// secret in its environment passed every one of them to `pass`, to `bw`,
+// and to whatever argv an operator put in config.toml. Fetching one
+// secret exposed all the others.
+func TestExecEnvIsAllowlisted(t *testing.T) {
+	// printenv rather than `env`: the classifier's own catalogue treats
+	// `env` as a command wrapper, and a test that reads like an exploit
+	// is a test someone will later "fix".
+	stubBin(t, "envvault", `printenv | sort | tr '\n' ';'`)
+
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-leak")
+	t.Setenv("TELEGRAM_BOT_TOKEN", "123:should-not-leak")
+	t.Setenv("GNUPGHOME", "/home/agent/.gnupg")
+
+	p := mustProvider(t, ExecFactory, ProviderConfig{
+		Label:   "v",
+		Command: []string{"envvault"},
+		Env:     map[string]string{"DECLARED_TOKEN": "declared-value"},
+	})
+	got, err := p.Fetch(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	for _, leaked := range []string{"ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "should-not-leak"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("%s reached the vault subprocess; the environment is not allowlisted", leaked)
+		}
+	}
+	// The allowlist has to be functional, not empty. mergedEnv's own
+	// comment gives the reason: `pass` reads GNUPGHOME and HOME, and a
+	// provider started with a bare environment fails in a way that looks
+	// like the vault is broken.
+	for _, needed := range []string{"PATH=", "HOME=", "GNUPGHOME=/home/agent/.gnupg"} {
+		if !strings.Contains(got, needed) {
+			t.Errorf("%s did not reach the subprocess; the vault CLI needs it", needed)
+		}
+	}
+	// A variable the operator declared is not subject to the allowlist —
+	// declaring it IS the authorisation.
+	if !strings.Contains(got, "DECLARED_TOKEN=declared-value") {
+		t.Error("the provider's own env block should always pass through")
+	}
+}
+
+// env_passthrough is how an operator keeps a variable the allowlist does
+// not know about, without going back to inheriting everything.
+func TestExecEnvPassthroughOption(t *testing.T) {
+	stubBin(t, "envvault2", `printenv | sort | tr '\n' ';'`)
+
+	t.Setenv("VAULT_EXTRA_FLAG", "wanted")
+	t.Setenv("UNRELATED_SECRET", "not-wanted")
+
+	p := mustProvider(t, ExecFactory, ProviderConfig{
+		Label: "v", Command: []string{"envvault2"},
+		Options: map[string]string{"env_passthrough": "VAULT_EXTRA_FLAG"},
+	})
+	got, err := p.Fetch(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !strings.Contains(got, "VAULT_EXTRA_FLAG=wanted") {
+		t.Error("a named passthrough variable should reach the subprocess")
+	}
+	if strings.Contains(got, "UNRELATED_SECRET") {
+		t.Error("env_passthrough should name variables, not open the gate")
+	}
+}
+
+// Each vendor driver knows which variables its own CLI authenticates
+// with, so the documented `export BW_SESSION` workflow keeps working
+// without the operator listing it by hand.
+func TestVendorDriversAllowTheirOwnCredentialVars(t *testing.T) {
+	t.Run("bitwarden keeps BW_SESSION", func(t *testing.T) {
+		stubBin(t, "bw", `printenv | sort | tr '\n' ';'`)
+		t.Setenv("BW_SESSION", "session-token")
+		t.Setenv("UNRELATED_SECRET", "not-wanted")
+
+		p := mustProvider(t, BitwardenFactory, ProviderConfig{Label: "bw"})
+		got, err := p.Fetch(context.Background(), "app/key")
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if !strings.Contains(got, "BW_SESSION=session-token") {
+			t.Error("BW_SESSION should survive; the driver's own hint tells operators to export it")
+		}
+		if strings.Contains(got, "UNRELATED_SECRET") {
+			t.Error("the vendor allowlist should not reopen the whole environment")
+		}
+	})
+
+	t.Run("1password keeps OP_SERVICE_ACCOUNT_TOKEN", func(t *testing.T) {
+		stubBin(t, "op", `printenv | sort | tr '\n' ';'`)
+		t.Setenv("OP_SERVICE_ACCOUNT_TOKEN", "ops-token")
+		t.Setenv("UNRELATED_SECRET", "not-wanted")
+
+		p := mustProvider(t, OnePasswordFactory, ProviderConfig{Label: "op"})
+		got, err := p.Fetch(context.Background(), "Private/Item/field")
+		if err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if !strings.Contains(got, "OP_SERVICE_ACCOUNT_TOKEN=ops-token") {
+			t.Error("OP_SERVICE_ACCOUNT_TOKEN should survive; the driver's own hint names it")
+		}
+		if strings.Contains(got, "UNRELATED_SECRET") {
+			t.Error("the vendor allowlist should not reopen the whole environment")
+		}
+	})
+}
+
 // The reason bitwarden and onepassword are compiled drivers rather than
 // exec blocks: the CLI's own words do not tell an operator what to do.
 func TestVendorDriversTranslateTheirFailures(t *testing.T) {
