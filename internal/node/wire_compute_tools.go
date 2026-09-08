@@ -117,6 +117,12 @@ func (n *Node) registerAgentTools(builtins *tools.Builtins, embedder compute.Emb
 	if err := n.wireVideoTools(builtins); err != nil {
 		return nil, err
 	}
+	// After the modalities: export needs the same artifact mount they
+	// do, and reads as "the thing you do with what they just produced"
+	// when a reader lands on this list looking for it.
+	if err := n.wireExportTool(builtins); err != nil {
+		return nil, err
+	}
 
 	return binariesProvider, nil
 }
