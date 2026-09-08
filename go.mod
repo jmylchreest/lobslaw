@@ -3,6 +3,7 @@ module github.com/jmylchreest/lobslaw
 go 1.27.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/Jille/raft-grpc-transport v1.6.1
 	github.com/coder/websocket v1.8.15
 	github.com/elastic/go-seccomp-bpf v1.6.0
@@ -38,7 +39,6 @@ require (
 )
 
 require (
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/DataDog/datadog-go v4.5.1+incompatible // indirect
 	github.com/Microsoft/go-winio v0.4.17 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
