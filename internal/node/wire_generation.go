@@ -440,6 +440,30 @@ func (n *Node) artifactOpener() gateway.ArtifactOpener {
 	}
 }
 
+// wireExportTool registers the export builtin, which copies a file out
+// of generated/ into export/ — the one place the retention sweep in
+// artifact_sweep.go structurally cannot reach.
+//
+// Skipped when there is no writable artifact mount, same reasoning as
+// the modality tools below: an export tool with nowhere to read
+// generated/ from, or write export/ to, could not satisfy a single
+// call.
+func (n *Node) wireExportTool(builtins *tools.Builtins) error {
+	resolver := n.artifactResolver()
+	if resolver == nil {
+		n.log.Warn("compute: no writable artifact mount; skipping the export tool")
+		return nil
+	}
+	if err := tools.RegisterExportBuiltin(builtins, tools.ExportConfig{Resolver: resolver}); err != nil {
+		return fmt.Errorf("register export: %w", err)
+	}
+	if err := n.toolRegistry.Register(tools.ExportToolDef()); err != nil {
+		return fmt.Errorf("register export tool def: %w", err)
+	}
+	n.log.Debug("compute: export registered", "mount", resolver.DefaultMount)
+	return nil
+}
+
 func (n *Node) resolveImageEndpoints() []*llmEndpoint {
 	return n.resolveModalityEndpoints("image", n.cfg.Compute.Image.Provider, compute.CapabilityImage)
 }

@@ -222,10 +222,25 @@ func (r *ArtifactResolver) write(name, mime string, b []byte) (*ResolvedArtifact
 	}, nil
 }
 
-// generatedDir is where resolved artifacts land inside the mount. Named
+// GeneratedDir is where resolved artifacts land inside the mount. Named
 // once because the retention sweep must walk exactly this directory and
 // nothing else in the tree.
-const generatedDir = "generated"
+//
+// Exported so the export builtin (#200) can build an accurate example
+// path in its own tool description without a second string literal
+// drifting out of sync with this one.
+const GeneratedDir = "generated"
+
+// ExportDir sits beside GeneratedDir at the mount root. Nothing writes
+// there yet in this package — the export builtin does, from
+// internal/tools — but the name belongs here so both packages agree on
+// it without a second literal.
+//
+// It needs no retention exemption of its own: sweepGenerated only ever
+// walks GeneratedDir (see artifact_sweep.go), so ExportDir is outside
+// its reach by construction, not by a check either package has to
+// remember to make.
+const ExportDir = "export"
 
 // safeArtifactName keeps a provider-influenced name from escaping the
 // mount. The name reaches us via a job the model prompted for, so it
@@ -251,7 +266,7 @@ func safeArtifactName(name, mime string) string {
 			base += ext
 		}
 	}
-	return filepath.Join(generatedDir, base)
+	return filepath.Join(GeneratedDir, base)
 }
 
 // hasFileExt reports whether base already ends in something that is
