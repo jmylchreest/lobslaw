@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-viper/mapstructure/v2"
 	koanftoml "github.com/knadh/koanf/parsers/toml/v2"
@@ -347,7 +348,10 @@ func validateChainTriggers(c ComputeConfig) error {
 					"judge's system prompt instead of staying a single tag",
 					types.ErrInvalidConfig, ch.Label, d)
 			}
-			if len(d) > domainTagMaxLen {
+			// Runes, not bytes: this bound exists to catch a paragraph
+			// in the wrong field, and counting bytes would refuse a
+			// short tag written in a non-Latin script.
+			if utf8.RuneCountInString(d) > domainTagMaxLen {
 				return fmt.Errorf("%w: chain %q has a trigger.domains entry over %d characters; "+
 					"a domain is a subject tag the preflight is offered and a chain routes on, "+
 					"and something this long is not a tag",
