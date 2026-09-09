@@ -44,18 +44,23 @@ func TestSandboxExecNoNewPrivsSetsProcStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/bin/cat", "/proc/self/status")
-	cmd.Env = append(os.Environ(), sandbox.PolicyEnvVar+"="+encoded)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	// Thread migration made enforcement intermittent; every invocation must
+	// inherit the flag, regardless of Go's scheduling between prctl and exec.
+	const attempts = 32
+	for attempt := range attempts {
+		cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/bin/cat", "/proc/self/status")
+		cmd.Env = append(os.Environ(), sandbox.PolicyEnvVar+"="+encoded)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
 
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("helper run failed: %v\n--- output ---\n%s", err, out.String())
-	}
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("attempt %d: helper run failed: %v\n--- output ---\n%s", attempt, err, out.String())
+		}
 
-	if !strings.Contains(out.String(), "\nNoNewPrivs:\t1\n") {
-		t.Errorf("expected NoNewPrivs=1 in /proc/self/status; got:\n%s", out.String())
+		if !strings.Contains(out.String(), "\nNoNewPrivs:\t1\n") {
+			t.Fatalf("attempt %d: expected NoNewPrivs=1 in /proc/self/status; got:\n%s", attempt, out.String())
+		}
 	}
 }
 
