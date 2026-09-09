@@ -1,6 +1,8 @@
 package skills
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +55,39 @@ storage:
 	}
 	if len(skill.Manifest.Storage) != 1 || skill.Manifest.Storage[0].Label != "shared" {
 		t.Errorf("storage: %+v", skill.Manifest.Storage)
+	}
+}
+
+// A hand-authored manifest (SKILL.md frontmatter, e.g.) may declare no
+// version at all. Parse must accept it and default in-memory, without
+// rewriting the file: SHA256 is checked against the bytes as written,
+// not against a re-serialised manifest, which is what would break a
+// signature over the original.
+func TestParseDefaultsAMissingVersionWithoutTouchingTheFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeHandler(t, dir, "h.sh", "#!/bin/sh\n")
+	manifest := "name: weather\nruntime: bash\nhandler: h.sh\n"
+	writeManifest(t, dir, manifest)
+
+	skill, err := Parse(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill.Manifest.Version != DefaultVersion {
+		t.Errorf("version: got %q, want %q", skill.Manifest.Version, DefaultVersion)
+	}
+
+	onDisk, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != manifest {
+		t.Fatalf("manifest.yaml was rewritten: got %q, want %q", onDisk, manifest)
+	}
+	want := sha256.Sum256([]byte(manifest))
+	if skill.SHA256 != hex.EncodeToString(want[:]) {
+		t.Error("SHA256 was computed over something other than the untouched manifest bytes")
 	}
 }
 

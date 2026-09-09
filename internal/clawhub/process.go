@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jmylchreest/lobslaw/internal/binaries"
+	"github.com/jmylchreest/lobslaw/internal/skills"
 )
 
 // ProcessResult captures what came out of processing a clawhub
@@ -203,12 +204,9 @@ func writeSyntheticManifest(stagingDir string, fm *SkillFrontmatter, cb Clawdbot
 	manifest := syntheticManifest{
 		SchemaVersion: 1,
 		Name:          fm.Name,
-		// SKILL.md frontmatter has no version field, and validateManifest
-		// rejects an empty one, so without this the skill fails to LOAD,
-		// not merely to export. A fixed literal rather than a content
-		// digest: the local signing path signs these raw bytes, so a
-		// version that moved with every edit would break every signature.
-		Version:        "0.0.0",
+		// The loader now defaults this; stated anyway since it is
+		// authored fresh here, not preserved. See DefaultVersion.
+		Version:        skills.DefaultVersion,
 		Description:    fm.Description,
 		Runtime:        "bash",
 		Handler:        "handler.sh",
