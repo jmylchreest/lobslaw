@@ -120,6 +120,10 @@ type AgentConfig struct {
 	// Soul remains the inexpensive accessor for runtime trust checks.
 	SoulSnapshot func(context.Context) (*soul.Soul, error)
 
+	// LanguageDetector is reused across turns and only invoked when the
+	// effective soul enables detection. Nil uses the lazy Lingua detector.
+	LanguageDetector soul.Detector
+
 	// EpisodicIngester, when non-nil, receives each turn's
 	// user-message + assistant-reply pair as an EpisodicRecord
 	// write opportunity. The agent calls IngestTurn after a
@@ -368,6 +372,9 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.LanguageDetector == nil {
+		cfg.LanguageDetector = soul.NewLinguaDetector()
 	}
 	return &Agent{cfg: cfg}, nil
 }
@@ -634,6 +641,14 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			config = a.cfg.Soul()
 		}
 		if config != nil {
+			// Language choice is turn-local. Never mutate a shared baseline or
+			// classify configuration, recalled context, or the previous reply.
+			turnConfig := *config
+			if turnConfig.Language.Detect {
+				if detected := a.cfg.LanguageDetector.Detect(soul.LanguageSample(req.Message)); detected != "" {
+					turnConfig.Language.Default = detected
+				}
+			}
 			var bins []promptgen.BinaryInfo
 			if a.cfg.BinariesProvider != nil {
 				bins = a.cfg.BinariesProvider()
@@ -651,7 +666,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 				proposals = a.cfg.ProposalsProvider(userIDFor(req))
 			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
-				Soul:           config,
+				Soul:           &turnConfig,
 				SoulBody:       body,
 				Tools:          toPromptgenTools(req.Tools),
 				Skills:         skillIndex,

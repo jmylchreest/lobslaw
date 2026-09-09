@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 
+	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -77,6 +79,26 @@ func Parse(raw []byte, path string) (*Soul, error) {
 	var cfg types.SoulConfig
 	if err := yaml.Unmarshal(frontmatter, &cfg); err != nil {
 		return nil, fmt.Errorf("soul: %s: parse frontmatter: %w", labelForError(path), err)
+	}
+	if cfg.SchemaVersion != 0 && cfg.SchemaVersion != types.SoulSchemaVersion {
+		return nil, fmt.Errorf("soul: %s: unsupported schema_version %d", labelForError(path), cfg.SchemaVersion)
+	}
+	if cfg.SchemaVersion == types.SoulSchemaVersion {
+		// Seed before decoding: omitted values get defaults, explicit zero
+		// remains an operator choice. Legacy files retain their old semantics.
+		cfg = types.SoulConfig{SchemaVersion: types.SoulSchemaVersion,
+			Verbosity: types.VerbosityBalanced,
+			EmotiveStyle: types.EmotiveStyle{
+				Excitement: types.SoulNeutralScore, Formality: types.SoulNeutralScore,
+				Directness: types.SoulNeutralScore, Sarcasm: types.SoulNeutralScore, Humor: types.SoulNeutralScore,
+			},
+			Adjustments: types.Adjustments{FeedbackCoefficient: DefaultFeedbackCoefficient, CooldownPeriod: DefaultCooldownPeriod},
+		}
+		decoder := yaml.NewDecoder(bytes.NewReader(frontmatter))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&cfg); err != nil {
+			return nil, fmt.Errorf("soul: %s: parse frontmatter: %w", labelForError(path), err)
+		}
 	}
 	applyDefaults(&cfg)
 	if err := validate(&cfg); err != nil {
@@ -163,10 +185,10 @@ func applyDefaults(cfg *types.SoulConfig) {
 	if cfg.EmotiveStyle.EmojiUsage == "" {
 		cfg.EmotiveStyle.EmojiUsage = DefaultEmojiUsage
 	}
-	if cfg.Adjustments.FeedbackCoefficient == 0 {
+	if cfg.SchemaVersion == 0 && cfg.Adjustments.FeedbackCoefficient == 0 {
 		cfg.Adjustments.FeedbackCoefficient = DefaultFeedbackCoefficient
 	}
-	if cfg.Adjustments.CooldownPeriod == 0 {
+	if cfg.SchemaVersion == 0 && cfg.Adjustments.CooldownPeriod == 0 {
 		cfg.Adjustments.CooldownPeriod = DefaultCooldownPeriod
 	}
 	if cfg.Feedback.Classifier == "" {
@@ -180,6 +202,27 @@ func applyDefaults(cfg *types.SoulConfig) {
 // mode. Anything out of range is an operator-config error surfaced
 // at boot rather than at first message.
 func validate(cfg *types.SoulConfig) error {
+	switch cfg.Verbosity {
+	case "", types.VerbosityConcise, types.VerbosityBalanced, types.VerbosityDetailed:
+	default:
+		return fmt.Errorf("verbosity=%q must be concise|balanced|detailed", cfg.Verbosity)
+	}
+	if cfg.Language.SpellingLocale != "" {
+		tag, err := language.Parse(cfg.Language.SpellingLocale)
+		if err != nil || tag == language.Und {
+			return fmt.Errorf("language.spelling_locale=%q must be a valid language tag", cfg.Language.SpellingLocale)
+		}
+		cfg.Language.SpellingLocale = tag.String()
+	}
+	if cfg.SchemaVersion == types.SoulSchemaVersion {
+		coefficient := cfg.Adjustments.FeedbackCoefficient
+		if math.IsNaN(coefficient) || math.IsInf(coefficient, 0) || coefficient < 0 || coefficient > 1 {
+			return fmt.Errorf("adjustments.feedback_coefficient must be finite and between 0 and 1")
+		}
+		if cfg.Adjustments.CooldownPeriod < 0 {
+			return fmt.Errorf("adjustments.cooldown_period must be nonnegative")
+		}
+	}
 	for _, field := range []struct {
 		name  string
 		value int
