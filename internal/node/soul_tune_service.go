@@ -30,7 +30,7 @@ type soulTuneServer struct {
 	n *Node
 }
 
-func (s *soulTuneServer) leader() (lobslawv1.SoulTuneServiceClient, func(), error) {
+func (s *soulTuneServer) leader(ctx context.Context) (lobslawv1.SoulTuneServiceClient, func(), error) {
 	if s.n.raft.IsLeader() {
 		return nil, func() {}, nil
 	}
@@ -38,7 +38,7 @@ func (s *soulTuneServer) leader() (lobslawv1.SoulTuneServiceClient, func(), erro
 	if addr == "" {
 		return nil, nil, status.Error(codes.Unavailable, "soul tune: no raft leader")
 	}
-	conn, err := s.n.dialer()(context.Background(), addr)
+	conn, err := s.n.dialer()(ctx, addr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -48,7 +48,7 @@ func (s *soulTuneServer) leader() (lobslawv1.SoulTuneServiceClient, func(), erro
 func (s *soulTuneServer) GetSoulTune(ctx context.Context, req *lobslawv1.GetSoulTuneRequest) (*lobslawv1.GetSoulTuneResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, soulRPCTimeout)
 	defer cancel()
-	client, closeConn, err := s.leader()
+	client, closeConn, err := s.leader(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (s *soulTuneServer) PutSoulTune(ctx context.Context, req *lobslawv1.PutSoul
 	if req.GetState() == nil {
 		return nil, status.Error(codes.InvalidArgument, "state required")
 	}
-	client, closeConn, err := s.leader()
+	client, closeConn, err := s.leader(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (s *soulTuneServer) RollbackSoulTune(ctx context.Context, req *lobslawv1.Ro
 	if req.GetSteps() < 1 || req.GetSteps() > memory.MaxSoulTuneHistory {
 		return nil, status.Error(codes.InvalidArgument, "steps outside retained history range")
 	}
-	client, closeConn, err := s.leader()
+	client, closeConn, err := s.leader(ctx)
 	if err != nil {
 		return nil, err
 	}

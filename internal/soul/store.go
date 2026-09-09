@@ -150,9 +150,7 @@ func (m *MemoryTuneStore) putLocked(state *TuneState) error {
 	return nil
 }
 
-// Rollback promotes a past version to current. steps=1 is the most
-// recent prior version. Promoted state's UpdatedAt is left as-is so
-// rollback is distinguishable from a fresh edit in audit logs.
+// Rollback restores a past overlay as a new revision, retaining the undo history.
 func (m *MemoryTuneStore) Rollback(_ context.Context, steps int) (*TuneState, error) {
 	if steps < 1 {
 		return nil, errors.New("soul tune: steps must be >= 1")

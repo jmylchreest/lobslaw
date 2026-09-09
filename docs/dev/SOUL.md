@@ -12,6 +12,40 @@ The soul is standing configuration, never the current task. The existing prompt 
 
 Sources: `internal/soul/loader.go`, `adjuster.go`, `mutate.go`, `store.go`; `internal/node/soul_tune_adapter.go`, `soul_tune_service.go`, `wire_compute.go`; `internal/compute/agent.go`; `pkg/promptgen/generate.go`, `sections.go`.
 
+```mermaid
+flowchart LR
+    File[Operator SOUL.md] --> Loader[Validated baseline loader]
+    Loader --> Adjuster[Effective soul adjuster]
+    Overlay[Raft overlay] --> Adjuster
+    Adjuster --> Snapshot[New-turn snapshot]
+    Snapshot --> Prompt[System prompt]
+    User[Current user message] --> Turn[Agent turn]
+    Prompt --> Turn
+    Turn --> Policy[Tool policy check]
+    Policy --> Tune[Bounded soul edit]
+    Tune --> CAS[Revision-checked Raft proposal]
+    CAS --> Overlay
+```
+
+```mermaid
+sequenceDiagram
+    participant Compute as Compute node
+    participant Policy as Policy service
+    participant Leader as Soul service on Raft leader
+    participant Raft as Replicated store
+    Compute->>Policy: Evaluate caller's soul tool permission
+    Policy-->>Compute: Allow or deny
+    opt Allowed edit
+        Compute->>Leader: Read current overlay and revision
+        Leader-->>Compute: Overlay and revision
+        Compute->>Leader: Submit bounded edit with expected revision
+        Leader->>Raft: Compare revision and apply
+        Raft-->>Leader: Committed or conflict
+        Leader-->>Compute: Success or explicit failure
+    end
+    Note over Compute: Current turn retains its prompt; next turn reads the new overlay
+```
+
 ## Field audit
 
 | Field | Current behavior | Consequence |
