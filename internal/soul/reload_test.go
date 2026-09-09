@@ -2,8 +2,9 @@ package soul
 
 import (
 	"context"
-	"sync"
 	"testing"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func TestReloadPreservesOverridesAndResetInherits(t *testing.T) {
@@ -57,20 +58,25 @@ func TestRollbackFirstEditRestoresInheritance(t *testing.T) {
 func TestConcurrentReloadTuneRefresh(t *testing.T) {
 	a, _ := newTestAdjuster(t)
 	ctx := context.Background()
-	var wg sync.WaitGroup
-	for i := range 20 {
-		wg.Go(func() {
+	const workers = 20
+	var group errgroup.Group
+	group.SetLimit(workers)
+	for i := range workers {
+		group.Go(func() error {
 			b := freshSoul(t)
 			b.Config.EmotiveStyle.Sarcasm = i % 10
 			a.ReplaceBaseline(b)
 			_, _, _ = a.Tune(ctx, "sarcasm", 1)
 			if err := a.RefreshTune(ctx); err != nil {
-				t.Error(err)
+				return err
 			}
 			_ = a.Soul()
+			return nil
 		})
 	}
-	wg.Wait()
+	if err := group.Wait(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.SetName(ctx, "last write"); err != nil {
 		t.Fatal(err)
 	}

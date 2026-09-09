@@ -1187,14 +1187,22 @@ service SoulTuneService {
 }
 
 message GetSoulTuneRequest {}
-message GetSoulTuneResponse { SoulTuneRecord record = 1; }
+message GetSoulTuneResponse {
+  SoulTuneRecord record = 1;
+}
 message PutSoulTuneRequest {
   SoulTuneState state = 1;
   uint64 expected_revision = 2;
 }
-message PutSoulTuneResponse { SoulTuneRecord record = 1; }
-message RollbackSoulTuneRequest { uint32 steps = 1; }
-message RollbackSoulTuneResponse { SoulTuneRecord record = 1; }
+message PutSoulTuneResponse {
+  SoulTuneRecord record = 1;
+}
+message RollbackSoulTuneRequest {
+  uint32 steps = 1;
+}
+message RollbackSoulTuneResponse {
+  SoulTuneRecord record = 1;
+}
 
 message SoulTuneRecord {
   // Latest applied tune.
