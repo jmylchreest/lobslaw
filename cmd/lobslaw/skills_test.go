@@ -1,9 +1,13 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/skills"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -61,16 +65,67 @@ func TestANestedNameIsNotTheSkillName(t *testing.T) {
 	}
 }
 
+// A missing NAME is still refused; a manifest with no way to identify
+// what it is cannot be installed or exported under any label. A
+// missing version is not in this list, see
+// TestManifestIdentityDefaultsAMissingVersion below.
 func TestAManifestMissingEitherFieldIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, manifest := range []string{
 		"version: 1.2.3\nruntime: python\n",
-		"name: tidy\nruntime: python\n",
 		"",
 	} {
 		if _, _, err := manifestIdentity([]byte(manifest)); err == nil {
 			t.Errorf("%q was accepted", manifest)
 		}
+	}
+}
+
+// A hand-authored SKILL.md has no field to put a version in, and the
+// import RPC needs a non-empty identity regardless.
+func TestManifestIdentityDefaultsAMissingVersion(t *testing.T) {
+	t.Parallel()
+	name, version, err := manifestIdentity([]byte("name: weather\nruntime: bash\nhandler: h.sh\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "weather" || version != skills.DefaultVersion {
+		t.Errorf("got %q %q, want \"weather\" %q", name, version, skills.DefaultVersion)
+	}
+}
+
+// --- import path: the bytes travel unmodified ---------------------------
+
+// prepareImport is exactly what skillsImport calls before the network
+// round trip; the storage-model decision requires manifest bytes to
+// survive import verbatim, signed or not.
+func TestPrepareImportReadsTheBundleWithoutRewritingIt(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	manifest := "name: weather\nruntime: bash\nhandler: h.sh\n"
+	if err := os.WriteFile(filepath.Join(dir, memory.ManifestFile), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "h.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	name, version, bundle, err := prepareImport(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "weather" || version != skills.DefaultVersion {
+		t.Fatalf("got %q %q", name, version)
+	}
+	if string(bundle.Manifest) != manifest {
+		t.Fatalf("bundle.Manifest = %q, want the file untouched: %q", bundle.Manifest, manifest)
+	}
+
+	// What skillsImport actually sends: the same bytes, run through the
+	// real loader exactly as skillService.validate does before storing
+	// anything.
+	if _, err := skills.ParseWithPolicy(dir, skills.SigningOff, nil); err != nil {
+		t.Fatalf("the loader rejected the untouched bundle: %v", err)
 	}
 }
 

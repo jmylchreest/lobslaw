@@ -86,6 +86,13 @@ type StorageAccess struct {
 	Mode    StorageMode `yaml:"mode,omitempty"` // default: read
 }
 
+// DefaultVersion stands in for a manifest that declares none, e.g.
+// SKILL.md frontmatter has no version field. A fixed literal rather
+// than a content digest: the local signing path signs raw manifest
+// bytes, so a version that moved with every edit would break every
+// signature.
+const DefaultVersion = "0.0.0"
+
 // Manifest is the on-disk shape of skills/<name>/manifest.yaml.
 // Versioning follows semver; the registry prefers the highest
 // version when two mounts expose the same skill name.
@@ -663,7 +670,9 @@ func validateManifest(m *Manifest, dir string) error {
 		return fmt.Errorf("manifest.name %q must not contain path separators", m.Name)
 	}
 	if m.Version == "" {
-		return errors.New("manifest.version is required")
+		// Defaults the struct only; raw bytes and any signature are
+		// already captured by the caller and stay untouched.
+		m.Version = DefaultVersion
 	}
 	if err := validateDisclosure(m); err != nil {
 		return err

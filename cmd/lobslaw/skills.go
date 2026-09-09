@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/skills"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -141,11 +142,7 @@ func skillsImport(args []string) error {
 	}
 
 	// Read here, on the client. The bytes travel.
-	bundle, err := memory.ReadBundle(dir)
-	if err != nil {
-		return err
-	}
-	name, version, err := manifestIdentity(bundle.Manifest)
+	name, version, bundle, err := prepareImport(dir)
 	if err != nil {
 		return err
 	}
@@ -287,7 +284,24 @@ func skillsRemove(args []string) error {
 	return nil
 }
 
-// manifestIdentity pulls the name and version out of a manifest.
+// prepareImport reads dir into a bundle and derives the identity
+// skillsImport sends, split out so a test can exercise it without a
+// live cluster.
+func prepareImport(dir string) (name, version string, bundle *memory.Bundle, err error) {
+	bundle, err = memory.ReadBundle(dir)
+	if err != nil {
+		return "", "", nil, err
+	}
+	name, version, err = manifestIdentity(bundle.Manifest)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return name, version, bundle, nil
+}
+
+// manifestIdentity pulls the name and version out of a manifest. A
+// missing version becomes DefaultVersion, since the import RPC needs
+// a non-empty one; the manifest bytes sent alongside it are untouched.
 //
 // Read from the manifest rather than taken as flags, because they are
 // already stated there and two sources for one fact eventually
@@ -322,8 +336,11 @@ func manifestIdentity(manifest []byte) (name, version string, err error) {
 			}
 		}
 	}
-	if name == "" || version == "" {
-		return "", "", fmt.Errorf("the manifest does not declare both a name and a version")
+	if name == "" {
+		return "", "", fmt.Errorf("the manifest does not declare a name")
+	}
+	if version == "" {
+		version = skills.DefaultVersion
 	}
 	return name, version, nil
 }

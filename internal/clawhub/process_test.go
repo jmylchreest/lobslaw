@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jmylchreest/lobslaw/internal/skills"
 )
 
 // makeZipBundle builds an in-memory zip with the supplied entries
@@ -227,6 +229,36 @@ func TestProcessBundleRealGogBundle(t *testing.T) {
 	}
 }
 
+// TestSyntheticManifestIncludesVersion checks the manifest bytes
+// directly, independent of ParseWithPolicy, so a future change to
+// validateManifest's rules can't mask a regression in the writer.
+func TestSyntheticManifestIncludesVersion(t *testing.T) {
+	skillMD := `---
+name: versionless
+---
+
+body
+`
+	bundle := makeZipBundle(t, map[string][]byte{"SKILL.md": []byte(skillMD)})
+	dir := t.TempDir()
+	if _, err := ProcessBundle(bundle, dir); err != nil {
+		t.Fatalf("ProcessBundle: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Version string `yaml:"version"`
+	}
+	if err := yaml.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parse synthetic manifest: %v", err)
+	}
+	if m.Version != "0.0.0" {
+		t.Errorf("version: got %q, want 0.0.0", m.Version)
+	}
+}
+
 func TestProcessBundleClawhubNoBinsNoSpecs(t *testing.T) {
 	skillMD := `---
 name: prose-only
@@ -250,6 +282,36 @@ Just markdown, no host requirements.
 	}
 	if len(res.RequiresBins) != 0 {
 		t.Errorf("expected no bins required, got %v", res.RequiresBins)
+	}
+}
+
+// TestSyntheticManifestPassesValidation proves (or disproves) the
+// claim that a clawhub-format SKILL.md, once installed, fails to
+// LOAD rather than merely failing to export. ProcessBundle is what
+// `plugin install` runs on the downloaded bytes; ParseWithPolicy is
+// what the registry's signing-aware scan runs on the result. If the
+// synthetic manifest has no version, validateManifest rejects it and
+// the skill never appears in the registry, independent of whether
+// `skills export` was ever invoked.
+func TestSyntheticManifestPassesValidation(t *testing.T) {
+	skillMD := `---
+name: no-version-skill
+description: A hand-authored clawhub skill with no version anywhere
+---
+
+# no-version-skill
+
+Prose only, nothing to install.
+`
+	bundle := makeZipBundle(t, map[string][]byte{
+		"SKILL.md": []byte(skillMD),
+	})
+	dir := t.TempDir()
+	if _, err := ProcessBundle(bundle, dir); err != nil {
+		t.Fatalf("ProcessBundle: %v", err)
+	}
+	if _, err := skills.ParseWithPolicy(dir, skills.SigningOff, nil); err != nil {
+		t.Fatalf("ParseWithPolicy rejected the synthetic manifest: %v", err)
 	}
 }
 

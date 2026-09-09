@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jmylchreest/lobslaw/internal/binaries"
+	"github.com/jmylchreest/lobslaw/internal/skills"
 )
 
 // ProcessResult captures what came out of processing a clawhub
@@ -201,8 +202,11 @@ func readManifestName(path string) (string, error) {
 // from the install dir at turn time.
 func writeSyntheticManifest(stagingDir string, fm *SkillFrontmatter, cb ClawdbotMetadata) error {
 	manifest := syntheticManifest{
-		SchemaVersion:  1,
-		Name:           fm.Name,
+		SchemaVersion: 1,
+		Name:          fm.Name,
+		// The loader now defaults this; stated anyway since it is
+		// authored fresh here, not preserved. See DefaultVersion.
+		Version:        skills.DefaultVersion,
 		Description:    fm.Description,
 		Runtime:        "bash",
 		Handler:        "handler.sh",
@@ -252,6 +256,7 @@ func writeSyntheticManifest(stagingDir string, fm *SkillFrontmatter, cb Clawdbot
 type syntheticManifest struct {
 	SchemaVersion  int             `yaml:"schema_version"`
 	Name           string          `yaml:"name"`
+	Version        string          `yaml:"version"`
 	Description    string          `yaml:"description,omitempty"`
 	Runtime        string          `yaml:"runtime"`
 	Handler        string          `yaml:"handler"`
