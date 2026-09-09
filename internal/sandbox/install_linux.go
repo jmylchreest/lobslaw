@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"slices"
 	"syscall"
 	"time"
@@ -38,6 +39,7 @@ import (
 // The caller (cmd/lobslaw sandbox-exec subcommand) is responsible for
 // clearing any transport env vars (e.g. LOBSLAW_SANDBOX_POLICY)
 // before calling this, so the target binary inherits a clean env.
+// The caller must exit on error; the thread may already be restricted.
 func InstallAndExec(p *Policy, path string, argv, env []string) error {
 	if p == nil {
 		return fmt.Errorf("InstallAndExec: nil Policy")
@@ -48,6 +50,10 @@ func InstallAndExec(p *Policy, path string, argv, env []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("InstallAndExec: empty argv (argv[0] is required)")
 	}
+
+	// NoNewPrivs and filesystem restrictions apply to an OS thread. Keep
+	// that thread through exec, and never return it to the pool on failure.
+	runtime.LockOSThread()
 
 	if p.NoNewPrivs {
 		if err := setNoNewPrivs(); err != nil {
@@ -77,7 +83,7 @@ func InstallAndExec(p *Policy, path string, argv, env []string) error {
 	return syscall.Exec(path, argv, env)
 }
 
-// setNoNewPrivs sets PR_SET_NO_NEW_PRIVS=1 on the current process.
+// setNoNewPrivs sets PR_SET_NO_NEW_PRIVS=1 on the current OS thread.
 // Once set, any execve (including the one at the end of
 // InstallAndExec) cannot gain capabilities or setuid bits — the
 // critical prerequisite for Landlock enforcement.
