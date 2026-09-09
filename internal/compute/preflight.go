@@ -3,8 +3,11 @@ package compute
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -60,7 +63,8 @@ type Judgment struct {
 	// Complexity is 0-100. Chains with a MinComplexity trigger match
 	// when Complexity >= trigger.
 	Complexity int
-	// Domains are free-form tags — "code", "finance", "legal".
+	// Domains are the tags the judge picked out of the operator's
+	// declared vocabulary. Never anything else: see domainSet.
 	Domains []string
 	// Hint selects a chain directly when set.
 	Hint Hint
@@ -77,10 +81,13 @@ func NeutralJudgment() Judgment {
 	return Judgment{Hint: HintBalanced}
 }
 
-// judgeSystemPrompt asks for a compact object. Models are told the
-// scale in concrete terms because "rate complexity 0-100" without
+// judgeSystemPromptFormat asks for a compact object. Models are told
+// the scale in concrete terms because "rate complexity 0-100" without
 // anchors produces a cluster around 50 and no discrimination.
-const judgeSystemPrompt = `You classify requests for routing. Reply with JSON only, no prose, no code fences:
+//
+// The domains line is substituted because it names the operator's
+// vocabulary, which is the only one that can route.
+const judgeSystemPromptFormat = `You classify requests for routing. Reply with JSON only, no prose, no code fences:
 
 {"complexity": <0-100>, "domains": [<tags>], "hint": "fast"|"balanced"|"deep"|"reasoning"}
 
@@ -88,9 +95,30 @@ complexity: 0-20 greeting, acknowledgement, or a fact you could answer in one li
 
 Judge the DIFFICULTY, not the length. "Prove this loop terminates" is short and hard. A pasted stack trace is long and easy.
 
-domains: at most 3 lowercase single-word tags naming the subject area ("code", "finance", "legal", "medical", "maths"). Omit rather than guess.
+%s
 
 hint: "reasoning" only when the task needs sustained deduction rather than knowledge. Otherwise pick from the complexity.`
+
+// judgeNoDomainsWanted is the instruction when no chain declares a
+// domain. "choose from:" with nothing after it would be worse than
+// asking for nothing, and a tag nothing routes on is not worth the
+// tokens spent producing it.
+const judgeNoDomainsWanted = `domains: always []. Nothing in this deployment routes on them.`
+
+// judgeSystemPrompt builds the instruction for a given vocabulary. It
+// still says "at most 3": a closed list does not stop a model naming
+// all of it. What survives is not capped at maxDomains any more; a
+// model that over-names keeps every declared tag it named, because
+// each one is already routable by the time normaliseDomains sees it.
+func judgeSystemPrompt(vocabulary []string) string {
+	domains := judgeNoDomainsWanted
+	if len(vocabulary) > 0 {
+		domains = fmt.Sprintf(
+			"domains: at most %d of these exact tags, whichever apply: %s. Use no others, and omit rather than guess.",
+			maxDomains, strings.Join(vocabulary, ", "))
+	}
+	return fmt.Sprintf(judgeSystemPromptFormat, domains)
+}
 
 // judgeMaxCompletionTokens bounds the reply. The answer is one small
 // object; a model that pads still yields a parseable prefix.
@@ -103,7 +131,10 @@ const judgeMaxCompletionTokens = 128
 // hangs yields the neutral judgment and the turn proceeds.
 const judgeTimeout = 8 * time.Second
 
-// maxDomains bounds what a model can put in the routing key.
+// maxDomains is what the prompt asks a model to name, not a hard cap:
+// normaliseDomains no longer discards a declared tag beyond this
+// count, since everything that survives its vocabulary filter is
+// already routable and there is nothing left to protect against.
 const maxDomains = 3
 
 // Judge classifies a turn for routing. A nil *Judge is usable and
@@ -112,6 +143,11 @@ const maxDomains = 3
 type Judge struct {
 	provider LLMProvider
 	model    string
+	// domains is the closed vocabulary; prompt is the instruction built
+	// from it, once, because neither changes without a restart.
+	domains         domainSet
+	prompt          string
+	outOfVocabulary sync.Once
 	// timeout overrides judgeTimeout when the operator set one for
 	// this role. Zero keeps the constant.
 	timeout time.Duration
@@ -120,14 +156,27 @@ type Judge struct {
 
 // NewJudge wires a judge to the preflight provider. A nil provider
 // gives a nil judge — absence, not a disabled flag.
-func NewJudge(provider LLMProvider, model string, timeout time.Duration, log *slog.Logger) *Judge {
+//
+// The vocabulary comes from the resolver rather than the config,
+// because the resolver is what MATCHES the tags: one reading of the
+// chains, so the list the model is offered cannot drift from the list a
+// chain can route on. Once is enough, as [compute] takes a restart.
+func NewJudge(provider LLMProvider, model string, routes *Resolver, timeout time.Duration, log *slog.Logger) *Judge {
 	if provider == nil {
 		return nil
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Judge{provider: provider, model: model, timeout: timeout, log: log}
+	domains := newDomainSet(routes.DomainVocabulary())
+	return &Judge{
+		provider: provider,
+		model:    model,
+		domains:  domains,
+		prompt:   judgeSystemPrompt(domains.sorted()),
+		timeout:  timeout,
+		log:      log,
+	}
 }
 
 // Judge classifies text, honouring an explicit hint.
@@ -152,7 +201,7 @@ func (j *Judge) Judge(ctx context.Context, text string, explicit Hint) Judgment 
 		MaxTokens:   judgeMaxCompletionTokens,
 		Temperature: 0,
 		Messages: []Message{
-			{Role: "system", Content: judgeSystemPrompt},
+			{Role: "system", Content: j.prompt},
 			{Role: "user", Content: text},
 		},
 	})
@@ -164,7 +213,33 @@ func (j *Judge) Judge(ctx context.Context, text string, explicit Hint) Judgment 
 		j.log.Debug("preflight: judge unavailable; routing on the default", "error", err)
 		return NeutralJudgment()
 	}
-	return parseJudgment(resp.Content, j.log)
+	judgment, outside := parseJudgment(resp.Content, j.domains, j.log)
+	j.reportOutOfVocabulary(outside)
+	return judgment
+}
+
+// maxOutOfVocabularyToReport bounds how many discarded tags this
+// warning names. A constant of its own, distinct from maxDomains: that
+// one bounds the routing key, this one bounds a log line, and raising
+// either must not silently change the other.
+const maxOutOfVocabularyToReport = 3
+
+// reportOutOfVocabulary says, once, that the model is answering outside
+// the list it was given.
+//
+// Once, because a model that ignores the list ignores it every turn, and
+// a line per turn is the noise that trains everyone to stop reading. WARN
+// because it is a standing misconfiguration: the chains declare subjects
+// this preflight model will not produce, so subject routing is inert
+// until one of the two changes.
+func (j *Judge) reportOutOfVocabulary(tags []string) {
+	if len(tags) == 0 {
+		return
+	}
+	j.outOfVocabulary.Do(func() {
+		j.log.Warn("preflight: the judge answered outside the configured domains; those turns route as though they had none",
+			"discarded", tags, "configured", j.domains.sorted())
+	})
 }
 
 // complexityOf gives an explicit hint a score, so a hint and a
@@ -182,12 +257,15 @@ func complexityOf(h Hint) int {
 }
 
 // parseJudgment reads the model's object, discarding anything it got
-// wrong rather than propagating it.
-func parseJudgment(content string, log *slog.Logger) Judgment {
+// wrong rather than propagating it. The second return is the domain tags
+// it threw away: returned rather than logged, because whether those are
+// worth an operator's attention is a question about the deployment and
+// not about one reply.
+func parseJudgment(content string, allowed domainSet, log *slog.Logger) (Judgment, []string) {
 	raw := extractObject(content)
 	if raw == "" {
 		log.Debug("preflight: no JSON object in the reply; routing on the default")
-		return NeutralJudgment()
+		return NeutralJudgment(), nil
 	}
 	var parsed struct {
 		Complexity int      `json:"complexity"`
@@ -196,7 +274,7 @@ func parseJudgment(content string, log *slog.Logger) Judgment {
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		log.Debug("preflight: unparseable judgment; routing on the default", "error", err)
-		return NeutralJudgment()
+		return NeutralJudgment(), nil
 	}
 
 	out := Judgment{Complexity: clampComplexity(parsed.Complexity)}
@@ -205,8 +283,9 @@ func parseJudgment(content string, log *slog.Logger) Judgment {
 	} else {
 		out.Hint = hintFor(out.Complexity)
 	}
-	out.Domains = normaliseDomains(parsed.Domains)
-	return out
+	var outside []string
+	out.Domains, outside = normaliseDomains(parsed.Domains, allowed)
+	return out, outside
 }
 
 // extractObject finds the first balanced {...} run.
@@ -266,31 +345,89 @@ func hintFor(complexity int) Hint {
 	}
 }
 
-// normaliseDomains lowercases, trims, drops blanks and duplicates, and
-// bounds the count.
-//
-// These become a routing key. A model that returns "Code" one turn and
-// "code" the next would route the same question two different ways,
-// and an operator comparing the two would have nothing to look at.
-func normaliseDomains(in []string) []string {
+// domainSet is the closed vocabulary of subject tags: the union of every
+// chain trigger's domains, the only set that can select a chain. The
+// judge is offered this list and held to it, rather than asked for "the
+// subject area" and hoped to answer in the operator's words.
+type domainSet map[string]struct{}
+
+// newDomainSet normalises declared tags exactly as a judgment is
+// normalised, so the two sides cannot disagree on spelling. Unbounded,
+// unlike a reply: how many subjects to route on is the operator's call.
+func newDomainSet(in []string) domainSet {
 	if len(in) == 0 {
 		return nil
 	}
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, maxDomains)
+	out := make(domainSet, len(in))
 	for _, d := range in {
-		d = strings.ToLower(strings.TrimSpace(d))
-		if d == "" || seen[d] {
-			continue
-		}
-		seen[d] = true
-		out = append(out, d)
-		if len(out) == maxDomains {
-			break
+		if tag := normaliseDomain(d); tag != "" {
+			out[tag] = struct{}{}
 		}
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// sorted gives a stable order, so one config is one prompt.
+func (d domainSet) sorted() []string {
+	if len(d) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(d))
+	for tag := range d {
+		out = append(out, tag)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func normaliseDomain(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// normaliseDomains lowercases, trims, and drops blanks, duplicates and
+// anything no chain could route on. The second return is what it
+// dropped as unroutable, capped at maxOutOfVocabularyToReport because a
+// reply can name any number of subjects and the first few already say
+// enough about what it produces. Normalising because these become a
+// routing key: "Code" one turn and "code" the next would route the
+// same question two different ways.
+//
+// NOTHING HERE CAPS HOW MANY TAGS SURVIVE. Every tag reaching kept has
+// already passed the vocabulary filter, so it is routable by
+// construction, and capping it further would drop a declared tag the
+// operator wrote a rule for, to make room for nothing. The prompt
+// still asks for at most maxDomains; a model that ignores that keeps
+// every declared tag it named.
+//
+// An empty vocabulary drops everything and reports nothing: no chain
+// routes on subject, so the tags are dead weight, not a signal.
+func normaliseDomains(in []string, allowed domainSet) (kept, outside []string) {
+	if len(in) == 0 || len(allowed) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool, len(in))
+	kept = make([]string, 0, min(len(in), len(allowed)))
+	for _, d := range in {
+		d = normaliseDomain(d)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		if _, ok := allowed[d]; !ok {
+			// Bounded: a reply can name any number of subjects, and the
+			// first few say enough about what it produces.
+			if len(outside) < maxOutOfVocabularyToReport {
+				outside = append(outside, d)
+			}
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if len(kept) == 0 {
+		return nil, outside
+	}
+	return kept, outside
 }

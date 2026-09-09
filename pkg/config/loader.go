@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-viper/mapstructure/v2"
 	koanftoml "github.com/knadh/koanf/parsers/toml/v2"
@@ -123,6 +125,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := validateSearchProviders(c.Compute); err != nil {
+		return err
+	}
+	if err := validateChainTriggers(c.Compute); err != nil {
 		return err
 	}
 	if err := validateSecretProviders(c.Secrets); err != nil {
@@ -291,6 +296,84 @@ func validateSecretProviders(c SecretsConfig) error {
 		}
 	}
 	return nil
+}
+
+// domainTagMaxLen bounds a trigger.domains entry. A tag becomes one
+// word in the judge's prompt and then a routing key, and something
+// long enough to need a limit is not a subject tag any more, it is a
+// paragraph pasted into the wrong field. 64 is generous for anything
+// resembling a real one ("passenger-injury-litigation" is 28) while
+// still catching that mistake.
+const domainTagMaxLen = 64
+
+// validateChainTriggers rejects a trigger.domains entry that would
+// misbehave once it reaches the judge's prompt or the routing key:
+// blank (declares nothing), a comma (the prompt joins the vocabulary
+// with ", ", so a comma inside one entry reads back as two tags
+// neither of which is what was declared), a newline, tab or carriage
+// return (lands verbatim inside what is meant to be a single-line
+// instruction), or excessive length (a paragraph, not a tag, by that
+// point).
+//
+// The domains in force are the union of every trigger's, and that union
+// is the list the preflight is told to choose from, so a bad entry is
+// not merely ignored: it narrows the rule, or corrupts what the judge
+// is asked to choose from. On a trigger that also sets min_complexity a
+// blank entry changes the rule from "this complexity AND this subject"
+// to complexity alone, which is a chain firing on turns the operator
+// excluded.
+//
+// Case and surrounding space are NOT rejected: both sides normalise, so
+// "Legal" and " legal " are the tag they look like.
+func validateChainTriggers(c ComputeConfig) error {
+	for _, ch := range c.Chains {
+		for _, d := range ch.Trigger.Domains {
+			if strings.TrimSpace(d) == "" {
+				return fmt.Errorf("%w: chain %q has an empty entry in trigger.domains; "+
+					"a domain is a subject tag the preflight is offered and a chain routes on, "+
+					"so an empty one narrows the rule instead of widening it",
+					types.ErrInvalidConfig, ch.Label)
+			}
+			if strings.Contains(d, ",") {
+				return fmt.Errorf("%w: chain %q has a comma in trigger.domains entry %q; "+
+					"a domain is a subject tag the preflight is offered and a chain routes on, "+
+					"and the prompt joins the vocabulary with commas, so this one entry would "+
+					"read back as two tags, neither of which is what was declared",
+					types.ErrInvalidConfig, ch.Label, d)
+			}
+			if hasDisallowedWhitespace(d) {
+				return fmt.Errorf("%w: chain %q has a newline, tab or carriage return in "+
+					"trigger.domains entry %q; a domain is a subject tag the preflight is "+
+					"offered and a chain routes on, and this one would land verbatim in the "+
+					"judge's system prompt instead of staying a single tag",
+					types.ErrInvalidConfig, ch.Label, d)
+			}
+			// Runes, not bytes: this bound exists to catch a paragraph
+			// in the wrong field, and counting bytes would refuse a
+			// short tag written in a non-Latin script.
+			if utf8.RuneCountInString(d) > domainTagMaxLen {
+				return fmt.Errorf("%w: chain %q has a trigger.domains entry over %d characters; "+
+					"a domain is a subject tag the preflight is offered and a chain routes on, "+
+					"and something this long is not a tag",
+					types.ErrInvalidConfig, ch.Label, domainTagMaxLen)
+			}
+		}
+	}
+	return nil
+}
+
+// hasDisallowedWhitespace reports whether s contains whitespace other
+// than a plain space. A space inside a multi-word tag is fine and
+// already handled by normalising; a newline, tab or carriage return is
+// not whitespace inside a tag, it is the operator's text landing
+// somewhere a tag was supposed to be one word.
+func hasDisallowedWhitespace(s string) bool {
+	for _, r := range s {
+		if r != ' ' && unicode.IsSpace(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateQueueMode rejects an unrecognised gateway.queue_mode at

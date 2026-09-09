@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -41,7 +42,7 @@ func routedAgent(t *testing.T, chains []config.ChainConfig, judgment string) (*A
 	}
 	var judge *Judge
 	if judgment != "" {
-		judge = NewJudge(&scriptedLLM{reply: judgment}, "tiny", 0, slog.Default())
+		judge = NewJudge(&scriptedLLM{reply: judgment}, "tiny", resolver, 0, slog.Default())
 	}
 	a := &Agent{cfg: AgentConfig{
 		Provider:     &scriptedProvider{label: "unused", calls: calls},
@@ -157,6 +158,47 @@ func TestTheRouteRecordsWhy(t *testing.T) {
 	}
 	if got.Judgment.Complexity != 90 {
 		t.Errorf("judgment = %+v; the signal was not carried", got.Judgment)
+	}
+}
+
+// A chain that never fires used to look exactly like a chain that fired
+// and picked the same provider: nothing was logged at all when nothing
+// matched, so "why did my legal chain never fire" had no answer short of
+// a debugger.
+func TestAnUnmatchedTurnSaysSo(t *testing.T) {
+	t.Parallel()
+	a, _ := routedAgent(t, []config.ChainConfig{deepChainCfg()},
+		`{"complexity": 5, "hint": "fast"}`)
+	logs := &logCapture{}
+	a.cfg.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if got := a.resolveRoute(context.Background(), ProcessMessageRequest{Message: "hello"}); got != nil {
+		t.Fatalf("route = %+v; this test is about the unmatched path", got)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "no chain matched") {
+		t.Errorf("nothing was logged when a configured chain did not fire:\n%s", got)
+	}
+	// The signal it was judged on, or the line says what happened
+	// without saying why.
+	if !strings.Contains(got, "complexity=5") {
+		t.Errorf("the line does not carry the judgment:\n%s", got)
+	}
+}
+
+// A deployment with no chains has made no routing decision to report,
+// and this runs on every turn. A line per turn there is the noise that
+// makes the interesting one unreadable.
+func TestWithNoChainsConfiguredTheTurnIsQuiet(t *testing.T) {
+	t.Parallel()
+	a, _ := routedAgent(t, nil, `{"complexity": 5, "hint": "fast"}`)
+	logs := &logCapture{}
+	a.cfg.Logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	a.resolveRoute(context.Background(), ProcessMessageRequest{Message: "hello"})
+
+	if strings.Contains(logs.String(), "no chain matched") {
+		t.Errorf("a node with no chains reported one not matching:\n%s", logs.String())
 	}
 }
 

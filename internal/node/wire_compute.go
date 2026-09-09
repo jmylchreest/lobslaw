@@ -295,6 +295,11 @@ func (n *Node) wireResolver() error {
 // fast model classifying ahead of the main turn — and falls back to
 // main when unset, so a deployment that never configured one still
 // routes, just at the main model's price.
+//
+// The resolver comes in because it holds the domains the chains route
+// on, and the judge is told to answer in those and nothing else.
+// wireResolver runs earlier in this stage; nil when no provider is
+// configured, which is a judge with no vocabulary rather than an error.
 func (n *Node) newJudge() *compute.Judge {
 	if n.roleMap == nil {
 		return nil
@@ -310,7 +315,7 @@ func (n *Node) newJudge() *compute.Judge {
 			break
 		}
 	}
-	return compute.NewJudge(n.roleMap.For(compute.RolePreflight), model,
+	return compute.NewJudge(n.roleMap.For(compute.RolePreflight), model, n.resolver,
 		n.roleMap.TimeoutFor(compute.RolePreflight), n.log)
 }
 

@@ -3,8 +3,7 @@ package compute
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"strings"
+	"slices"
 	"testing"
 )
 
@@ -38,15 +37,18 @@ func (s *scriptedLLM) Chat(_ context.Context, req ChatRequest) (*ChatResponse, e
 	return &ChatResponse{Content: s.reply}, nil
 }
 
-func judgeWith(t *testing.T, reply string) (*Judge, *scriptedLLM) {
+// judgeWith scripts a reply. The tags are the vocabulary the operator
+// declared, because a judge only reports domains a chain can route on.
+func judgeWith(t *testing.T, reply string, vocabulary ...string) (*Judge, *scriptedLLM) {
 	t.Helper()
 	llm := &scriptedLLM{reply: reply}
-	return NewJudge(llm, "tiny", 0, slog.Default()), llm
+	return judgeOver(t, llm, vocabulary), llm
 }
 
 func TestAJudgmentRoutes(t *testing.T) {
 	t.Parallel()
-	j, _ := judgeWith(t, `{"complexity": 82, "domains": ["code","maths"], "hint": "deep"}`)
+	j, _ := judgeWith(t, `{"complexity": 82, "domains": ["code","maths"], "hint": "deep"}`,
+		"code", "maths")
 	got := j.Judge(context.Background(), "prove this loop terminates", "")
 	if got.Complexity != 82 || got.Hint != HintDeep {
 		t.Errorf("got %+v", got)
@@ -96,7 +98,7 @@ func TestAnUnknownExplicitHintDoesNotSkipTheCall(t *testing.T) {
 func TestAFailedJudgeRoutesOnTheDefault(t *testing.T) {
 	t.Parallel()
 	llm := &scriptedLLM{err: errors.New("429 slow down")}
-	j := NewJudge(llm, "tiny", 0, slog.Default())
+	j := judgeOver(t, llm, nil)
 	got := j.Judge(context.Background(), "a question", "")
 	if !isNeutral(got) {
 		t.Errorf("got %+v, want the neutral judgment", got)
@@ -112,7 +114,7 @@ func TestGarbageRoutesOnTheDefault(t *testing.T) {
 		"wrong types":   `{"complexity": "very high", "domains": "code"}`,
 		"unclosed pair": `{"complexity": 50, "domains": [`,
 	} {
-		got := parseJudgment(reply, slog.Default())
+		got := parsed(reply, "code")
 		if got.Hint != HintBalanced || got.Complexity != 0 || got.Domains != nil {
 			t.Errorf("%s: got %+v, want the neutral judgment", name, got)
 		}
@@ -123,7 +125,7 @@ func TestGarbageRoutesOnTheDefault(t *testing.T) {
 // preflight provider was configured.
 func TestANilJudgeIsUsable(t *testing.T) {
 	t.Parallel()
-	if NewJudge(nil, "", 0, nil) != nil {
+	if NewJudge(nil, "", nil, 0, nil) != nil {
 		t.Fatal("a nil provider should give a nil judge")
 	}
 	var j *Judge
@@ -141,7 +143,7 @@ func TestANilJudgeIsUsable(t *testing.T) {
 
 func TestFencedJSONIsStillRead(t *testing.T) {
 	t.Parallel()
-	got := parseJudgment("```json\n{\"complexity\": 75, \"hint\": \"deep\"}\n```", slog.Default())
+	got := parsed("```json\n{\"complexity\": 75, \"hint\": \"deep\"}\n```")
 	if got.Complexity != 75 || got.Hint != HintDeep {
 		t.Errorf("got %+v; a reply that is right apart from backticks is worth reading", got)
 	}
@@ -151,7 +153,7 @@ func TestFencedJSONIsStillRead(t *testing.T) {
 // or counting naively would truncate this one.
 func TestBracesInsideStringsDoNotEndTheObject(t *testing.T) {
 	t.Parallel()
-	got := parseJudgment(`{"domains": ["a}b"], "complexity": 60}`, slog.Default())
+	got := parsed(`{"domains": ["a}b"], "complexity": 60}`)
 	if got.Complexity != 60 {
 		t.Errorf("complexity = %d; the object was cut short at a brace in a string", got.Complexity)
 	}
@@ -159,30 +161,26 @@ func TestBracesInsideStringsDoNotEndTheObject(t *testing.T) {
 
 func TestComplexityIsClamped(t *testing.T) {
 	t.Parallel()
-	if got := parseJudgment(`{"complexity": 900}`, slog.Default()); got.Complexity != 100 {
+	if got := parsed(`{"complexity": 900}`); got.Complexity != 100 {
 		t.Errorf("complexity = %d, want 100", got.Complexity)
 	}
-	if got := parseJudgment(`{"complexity": -5}`, slog.Default()); got.Complexity != 0 {
+	if got := parsed(`{"complexity": -5}`); got.Complexity != 0 {
 		t.Errorf("complexity = %d, want 0", got.Complexity)
 	}
 }
 
 // Domains become a routing key. "Code" one turn and "code" the next
 // would route the same question two different ways.
+//
+// All four declared tags survive: every one of them passed the
+// vocabulary filter, so none is capped away just for being the fourth.
 func TestDomainsAreNormalised(t *testing.T) {
 	t.Parallel()
-	got := parseJudgment(`{"domains": ["  Code ", "CODE", "", "Finance", "legal", "maths"]}`,
-		slog.Default())
-	if len(got.Domains) != maxDomains {
-		t.Fatalf("domains = %v, want %d after dedup and bounding", got.Domains, maxDomains)
-	}
-	for _, d := range got.Domains {
-		if d != strings.ToLower(strings.TrimSpace(d)) {
-			t.Errorf("domain %q was not normalised", d)
-		}
-	}
-	if got.Domains[0] != "code" || got.Domains[1] != "finance" {
-		t.Errorf("domains = %v; order and dedup are wrong", got.Domains)
+	got := parsed(`{"domains": ["  Code ", "CODE", "", "Finance", "legal", "maths"]}`,
+		"code", "finance", "legal", "maths")
+	want := []string{"code", "finance", "legal", "maths"}
+	if !slices.Equal(got.Domains, want) {
+		t.Fatalf("domains = %v, want %v after dedup and normalising", got.Domains, want)
 	}
 }
 
@@ -211,7 +209,7 @@ func TestReasoningIsNeverInferred(t *testing.T) {
 		}
 	}
 	// It is honoured when asked for by name.
-	if got := parseJudgment(`{"complexity": 20, "hint": "reasoning"}`, slog.Default()); got.Hint != HintReasoning {
+	if got := parsed(`{"complexity": 20, "hint": "reasoning"}`); got.Hint != HintReasoning {
 		t.Errorf("hint = %q; an explicit reasoning hint was dropped", got.Hint)
 	}
 }
@@ -224,7 +222,7 @@ func TestTheJudgeIsBounded(t *testing.T) {
 		t.Fatal("the judge has no timeout; a hanging preflight would hang the turn")
 	}
 	llm := &scriptedLLM{reply: `{"complexity": 10}`}
-	j := NewJudge(llm, "tiny", 0, slog.Default())
+	j := judgeOver(t, llm, nil)
 	j.Judge(context.Background(), "hello", "")
 	if _, hasDeadline := context.Background().Deadline(); hasDeadline {
 		t.Fatal("test assumption broken")
@@ -243,7 +241,7 @@ func TestTheJudgeIsBounded(t *testing.T) {
 // indistinguishable from the preflight having had no opinion.
 func TestAnUnknownHintFromTheModelIsDiscarded(t *testing.T) {
 	t.Parallel()
-	got := parseJudgment(`{"complexity": 80, "hint": "turbo"}`, slog.Default())
+	got := parsed(`{"complexity": 80, "hint": "turbo"}`)
 	if !got.Hint.Valid() {
 		t.Errorf("hint = %q; an invalid hint reached the resolver", got.Hint)
 	}
@@ -257,7 +255,7 @@ func TestAnUnknownHintFromTheModelIsDiscarded(t *testing.T) {
 // An omitted hint is the same case and must behave the same way.
 func TestAnOmittedHintIsDerivedNotBlanked(t *testing.T) {
 	t.Parallel()
-	got := parseJudgment(`{"complexity": 10}`, slog.Default())
+	got := parsed(`{"complexity": 10}`)
 	if got.Hint != HintFast {
 		t.Errorf("hint = %q, want fast for complexity 10", got.Hint)
 	}

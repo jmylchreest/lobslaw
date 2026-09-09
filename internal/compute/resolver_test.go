@@ -86,6 +86,33 @@ func TestNewResolverReportsAllProblems(t *testing.T) {
 	}
 }
 
+// pkg/config rejects a blank trigger.domains entry before NewResolver
+// ever sees it, but NewResolver is exported and validates its own
+// coherence regardless of that caller. Left unchecked, an all-blank
+// slice normalises to zero entries and triggerMatches treats the chain
+// as complexity-only, firing on complexity alone despite the subject
+// gate the operator wrote.
+func TestNewResolverRejectsATriggerDomainsThatNormalisesToNothing(t *testing.T) {
+	t.Parallel()
+	cfg := &config.ComputeConfig{
+		Providers: []config.ProviderConfig{providerAt("p", types.TrustPublic)},
+		Chains: []config.ChainConfig{
+			{
+				Label:   "finance",
+				Steps:   []config.ChainStepConfig{{Provider: "p"}},
+				Trigger: config.ChainTriggerConfig{MinComplexity: 60, Domains: []string{"  ", ""}},
+			},
+		},
+	}
+	_, err := NewResolver(cfg)
+	if err == nil {
+		t.Fatal("a trigger.domains that normalises to nothing was accepted")
+	}
+	if !strings.Contains(err.Error(), "finance") {
+		t.Errorf("error does not name the offending chain: %v", err)
+	}
+}
+
 func TestResolveAlwaysTriggerMatches(t *testing.T) {
 	t.Parallel()
 	cfg := &config.ComputeConfig{
