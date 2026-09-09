@@ -18,7 +18,10 @@ flowchart LR
     Loader --> Adjuster[Effective soul adjuster]
     Overlay[Raft overlay] --> Adjuster
     Adjuster --> Snapshot[New-turn snapshot]
-    Snapshot --> Prompt[System prompt]
+    Snapshot --> TurnConfig[Turn-local style and language]
+    User --> Detection[Optional bounded language detection]
+    Detection --> TurnConfig
+    TurnConfig --> Prompt[System prompt]
     User[Current user message] --> Turn[Agent turn]
     Prompt --> Turn
     Turn --> Policy[Tool policy check]

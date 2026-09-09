@@ -8,7 +8,7 @@ import (
 )
 
 // MaxLanguageSampleRunes bounds the per-turn cost of language detection.
-const MaxLanguageSampleRunes = 2048
+const MaxLanguageSampleRunes int = 2048
 
 // LanguageSample bounds detector work without splitting UTF-8 characters.
 func LanguageSample(message string) string {

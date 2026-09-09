@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 func TestVersionedSoulStyle(t *testing.T) {
@@ -12,7 +13,7 @@ func TestVersionedSoulStyle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Config.EmotiveStyle.Formality != 5 || s.Config.EmotiveStyle.Sarcasm != 0 {
+	if s.Config.EmotiveStyle.Formality != types.SoulNeutralScore || s.Config.EmotiveStyle.Sarcasm != 0 {
 		t.Fatalf("omitted dials must default to neutral while explicit zero is preserved: %+v", s.Config.EmotiveStyle)
 	}
 	if s.Config.Adjustments.FeedbackCoefficient != 0 || s.Config.Adjustments.CooldownPeriod != 0 {

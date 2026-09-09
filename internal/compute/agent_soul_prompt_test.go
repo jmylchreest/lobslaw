@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/soul"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 func TestResumeKeepsOriginalSoulPrompt(t *testing.T) {
@@ -37,7 +38,7 @@ func TestSoulSnapshotStaysInSystemPrompt(t *testing.T) {
 	const guidance = "Use short sentences and dry humour."
 	s := soul.DefaultSoul()
 	s.Body = guidance
-	s.Config.Verbosity = "concise"
+	s.Config.Verbosity = types.VerbosityConcise
 	s.Config.Language.SpellingLocale = "en-GB"
 	var seen []ChatRequest
 	provider := NewMockProviderFunc(func(req ChatRequest, _ int) (MockResponse, error) {

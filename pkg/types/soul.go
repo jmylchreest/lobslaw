@@ -5,12 +5,12 @@ import "time"
 // SoulConfig is the YAML frontmatter of SOUL.md. The freeform
 // markdown body is loaded alongside, separately.
 type SoulConfig struct {
-	SchemaVersion int    `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
-	Verbosity     string `yaml:"verbosity,omitempty" json:"verbosity,omitempty"`
-	Name          string `yaml:"name" json:"name"`
-	Scope         string `yaml:"scope" json:"scope"`
-	Culture       string `yaml:"culture" json:"culture"`
-	Nationality   string `yaml:"nationality" json:"nationality"`
+	SchemaVersion int       `yaml:"schema_version,omitempty" json:"schema_version,omitempty"`
+	Verbosity     Verbosity `yaml:"verbosity,omitempty" json:"verbosity,omitempty"`
+	Name          string    `yaml:"name" json:"name"`
+	Scope         string    `yaml:"scope" json:"scope"`
+	Culture       string    `yaml:"culture" json:"culture"`
+	Nationality   string    `yaml:"nationality" json:"nationality"`
 
 	Language Language `yaml:"language" json:"language"`
 
@@ -42,11 +42,18 @@ type Language struct {
 
 // SoulSchemaVersion opts into strict decoding and explicit-zero style scores.
 const (
-	SoulSchemaVersion = 1
-	SoulNeutralScore  = 5
-	VerbosityConcise  = "concise"
-	VerbosityBalanced = "balanced"
-	VerbosityDetailed = "detailed"
+	SoulSchemaVersion int = 1
+	SoulNeutralScore  int = 5
+)
+
+// Verbosity sets the default amount of explanation in replies.
+type Verbosity string
+
+// Supported verbosity levels are independent of the directness style dial.
+const (
+	VerbosityConcise  Verbosity = "concise"
+	VerbosityBalanced Verbosity = "balanced"
+	VerbosityDetailed Verbosity = "detailed"
 )
 
 // EmotiveStyle scores the soul on numeric dimensions (0-10) plus
