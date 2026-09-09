@@ -8,7 +8,6 @@ package lobslawv1
 
 import (
 	context "context"
-
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -2531,6 +2530,212 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMounts",
 			Handler:    _StorageService_ListMounts_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
+	SoulTuneService_GetSoulTune_FullMethodName      = "/lobslaw.v1.SoulTuneService/GetSoulTune"
+	SoulTuneService_PutSoulTune_FullMethodName      = "/lobslaw.v1.SoulTuneService/PutSoulTune"
+	SoulTuneService_RollbackSoulTune_FullMethodName = "/lobslaw.v1.SoulTuneService/RollbackSoulTune"
+)
+
+// SoulTuneServiceClient is the client API for SoulTuneService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// SoulTuneRecord holds the agent's mutable personality overlay.
+// SOUL.md on disk is the operator-curated baseline (read-only); this
+// record carries the bounded subset the agent may tune at runtime —
+// name, the five emotive dimensions, emoji_usage, fragments. Stored
+// in raft so cluster nodes agree on the agent's identity and so
+// containerised deployments don't need a writable file mount.
+//
+// One record per cluster, keyed by the constant id "soul:tune". A
+// per-field optional discriminator means an unset field falls back
+// to the baseline at merge time — so when the operator edits SOUL.md
+// to lower sarcasm, untuned dimensions follow the new baseline while
+// fields the agent has explicitly tuned stay pinned.
+// SoulTuneService exposes the durable bounded overlay to compute-only peers.
+// SOUL.md itself remains operator-managed on each node.
+type SoulTuneServiceClient interface {
+	GetSoulTune(ctx context.Context, in *GetSoulTuneRequest, opts ...grpc.CallOption) (*GetSoulTuneResponse, error)
+	PutSoulTune(ctx context.Context, in *PutSoulTuneRequest, opts ...grpc.CallOption) (*PutSoulTuneResponse, error)
+	RollbackSoulTune(ctx context.Context, in *RollbackSoulTuneRequest, opts ...grpc.CallOption) (*RollbackSoulTuneResponse, error)
+}
+
+type soulTuneServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewSoulTuneServiceClient(cc grpc.ClientConnInterface) SoulTuneServiceClient {
+	return &soulTuneServiceClient{cc}
+}
+
+func (c *soulTuneServiceClient) GetSoulTune(ctx context.Context, in *GetSoulTuneRequest, opts ...grpc.CallOption) (*GetSoulTuneResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSoulTuneResponse)
+	err := c.cc.Invoke(ctx, SoulTuneService_GetSoulTune_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *soulTuneServiceClient) PutSoulTune(ctx context.Context, in *PutSoulTuneRequest, opts ...grpc.CallOption) (*PutSoulTuneResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutSoulTuneResponse)
+	err := c.cc.Invoke(ctx, SoulTuneService_PutSoulTune_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *soulTuneServiceClient) RollbackSoulTune(ctx context.Context, in *RollbackSoulTuneRequest, opts ...grpc.CallOption) (*RollbackSoulTuneResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RollbackSoulTuneResponse)
+	err := c.cc.Invoke(ctx, SoulTuneService_RollbackSoulTune_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SoulTuneServiceServer is the server API for SoulTuneService service.
+// All implementations should embed UnimplementedSoulTuneServiceServer
+// for forward compatibility.
+//
+// SoulTuneRecord holds the agent's mutable personality overlay.
+// SOUL.md on disk is the operator-curated baseline (read-only); this
+// record carries the bounded subset the agent may tune at runtime —
+// name, the five emotive dimensions, emoji_usage, fragments. Stored
+// in raft so cluster nodes agree on the agent's identity and so
+// containerised deployments don't need a writable file mount.
+//
+// One record per cluster, keyed by the constant id "soul:tune". A
+// per-field optional discriminator means an unset field falls back
+// to the baseline at merge time — so when the operator edits SOUL.md
+// to lower sarcasm, untuned dimensions follow the new baseline while
+// fields the agent has explicitly tuned stay pinned.
+// SoulTuneService exposes the durable bounded overlay to compute-only peers.
+// SOUL.md itself remains operator-managed on each node.
+type SoulTuneServiceServer interface {
+	GetSoulTune(context.Context, *GetSoulTuneRequest) (*GetSoulTuneResponse, error)
+	PutSoulTune(context.Context, *PutSoulTuneRequest) (*PutSoulTuneResponse, error)
+	RollbackSoulTune(context.Context, *RollbackSoulTuneRequest) (*RollbackSoulTuneResponse, error)
+}
+
+// UnimplementedSoulTuneServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedSoulTuneServiceServer struct{}
+
+func (UnimplementedSoulTuneServiceServer) GetSoulTune(context.Context, *GetSoulTuneRequest) (*GetSoulTuneResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSoulTune not implemented")
+}
+func (UnimplementedSoulTuneServiceServer) PutSoulTune(context.Context, *PutSoulTuneRequest) (*PutSoulTuneResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PutSoulTune not implemented")
+}
+func (UnimplementedSoulTuneServiceServer) RollbackSoulTune(context.Context, *RollbackSoulTuneRequest) (*RollbackSoulTuneResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RollbackSoulTune not implemented")
+}
+func (UnimplementedSoulTuneServiceServer) testEmbeddedByValue() {}
+
+// UnsafeSoulTuneServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SoulTuneServiceServer will
+// result in compilation errors.
+type UnsafeSoulTuneServiceServer interface {
+	mustEmbedUnimplementedSoulTuneServiceServer()
+}
+
+func RegisterSoulTuneServiceServer(s grpc.ServiceRegistrar, srv SoulTuneServiceServer) {
+	// If the following call pancis, it indicates UnimplementedSoulTuneServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&SoulTuneService_ServiceDesc, srv)
+}
+
+func _SoulTuneService_GetSoulTune_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSoulTuneRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SoulTuneServiceServer).GetSoulTune(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SoulTuneService_GetSoulTune_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SoulTuneServiceServer).GetSoulTune(ctx, req.(*GetSoulTuneRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SoulTuneService_PutSoulTune_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutSoulTuneRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SoulTuneServiceServer).PutSoulTune(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SoulTuneService_PutSoulTune_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SoulTuneServiceServer).PutSoulTune(ctx, req.(*PutSoulTuneRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SoulTuneService_RollbackSoulTune_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RollbackSoulTuneRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SoulTuneServiceServer).RollbackSoulTune(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SoulTuneService_RollbackSoulTune_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SoulTuneServiceServer).RollbackSoulTune(ctx, req.(*RollbackSoulTuneRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// SoulTuneService_ServiceDesc is the grpc.ServiceDesc for SoulTuneService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var SoulTuneService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.SoulTuneService",
+	HandlerType: (*SoulTuneServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetSoulTune",
+			Handler:    _SoulTuneService_GetSoulTune_Handler,
+		},
+		{
+			MethodName: "PutSoulTune",
+			Handler:    _SoulTuneService_PutSoulTune_Handler,
+		},
+		{
+			MethodName: "RollbackSoulTune",
+			Handler:    _SoulTuneService_RollbackSoulTune_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

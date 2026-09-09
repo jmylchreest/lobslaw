@@ -21,9 +21,10 @@ import (
 // lifted into types.SoulConfig plus the freeform markdown body
 // that gets injected into the agent's system prompt verbatim.
 type Soul struct {
-	Config types.SoulConfig
-	Body   string // markdown following the frontmatter, empty-whitespace trimmed
-	Path   string // absolute path the soul was loaded from
+	Config    types.SoulConfig
+	Body      string   // markdown following the frontmatter, empty-whitespace trimmed
+	Path      string   // absolute path the soul was loaded from
+	Overrides []string // fields explicitly pinned by the persisted overlay
 }
 
 // Load reads + parses a SOUL.md at path. Returns ErrNotFound when
@@ -54,10 +55,8 @@ func Load(path string) (*Soul, error) {
 	// false positive, which is a worse outcome than the thing being
 	// guarded against.
 	//
-	// Worth scanning even though it is operator-authored, because it is
-	// not only operator-written: the soul_* tools let the agent tune
-	// its own identity, so a poisoned memory can drive an edit here.
-	// This is the tripwire for that.
+	// The file is operator-authored; imported personality text can
+	// still contain instructions the operator did not intend.
 	for _, f := range promptguard.Scan(string(raw)) {
 		slog.Default().Warn("soul: suspicious content in SOUL file",
 			"path", abs, "detector", f.Detector, "detail", f.Detail)

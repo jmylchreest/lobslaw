@@ -31,14 +31,20 @@ func (s *raftSoulTuneStore) Get(ctx context.Context) (*soul.TuneState, error) {
 	if rec == nil || rec.Current == nil {
 		return nil, nil
 	}
-	return tuneStateFromProto(rec.Current), nil
+	out := tuneStateFromProto(rec.Current)
+	out.Revision = rec.Revision
+	return out, nil
 }
 
 func (s *raftSoulTuneStore) Put(ctx context.Context, state *soul.TuneState) error {
 	if state == nil {
 		return errors.New("soul tune: state nil")
 	}
-	return s.svc.Put(ctx, tuneStateToProto(state))
+	rec, err := s.svc.Put(ctx, tuneStateToProto(state), state.Revision)
+	if err == nil {
+		state.Revision = rec.Revision
+	}
+	return err
 }
 
 func (s *raftSoulTuneStore) Rollback(ctx context.Context, steps int) (*soul.TuneState, error) {
@@ -46,7 +52,9 @@ func (s *raftSoulTuneStore) Rollback(ctx context.Context, steps int) (*soul.Tune
 	if err != nil {
 		return nil, err
 	}
-	return tuneStateFromProto(picked), nil
+	out := tuneStateFromProto(picked.Current)
+	out.Revision = picked.Revision
+	return out, nil
 }
 
 func tuneStateFromProto(p *lobslawv1.SoulTuneState) *soul.TuneState {

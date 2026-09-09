@@ -23,6 +23,9 @@ func (a *Adjuster) SetName(ctx context.Context, name string) (string, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
+		return "", err
+	}
 	state := a.tune.Clone()
 	state.Name = &cleaned
 	state.UpdatedBy = TuneSource
@@ -43,6 +46,9 @@ func (a *Adjuster) AddFragment(ctx context.Context, text string) (string, int, e
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
+		return "", 0, err
+	}
 	current := a.currentFragmentsLocked()
 	for _, existing := range current {
 		if strings.EqualFold(existing, cleaned) {
@@ -74,6 +80,9 @@ func (a *Adjuster) RemoveFragment(ctx context.Context, needle string) (string, e
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
+		return "", err
+	}
 	current := a.currentFragmentsLocked()
 	for i, f := range current {
 		if strings.Contains(strings.ToLower(f), needle) {
@@ -119,6 +128,9 @@ func (a *Adjuster) currentFragmentsLocked() []string {
 func (a *Adjuster) Tune(ctx context.Context, dimension string, delta int) (int, int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
+		return 0, 0, err
+	}
 	prev, baseline, ok := a.emotiveValueLocked(dimension)
 	if !ok {
 		return 0, 0, fmt.Errorf("unknown dimension %q (want excitement|formality|directness|sarcasm|humor)", dimension)
@@ -148,6 +160,9 @@ func (a *Adjuster) SetEmojiUsage(ctx context.Context, value string) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
+		return err
+	}
 	state := a.tune.Clone()
 	state.EmojiUsage = &value
 	state.UpdatedBy = TuneSource
@@ -165,13 +180,13 @@ func (a *Adjuster) HistoryRollback(ctx context.Context, steps int) (string, erro
 	if steps < 1 {
 		return "", errors.New("steps must be >= 1")
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	restored, err := a.store.Rollback(ctx, steps)
 	if err != nil {
 		return "", err
 	}
-	a.mu.Lock()
 	a.tune = restored
-	a.mu.Unlock()
 	if restored != nil && !restored.UpdatedAt.IsZero() {
 		return restored.UpdatedAt.UTC().Format("20060102T150405.000"), nil
 	}
@@ -183,12 +198,45 @@ func (a *Adjuster) HistoryRollback(ctx context.Context, steps int) (string, erro
 // mutation (other node became leader) propagates to this Adjuster's
 // in-memory cache without a process restart.
 func (a *Adjuster) RefreshTune(ctx context.Context) error {
-	current, err := a.store.Get(ctx)
-	if err != nil {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.refreshLocked(ctx)
+}
+
+// Reset removes explicit overrides; the current operator baseline takes effect.
+func (a *Adjuster) Reset(ctx context.Context, field string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.refreshLocked(ctx); err != nil {
 		return err
 	}
-	a.mu.Lock()
-	a.tune = current
-	a.mu.Unlock()
+	state := a.tune.Clone()
+	switch field {
+	case "all":
+		state = &TuneState{Revision: state.Revision}
+	case "name":
+		state.Name = nil
+	case DimExcitement:
+		state.Excitement = nil
+	case DimFormality:
+		state.Formality = nil
+	case DimDirectness:
+		state.Directness = nil
+	case DimSarcasm:
+		state.Sarcasm = nil
+	case DimHumor:
+		state.Humor = nil
+	case "emoji_usage":
+		state.EmojiUsage = nil
+	case "fragments":
+		state.Fragments = nil
+	default:
+		return fmt.Errorf("soul reset: unknown field %q", field)
+	}
+	state.UpdatedBy = TuneSource
+	if err := a.store.Put(ctx, state); err != nil {
+		return err
+	}
+	a.tune = state
 	return nil
 }

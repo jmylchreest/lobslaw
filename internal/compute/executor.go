@@ -46,6 +46,10 @@ type InvokeResult struct {
 // ExecutorConfig tunes executor behaviour. Zero values take safe
 // defaults.
 type ExecutorConfig struct {
+	// PolicyFallback evaluates explicitly supported operations when this node
+	// has no local policy engine. Unavailable or unsupported operations must fail.
+	PolicyFallback func(context.Context, *types.Claims, string, string) (policy.Decision, error)
+
 	// MaxOutputBytes bounds stdout and stderr separately. Prevents a
 	// compromised tool from OOM-ing the agent via unbounded output.
 	// Default: 10 MiB.
@@ -372,10 +376,16 @@ func (e *Executor) CheckPolicy(ctx context.Context, claims *types.Claims, action
 // — callers in Phase 6 will convert ErrRequireConfirm into a
 // Channel.Prompt flow.
 func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action, resource string) error {
-	if e.policy == nil {
+	var dec policy.Decision
+	var err error
+	switch {
+	case e.policy != nil:
+		dec, err = e.policy.Evaluate(ctx, claims, action, resource)
+	case e.cfg.PolicyFallback != nil:
+		dec, err = e.cfg.PolicyFallback(ctx, claims, action, resource)
+	default:
 		return ErrNoPolicyEngine
 	}
-	dec, err := e.policy.Evaluate(ctx, claims, action, resource)
 	if err != nil {
 		return fmt.Errorf("policy evaluate: %w", err)
 	}

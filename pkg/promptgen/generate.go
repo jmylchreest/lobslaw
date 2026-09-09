@@ -15,6 +15,9 @@ type GenerateInput struct {
 	// Soul shapes BuildIdentity. nil → "default assistant persona".
 	Soul *types.SoulConfig
 
+	// SoulBody is operator-authored configuration, never a user request.
+	SoulBody string
+
 	// Tools + Skills render available-capabilities sections. Empty
 	// lists produce "(none configured)" / "(none installed)" bodies.
 	Tools  []ToolInfo
@@ -102,6 +105,7 @@ func Generate(in GenerateInput) string {
 		BuildPromptContract(),
 		BuildSafety(in.Tools),
 		BuildPersonality(in.Soul, in.Tools),
+		BuildSoulGuidance(in.SoulBody),
 		BuildFragments(in.Soul),
 		BuildTooling(in.Tools),
 		BuildSkills(in.Skills, in.SkillProposals),

@@ -937,12 +937,11 @@ func (n *Node) reloadSections(_ context.Context, sections []string) (reloaded, r
 				errs[section] = "no SoulPath configured; nothing to reload"
 				continue
 			}
-			loaded, err := soul.LoadOrDefault(n.cfg.SoulPath)
+			loaded, err := n.reloadSoul()
 			if err != nil {
 				errs[section] = err.Error()
 				continue
 			}
-			n.soul.Store(loaded)
 			reloaded = append(reloaded, section)
 			n.log.Info("reload: soul replaced",
 				"name", loaded.Config.Name,
@@ -969,13 +968,12 @@ func (n *Node) runSoulWatcher(ctx context.Context) {
 		Paths:  []string{n.cfg.SoulPath},
 		Logger: n.log,
 	}, func(_ []fsnotify.Event) {
-		loaded, err := soul.LoadOrDefault(n.cfg.SoulPath)
+		loaded, err := n.reloadSoul()
 		if err != nil {
 			n.log.Warn("soul hot-reload: parse failed; keeping previous",
 				"path", n.cfg.SoulPath, "err", err)
 			return
 		}
-		n.soul.Store(loaded)
 		n.log.Info("soul hot-reloaded",
 			"path", n.cfg.SoulPath,
 			"name", loaded.Config.Name,
@@ -1263,4 +1261,29 @@ func (n *Node) startSandboxPolicyWatcher(ctx context.Context) {
 	}
 	n.log.Info("sandbox: watching operator policy.d for changes",
 		"dirs", n.cfg.SandboxPolicyDirs)
+}
+
+// reloadSoul is shared by explicit reload and the watcher. Missing files at
+// boot can use defaults; losing a live file must preserve the last valid soul.
+func (n *Node) reloadSoul() (*soul.Soul, error) {
+	loaded, err := soul.Load(n.cfg.SoulPath)
+	if err != nil {
+		return nil, err
+	}
+	if n.soulAdjuster != nil {
+		n.soulAdjuster.ReplaceBaseline(loaded)
+	}
+	n.soul.Store(loaded)
+	return loaded, nil
+}
+
+func (n *Node) soulSnapshot(ctx context.Context) (*soul.Soul, error) {
+	if n.soulAdjuster == nil {
+		return n.Soul(), nil
+	}
+	snapshot, err := n.soulAdjuster.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
 }

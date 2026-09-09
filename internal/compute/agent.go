@@ -16,6 +16,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/promptguard"
+	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/internal/trace"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
@@ -114,6 +115,10 @@ type AgentConfig struct {
 	// agent. Nil → no system prompt is injected unless the caller
 	// populates req.SystemPrompt manually.
 	Soul func() *types.SoulConfig
+
+	// SoulSnapshot supplies the complete effective soul once per new turn.
+	// Soul remains the inexpensive accessor for runtime trust checks.
+	SoulSnapshot func(context.Context) (*soul.Soul, error)
 
 	// EpisodicIngester, when non-nil, receives each turn's
 	// user-message + assistant-reply pair as an EpisodicRecord
@@ -580,7 +585,9 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// round-trip and could route one turn two different ways
 	// mid-conversation.
 	ctx = WithRoute(ctx, a.resolveRoute(ctx, req))
-	a.fillDefaults(ctx, &req)
+	if err := a.fillDefaults(ctx, &req); err != nil {
+		return nil, err
+	}
 	seeded := a.seedMessages(req)
 	// The user message is the last thing seedMessages appends, so
 	// the turn starts there. When the caller sent no text (media
@@ -598,7 +605,7 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 // without each having to know about tools or personality.
 // Explicit values on req always win so tests that script exact
 // prompts still work.
-func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
+func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) error {
 	if req.UserTimezone == "" && a.cfg.TimezoneResolver != nil && req.Claims != nil {
 		req.UserTimezone = a.cfg.TimezoneResolver(req.Claims.UserID)
 	}
@@ -612,9 +619,21 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
 	}
-	if req.SystemPrompt == "" && a.cfg.Soul != nil {
-		soul := a.cfg.Soul()
-		if soul != nil {
+	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil) {
+		var config *types.SoulConfig
+		var body string
+		if a.cfg.SoulSnapshot != nil {
+			snapshot, err := a.cfg.SoulSnapshot(ctx)
+			if err != nil {
+				return fmt.Errorf("load effective soul: %w", err)
+			}
+			if snapshot != nil {
+				config, body = &snapshot.Config, snapshot.Body
+			}
+		} else {
+			config = a.cfg.Soul()
+		}
+		if config != nil {
 			var bins []promptgen.BinaryInfo
 			if a.cfg.BinariesProvider != nil {
 				bins = a.cfg.BinariesProvider()
@@ -632,7 +651,8 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 				proposals = a.cfg.ProposalsProvider(userIDFor(req))
 			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
-				Soul:           soul,
+				Soul:           config,
+				SoulBody:       body,
 				Tools:          toPromptgenTools(req.Tools),
 				Skills:         skillIndex,
 				SkillProposals: proposals,
@@ -663,6 +683,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 				"recall_count", len(assembly.RecallIDs))
 		}
 	}
+	return nil
 }
 
 // maybeIngestTurn fires the configured EpisodicIngester after a
@@ -771,7 +792,21 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
-	a.fillDefaults(ctx, &req)
+	// This is the same turn. Its system prompt is already part of the
+	// continuation; refreshing the soul here would assemble an unused prompt
+	// and could prevent resumption when a remote store is unavailable.
+	if req.SystemPrompt == "" {
+		for _, m := range priorMessages {
+			if m.Role == "system" {
+				req.SystemPrompt = m.Content
+				break
+			}
+		}
+	}
+
+	if err := a.fillDefaults(ctx, &req); err != nil {
+		return nil, err
+	}
 	msgs := make([]Message, len(priorMessages))
 	copy(msgs, priorMessages)
 	// Everything handed in was already recorded when the turn

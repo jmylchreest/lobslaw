@@ -68,7 +68,7 @@ Single `*` wildcard, prefix or suffix:
 | Pattern | Matches |
 |---|---|
 | `current_time` | exactly that name |
-| `soul_*` | `soul_tune`, `soul_list`, `soul_history` |
+| `soul_*` | `soul_get`, `soul_tune`, `soul_fragment_add`, `soul_fragment_remove`, `soul_reset`, `soul_history_rollback` |
 | `*.send` | `gws-workspace.gmail.send`, `slack.message.send` |
 | `*` | every resource (DANGEROUS — only for `priority=1000+` denies) |
 
