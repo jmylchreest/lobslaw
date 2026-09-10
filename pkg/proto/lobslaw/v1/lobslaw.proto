@@ -998,6 +998,52 @@ message AgentCommitment {
   string owner = 12;
   // revision — see ScheduledTaskRecord.revision.
   uint64 revision = 13;
+  // watch is set only on commitments whose handler_ref is the watch
+  // handler. Absent on every other commitment, which is what makes a
+  // watch identifiable without a second bucket or a kind enum.
+  WatchState watch = 14;
+}
+
+// WatchState is what one watch remembers between checks.
+//
+// It is deliberately separate from AgentCommitment.params: params is
+// the request, written once by whoever created the watch, and the
+// model can choose its contents. This is the answer, written only by
+// the watch handler — and it decides whether the assistant speaks, so
+// it must not share a namespace with anything the model can set.
+message WatchState {
+  // digest is sha256 of the last ACCEPTED observation. Compared rather
+  // than the observation itself so a long state string costs the same
+  // as a short one.
+  string digest = 1;
+  // observation is the canonical state the probe last reported. Kept
+  // in full because it is replayed into the next probe's prompt: the
+  // model is anchored to the shape it used last time, which is what
+  // stops a reworded restatement of an unchanged fact from reading as
+  // a change.
+  string observation = 2;
+  google.protobuf.Timestamp last_checked = 3;
+  google.protobuf.Timestamp last_changed = 4;
+  // unchanged_runs drives the backoff and resets to zero on a change.
+  uint32 unchanged_runs = 5;
+  // failed_runs counts probes that reported nothing at all. Tracked
+  // apart from unchanged_runs because they mean opposite things: one
+  // says the world is quiet, the other says we cannot see it.
+  uint32 failed_runs = 6;
+  // interval is the current gap between checks, after backoff.
+  google.protobuf.Duration interval = 7;
+  // base_interval is what a change resets interval to.
+  google.protobuf.Duration base_interval = 8;
+  // max_interval caps the backoff.
+  google.protobuf.Duration max_interval = 9;
+  // expires_at ends the watch. Zero means it runs until cancelled.
+  google.protobuf.Timestamp expires_at = 10;
+  // max_failures is how many consecutive silent probes suspend the
+  // watch. Zero picks the handler's default.
+  uint32 max_failures = 11;
+  // suspended_reason is set when the watch stopped itself rather than
+  // being cancelled, so watch_list can say why.
+  string suspended_reason = 12;
 }
 
 message ScheduledTaskRecord {

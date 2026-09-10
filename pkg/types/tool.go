@@ -40,7 +40,18 @@ type ToolDef struct {
 	RecommendTools []string `json:"recommend_tools,omitempty"`
 	AvoidTools     []string `json:"avoid_tools,omitempty"`
 	SidecarOnly    bool     `json:"sidecar_only,omitempty"`
-	RiskTier       RiskTier `json:"risk_tier"`
+
+	// Unlisted keeps a tool out of the default LLM tool list while
+	// leaving it registered and invocable.
+	//
+	// For tools that belong to one kind of turn rather than to the
+	// model at large: watch_report means nothing outside a watch
+	// check, and advertising it everywhere would offer the model a
+	// tool that fails in every context but one. The turn that wants it
+	// puts it in ProcessMessageRequest.Tools explicitly, which is the
+	// same per-turn scoping buildResearchToolList already uses.
+	Unlisted bool     `json:"unlisted,omitempty"`
+	RiskTier RiskTier `json:"risk_tier"`
 }
 
 // ToolPermission is a per-tool grant attached to a role or session.

@@ -1111,6 +1111,14 @@ func (n *Node) registerAgentTurnHandlers() {
 	// already being billed. See scheduler.Idempotent.
 	_ = n.scheduler.Handlers().RegisterCommitment(
 		GenerationPollHandlerRef, n.runGenerationPoll, scheduler.Idempotent())
+
+	// Idempotent for a different reason than generation polling: a
+	// watch is never "delivered", it is re-armed, and completing it
+	// before the handler ran would end the watch on its first check.
+	// The at-most-once ordering exists to stop a person being messaged
+	// twice; a watch that checks twice says nothing either time.
+	_ = n.scheduler.Handlers().RegisterCommitment(
+		tools.WatchHandlerRef, n.runWatchAsAgentTurn, scheduler.Idempotent())
 }
 
 // researchIDEntropy is a process-wide ULID monotonic source for

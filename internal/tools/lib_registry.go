@@ -161,6 +161,11 @@ func (r *Registry) LLMTools() []compute.Tool {
 	defs := r.List()
 	out := make([]compute.Tool, 0, len(defs))
 	for _, d := range defs {
+		// Registered, invocable, and not advertised. The turn that
+		// needs it names it in ProcessMessageRequest.Tools.
+		if d.Unlisted {
+			continue
+		}
 		schema := d.ParametersSchema
 		if len(schema) == 0 {
 			schema = []byte(`{"type":"object","properties":{}}`)

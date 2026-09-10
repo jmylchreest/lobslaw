@@ -19,6 +19,8 @@ Both live in Raft-replicated bbolt buckets so every voter sees the same state.
 - **`ScheduledTaskRecord`** (bucket `scheduled_tasks`) — recurring operator-defined work. Carries a cron expression, `HandlerRef`, `Params`, plus claim fields (`ClaimedBy`, `ClaimExpiresAt`) and fire-tracking fields (`LastRun`, `NextRun`).
 - **`AgentCommitment`** (bucket `commitments`) — one-shot user-originated deferred work ("remind me in 2 hours"). Carries `DueAt`, `HandlerRef`, `Params`, a `Status` (pending/done/cancelled), the same claim fields, and a `Reason` the `agent:turn` handler uses as a prompt fallback.
 
+An `AgentCommitment` may additionally carry a **`WatchState`** (field `watch`). It is present only on records whose `HandlerRef` is `agent:watch`, which is what makes a watch identifiable without a second bucket or a kind enum. See [Built-in `agent:watch`](#built-in-agentwatch).
+
 Claim state is scheduler-owned. PlanService strips caller-supplied claim fields on `AddCommitment` so user RPCs can't pre-claim a record.
 
 ---
@@ -159,7 +161,7 @@ Both are expected to be idempotent per the partition caveat. Currently enforced 
 
 Handler refs use a `<namespace>:<name>` convention that signals what kind of operation the ref resolves to. Three namespaces exist:
 
-- **`agent:*`** — dispatches through `compute.Agent.RunToolCallLoop` (the LLM agent loop). The only member today is `agent:turn` — operators use it for "every morning run this prompt" tasks.
+- **`agent:*`** — dispatches through `compute.Agent.RunToolCallLoop` (the LLM agent loop). Two members: `agent:turn`, which operators use for "every morning run this prompt" tasks, and `agent:watch`, which runs a check and speaks only when its answer has changed.
 - **`memory:*`** — memory-layer Go-native operations registered at boot. Today's member is `memory:dream`, which fires one Dream/REM consolidation pass on the Raft leader (soft-skip on followers).
 - **`skill:*`** — reserved for Phase 8 on-disk skills (manifest + handler script + sandboxed subprocess). Not currently used by any built-in handler.
 
@@ -172,6 +174,87 @@ Registered during `node.New` when both a scheduler and an agent are present. Dis
 A user who wants "every morning check the weather and summarize" asks the agent, which creates the task through its schedule tool with `HandlerRef = "agent:turn"` and `Params.prompt = "check the weather and summarize it"`. Natural-language commitments ("remind me to call the plumber in 2 hours") skip `Params` and let `Reason` drive.
 
 Handler errors are logged; the next tick retries via the regular cron schedule (for tasks) or not at all (commitments — they're one-shot).
+
+### Built-in `agent:watch`
+
+A watch answers "tell me when this changes". It is an `AgentCommitment` that re-arms itself rather
+than completing, so its cadence can respond to what it finds — which is why it is not a
+`ScheduledTaskRecord`: **a cron expression cannot describe an interval that widens when nothing
+happens.**
+
+Registered `Idempotent()`, so the handler runs *before* completion and a returned
+`*scheduler.RetryAfter` leaves the commitment pending with a new `DueAt` and no claim. That is the
+same loop `generation:poll` uses; what a watch adds is state, carried in `AgentCommitment.watch`.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as Scheduler
+  participant H as node.runWatchAsAgentTurn
+  participant A as compute.Agent
+  participant T as watch_report (unlisted)
+  participant N as notify.Service
+
+  S->>H: due watch (claim held)
+  alt past expires_at
+    H->>N: "I have stopped watching X"
+    H-->>S: nil  (commitment completes)
+  else
+    H->>A: probe turn — previous observation replayed into the prompt
+    A->>T: watch_report(state, summary)
+    T-->>H: report, via the turn-scoped collector
+    alt no report at all
+      Note over H: failed_runs++ — NOT an unchanged result
+      opt failed_runs >= max_failures
+        H->>N: "I have stopped watching X: <why>"
+        H-->>S: nil
+      end
+    else state digest differs
+      H->>N: summary + was/now
+      Note over H: unchanged_runs = 0, interval = base
+    else state digest matches
+      Note over H: unchanged_runs++, interval widens
+    end
+    H-->>S: RetryAfter(interval)
+  end
+```
+
+**The state rides back on the record the re-arm writes.** The handler mutates `c.Watch` in place and
+returns; `rearmCommitment` clones the commitment *after* the handler ran, so the mutation travels
+with the re-arm in a single Raft write. A handler that wrote the record itself and then asked for a
+retry would move the revision its own re-arm CASes against, and lose every time.
+`TestRearmCarriesHandlerMutations` pins this.
+
+**How "changed" is decided.** Not by digesting the turn's reply — an LLM rewording an unchanged fact
+would read as a change, and the watch would fire constantly. The probe turn instead calls
+`watch_report(state, summary)`, and only `state` is digested. Two things hold that string stable:
+the previous observation is replayed verbatim into the next probe's prompt, and `watch_report`'s
+description constrains the shape. Anchoring on the prior value is what stops rewording; the digest
+only compares.
+
+`watch_report` is `Unlisted` in the tool registry — registered and invocable, but absent from the
+default LLM tool list, because it means nothing outside a check. The watch turn adds it back by
+naming it in `ProcessMessageRequest.Tools`, the same per-turn scoping `buildResearchToolList` uses.
+
+**A probe cannot speak or schedule.** `buildWatchToolList` denies `notify` and the
+watch/commitment/schedule mutators. Both are correctness rather than tidiness: a probe that can call
+`notify` can message the user from inside an unchanged check, which is precisely what a watch
+promises not to do — the handler decides whether anything is said, from the digest, and it must be
+the only thing that can. A probe that can schedule can schedule itself, so a check that decides to
+also watch something related would create a watch on every run.
+
+**A silent probe is a failure, not an unchanged result.** A turn that ends without reporting
+increments `failed_runs` and leaves the stored observation untouched. After `max_failures` (default
+5) the watch suspends and says so once. Counting a broken probe as "unchanged" would leave a dead
+watch looking exactly like a quiet one — the worst outcome available, because it is invisible.
+
+**Nothing ends in silence.** Change, suspension and expiry all notify; an unchanged check never
+does. A watch that stopped without saying so leaves the user believing they are still covered.
+
+Backoff is `min(base × 1.5^(unchanged+failed), max_interval)`, reset to base on a change. Watches
+are created by the agent through `watch_create` and expire after 30 days by default.
+
+---
 
 ### Built-in `memory:dream`
 

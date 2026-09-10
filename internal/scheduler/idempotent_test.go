@@ -184,3 +184,79 @@ type errWrap struct{ err error }
 
 func (e errWrap) Error() string { return "wrapped: " + e.err.Error() }
 func (e errWrap) Unwrap() error { return e.err }
+
+// A re-arming handler carries state forward on the record it was
+// handed, and these two tests are why that is safe to rely on.
+//
+// The alternative — a handler writing the record itself and then
+// asking for a retry — cannot work: the write moves the revision, and
+// the re-arm applies under a CAS on the revision the scheduler read,
+// so the handler would lose its own re-arm to a conflict every time.
+// Mutating in place is one raft write instead of two and cannot race
+// with itself, and internal/node's watch handler depends on it.
+func TestRearmCarriesHandlerMutations(t *testing.T) {
+	t.Parallel()
+	node, _ := singleNodeRaft(t, "n1")
+
+	reg := NewHandlerRegistry()
+	_ = reg.RegisterCommitment("stateful", func(_ context.Context, c *lobslawv1.AgentCommitment) error {
+		if c.Params == nil {
+			c.Params = map[string]string{}
+		}
+		c.Params["observed"] = "price: 212.00 GBP"
+		return RetryAfterIn(42*time.Minute, "still watching")
+	}, Idempotent())
+
+	s, _ := NewScheduler(Config{NodeID: "node-a", MaxSleep: 20 * time.Millisecond, ClaimTTL: time.Minute}, node, reg)
+	seedCommitment(t, node, &lobslawv1.AgentCommitment{
+		Id: "c1", HandlerRef: "stateful", Status: "pending",
+		DueAt: timestamppb.New(time.Now().Add(-time.Second)),
+	})
+
+	runSchedulerUntil(t, s, func() bool {
+		c := loadCommitment(t, node, "c1")
+		return c != nil && c.ClaimedBy == "" && c.Params["observed"] != ""
+	})
+
+	got := loadCommitment(t, node, "c1")
+	if got.Params["observed"] != "price: 212.00 GBP" {
+		t.Fatalf("the re-arm dropped what the handler recorded (params=%v); "+
+			"a handler that carries state between fires has nowhere else to put it", got.Params)
+	}
+	if got.Status == string(statusDone) {
+		t.Error("a retry request closed the commitment")
+	}
+}
+
+// The same guarantee on the terminal path: a handler that finishes
+// after recording something must not lose the recording.
+func TestCompletionCarriesHandlerMutations(t *testing.T) {
+	t.Parallel()
+	node, _ := singleNodeRaft(t, "n1")
+
+	reg := NewHandlerRegistry()
+	_ = reg.RegisterCommitment("stateful", func(_ context.Context, c *lobslawv1.AgentCommitment) error {
+		if c.Params == nil {
+			c.Params = map[string]string{}
+		}
+		c.Params["suspended_because"] = "the check never reported"
+		return nil
+	}, Idempotent())
+
+	s, _ := NewScheduler(Config{NodeID: "node-a", MaxSleep: 20 * time.Millisecond, ClaimTTL: time.Minute}, node, reg)
+	seedCommitment(t, node, &lobslawv1.AgentCommitment{
+		Id: "c1", HandlerRef: "stateful", Status: "pending",
+		DueAt: timestamppb.New(time.Now().Add(-time.Second)),
+	})
+
+	runSchedulerUntil(t, s, func() bool {
+		c := loadCommitment(t, node, "c1")
+		return c != nil && c.Status == string(statusDone)
+	})
+
+	got := loadCommitment(t, node, "c1")
+	if got.Params["suspended_because"] != "the check never reported" {
+		t.Errorf("completion dropped what the handler recorded (params=%v); "+
+			"a watch that stops has to be able to say why", got.Params)
+	}
+}

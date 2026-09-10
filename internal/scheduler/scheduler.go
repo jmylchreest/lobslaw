@@ -902,7 +902,8 @@ func (s *Scheduler) runCommitmentHandler(ctx context.Context, c *lobslawv1.Agent
 }
 
 // runIdempotentCommitment is the at-least-once ordering: run first,
-// then record the outcome.
+// then record the outcome — and, on both outcomes, carry whatever the
+// handler wrote onto the record (see rearmCommitment).
 //
 // Three outcomes rather than two. A polling handler is not finished
 // when it returns — it is finished when the JOB is — so RetryAfter
@@ -944,6 +945,16 @@ func (s *Scheduler) runIdempotentCommitment(ctx context.Context, handler Commitm
 // rearmCommitment leaves the commitment pending and moves it to the
 // time the handler asked for, releasing the claim so any node may
 // take the next poll.
+// rearmCommitment moves DueAt to the requested time and releases the
+// claim, leaving the commitment pending.
+//
+// The clone is taken AFTER the handler ran, so anything the handler
+// wrote onto the record travels with the re-arm. That is a guarantee
+// handlers rely on rather than an accident: a handler carrying state
+// between fires cannot write the record itself and then ask for a
+// retry, because its own write would move the revision this apply
+// CASes against. Mutating in place is the supported way to do it, and
+// TestRearmCarriesHandlerMutations pins it.
 func (s *Scheduler) rearmCommitment(c *lobslawv1.AgentCommitment, r *RetryAfter) {
 	updated := proto.Clone(c).(*lobslawv1.AgentCommitment)
 	updated.DueAt = timestamppb.New(r.At)

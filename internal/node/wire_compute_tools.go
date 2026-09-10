@@ -43,6 +43,9 @@ func (n *Node) registerAgentTools(builtins *tools.Builtins, embedder compute.Emb
 		if err := n.wireCommitmentTools(builtins); err != nil {
 			return nil, err
 		}
+		if err := n.wireWatchTools(builtins); err != nil {
+			return nil, err
+		}
 		if err := n.wireCredentialsTools(builtins); err != nil {
 			return nil, err
 		}
@@ -283,6 +286,26 @@ func (n *Node) wireCommitmentTools(builtins *tools.Builtins) error {
 		}
 	}
 	n.log.Debug("compute: commitment_create/list/cancel registered")
+	return nil
+}
+
+// wireWatchTools registers the watch family. A watch is a commitment
+// with state, so it takes the same Store + Raft pair — what differs is
+// the handler it dispatches through, which re-arms itself instead of
+// completing.
+func (n *Node) wireWatchTools(builtins *tools.Builtins) error {
+	if err := tools.RegisterWatchBuiltins(builtins, tools.WatchConfig{
+		Store: n.store,
+		Raft:  n.raft,
+	}); err != nil {
+		return fmt.Errorf("register watch builtins: %w", err)
+	}
+	for _, td := range tools.WatchToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			return fmt.Errorf("register watch tool %q: %w", td.Name, err)
+		}
+	}
+	n.log.Debug("compute: watch_create/list/cancel registered (watch_report unlisted)")
 	return nil
 }
 
