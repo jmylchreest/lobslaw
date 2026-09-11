@@ -66,6 +66,10 @@ func (n *Node) runWatchAsAgentTurn(ctx context.Context, c *lobslawv1.AgentCommit
 		Channel:   c.Params["channel"],
 		ChannelID: c.Params["chat_id"],
 		Tools:     buildWatchToolList(n.toolRegistry),
+		// A check is machinery, not a conversation. Remembering it
+		// would write a memory on every probe and then feed those
+		// memories back into the next probe's own prompt.
+		SkipEpisodicIngest: true,
 	}
 	resp, runErr := n.agent.RunToolCallLoop(probeCtx, req)
 

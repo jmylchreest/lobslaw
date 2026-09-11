@@ -262,6 +262,12 @@ Backoff is `min(base × 1.5^(unchanged+failed), max_interval)`, reset to base on
 clamped so a check never lands after `expires_at` — otherwise a watch that had widened to daily
 would announce its expiry a day after it stopped covering anything.
 
+**A check is not remembered.** The probe turn sets `SkipEpisodicIngest`, because a watch runs on its
+own cadence forever and its reply carries nothing a person would want recalled. Without it a watch
+writes an episodic record per check and those records are then *recalled into the next check's
+prompt* — observed on a running node within two minutes of creating a 10-second watch, along with a
+promptguard quarantine per check once the probe prompt legitimately contained `</untrusted>`.
+
 A report is read from the collector *before* a turn error is acted on: a check that reported and
 then failed has already produced the only thing a check exists to produce, and discarding it would
 both lose a good observation and push a working watch toward suspension.

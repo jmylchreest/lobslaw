@@ -451,6 +451,19 @@ type ProcessMessageRequest struct {
 	// prompt — recalled episodes are untrusted content.
 	RecalledContext string
 
+	// SkipEpisodicIngest stops this turn being remembered.
+	//
+	// For turns that are machinery rather than conversation. A watch
+	// check runs on its own cadence forever and its reply carries
+	// nothing a person would ever want recalled — so ingesting it
+	// writes a memory per check, and those memories are then RECALLED
+	// into the next check's prompt, which grows every probe and
+	// crowds real memories out of everyone else's recall too.
+	//
+	// Observed, not theorised: a 10-second watch put its own scaffold
+	// in the store and had it read back to itself within two minutes.
+	SkipEpisodicIngest bool
+
 	// Attachments are media the channel received with this turn.
 	// Channel handlers (gateway/telegram, gateway/rest, etc.)
 	// populate this from their native payload + downloader. The
@@ -683,7 +696,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 // turn is preferable to dropping the user's reply for a backend
 // hiccup.
 func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string, calls []ToolInvocation) {
-	if a.cfg.EpisodicIngester == nil || reply == "" {
+	if a.cfg.EpisodicIngester == nil || reply == "" || req.SkipEpisodicIngest {
 		return
 	}
 	// Channel and ChatID come from the request, which is where they
