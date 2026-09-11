@@ -81,6 +81,11 @@ Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detai
 | **R35** | [What the sandbox actually enforces](#r35--what-the-sandbox-actually-enforces) | ⬜ | 🔴 P0 | M | — |
 | **R36** | [The agent cannot say what it can do](#r36--the-agent-cannot-say-what-it-can-do) | 🟨 | 🟠 P1 | S | — |
 | **R37** | [A queue mode that reads the messages](#r37--a-queue-mode-that-reads-the-messages) | ⬜ | 🟡 P2 | M | — |
+| **R38** | [A watch that only speaks when something changed](#r38--a-watch-that-only-speaks-when-something-changed) | ⬜ | 🟠 P1 | M | — |
+| **R39** | [A commitment that closes](#r39--a-commitment-that-closes) | ⬜ | 🟠 P1 | M | — |
+| **R40** | [An edit is not a new message](#r40--an-edit-is-not-a-new-message) | ⬜ | 🟠 P1 | M | — |
+| **R41** | [A voice note deserves a voice note](#r41--a-voice-note-deserves-a-voice-note) | ⬜ | 🟡 P2 | M | — |
+| **R42** | [Asking is cheaper than guessing](#r42--asking-is-cheaper-than-guessing) | ⬜ | 🟠 P1 | M | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -187,6 +192,32 @@ R21, R23, R30, R32, R33, R34, R35. Everything else in the index is done.
 - **R36 itself was overtaken while being written** — see its own header note. Between that and the
   collision, the pattern worth naming is that this document is now edited concurrently and its
   numbering assumes it is not.
+
+### The assistant-feel group (2026-09-10)
+
+R38–R42 come from a different question than the rest of this document. Everything above asks what
+lobslaw is missing as a system; these five ask what it is missing as an **assistant** — the gap
+between an excellent agent runtime and something a person would notice the absence of.
+
+They share a shape worth naming: **each one is a small amount of new code sitting on a mechanism
+that already exists and has one caller.** R38 is `RetryAfter` plus state. R42 is `Continuation` with
+a different resolution payload. R40 is `SessionMessage.turn_id`, a field whose comment already
+describes the operation nobody had needed yet. R41 is `AudioDriver.Transcribe` moved one layer out.
+Only R39 adds a concept, and it adds it beside `status` rather than inside it.
+
+That is a good sign about the foundation and a warning about the estimates: the plumbing being
+present is why these are M and not L, and it is also why each one's real cost is concentrated in a
+single hard part rather than spread across the change. Those parts are called out per item.
+
+**Landing order: R38 → R39 → R40 → R41 → R42.** Not priority order — conflict order. R38 and R39
+both extend `AgentCommitment` and touch the scheduler's fire path; R40 and R41 both sit in
+`telegram.go`'s inbound path; R42 crosses all four plus `internal/compute`, so it goes last and
+rebases once rather than five times.
+
+**R41 is P2 while the others are P1**, which is deliberate rather than an oversight: it is the only
+one of the five that costs money on every use, and the only one whose absence has a workaround the
+user can perform themselves.
+
 
 ### Status drift
 
@@ -5132,3 +5163,408 @@ early with no resolver, so the judge is never called. Any measurement has to sta
       visible rather than argued about.
 - [ ] `smart` is not the default. `serial` stays the default for the reason ParseQueueMode already
       gives: the modes that can lose a message should never be reached by a typo.
+
+---
+
+## R38 — a watch that only speaks when something changed
+
+⬜ **Not started.** 🟠 P1.
+
+### Problem
+
+"Tell me when the flight drops below £200" compiles today to `schedule_create` with a cron and a
+prompt, and `runTaskAsAgentTurn` runs that prompt as a fresh turn that remembers nothing. Between
+two fires the record carries `LastRun` and `NextRun` and nothing else.
+
+That leaves the user two prompts to choose between, and both are wrong:
+
+    check the flight price and tell me            → an identical message every hour
+    check the flight price, tell me if it changed → the model has nothing to compare against,
+                                                    so it either never speaks or always does
+
+The missing primitive is state between fires, and a cadence that responds to it. A watch is not a
+scheduled task that got lucky; it is a different thing wearing the same record.
+
+### Proposal — a watch is a self-rearming commitment
+
+The mechanism already exists and is already load-bearing elsewhere. `RegisterCommitment(ref, h,
+Idempotent())` runs the handler *before* completion, and a handler returning `*scheduler.RetryAfter`
+leaves the commitment pending, moves `DueAt`, and releases the claim so any node may take the next
+one — `runIdempotentCommitment` → `rearmCommitment`. Async generation runs on exactly this loop:
+`wire_generation.go` is its only caller today, re-arming on `driver.PollInterval()` for as long as
+an image or video job outlives the turn that asked for it.
+
+That is a watch, minus the state. It is also the argument against modelling one as a scheduled task:
+**a cron expression cannot describe an interval that widens when nothing happens.** A re-arm can,
+because it computes the next time after seeing the result.
+
+So: a new handler ref `agent:watch`, registered idempotent alongside `agent:turn`.
+
+#### State on the record, next to the config and separate from it
+
+A new `WatchState` message hung off `AgentCommitment`, written by the handler under the same
+CAS-on-revision the scheduler already uses for every other post-fire write:
+
+```protobuf
+message WatchState {
+  string digest = 1;       // sha256 of the last accepted observation
+  string observation = 2;  // the canonical state string, replayed into the next probe
+  google.protobuf.Timestamp last_checked = 3;
+  google.protobuf.Timestamp last_changed = 4;
+  uint32 unchanged_runs = 5;
+  uint32 failed_runs = 6;
+  google.protobuf.Duration interval = 7;       // current, after backoff
+  google.protobuf.Duration base_interval = 8;
+  google.protobuf.Timestamp expires_at = 9;
+}
+```
+
+The probe prompt, the base interval and the expiry stay in `Params`, which is what the user asked
+for. State stays in `WatchState`, which only the handler writes. They are kept apart deliberately:
+`Params` is model-writable at creation, and the field that decides whether the assistant speaks
+should not be.
+
+### The three things that make it harder than it sounds
+
+**Digesting the model's prose does not work, and fails in the loud direction.** The obvious
+implementation — hash the turn's final assistant text, compare to last time — breaks the first time
+the model says "£212" instead of "£212.00". Rewording is not a change, and a watch that fires on
+rewording fires constantly, which is the failure that makes the feature worse than the cron it
+replaced.
+
+The probe turn must instead end by calling a new `watch_report(state, summary)` builtin, and the
+handler digests `state` alone. Two things hold that string stable:
+
+1. **The previous observation is replayed into the probe prompt verbatim** — *"last time you
+   reported `price: £212.00`; report in the same shape"*. Anchoring on the prior value is what stops
+   rewording; the digest only compares.
+2. `watch_report`'s description constrains the shape — a short canonical fact, no prose, no
+   timestamps, no hedging.
+
+**A probe that reports nothing is a failure, not an unchanged result.** If the turn ends without
+calling `watch_report` — the model wandered, a tool broke, the provider was down — `failed_runs`
+increments, the interval backs off, and the observation is left untouched. After `max_failures`
+(default 5) the watch suspends and says so once.
+
+Counting a broken probe as "unchanged" is how a watch dies silently, and silence is
+indistinguishable from "nothing has happened yet". That is the worst outcome on offer here, because
+the user goes on believing they are covered.
+
+**Silence at the end is the same bug.** `interval = min(base × 1.5^unchanged_runs, max_interval)`,
+reset to base on change, bounded by the expiry — and when the expiry arrives the watch says so:
+*"I've stopped watching the fare; it hadn't moved in 7 days."* A watch that ends quietly leaves the
+user believing it is still running, for as long as they don't think about it.
+
+`notify` fires on change, on suspension, and on expiry. Never on an unchanged run.
+
+### Surface
+
+`watch_create`, `watch_list`, `watch_cancel` — separate builtins rather than a flag on
+`schedule_create`, because the tool description is where the model learns which primitive it wants,
+and the existing three already steer that way (*"For recurring checks use schedule_create
+instead"*). `watch_list` reports last observation, last change and next check, so the answer to "are
+you still watching that?" comes from the record rather than from a guess.
+
+### Acceptance
+
+- [ ] An unchanged probe sends nothing and widens the interval; a changed one sends once and resets
+      it to base.
+- [ ] The same change observed twice in a row sends one message.
+- [ ] A probe that never calls `watch_report` counts as a failure, not as unchanged, and leaves the
+      stored observation untouched.
+- [ ] `max_failures` consecutive failures suspend the watch with one message naming the reason.
+- [ ] Expiry sends a message. Nothing in this feature ends in silence, and a test asserts it.
+- [ ] The previous observation appears verbatim in the next probe's prompt.
+- [ ] Two nodes with the same watch due fire it once — the existing claim CAS covers this, and the
+      test names it rather than assuming it.
+- [ ] A node restart mid-watch resumes from the stored state, not from a blank one.
+- [ ] `watch_list` shows last observation, last change and next check.
+
+---
+
+## R39 — a commitment that closes
+
+⬜ **Not started.** 🟠 P1.
+
+### Problem
+
+`runCommitmentHandler` marks a commitment `done` *before* its handler runs — deliberately, and the
+comment says why: at-most-once, because a reminder that fires twice is worse than one that
+occasionally goes missing. But "done" there means **the message was sent.** Whether the thing was
+done is not modelled anywhere.
+
+Two consequences, and the second is the one that stings:
+
+- *"Remind me to send the invoice tomorrow"* produces exactly one nudge and then nothing, forever.
+- Ask *"did I ever send that invoice?"* and the agent guesses. `commitment_list` exists; nothing
+  gives the model a reason to call it on an ordinary turn.
+
+That second one is [R36](#r36--the-agent-cannot-say-what-it-can-do) again in a different subsystem:
+the surface exists, the question never reaches it, and the answer is confident and wrong.
+
+### Proposal
+
+**1 · Separate delivery from discharge.** `status` stays exactly as it is — it is the scheduler's
+lifecycle, it decides whether the record fires again, and redefining it reaches straight into the
+claim path. Three fields alongside it:
+
+- `bool obligation` — true when the thing to be done is the *user's*. "Remind me to call the
+  dentist" is an obligation; "check the weather at 9am" is not. Default false.
+- `string outcome` — `unknown | kept | dropped`, meaningful only when `obligation`.
+- `string follow_up_of` — the parent's id.
+
+**2 · One follow-up, then stop.** A fired obligation creates exactly one follow-up commitment
+(default +4h) whose turn asks whether it happened. **A commitment with `follow_up_of` set creates
+none**, so the cap is structural rather than a counter someone can forget to increment. An
+unanswered follow-up closes the chain with `outcome = unknown`.
+
+Asking twice and stopping is the difference between an assistant and a nag, and the nag gets muted —
+after which every other proactive feature in the tree is muted with it.
+
+The follow-up respects the owner's clock: a nudge that fired at 22:00 does not follow up at 02:00.
+`ProcessMessageRequest.UserTimezone` already carries what that needs.
+
+**3 · A way to close it.** `commitment_complete(id, outcome)`, so a turn can record "yes, sent it"
+whenever the user happens to say so — inside the follow-up turn, or three days later in a
+conversation about something else.
+
+**4 · Make them visible on ordinary turns.** Open obligations — owner-scoped, overdue or due today,
+capped, one line each — injected the way `RecalledContext` already is. This is the piece that makes
+the feature feel like memory rather than like a timer: without it the agent cannot notice "you said
+you'd do X" unless a follow-up happens to fire mid-conversation.
+
+### What makes it harder than it sounds
+
+**What counts as an obligation is the model's call, at creation, from the user's own words.** No
+classifier and no heuristic: the distinction lives in the tool description and the default is false.
+A wrongly-flagged reminder costs one extra question; a classifier wrong at scale costs the trust
+that makes the whole proactive surface tolerable.
+
+**The injection is a prompt cost on every turn, paid whether or not it is used.** Bound it hard, and
+emit nothing at all when the set is empty — `RecalledContext` has the same shape and the same
+discipline, and R20e exists because a retrieval surface that always returns something is worse than
+one that returns nothing.
+
+**A plain reminder must behave exactly as it does today.** That is the regression this feature is
+one defaulted-wrong field away from causing, and it is the first test to write.
+
+### Acceptance
+
+- [ ] `obligation = false` — the default — fires once and creates nothing. Behaviour identical to
+      today, asserted rather than assumed.
+- [ ] An obligation that fires creates exactly one follow-up; that follow-up creates none.
+- [ ] "Yes, done" in the follow-up turn closes the parent `kept`, and nothing else fires.
+- [ ] An unanswered follow-up closes the chain `unknown` rather than leaving it pending forever.
+- [ ] `commitment_complete` closes an obligation from an unrelated later turn.
+- [ ] Open obligations appear in an ordinary turn's context, capped, and disappear once closed.
+- [ ] With none open, the prompt is byte-identical to the pre-feature one.
+- [ ] A follow-up computed into the small hours moves to the morning, using the owner's timezone.
+
+---
+
+## R40 — an edit is not a new message
+
+⬜ **Not started.** 🟠 P1.
+
+### Problem
+
+`tgUpdate` has `Message` and `CallbackQuery`. There is no `EditedMessage` field, so the update never
+reaches `handleUpdate`'s switch and Telegram's edit delivery is dropped on the floor.
+
+Fix a typo in the message you just sent and the bot says nothing. It is the cheapest correctness bug
+on the primary channel, and it reads to a user as "it's broken" rather than "that isn't supported".
+
+### Proposal
+
+Add `EditedMessage *tgMessage` and route it to a supersede path — **not** to `handleMessage`, which
+would answer twice and leave both exchanges in the transcript.
+
+The turn id makes this tractable. `turnID := "tg-" + strconv.FormatInt(msg.MessageID, 10)` derives
+from the message id, so an edit carries the *same* turn id as the message it replaces. And
+`SessionMessage.turn_id` is already on every stored message, documented as existing "for audit
+correlation and for trimming on turn boundaries" — which is the operation this needs, under a name
+that was written before there was a caller for it.
+
+Three cases:
+
+1. **The original turn is still in flight.** Let it finish, then run the edit as a fresh turn whose
+   transcript write replaces the superseded pair. Not "cancel and restart": the running turn may
+   already have taken an irreversible action, and [R37](#r37--a-queue-mode-that-reads-the-messages)
+   makes that argument at length for folding. This inherits the conclusion rather than re-arguing
+   it.
+2. **The original turn is complete.** Run the edited text, then replace the prior user message and
+   its reply, keyed on turn id. The model must not go on seeing a question the user retracted
+   alongside the answer it got.
+3. **The edit is old.** Telegram delivers edits to messages of any age. Outside a window (default 15
+   minutes, configurable) the edit is ignored with a debug line — silently re-answering last
+   Tuesday's message is worse than doing nothing.
+
+The reply carries `reply_to_message_id` pointing at the edited message, so which answer is current
+is visible rather than inferred from ordering.
+
+### The hard part: the session store has no replace
+
+`conversationLog` is Load / Append / Forget, and `BucketSessionMessages` is an append-ordered log
+keyed `<session_id>:<20-digit zero-padded seq>`. Superseding means deleting the entries carrying one
+turn id and appending the new pair — a new FSM op, and a Raft write like every other mutation.
+
+That is the real cost of this item, and it is worth paying once rather than working around: R39's
+outcome corrections want the same operation, and so does every future "actually, ignore that". The
+key layout already supports the prefix scan it needs, which is a good sign that the shape was right
+before anyone needed it.
+
+### Acceptance
+
+- [ ] An edit inside the window produces a new reply, threaded to the edited message.
+- [ ] The transcript afterwards holds the edited text and its answer, and not the original pair.
+- [ ] An edit outside the window is ignored, with a log line and no provider call.
+- [ ] An edit arriving while the original turn is in flight does not interleave the transcript.
+- [ ] A caption edit on a media message behaves as a text edit.
+- [ ] The replace is a Raft write, survives a restart, and a two-node test asserts both nodes read
+      the same transcript afterwards.
+
+---
+
+## R41 — a voice note deserves a voice note
+
+⬜ **Not started.** 🟡 P2.
+
+### Problem
+
+Voice already round-trips, badly, in both directions.
+
+**Inbound:** `downloadAttachments` fetches the file, `decorateWithAttachments` hands the model a
+path and a hint, and the model decides whether to call `read_audio`. So a spoken message costs an
+extra model round trip before a single word has been heard — and the words never enter the session
+transcript. **The stored history of a spoken conversation is a list of filenames.** Recall cannot
+see it, `session_search` cannot find it, and R40's supersede has nothing to supersede.
+
+**Outbound:** `speak` + `SendAttachments` work, and `telegramMethodFor` even gets the distinction
+right that most implementations miss — a voice note plays inline with a waveform, audio arrives as a
+track to open. But it only happens when the model chooses to call `speak`. Talk to it and a wall of
+text comes back.
+
+### Proposal
+
+**1 · Transcribe at the edge.** The channel calls `compute.AudioDriver.Transcribe` — already wired,
+already failing over, already trust-tiered for `read_audio` — before the turn starts. The transcript
+becomes the message body; the audio stays attached for anything that wants the original. From there
+the turn is a typed turn, with everything that follows from that: recall, history, search, edits.
+
+**2 · Say what was heard.** The reply opens with the transcript, quoted. Skipping this is what makes
+mis-hearing unrecoverable — the user cannot tell a bad answer from a good answer to the wrong
+question, and the second one is much more common.
+
+**3 · Reply in kind.** A `PreferredReplyModality` on `ProcessMessageRequest`, set by the channel
+when the inbound message arrived as voice. The gateway synthesises the reply and sends one
+`sendVoice` with the text as the caption: playable inline, readable without playing, one message in
+the chat. Past Telegram's 1024-character caption limit it degrades to a text message plus a voice
+note, with nothing truncated.
+
+**This belongs in the gateway, not in the model's judgement.** Replying in kind is a property of the
+channel the message arrived on. A model that has to remember to call `speak` will sometimes forget,
+and an assistant that answers a spoken question in text half the time is worse than one that never
+speaks — the user cannot form a habit around it.
+
+**4 · Off by default, with a per-user override.** `[gateway.voice] enabled` and `reply_in_kind`,
+plus a user preference in `BucketUserPrefs`, where notify routing already lives. Someone talking to
+it from the car wants this on; someone who sends one voice note a month does not.
+
+### What makes it harder than it sounds
+
+**Cost stops being discretionary.** Today STT is billed when the model judges it worth it. After
+this, every inbound voice note is billed and every voice reply pays for TTS on top. Both must land
+in the turn's cost record and count against `TurnBudget` like any other modality call — `speak`
+already carries `Pricing`, `Model` and `BilledTo` for exactly this reason, so the shape exists and
+needs wiring rather than inventing.
+
+**A failed transcription must not eat the message.** If `Transcribe` errors the turn falls back to
+today's path — attachment plus stub — and still answers. The feature degrades to the status quo; it
+never degrades to silence.
+
+**Shared chats.** Transcribing a voice note in a group and echoing it back quotes one person's
+speech at a room, and answering aloud plays it there. Reply-in-kind stays off in shared chats unless
+explicitly enabled; `isSharedChat` already tells the handler which it is in.
+
+### Acceptance
+
+- [ ] A voice note produces a turn whose message body is the transcript, and that transcript is in
+      the stored session history.
+- [ ] The reply quotes what was heard.
+- [ ] With `reply_in_kind`, the answer is one voice note captioned with its own text.
+- [ ] A reply past the caption limit arrives as text plus voice, with nothing truncated.
+- [ ] A transcription failure falls back to the current path and the turn still answers.
+- [ ] STT and TTS spend appear in the turn's cost record and count against the budget cap.
+- [ ] Disabled is the default, and a node with it disabled behaves exactly as today.
+
+---
+
+## R42 — asking is cheaper than guessing
+
+⬜ **Not started.** 🟠 P1.
+
+### Problem
+
+Handed an ambiguous request the agent picks a reading and commits, because there is nothing else it
+can do. A turn can pause for a **confirmation** — `NeedsConfirmation`, the prompt registry,
+`ResumeFromConfirmation` — and a confirmation is a closed question with two answers and a keyboard.
+There is no way to pause for an open one.
+
+So *"email Sam about the thing"* either guesses which Sam, or spends a whole turn ending in a
+question — and loses everything it had assembled getting there: the tool results, the spend, the
+half-built plan.
+
+### Proposal
+
+A `PromptKind` of `question`, resolved with free text rather than a tapped verb, raised by a new
+`ask_user` builtin.
+
+The expensive half is built. `Continuation` serialises a paused turn's messages and spend into a
+Raft-backed record, which is why an approval survives a restart and resumes on another node
+([R2](#r2--durable-cluster-wide-confirmations)); `ResumeFromConfirmation(ctx, req, priorMessages)`
+replays it. A question is that same pause with a different resolution payload — and because the
+model asks by calling a tool, **the answer resumes as that call's tool result.** There is no new
+position in the message sequence to invent, which is the part that would otherwise be fiddly.
+
+Per channel: Telegram sends the question with `ForceReply` and binds the next inbound message from
+that user in that chat to the pending question, checked ahead of the normal turn path. REST gains
+`POST /v1/prompts/{id}/answer` and surfaces a pending question the way it surfaces a pending
+confirmation. Slack's threaded reply is the same shape as Telegram's.
+
+### Four guard rails, because this is the feature that annoys
+
+1. **One question per turn.** A second `ask_user` is refused with an error telling the model to
+   proceed on its best assumption and state it in the answer. Enforced in the registry, not
+   requested in the prompt.
+2. **Not offered where nobody can answer.** `ProcessMessageRequest.Tools` is already per-turn and
+   already filtered — `buildResearchToolList` does exactly this for research workers — so scheduler,
+   commitment and watch turns build their list without it. This is `wireSkillViewTool`'s rule
+   applied a second time: a tool that can only fail **"teaches the model to stop asking"**.
+3. **Unanswered is not stuck.** The prompt TTL already auto-resolves. For a question it resumes the
+   turn with *no answer — proceed on your best assumption and say what you assumed*, rather than
+   abandoning work that has already been paid for.
+4. **Who may answer.** In a shared chat, the reply resolves the question only if `mayResolve` would
+   have let that principal tap a confirmation. An open question in a room must not be answerable by
+   whoever types first when a closed one would not be.
+
+### The risk worth stating plainly
+
+**This is the item on the list that can make the assistant worse.** An agent that asks when it
+should act is more irritating than one that acts and gets corrected, because the correction is one
+message and the question is two.
+
+The one-question cap and a tool description that spends most of its length on when *not* to call it
+are the entire design. Both want tuning against real conversations before the default moves, and the
+honest first version ships it available and rarely used rather than encouraged.
+
+### Acceptance
+
+- [ ] `ask_user` pauses a turn; the answer resumes it with the tool result in place, and the tool
+      calls made before the pause are not repeated.
+- [ ] Spend from before the pause is replayed into the resumed budget — `Continuation` already does
+      this, and the test names it.
+- [ ] The pause survives a node restart and resumes on a different node.
+- [ ] A second `ask_user` in one turn is refused, and the model is told to assume and proceed.
+- [ ] A scheduler-origin turn is not offered the tool at all.
+- [ ] An unanswered question times out into a resumed turn that states its assumption.
+- [ ] In a shared chat, only a principal who could resolve a confirmation can answer a question.
