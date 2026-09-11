@@ -170,7 +170,7 @@ func newScheduleCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("schedule_create: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, raftApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("schedule_create: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{
@@ -294,7 +294,7 @@ func newScheduleDeleteHandler(store *memory.Store, raft memoryRaftApplier) compu
 		if err != nil {
 			return nil, 1, fmt.Errorf("schedule_delete: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, raftApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("schedule_delete: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{"id": id, "deleted": true})

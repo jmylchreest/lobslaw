@@ -243,6 +243,13 @@ promises not to do — the handler decides whether anything is said, from the di
 the only thing that can. A probe that can schedule can schedule itself, so a check that decides to
 also watch something related would create a watch on every run.
 
+**The replayed observation is untrusted.** It is model-authored text summarising whatever the last
+probe read, so a watched page can influence what ends up in it — and it is replayed into every
+subsequent check. It goes through `promptgen.WrapContext` as `TrustUntrusted`, which also
+neutralises delimiters so a state containing `</untrusted>` cannot break out. `watch_report` bounds
+one state at `MaxWatchStateChars` (512), which caps both the injection surface and the prompt growth
+that an unbounded state would compound on every check.
+
 **A silent probe is a failure, not an unchanged result.** A turn that ends without reporting
 increments `failed_runs` and leaves the stored observation untouched. After `max_failures` (default
 5) the watch suspends and says so once. Counting a broken probe as "unchanged" would leave a dead
@@ -251,8 +258,15 @@ watch looking exactly like a quiet one — the worst outcome available, because 
 **Nothing ends in silence.** Change, suspension and expiry all notify; an unchanged check never
 does. A watch that stopped without saying so leaves the user believing they are still covered.
 
-Backoff is `min(base × 1.5^(unchanged+failed), max_interval)`, reset to base on a change. Watches
-are created by the agent through `watch_create` and expire after 30 days by default.
+Backoff is `min(base × 1.5^(unchanged+failed), max_interval)`, reset to base on a change, and
+clamped so a check never lands after `expires_at` — otherwise a watch that had widened to daily
+would announce its expiry a day after it stopped covering anything.
+
+A report is read from the collector *before* a turn error is acted on: a check that reported and
+then failed has already produced the only thing a check exists to produce, and discarding it would
+both lose a good observation and push a working watch toward suspension.
+
+Watches are created by the agent through `watch_create` and expire after 30 days by default.
 
 ---
 

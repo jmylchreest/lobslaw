@@ -41,6 +41,15 @@ const (
 	DefaultWatchMaxFailures = 5
 )
 
+// MaxWatchStateChars bounds one reported state.
+//
+// A state is "the shortest canonical form of the fact", so a long one
+// is evidence the model reported prose instead — and prose is exactly
+// what the digest cannot compare. The bound is also the reason the
+// prompt cannot grow without limit: every state is replayed into the
+// next probe, so an unbounded one compounds on every check, forever.
+const MaxWatchStateChars = 512
+
 // WatchConfig wires the watch_* builtins. Same Store + Raft pair as
 // the commitment and schedule families, because a watch is a
 // commitment.
@@ -210,7 +219,7 @@ func newWatchCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("watch_create: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, raftApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("watch_create: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{
@@ -308,9 +317,15 @@ func newWatchCancelHandler(store *memory.Store, raft memoryRaftApplier) compute.
 		if id == "" {
 			return nil, 2, errors.New("watch_cancel: id is required")
 		}
-		// Same refusal shape as commitment_cancel: "not yours" and
-		// "not there" are one answer, so ids cannot be probed.
-		ok, err := commitmentActionable(ctx, store, id)
+		// Ownership AND watch-ness. commitmentActionable alone would
+		// let this delete a plain reminder whose id the model confused
+		// for a watch's — a tool doing something other than what its
+		// description says, silently and irreversibly.
+		//
+		// Same refusal shape as commitment_cancel: "not yours", "not a
+		// watch" and "not there" are one answer, so ids cannot be
+		// probed for existence.
+		ok, err := watchActionable(ctx, store, id)
 		if err != nil {
 			return nil, 1, fmt.Errorf("watch_cancel: %w", err)
 		}
@@ -326,7 +341,7 @@ func newWatchCancelHandler(store *memory.Store, raft memoryRaftApplier) compute.
 		if err != nil {
 			return nil, 1, fmt.Errorf("watch_cancel: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, raftApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("watch_cancel: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{"id": id, "cancelled": true})
@@ -339,6 +354,15 @@ func newWatchReportHandler() compute.BuiltinFunc {
 		state := strings.TrimSpace(args["state"])
 		if state == "" {
 			return nil, 2, errors.New("watch_report: state is required")
+		}
+		if len(state) > MaxWatchStateChars {
+			// Exit 2 so the model can shorten and call again inside
+			// this same turn, rather than the check counting as
+			// silent and pushing the watch toward suspension.
+			return nil, 2, fmt.Errorf(
+				"watch_report: state is %d characters and the limit is %d — report the bare fact "+
+					"(a label and a value), not a description of it",
+				len(state), MaxWatchStateChars)
 		}
 		ok := compute.ReportWatch(ctx, compute.WatchReport{
 			State:   state,
@@ -353,6 +377,31 @@ func newWatchReportHandler() compute.BuiltinFunc {
 		out, _ := json.Marshal(map[string]any{"recorded": true})
 		return out, 0, nil
 	}
+}
+
+// watchActionable loads a commitment and reports whether this turn may
+// cancel it as a watch: owned by the caller, and carrying watch state.
+// A missing record, someone else's, and a plain reminder all report
+// false, so every refusal is the same answer.
+func watchActionable(ctx context.Context, store *memory.Store, id string) (bool, error) {
+	if store == nil {
+		return false, nil
+	}
+	raw, err := store.Get(memory.BucketCommitments, id)
+	if err != nil {
+		if memory.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	var c lobslawv1.AgentCommitment
+	if err := proto.Unmarshal(raw, &c); err != nil {
+		return false, fmt.Errorf("unmarshal commitment %q: %w", id, err)
+	}
+	if c.Watch == nil {
+		return false, nil
+	}
+	return ownedByCaller(ctx, c.Owner), nil
 }
 
 // parseWatchDuration accepts a Go duration and falls back to def when

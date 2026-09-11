@@ -294,3 +294,69 @@ func TestWatchReportIsRegisteredButNotAdvertised(t *testing.T) {
 		t.Error("the rest of the family must still be advertised")
 	}
 }
+
+// watch_cancel deletes records irreversibly, so it must only delete
+// the kind of record it says it does. A model that confuses a
+// reminder's id for a watch's would otherwise silently drop the
+// reminder and report success.
+func TestWatchCancelWillNotCancelAPlainReminder(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStoreForTest(t)
+	seedCommitment(t, store, "r1", "pending", time.Now().Add(time.Hour)) // owned by user:alice
+	seedWatch(t, store, "w1", "user:alice", "the fare", "pending", "price: 1")
+
+	b, raft := newWatchBuiltins(t, store)
+	fn, _ := b.Get("watch_cancel")
+
+	_, exitReminder, errReminder := fn(turnAs("alice"), map[string]string{"id": "r1"})
+	if errReminder == nil {
+		t.Fatal("watch_cancel deleted a plain reminder")
+	}
+	if len(raft.entries) != 0 {
+		t.Fatalf("a refused cancel must not write; got %d", len(raft.entries))
+	}
+
+	// Indistinguishable from "no such id", so the refusal cannot be
+	// used to learn that a reminder with that id exists.
+	_, exitMissing, errMissing := fn(turnAs("alice"), map[string]string{"id": "nope"})
+	if errReminder.Error() != errMissing.Error() || exitReminder != exitMissing {
+		t.Errorf("refusals differ and so leak existence:\n reminder: %v\n missing:  %v", errReminder, errMissing)
+	}
+
+	// The real watch still cancels.
+	if _, exit, err := fn(turnAs("alice"), map[string]string{"id": "w1"}); err != nil || exit != 0 {
+		t.Fatalf("cancelling an actual watch failed: exit=%d err=%v", exit, err)
+	}
+	if len(raft.entries) != 1 {
+		t.Errorf("expected one delete; got %d", len(raft.entries))
+	}
+}
+
+// A state is meant to be the shortest canonical form of a fact. A long
+// one is prose, which is what the digest cannot compare — and it is
+// replayed into every future probe, so an unbounded one compounds.
+func TestWatchReportRejectsAnOversizedState(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStoreForTest(t)
+	b, _ := newWatchBuiltins(t, store)
+	fn, _ := b.Get("watch_report")
+
+	ctx, collector := compute.WithWatchCollector(turnAs("alice"))
+	_, exit, err := fn(ctx, map[string]string{"state": strings.Repeat("x", MaxWatchStateChars+1)})
+	if err == nil {
+		t.Fatal("an oversized state should be refused")
+	}
+	// Exit 2 is "you did it wrong" — the model can shorten and call
+	// again in this same turn rather than the check counting as silent.
+	if exit != 2 {
+		t.Errorf("exit = %d, want 2 so the model retries rather than failing the check", exit)
+	}
+	if got, _ := collector.Report(); got != nil {
+		t.Error("a refused report must not reach the collector")
+	}
+
+	// Exactly at the limit is fine.
+	if _, exit, err := fn(ctx, map[string]string{"state": strings.Repeat("x", MaxWatchStateChars)}); err != nil || exit != 0 {
+		t.Errorf("a state at the limit should be accepted: exit=%d err=%v", exit, err)
+	}
+}

@@ -67,20 +67,21 @@ func (n *Node) runWatchAsAgentTurn(ctx context.Context, c *lobslawv1.AgentCommit
 		ChannelID: c.Params["chat_id"],
 		Tools:     buildWatchToolList(n.toolRegistry),
 	}
-	resp, err := n.agent.RunToolCallLoop(probeCtx, req)
-	if err != nil {
-		// A provider outage is not an observation. Counted as a failed
-		// probe so a persistent one eventually suspends the watch,
-		// rather than retrying forever in silence.
-		n.log.Warn("watch: probe turn failed", "watch", c.Id, "err", err)
-		return n.finishWatch(ctx, c, decideWatchFailure(st, what, "the check could not run", now))
-	}
+	resp, runErr := n.agent.RunToolCallLoop(probeCtx, req)
 
+	// The collector is read BEFORE the error is acted on. A turn that
+	// reported and then failed — a budget cap on a later call, a
+	// provider dropping mid-cleanup — has already produced the only
+	// thing a check exists to produce. Discarding it would throw away a
+	// good observation AND advance the failure count toward suspending
+	// a watch that is working.
 	report, calls := collector.Report()
 	if report == nil {
-		n.log.Warn("watch: probe reported nothing",
-			"watch", c.Id, "turn", req.TurnID, "tool_calls", len(resp.ToolCalls))
-		return n.finishWatch(ctx, c, decideWatchFailure(st, what, "the check ran but reported no state", now))
+		return n.finishWatch(ctx, c, decideWatchFailure(st, what, probeFailureReason(resp, runErr), now))
+	}
+	if runErr != nil {
+		n.log.Warn("watch: probe reported, then the turn failed; keeping the report",
+			"watch", c.Id, "turn", req.TurnID, "err", runErr)
 	}
 	if calls > 1 {
 		n.log.Info("watch: probe reported more than once; keeping the last",
@@ -92,6 +93,25 @@ func (n *Node) runWatchAsAgentTurn(ctx context.Context, c *lobslawv1.AgentCommit
 		"watch", c.Id, "action", d.Action.String(),
 		"unchanged_runs", st.UnchangedRuns, "next", d.Retry)
 	return n.finishWatch(ctx, c, d)
+}
+
+// probeFailureReason says why a check produced nothing, in words the
+// user will read when the watch eventually suspends.
+//
+// The confirmation case is called out separately because "it reported
+// no state" would be actively misleading: the check did not fail, it
+// stopped to ask permission, and a scheduled turn has nobody to ask.
+// That is a configuration problem with a specific fix, and the message
+// is the only place it can surface.
+func probeFailureReason(resp *compute.ProcessMessageResponse, runErr error) string {
+	switch {
+	case runErr != nil:
+		return "the check could not run"
+	case resp != nil && resp.NeedsConfirmation:
+		return "the check needed permission to continue, and a scheduled check has nobody to ask"
+	default:
+		return "the check ran but reported no state"
+	}
 }
 
 // finishWatch delivers whatever the decision asked for and tells the

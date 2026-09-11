@@ -28,6 +28,14 @@ type memoryRaftApplier interface {
 	Apply(data []byte, timeout time.Duration) (any, error)
 }
 
+// raftApplyTimeout bounds one builtin's write to the cluster.
+//
+// Named rather than repeated: it was the same literal in five call
+// sites across four files, which is the shape code-magic-numbers
+// exists to prevent — the copies cannot be changed together, and
+// nothing would notice if one drifted.
+const raftApplyTimeout = 5 * time.Second
+
 // memoryForgetter is the subset of *memory.Service needed for
 // memory_forget. Interface so tests can substitute a fake.
 type memoryForgetter interface {

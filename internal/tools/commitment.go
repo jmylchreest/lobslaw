@@ -169,7 +169,7 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("commitment_create: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, raftApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("commitment_create: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{
@@ -272,7 +272,7 @@ func newCommitmentCancelHandler(store *memory.Store, raft memoryRaftApplier) com
 		if err != nil {
 			return nil, 1, fmt.Errorf("commitment_cancel: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, raftApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("commitment_cancel: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{"id": id, "cancelled": true})

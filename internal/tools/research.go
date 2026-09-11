@@ -121,7 +121,7 @@ func newResearchStartHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("research_start: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, raftApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("research_start: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{
