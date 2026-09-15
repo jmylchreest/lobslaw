@@ -200,6 +200,52 @@ must not claim a single point in time that it cannot provide.
 7. Rebuild caches and indexes and report counts, skips, model and any remaining
    work. Return success only when every selected component is complete.
 
+### Stable identity for importing alongside
+
+Agreed extension; not implemented by the current content-based retry receipts.
+See the aide decision `archive-stable-import-mappings`.
+
+An alongside import must maintain a durable mapping from
+`(source identity, record kind, source record ID)` to the destination record ID.
+The source identity stays stable across backup generations; snapshot IDs, archive
+checksums, timestamps and record contents cannot stand in for it. Ownership
+mappings remain explicit and separately authorized. A source identity is provenance,
+not permission to access or overwrite destination data.
+
+Store the source content fingerprint and the destination content fingerprint from
+the successful import with the mapping. Compare portable content, excluding derived
+embeddings and destination encryption. Resolve against the mapped destination before
+considering a new alongside copy:
+
+| State | Import behavior |
+| --- | --- |
+| First alongside import | Allocate one destination ID, remap references and save the mapping atomically with the records |
+| Source and mapped destination unchanged | Skip, including when the archive is a newer backup generation |
+| Source changed | Show a conflict against the mapped copy; do not allocate another ID |
+| Destination edited | Show the destination change explicitly, even when the source is unchanged |
+| Destination deleted | Retain the mapping and report deletion; do not silently recreate the record |
+
+Treat a session index and its transcript as a single conflict group. Every message
+must reference the mapped session and preserve its sequence relationships. Stable
+mappings must also survive destination backup/restore; otherwise restoring a backup
+would reintroduce duplicates on the next import. This requires portable provenance
+metadata, distinct from operational Raft state and snapshot-specific retry receipts.
+Older archives without source identity require an explicit, consistently reused
+source association before alongside import can promise cross-generation behavior.
+
+The conflict interface offers replace, import alongside, or skip for supported
+record groups. Replace requires an explicit selection and a verified destination
+backup; alongside is not a way to evade an existing mapped conflict. Unattended
+imports fail on unresolved conflicts. Persist resolutions with import progress and
+check destination state again when committing, so concurrent edits cannot be lost.
+Executable imports remain paused. Existing retry receipts must not hide changed or
+deleted mapped records from the preview.
+
+Required regression coverage includes repeated imports of one archive, unchanged
+records across different generations, changed source content, destination edits and
+deletions, session reference remapping, restart/resume, concurrent destination edits,
+and destination backup/restore followed by another import.
+
 Embeddings are derived data, but summaries are source content. Re-embed summaries
 without asking an LLM to rewrite them. Old dimensions and model stamps are not
 valid on the target. An unavailable embedder pauses import with a recoverable
@@ -265,6 +311,7 @@ verification; failed or truncated writes are never listed as restorable snapshot
 | Skill integrity | Preserve manifests and signatures verbatim | Reserialising signed YAML invalidates signatures |
 | Backup generations | Immutable, self-contained archives | Restores do not depend on a fragile incremental chain |
 | Conflict handling | Plan first, exact duplicate no-op, conflicting ID rejected | Repeatable migration without silently overwriting new data |
+| Alongside identity | Persistent source-record mappings across generations | Repeated imports cannot multiply copies or silently recreate deleted records |
 | Failure handling | Durable resumable batches | Fits bounded Raft proposals and makes partial progress explicit |
 
 ## Acceptance criteria
