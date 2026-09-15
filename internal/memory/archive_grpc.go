@@ -48,7 +48,7 @@ func (s *ArchiveRPC) authorized(ctx context.Context, action string) error {
 	return nil
 }
 
-func (s *ArchiveRPC) ExportArchive(_ *lobslawv1.ArchiveExportRequest, stream grpc.ServerStreamingServer[lobslawv1.ArchiveChunk]) error {
+func (s *ArchiveRPC) ExportArchive(_ *lobslawv1.ExportArchiveRequest, stream grpc.ServerStreamingServer[lobslawv1.ExportArchiveResponse]) error {
 	if err := s.authorized(stream.Context(), "archive:export"); err != nil {
 		return err
 	}
@@ -68,14 +68,14 @@ func (s *ArchiveRPC) ExportArchive(_ *lobslawv1.ArchiveExportRequest, stream grp
 		return status.Error(codes.Internal, "cannot encode archive")
 	}
 	for payload.Len() > 0 {
-		if err := stream.Send(&lobslawv1.ArchiveChunk{Data: payload.Next(ArchiveChunkBytes)}); err != nil {
+		if err := stream.Send(&lobslawv1.ExportArchiveResponse{Data: payload.Next(ArchiveChunkBytes)}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *ArchiveRPC) ImportArchive(stream grpc.ClientStreamingServer[lobslawv1.ArchiveChunk, lobslawv1.ArchiveImportResponse]) error {
+func (s *ArchiveRPC) ImportArchive(stream grpc.ClientStreamingServer[lobslawv1.ImportArchiveRequest, lobslawv1.ImportArchiveResponse]) error {
 	ctx := stream.Context()
 	if err := s.authorized(ctx, "archive:import"); err != nil {
 		return err
@@ -147,7 +147,7 @@ func (s *ArchiveRPC) ImportArchive(stream grpc.ClientStreamingServer[lobslawv1.A
 	if err != nil {
 		return status.Error(codes.Internal, "cannot encode import progress")
 	}
-	response := &lobslawv1.ArchiveImportResponse{PlanJson: planJSON, ResultJson: progressJSON}
+	response := &lobslawv1.ImportArchiveResponse{PlanJson: planJSON, ResultJson: progressJSON}
 	if header.Apply {
 		result, applyErr := ApplyArchiveImport(ctx, s.service.raft, s.service.store, snapshot.Records, opts, s.service.embedder)
 		response.ResultJson, err = json.Marshal(result)

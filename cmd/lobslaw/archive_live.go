@@ -123,11 +123,11 @@ func importArchiveSnapshot(node *liveNode, snapshot archive.Snapshot, opts memor
 	if err != nil {
 		return err
 	}
-	if err := stream.Send(&lobslawv1.ArchiveChunk{OptionsJson: options, Apply: apply, RequireEmpty: requireEmpty}); err != nil {
+	if err := stream.Send(&lobslawv1.ImportArchiveRequest{OptionsJson: options, Apply: apply, RequireEmpty: requireEmpty}); err != nil {
 		return err
 	}
 	for payload.Len() > 0 {
-		if err := stream.Send(&lobslawv1.ArchiveChunk{Data: payload.Next(memory.ArchiveChunkBytes)}); err != nil {
+		if err := stream.Send(&lobslawv1.ImportArchiveRequest{Data: payload.Next(memory.ArchiveChunkBytes)}); err != nil {
 			return err
 		}
 	}
@@ -155,7 +155,7 @@ func exportArchiveSnapshot(node *liveNode) (archive.Snapshot, error) {
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := node.ctx()
 	defer cancel()
-	stream, err := lobslawv1.NewArchiveServiceClient(conn).ExportArchive(ctx, &lobslawv1.ArchiveExportRequest{})
+	stream, err := lobslawv1.NewArchiveServiceClient(conn).ExportArchive(ctx, &lobslawv1.ExportArchiveRequest{})
 	if err != nil {
 		return archive.Snapshot{}, err
 	}

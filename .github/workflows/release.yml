@@ -1,7 +1,7 @@
 name: release
 
-# Publishes immutable SHA tags on main and release tags on version pushes.
-# Deployments explicitly pin a release tag or digest; no floating latest tag.
+# Main builds publish main/latest plus an immutable SHA tag.
+# The homelab follows main through Keel; version builds retain release tags.
 #
 #   git tag -a v0.1.0 -m 'first cluster deploy' && git push origin v0.1.0
 #
@@ -39,10 +39,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # latest=false is load-bearing, not tidiness. metadata-action's default
-      # flavour adds a `latest` tag for any semver ref, and a floating tag in a
-      # registry that something might resolve is exactly the silent-update
-      # problem the pinning above exists to avoid.
+      # Only main moves the deployment aliases; version and feature builds do not.
       - name: derive tags
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -50,6 +47,8 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false
           tags: |
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=tag
             type=sha,prefix=sha-,format=short
 

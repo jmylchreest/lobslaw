@@ -1988,23 +1988,27 @@ message LogEntry {
 // Only allowlisted knowledge kinds are accepted. Existing records are never
 // overwritten; dependencies carry their expected digest and are read-only.
 service ArchiveService {
-  rpc ExportArchive(ArchiveExportRequest) returns (stream ArchiveChunk);
-  rpc ImportArchive(stream ArchiveChunk) returns (ArchiveImportResponse);
+  rpc ExportArchive(ExportArchiveRequest) returns (stream ExportArchiveResponse);
+  rpc ImportArchive(stream ImportArchiveRequest) returns (ImportArchiveResponse);
 }
 
-message ArchiveExportRequest {}
+message ExportArchiveRequest {}
+
+message ExportArchiveResponse {
+  bytes data = 1;
+}
 
 // The first import chunk carries options_json and apply. Remaining chunks
 // carry archive bytes only. Transport is authenticated mTLS; archive encryption
 // and decryption stay on the operator's machine.
-message ArchiveChunk {
+message ImportArchiveRequest {
   bytes data = 1;
   bytes options_json = 2;
   bool apply = 3;
   bool require_empty = 4;
 }
 
-message ArchiveImportResponse {
+message ImportArchiveResponse {
   bytes plan_json = 1;
   bytes result_json = 2;
   // An apply failure still returns durable progress for a resumable import.

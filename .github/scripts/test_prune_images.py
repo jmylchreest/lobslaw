@@ -21,6 +21,7 @@ class RetentionTests(unittest.TestCase):
         versions = builds + [version(100, ["v0.1.0", "sha-abcdef0"]),
                              version(101, []), version(102, [], 1),
                              version(103, ["production"]),
+                             version(105, ["main", "latest", "sha-123abcd"]),
                              version(104, list(prune.PINNED_TAGS))]
         self.assertEqual({v["id"] for v in prune.candidates(versions, now)},
                          {prune.KEEP_BUILDS, 101})

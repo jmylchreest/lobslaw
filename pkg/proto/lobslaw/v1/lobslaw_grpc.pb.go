@@ -3497,8 +3497,8 @@ const (
 // Only allowlisted knowledge kinds are accepted. Existing records are never
 // overwritten; dependencies carry their expected digest and are read-only.
 type ArchiveServiceClient interface {
-	ExportArchive(ctx context.Context, in *ArchiveExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ArchiveChunk], error)
-	ImportArchive(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ArchiveChunk, ArchiveImportResponse], error)
+	ExportArchive(ctx context.Context, in *ExportArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportArchiveResponse], error)
+	ImportArchive(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportArchiveRequest, ImportArchiveResponse], error)
 }
 
 type archiveServiceClient struct {
@@ -3509,13 +3509,13 @@ func NewArchiveServiceClient(cc grpc.ClientConnInterface) ArchiveServiceClient {
 	return &archiveServiceClient{cc}
 }
 
-func (c *archiveServiceClient) ExportArchive(ctx context.Context, in *ArchiveExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ArchiveChunk], error) {
+func (c *archiveServiceClient) ExportArchive(ctx context.Context, in *ExportArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportArchiveResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ArchiveService_ServiceDesc.Streams[0], ArchiveService_ExportArchive_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[ArchiveExportRequest, ArchiveChunk]{ClientStream: stream}
+	x := &grpc.GenericClientStream[ExportArchiveRequest, ExportArchiveResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -3526,20 +3526,20 @@ func (c *archiveServiceClient) ExportArchive(ctx context.Context, in *ArchiveExp
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ArchiveService_ExportArchiveClient = grpc.ServerStreamingClient[ArchiveChunk]
+type ArchiveService_ExportArchiveClient = grpc.ServerStreamingClient[ExportArchiveResponse]
 
-func (c *archiveServiceClient) ImportArchive(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ArchiveChunk, ArchiveImportResponse], error) {
+func (c *archiveServiceClient) ImportArchive(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportArchiveRequest, ImportArchiveResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ArchiveService_ServiceDesc.Streams[1], ArchiveService_ImportArchive_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[ArchiveChunk, ArchiveImportResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[ImportArchiveRequest, ImportArchiveResponse]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ArchiveService_ImportArchiveClient = grpc.ClientStreamingClient[ArchiveChunk, ArchiveImportResponse]
+type ArchiveService_ImportArchiveClient = grpc.ClientStreamingClient[ImportArchiveRequest, ImportArchiveResponse]
 
 // ArchiveServiceServer is the server API for ArchiveService service.
 // All implementations should embed UnimplementedArchiveServiceServer
@@ -3549,8 +3549,8 @@ type ArchiveService_ImportArchiveClient = grpc.ClientStreamingClient[ArchiveChun
 // Only allowlisted knowledge kinds are accepted. Existing records are never
 // overwritten; dependencies carry their expected digest and are read-only.
 type ArchiveServiceServer interface {
-	ExportArchive(*ArchiveExportRequest, grpc.ServerStreamingServer[ArchiveChunk]) error
-	ImportArchive(grpc.ClientStreamingServer[ArchiveChunk, ArchiveImportResponse]) error
+	ExportArchive(*ExportArchiveRequest, grpc.ServerStreamingServer[ExportArchiveResponse]) error
+	ImportArchive(grpc.ClientStreamingServer[ImportArchiveRequest, ImportArchiveResponse]) error
 }
 
 // UnimplementedArchiveServiceServer should be embedded to have
@@ -3560,10 +3560,10 @@ type ArchiveServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedArchiveServiceServer struct{}
 
-func (UnimplementedArchiveServiceServer) ExportArchive(*ArchiveExportRequest, grpc.ServerStreamingServer[ArchiveChunk]) error {
+func (UnimplementedArchiveServiceServer) ExportArchive(*ExportArchiveRequest, grpc.ServerStreamingServer[ExportArchiveResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method ExportArchive not implemented")
 }
-func (UnimplementedArchiveServiceServer) ImportArchive(grpc.ClientStreamingServer[ArchiveChunk, ArchiveImportResponse]) error {
+func (UnimplementedArchiveServiceServer) ImportArchive(grpc.ClientStreamingServer[ImportArchiveRequest, ImportArchiveResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method ImportArchive not implemented")
 }
 func (UnimplementedArchiveServiceServer) testEmbeddedByValue() {}
@@ -3587,22 +3587,22 @@ func RegisterArchiveServiceServer(s grpc.ServiceRegistrar, srv ArchiveServiceSer
 }
 
 func _ArchiveService_ExportArchive_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ArchiveExportRequest)
+	m := new(ExportArchiveRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(ArchiveServiceServer).ExportArchive(m, &grpc.GenericServerStream[ArchiveExportRequest, ArchiveChunk]{ServerStream: stream})
+	return srv.(ArchiveServiceServer).ExportArchive(m, &grpc.GenericServerStream[ExportArchiveRequest, ExportArchiveResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ArchiveService_ExportArchiveServer = grpc.ServerStreamingServer[ArchiveChunk]
+type ArchiveService_ExportArchiveServer = grpc.ServerStreamingServer[ExportArchiveResponse]
 
 func _ArchiveService_ImportArchive_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(ArchiveServiceServer).ImportArchive(&grpc.GenericServerStream[ArchiveChunk, ArchiveImportResponse]{ServerStream: stream})
+	return srv.(ArchiveServiceServer).ImportArchive(&grpc.GenericServerStream[ImportArchiveRequest, ImportArchiveResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ArchiveService_ImportArchiveServer = grpc.ClientStreamingServer[ArchiveChunk, ArchiveImportResponse]
+type ArchiveService_ImportArchiveServer = grpc.ClientStreamingServer[ImportArchiveRequest, ImportArchiveResponse]
 
 // ArchiveService_ServiceDesc is the grpc.ServiceDesc for ArchiveService service.
 // It's only intended for direct use with grpc.RegisterService,

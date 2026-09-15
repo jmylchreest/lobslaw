@@ -44,7 +44,7 @@ func TestArchiveRPCRequiresAuthorizationAndPlansBeforeApply(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	client := lobslawv1.NewArchiveServiceClient(conn)
 	ctx := context.Background()
-	export, err := client.ExportArchive(ctx, &lobslawv1.ArchiveExportRequest{})
+	export, err := client.ExportArchive(ctx, &lobslawv1.ExportArchiveRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,10 +64,10 @@ func TestArchiveRPCRequiresAuthorizationAndPlansBeforeApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := mismatch.Send(&lobslawv1.ArchiveChunk{OptionsJson: []byte(`{"source_id":"wrong-source"}`)}); err != nil {
+	if err := mismatch.Send(&lobslawv1.ImportArchiveRequest{OptionsJson: []byte(`{"source_id":"wrong-source"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := mismatch.Send(&lobslawv1.ArchiveChunk{Data: payload.Bytes()}); err != nil {
+	if err := mismatch.Send(&lobslawv1.ImportArchiveRequest{Data: payload.Bytes()}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := mismatch.CloseAndRecv(); status.Code(err) != codes.InvalidArgument {
@@ -78,10 +78,10 @@ func TestArchiveRPCRequiresAuthorizationAndPlansBeforeApply(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := stream.Send(&lobslawv1.ArchiveChunk{OptionsJson: []byte(`{}`), Apply: apply}); err != nil {
+		if err := stream.Send(&lobslawv1.ImportArchiveRequest{OptionsJson: []byte(`{}`), Apply: apply}); err != nil {
 			t.Fatal(err)
 		}
-		if err := stream.Send(&lobslawv1.ArchiveChunk{Data: payload.Bytes()}); err != nil {
+		if err := stream.Send(&lobslawv1.ImportArchiveRequest{Data: payload.Bytes()}); err != nil {
 			t.Fatal(err)
 		}
 		response, err := stream.CloseAndRecv()
@@ -99,7 +99,7 @@ func TestArchiveRPCRequiresAuthorizationAndPlansBeforeApply(t *testing.T) {
 			}
 		}
 	}
-	export, err = client.ExportArchive(ctx, &lobslawv1.ArchiveExportRequest{})
+	export, err = client.ExportArchive(ctx, &lobslawv1.ExportArchiveRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
