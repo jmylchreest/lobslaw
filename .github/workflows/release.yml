@@ -1,17 +1,15 @@
 name: release
 
-# Publishes the container image. Tag-driven: nothing is pushed on a merge to
-# main, because the homelab deployment pins an exact tag on purpose (an agent
-# holding your API keys is not a workload you want silently updating itself).
+# Publishes immutable SHA tags on main and release tags on version pushes.
+# Deployments explicitly pin a release tag or digest; no floating latest tag.
 #
 #   git tag -a v0.1.0 -m 'first cluster deploy' && git push origin v0.1.0
 #
-# Consumed by namespaces/hermes/lobslaw.yaml in jmylchreest/homelab, which pulls
-# through the cluster's zot mirror at cr.home.i0.pm rather than from ghcr.io
-# directly. Nothing else needs to change there when a new tag ships except the
-# pinned tag itself.
+# Consumed by namespaces/hermes/lobslaw.yaml in jmylchreest/homelab.
+# See .github/CONTAINERS.md for publishing and deployment retention pins.
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 

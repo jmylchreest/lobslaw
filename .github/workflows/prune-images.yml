@@ -1,0 +1,33 @@
+name: prune container images
+
+on:
+  schedule:
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: prune-container-images
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify retention rules
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Prune old builds and unreachable manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/prune-images.py
