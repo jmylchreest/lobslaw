@@ -16,7 +16,7 @@ Older SHA builds and unreachable untagged manifests are deleted. Registry
 inspection must complete successfully before any deletion starts. Add a new
 deployment tag to `PINNED_TAGS` before upgrading a cluster; remove an old pin
 only when no deployment or required rollback uses it. The initial homelab pin
-is `sha-9dd09ba`.
+is `sha-9dd09ba`; `sha-6d29f6b` is the portable-backup migration build.
 
 The workflow token needs admin access to the package to delete versions, as
 described in [GitHub's package deletion documentation](https://docs.github.com/en/packages/learn-github-packages/deleting-and-restoring-a-package).

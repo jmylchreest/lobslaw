@@ -11,7 +11,9 @@ archive remains bounded to 256 MiB and is assembled in memory.
 
 The private 355-record local-stack fixture has round-tripped through an isolated
 Raft destination using a fresh memory key and the actual cached MiniLM model.
-Kubernetes deployment verification remains pending. Filesystem attachments,
+The same 355 records also restored through the production binary in an isolated
+Kubernetes pod: repeat apply wrote zero records and live encrypted export
+preserved the full inventory. Production migration remains pending. Filesystem attachments,
 automatic schedule activation, retained incomplete upload jobs and remote backup
 repositories remain outside this implementation. The sections below retain the
 broader design; see docs/user/ARCHIVE.md for the implemented commands.

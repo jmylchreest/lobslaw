@@ -12,7 +12,7 @@ KEEP_BUILDS = 10
 MIN_AGE_DAYS = 30
 PAGE_SIZE = 100
 # Deployment pins must survive even after they fall outside the build window.
-PINNED_TAGS = {"sha-9dd09ba"}
+PINNED_TAGS = {"sha-9dd09ba", "sha-6d29f6b"}
 SHA_TAG = re.compile(r"sha-[0-9a-f]{7,40}")
 
 
