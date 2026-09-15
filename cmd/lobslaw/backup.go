@@ -59,6 +59,7 @@ func backupCreate(args []string) error {
 		node.bind(fs)
 	}
 	path := fs.String("repository", "", "local backup repository directory")
+	sourceID := fs.String("source-id", envOr("LOBSLAW_ARCHIVE_SOURCE_ID", ""), "stable source identity shared by every generation")
 	var recipients []age.Recipient
 	fs.Func("recipient", "age recipient (repeatable; required)", func(value string) error {
 		recipient, err := age.ParseX25519Recipient(value)
@@ -101,6 +102,10 @@ func backupCreate(args []string) error {
 		if err != nil {
 			return err
 		}
+	}
+	snapshot.Manifest.SourceID, err = archive.SourceIdentity(snapshot.Manifest, *sourceID)
+	if err != nil {
+		return err
 	}
 	generation, err := (backup.Repository{Path: *path}).Create(snapshot, recipients...)
 	if err != nil {

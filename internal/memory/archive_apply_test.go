@@ -20,6 +20,13 @@ type interruptedArchiveRaft struct {
 }
 
 func TestArchiveImportResumesAfterRaftAndStoreRestart(t *testing.T) {
+	for _, source := range []string{"", "stable-source"} {
+		t.Run(source, func(t *testing.T) { testArchiveImportRestart(t, ArchiveImportOptions{SourceID: source}) })
+	}
+}
+
+func testArchiveImportRestart(t *testing.T, opts ArchiveImportOptions) {
+	t.Helper()
 	node, fsm := newTestRaft(t)
 	store := fsm.Store()
 	path := store.loadDB().Path()
@@ -29,7 +36,7 @@ func TestArchiveImportResumesAfterRaftAndStoreRestart(t *testing.T) {
 		archiveTestRecord(t, "documents", "b", &lobslawv1.VectorRecord{Id: "b", Text: "second"}),
 	}
 	ctx := context.Background()
-	first, err := ApplyArchiveImport(ctx, &interruptedArchiveRaft{raft: node, remaining: 1}, store, records, ArchiveImportOptions{}, stubEmbedder{model: "destination"})
+	first, err := ApplyArchiveImport(ctx, &interruptedArchiveRaft{raft: node, remaining: 1}, store, records, opts, stubEmbedder{model: "destination"})
 	if err == nil || first.Applied != 1 {
 		t.Fatalf("expected partial import: %+v, %v", first, err)
 	}
@@ -56,7 +63,7 @@ func TestArchiveImportResumesAfterRaftAndStoreRestart(t *testing.T) {
 	if err := restarted.WaitForLeader(5 * time.Second); err != nil {
 		t.Fatal(err)
 	}
-	result, err := ApplyArchiveImport(ctx, restarted, reopened, records, ArchiveImportOptions{}, stubEmbedder{model: "destination"})
+	result, err := ApplyArchiveImport(ctx, restarted, reopened, records, opts, stubEmbedder{model: "destination"})
 	if err != nil || result.Applied != 1 || result.Completed != 2 || result.ImportID != first.ImportID {
 		t.Fatalf("restart lost resume state: %+v, %v", result, err)
 	}

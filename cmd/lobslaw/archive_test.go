@@ -44,7 +44,7 @@ func TestArchiveExportEncryptedAndDoesNotOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"--offline", "--state-db", dbpath, "--out", out, "--recipient", id.Recipient().String()}
+	args := []string{"--offline", "--state-db", dbpath, "--out", out, "--recipient", id.Recipient().String(), "--source-id", "test-local"}
 	if err := archiveExport(args); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,9 @@ func TestArchiveExportEncryptedAndDoesNotOverwrite(t *testing.T) {
 	snap, err := archive.Read(f, id)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if snap.Manifest.SourceID != "test-local" {
+		t.Fatal("stable source identity missing")
 	}
 	if snap.Manifest.Counts["scheduled-tasks"] != 1 {
 		t.Fatal("schedule missing")

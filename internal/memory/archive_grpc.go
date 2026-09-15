@@ -114,6 +114,9 @@ func (s *ArchiveRPC) ImportArchive(stream grpc.ClientStreamingServer[lobslawv1.A
 	if err != nil {
 		return status.Error(codes.InvalidArgument, "archive verification failed")
 	}
+	if err := bindArchiveSource(snapshot.Manifest, &opts, header.RequireEmpty); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
 	existing, err := s.service.store.ArchiveRecords(ctx)
 	if err != nil {
 		return status.Error(codes.Internal, "cannot read destination snapshot")
@@ -179,6 +182,22 @@ func archiveRestoreTarget(store *Store, existing, incoming []archive.Record, opt
 		if !ok || !completed[archiveRecordKey{source.Kind, source.ID}] {
 			return errors.New("backup restore requires an empty knowledge store or its own partial restore; use archive import to merge")
 		}
+	}
+	return nil
+}
+
+func bindArchiveSource(manifest archive.Manifest, opts *ArchiveImportOptions, restore bool) error {
+	source, err := archive.SourceIdentity(manifest, opts.SourceID)
+	if err != nil {
+		return err
+	}
+	opts.SourceID = source
+	if restore {
+		if len(opts.Alongside) > 0 || len(opts.Skip) > 0 {
+			return errors.New("backup restore does not support alongside or skip; use archive import")
+		}
+		// Restore existing provenance rather than adopting the backup as a new source.
+		opts.SourceID = ""
 	}
 	return nil
 }

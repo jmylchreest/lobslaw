@@ -40,6 +40,23 @@ func readArchiveFile(path, identityPath string) (archive.Snapshot, error) {
 }
 
 func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOptions) {
+	fs.StringVar(&opts.SourceID, "source-id", "", "stable source identity (required for alongside on older archives)")
+	fs.Func("skip", "keep the destination and skip source kind/id (repeatable; sessions include their messages)", func(value string) error {
+		kind, id, ok := strings.Cut(value, "/")
+		if !ok || kind == "" || id == "" {
+			return errors.New("skip requires kind/id")
+		}
+		opts.Skip = append(opts.Skip, memory.ArchiveRecordRef{Kind: kind, ID: id})
+		return nil
+	})
+	fs.Func("alongside", "import kind/id as a separate, persistently mapped copy (repeatable)", func(value string) error {
+		kind, id, ok := strings.Cut(value, "/")
+		if !ok || kind == "" || id == "" {
+			return errors.New("alongside requires kind/id")
+		}
+		opts.Alongside = append(opts.Alongside, memory.ArchiveRecordRef{Kind: kind, ID: id})
+		return nil
+	})
 	opts.Owners = make(map[string]string)
 	fs.StringVar(&opts.SourceTimezone, "source-timezone", "", "source cron timezone, e.g. Europe/London")
 	fs.BoolVar(&opts.KeepExisting, "keep-existing", false, "explicitly skip conflicting destination records")
@@ -80,6 +97,11 @@ func archiveImport(args []string, requireEmpty bool) error {
 }
 
 func importArchiveSnapshot(node *liveNode, snapshot archive.Snapshot, opts memory.ArchiveImportOptions, apply, requireEmpty bool) error {
+	sourceID, err := archive.SourceIdentity(snapshot.Manifest, opts.SourceID)
+	if err != nil {
+		return err
+	}
+	opts.SourceID = sourceID
 	// Verify and serialize before opening a connection. The private backup
 	// identity stays here; plaintext records travel only through mutual TLS.
 	var payload bytes.Buffer
@@ -159,6 +181,7 @@ func archiveExportLive(args []string) error {
 	var node liveNode
 	node.bind(fs)
 	out := fs.String("out", "", "new output archive path")
+	sourceID := fs.String("source-id", envOr("LOBSLAW_ARCHIVE_SOURCE_ID", ""), "stable source identity shared by every generation")
 	plaintext := fs.Bool("plaintext", false, "explicitly write an unencrypted archive")
 	var recipients []age.Recipient
 	fs.Func("recipient", "age recipient (repeatable)", func(value string) error {
@@ -180,6 +203,10 @@ func archiveExportLive(args []string) error {
 		return errors.New("choose --recipient or explicit --plaintext")
 	}
 	snapshot, err := exportArchiveSnapshot(&node)
+	if err != nil {
+		return err
+	}
+	snapshot.Manifest.SourceID, err = archive.SourceIdentity(snapshot.Manifest, *sourceID)
 	if err != nil {
 		return err
 	}

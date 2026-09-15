@@ -77,6 +77,7 @@ func archiveExport(args []string) error {
 	fs := flag.NewFlagSet("archive export", flag.ContinueOnError)
 	var opts offlineStore
 	opts.bind(fs)
+	sourceID := fs.String("source-id", envOr("LOBSLAW_ARCHIVE_SOURCE_ID", ""), "stable source identity shared by every generation")
 	offline := fs.Bool("offline", false, "read a stopped node or consistent snapshot")
 	out := fs.String("out", "", "new output archive path")
 	plaintext := fs.Bool("plaintext", false, "explicitly write an unencrypted archive")
@@ -127,6 +128,7 @@ func archiveExport(args []string) error {
 	snapshot := archive.Snapshot{
 		Records: records,
 		Manifest: archive.Manifest{
+			SourceID:      *sourceID,
 			SnapshotID:    ids.New(),
 			CreatedAt:     time.Now().UTC(),
 			SourceVersion: Version,

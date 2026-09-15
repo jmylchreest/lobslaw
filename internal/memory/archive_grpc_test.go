@@ -54,10 +54,24 @@ func TestArchiveRPCRequiresAuthorizationAndPlansBeforeApply(t *testing.T) {
 	allowed.Store(true)
 	var payload bytes.Buffer
 	if err := archive.Write(&payload, archive.Snapshot{
-		Manifest: archive.Manifest{SnapshotID: "rpc-test", CreatedAt: time.Now()},
+		Manifest: archive.Manifest{SnapshotID: "rpc-test", CreatedAt: time.Now(), SourceID: "rpc-source"},
 		Records:  []archive.Record{archiveTestRecord(t, "documents", "v", &lobslawv1.VectorRecord{Id: "v", Text: "summary"})},
 	}); err != nil {
 		t.Fatal(err)
+	}
+	// The server enforces the manifest binding even for a caller bypassing the CLI.
+	mismatch, err := client.ImportArchive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mismatch.Send(&lobslawv1.ArchiveChunk{OptionsJson: []byte(`{"source_id":"wrong-source"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mismatch.Send(&lobslawv1.ArchiveChunk{Data: payload.Bytes()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mismatch.CloseAndRecv(); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("source relabelling accepted: %v", err)
 	}
 	for _, apply := range []bool{false, true} {
 		stream, err := client.ImportArchive(ctx)
@@ -101,7 +115,7 @@ func TestArchiveRPCRequiresAuthorizationAndPlansBeforeApply(t *testing.T) {
 		restored.Write(chunk.Data)
 	}
 	snapshot, err := archive.Read(&restored)
-	if err != nil || len(snapshot.Records) != 1 {
+	if err != nil || len(snapshot.Records) != 2 {
 		t.Fatalf("live export: %v", err)
 	}
 }

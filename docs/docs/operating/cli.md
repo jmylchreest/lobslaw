@@ -497,6 +497,22 @@ remain outside this knowledge backup.
 
 ## `lobslaw memory` and `lobslaw session`
 
+### Stable archive sources and conflict selections
+
+`archive export` and `backup create` accept `--source-id` (or the
+`LOBSLAW_ARCHIVE_SOURCE_ID` environment variable) to label generations from the
+same source. Choose one unique label per stack and keep it stable. Import uses the
+archive's label; older archives need an explicit `archive import --source-id` for
+alongside behavior. Relabelling an archive with a conflicting source ID is refused.
+
+`archive import --alongside kind/id` creates a separate copy with a durable mapping;
+repeat imports reuse it across backup generations. Sessions include their whole
+transcript. `--skip kind/id` keeps the destination and omits that source group.
+Both flags are repeatable. They are unavailable on `backup restore`, which preserves
+existing provenance in an empty destination. Neither flag overwrites data. Changed
+or deleted mapped copies remain explicit conflicts; alongside cannot create another
+copy to avoid one. Interactive prompts and replacement are not implemented.
+
 ### `memory reembed` needs the node UP, unlike the rest
 
 Changing `[compute.embeddings] model` is refused at boot: vectors from

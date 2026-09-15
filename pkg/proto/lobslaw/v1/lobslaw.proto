@@ -2018,6 +2018,17 @@ message ArchiveBatch {
   bytes receipt = 4;
 }
 
+// Portable import provenance. Retained even when the destination record is deleted.
+message ArchiveMapping {
+  string id = 1;
+  string source_id = 2;
+  string kind = 3;
+  string source_record_id = 4;
+  string destination_id = 5;
+  string source_digest = 6;
+  string destination_digest = 7;
+}
+
 message ArchiveMutation {
   string kind = 1;
   string id = 2;

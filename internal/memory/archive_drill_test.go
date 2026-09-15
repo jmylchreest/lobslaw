@@ -41,22 +41,7 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 	opts := ArchiveImportOptions{
 		Owners: make(map[string]string), SourceTimezone: "UTC",
 	}
-	for _, record := range snapshot.Records {
-		msg, err := decodeArchiveRecord(record)
-		if err != nil {
-			t.Fatal(err)
-		}
-		value := msg.ProtoReflect()
-		for _, name := range []protoreflect.Name{"owner", "user_id"} {
-			field := value.Descriptor().Fields().ByName(name)
-			if field != nil {
-				owner := value.Get(field).String()
-				if owner != "" {
-					opts.Owners[owner] = owner
-				}
-			}
-		}
-	}
+	archiveDrillOwners(t, snapshot.Records, opts.Owners)
 	node, fsm := newTestRaft(t)
 	ctx := context.Background()
 	var destination ReembedEmbedder = stubEmbedder{model: "drill-model"}
@@ -67,6 +52,28 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = encoder.Close() })
 		destination = archiveDrillEmbedder{encoder: encoder, model: filepath.Base(modelPath)}
+	}
+	if destinationPath := os.Getenv("LOBSLAW_ARCHIVE_DESTINATION"); destinationPath != "" {
+		file, err := os.Open(destinationPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseline, err := archive.Read(file, identities...)
+		_ = file.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		archiveDrillOwners(t, baseline.Records, opts.Owners)
+		if _, err := ApplyArchiveImport(ctx, node, fsm.Store(), baseline.Records, opts, destination); err != nil {
+			t.Fatal(err)
+		}
+		preview, err := PlanArchiveImport(mustArchiveRecords(t, fsm.Store()), snapshot.Records, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts.SourceID = "private-drill-source"
+		opts.Alongside = preview.Conflicts
+		t.Logf("isolated merge: %d baseline records, %d explicit alongside selections", len(baseline.Records), len(opts.Alongside))
 	}
 	result, err := ApplyArchiveImport(ctx, node, fsm.Store(), snapshot.Records, opts, destination)
 	if err != nil {
@@ -84,7 +91,31 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 		t.Fatalf("round trip differs: additions=%d duplicates=%d conflicts=%d err=%v",
 			len(plan.Additions), len(plan.Duplicates), len(plan.Conflicts), err)
 	}
+	repeated, err := ApplyArchiveImport(ctx, node, fsm.Store(), snapshot.Records, opts, nil)
+	if err != nil || repeated.Applied != 0 || repeated.Completed != len(snapshot.Records) {
+		t.Fatalf("repeat import: %+v, %v", repeated, err)
+	}
 	t.Logf("restored %d records through Raft into a fresh key; destination embeddings rebuilt", result.Completed)
+}
+
+func archiveDrillOwners(t *testing.T, records []archive.Record, owners map[string]string) {
+	t.Helper()
+	for _, record := range records {
+		msg, err := decodeArchiveRecord(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value := msg.ProtoReflect()
+		for _, name := range []protoreflect.Name{"owner", "user_id"} {
+			field := value.Descriptor().Fields().ByName(name)
+			if field != nil {
+				owner := value.Get(field).String()
+				if owner != "" {
+					owners[owner] = owner
+				}
+			}
+		}
+	}
 }
 
 type archiveDrillEmbedder struct {

@@ -82,7 +82,7 @@ func TestArchiveRejectsInvalidSchemaInventoryAndPaths(t *testing.T) {
 	changes := map[string]func(*tar.Header, []byte) []byte{
 		"schema": func(h *tar.Header, b []byte) []byte {
 			if h.Name == manifestName {
-				return bytes.Replace(b, []byte(`"schema_version":1`), []byte(`"schema_version":999`), 1)
+				return bytes.Replace(b, []byte(`"schema_version":2`), []byte(`"schema_version":999`), 1)
 			}
 			return b
 		},
@@ -182,5 +182,46 @@ func TestPlaintextArchiveRoundTripAndTrailingData(t *testing.T) {
 	}
 	if _, err := Read(bytes.NewReader(append(out.Bytes(), 'x'))); err == nil {
 		t.Fatal("trailing data accepted")
+	}
+}
+
+func TestArchivePreservesStableSourceIdentity(t *testing.T) {
+	snapshot := fixture()
+	snapshot.Manifest.SourceID = "local-stack"
+	var buffer bytes.Buffer
+	if err := Write(&buffer, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Read(&buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Manifest.SourceID != "local-stack" {
+		t.Fatal("source identity lost")
+	}
+	if _, err := SourceIdentity(restored.Manifest, "another-stack"); err == nil {
+		t.Fatal("accepted conflicting source identity")
+	}
+	if id, err := SourceIdentity(restored.Manifest, ""); err != nil || id != "local-stack" {
+		t.Fatalf("source identity: %q, %v", id, err)
+	}
+}
+
+func TestArchiveReadsLegacySchemaWithoutSourceIdentity(t *testing.T) {
+	data := rewriteArchive(t, func(h *tar.Header, data []byte) []byte {
+		if h.Name == manifestName {
+			return bytes.Replace(data, []byte(`"schema_version":2`), []byte(`"schema_version":1`), 1)
+		}
+		return data
+	})
+	snapshot, err := Read(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Manifest.SchemaVersion != 1 || snapshot.Manifest.SourceID != "" {
+		t.Fatal("legacy archive identity changed")
+	}
+	if id, err := SourceIdentity(snapshot.Manifest, "legacy-local"); err != nil || id != "legacy-local" {
+		t.Fatalf("legacy binding: %q, %v", id, err)
 	}
 }

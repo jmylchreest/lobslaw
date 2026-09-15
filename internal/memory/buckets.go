@@ -4,6 +4,7 @@ package memory
 // top-level bbolt bucket, keyed by record ID.
 const (
 	// BucketArchiveImports holds encrypted receipts, excluded from portable exports.
+	BucketArchiveMappings = "archive_mappings"
 	BucketArchiveImports  = "archive_imports"
 	BucketPolicyRules     = "policy_rules"
 	BucketScheduledTasks  = "scheduled_tasks"
@@ -163,6 +164,7 @@ const SoulTuneRecordID = "soul:tune"
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
 	BucketArchiveImports,
+	BucketArchiveMappings,
 	BucketRaftMeta,
 	BucketPolicyRules,
 	BucketScheduledTasks,

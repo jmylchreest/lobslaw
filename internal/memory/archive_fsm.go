@@ -109,6 +109,31 @@ func (f *FSM) applyArchiveMutation(tx *bolt.Tx, mutation *lobslawv1.ArchiveMutat
 	if err := proto.Unmarshal(mutation.Payload, msg); err != nil {
 		return "", err
 	}
+	if mapping, ok := msg.(*lobslawv1.ArchiveMapping); ok && mutation.ExpectedDigest != "" {
+		target, err := findArchiveKind(mapping.Kind)
+		if err != nil {
+			return "", err
+		}
+		sealed := tx.Bucket([]byte(target.bucket)).Get([]byte(mapping.DestinationId))
+		if sealed == nil {
+			return "", errors.New("mapped destination disappeared; re-plan import")
+		}
+		raw, err := f.store.cipher.OpenTo(nil, sealed)
+		if err != nil {
+			return "", err
+		}
+		current := proto.Clone(target.message)
+		if err := proto.Unmarshal(raw, current); err != nil {
+			return "", err
+		}
+		digest, err := archiveFingerprint(current)
+		if err != nil {
+			return "", err
+		}
+		if digest != mutation.ExpectedDigest || digest != mapping.DestinationDigest {
+			return "", errors.New("mapped destination changed; re-plan import")
+		}
+	}
 	setRevision(msg, 1)
 	if vector, ok := msg.(*lobslawv1.VectorRecord); ok {
 		vector.Norm = norm(vector.Embedding)

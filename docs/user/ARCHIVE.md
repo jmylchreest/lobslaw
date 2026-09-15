@@ -91,12 +91,57 @@ IDs is not deduplicated. Conflicting session indexes may need explicit resolutio
 before their messages can be imported; keeping an index does not permit messages
 outside its sequence range.
 
+### Importing alongside without multiplying copies
+
+Use a unique, stable source label for each stack. Set `--source-id local-stack`
+when exporting or creating backups, or set `LOBSLAW_ARCHIVE_SOURCE_ID` in the
+backup process environment. Reuse the same label for every generation. The label
+is provenance, not an owner or an access grant. Do not reuse it for unrelated stacks.
+
+Older archives have no source label. Supply `--source-id` on each import of those
+archives. An explicit source ID cannot override a different ID embedded in an archive.
+
+```sh
+lobslaw archive import local.age --context homelab --identity ./backup-key.txt \
+  --source-id local-stack --owner user:alice=user:alice --source-timezone UTC \
+  --alongside sessions/telegram:chat-id --alongside scheduled-tasks/morning
+```
+
+Preview first, then repeat with `--apply`. Each selection creates one separate
+copy and a persistent source-to-destination mapping. Selecting a session also
+remaps every message in its transcript. Later imports find that same copy even
+when the archive generation changes or the alongside flag is omitted:
+
+- Unchanged source and destination: skip.
+- Changed source: report a conflict against the mapped copy.
+- Edited or deleted destination: report it explicitly, including on same-archive
+  retries. Neither `--alongside` nor `--keep-existing` silently creates another copy.
+
+Mappings commit with their content, are encrypted in the destination store, and
+are included as `import-mappings` in portable backups. Derived embeddings are not
+part of their fingerprints. Restoring a backup preserves these mappings without
+adopting the backup as an additional source. Deletion mappings remain present so
+restoring and importing again cannot silently recreate deleted content.
+
+Use `--skip kind/id` to omit a conflicting source record while retaining the
+destination. A session selection skips its whole transcript. Alongside currently
+supports sessions, documents, episodic records, consolidations, schedules and
+commitments. It refuses signed skills and owner-keyed settings. Archives carrying
+existing provenance cannot remap the records that provenance already describes;
+restore those records with their existing IDs. Replacement and interactive conflict
+prompts are not implemented; scripts must pass explicit selections. Unresolved
+conflicts still stop apply before pending writes.
+
+Writers emit schema 2; readers also accept schema 1. Schema 2 adds optional source
+identity and portable import provenance. Older binaries cannot read schema 2.
+
 ### Interrupted imports
 
 Repeat the same archive, mappings and options with `--apply`. Content and options
 determine a stable import ID. A completed batch and its encrypted receipt commit
-in the same transaction; a retry skips it even if the record has since been edited
-or deleted. The preview reports durable progress. Keep the original archive to
+in the same transaction; an untracked retry skips it even if the record has since been edited
+or deleted. Imports with a source identity always recheck their persistent mappings
+and surface destination edits or deletions. The preview reports durable progress. Keep the original archive to
 resume: the server does not retain an unfinished upload.
 
 Imports are not globally atomic. Each completed batch is visible, and an error

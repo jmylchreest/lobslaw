@@ -54,10 +54,10 @@ func ApplyArchiveImport(ctx context.Context, raft RebindApplier, store *Store, i
 	if err != nil {
 		return result, err
 	}
-	if len(plan.Conflicts) > 0 && !opts.KeepExisting {
+	if len(plan.Conflicts) > 0 && (!opts.KeepExisting || len(plan.ConflictDetails) > 0) {
 		return result, fmt.Errorf("archive import has %d conflicts; no records written", len(plan.Conflicts))
 	}
-	result.Completed += len(plan.Duplicates) + len(plan.Conflicts)
+	result.Completed += len(plan.Duplicates) + len(plan.Conflicts) + len(plan.Skipped)
 	if plan.Embeddings > 0 && (embedder == nil || embedder.Model() == "") {
 		return result, errors.New("destination embedder unavailable; import can be resumed")
 	}
@@ -70,9 +70,12 @@ func ApplyArchiveImport(ctx context.Context, raft RebindApplier, store *Store, i
 	if err != nil {
 		return result, err
 	}
-	sources, err := archiveMappedSources(pending, opts)
-	if err != nil {
-		return result, err
+	sources := plan.sources
+	if sources == nil {
+		sources, err = archiveMappedSources(pending, opts)
+		if err != nil {
+			return result, err
+		}
 	}
 	for _, group := range groups {
 		if err := ctx.Err(); err != nil {
@@ -80,6 +83,9 @@ func ApplyArchiveImport(ctx context.Context, raft RebindApplier, store *Store, i
 		}
 		batch, err := prepareArchiveBatch(ctx, store, id, group, sources, embedder)
 		if err != nil {
+			return result, err
+		}
+		if err := guardArchiveMappings(batch, plan.generatedMappings); err != nil {
 			return result, err
 		}
 		entry := putEntry(batch.BatchId, &lobslawv1.LogEntry{
@@ -96,8 +102,13 @@ func ApplyArchiveImport(ctx context.Context, raft RebindApplier, store *Store, i
 		if applyErr, ok := response.(error); ok && applyErr != nil {
 			return result, applyErr
 		}
-		result.Applied += len(group)
-		result.Completed += len(group)
+		for _, record := range group {
+			if record.Kind == "import-mappings" && plan.generatedMappings[record.ID] {
+				continue
+			}
+			result.Applied++
+			result.Completed++
+		}
 	}
 	return result, nil
 }
@@ -184,6 +195,27 @@ func archiveImportGroups(records []archive.Record) ([][]archive.Record, error) {
 	for _, record := range records {
 		key := "2/" + record.Kind + "/" + record.ID
 		switch record.Kind {
+		case "import-mappings":
+			msg, err := decodeArchiveRecord(record)
+			if err != nil {
+				return nil, err
+			}
+			mapping := msg.(*lobslawv1.ArchiveMapping)
+			key = "2/" + mapping.Kind + "/" + mapping.DestinationId
+			if mapping.Kind == "skill-blobs" {
+				key = "0/" + mapping.DestinationId
+			}
+			if mapping.Kind == "sessions" {
+				key = "1/" + mapping.DestinationId
+			}
+			if mapping.Kind == "session-messages" {
+				// Message keys end in a fixed-width sequence; session IDs can contain colons.
+				split := strings.LastIndex(mapping.DestinationId, ":")
+				if split <= 0 || len(mapping.DestinationId)-split-1 != 20 {
+					return nil, errors.New("invalid mapped message key")
+				}
+				key = "1/" + mapping.DestinationId[:split]
+			}
 		case "skill-blobs":
 			key = "0/" + record.ID
 		case "sessions":
@@ -213,6 +245,10 @@ func prepareArchiveBatch(ctx context.Context, store *Store, id string, records [
 	batch := &lobslawv1.ArchiveBatch{ImportId: id}
 	receipt := archiveReceipt{}
 	inBatch := make(map[archiveRecordKey]bool)
+	// Provenance checks must observe all content writes in the batch.
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].Kind != "import-mappings" && records[j].Kind == "import-mappings"
+	})
 	for _, record := range records {
 		inBatch[archiveRecordKey{record.Kind, record.ID}] = true
 	}
@@ -317,6 +353,9 @@ func archiveImportProgress(store *Store, incoming []archive.Record, opts Archive
 		return result, nil, err
 	}
 	result.ImportID = id
+	if opts.SourceID != "" {
+		return result, incoming, nil
+	}
 	completed, err := archiveCompleted(store, id)
 	if err != nil {
 		return result, nil, err
@@ -330,4 +369,21 @@ func archiveImportProgress(store *Store, incoming []archive.Record, opts Archive
 		}
 	}
 	return result, pending, nil
+}
+
+func guardArchiveMappings(batch *lobslawv1.ArchiveBatch, generated map[string]bool) error {
+	for _, mutation := range batch.Records {
+		if mutation.Kind != "import-mappings" || !generated[mutation.Id] {
+			continue
+		}
+		var mapping lobslawv1.ArchiveMapping
+		if err := proto.Unmarshal(mutation.Payload, &mapping); err != nil {
+			return err
+		}
+		mutation.ExpectedDigest = mapping.DestinationDigest
+	}
+	if proto.Size(batch) > maxArchiveBatchBytes {
+		return errors.New("dependency-complete archive batch exceeds size limit")
+	}
+	return nil
 }

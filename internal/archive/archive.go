@@ -22,7 +22,7 @@ import (
 
 const (
 	Format                = "lobslaw-knowledge"
-	SchemaVersion         = 1
+	SchemaVersion         = 2
 	MaxRecordBytes  int64 = 8 << 20
 	MaxArchiveBytes int64 = 256 << 20
 	MaxRecords            = 100000
@@ -42,6 +42,7 @@ type Manifest struct {
 	SchemaVersion int               `json:"schema_version"`
 	SnapshotID    string            `json:"snapshot_id"`
 	CreatedAt     time.Time         `json:"created_at"`
+	SourceID      string            `json:"source_id,omitempty"`
 	SourceVersion string            `json:"source_version"`
 	Counts        map[string]int    `json:"counts"`
 	Checksums     map[string]string `json:"checksums"`
@@ -135,6 +136,9 @@ func encodeSnapshot(snapshot Snapshot) ([]byte, [][]byte, error) {
 	})
 
 	m := snapshot.Manifest
+	if _, err := SourceIdentity(m, ""); err != nil {
+		return nil, nil, err
+	}
 	m.Format = Format
 	m.SchemaVersion = SchemaVersion
 	m.Counts = map[string]int{}
@@ -281,7 +285,10 @@ func Read(src io.Reader, identities ...age.Identity) (Snapshot, error) {
 }
 
 func validateManifest(m Manifest) error {
-	if m.Format != Format || m.SchemaVersion != SchemaVersion {
+	if _, err := SourceIdentity(m, ""); err != nil {
+		return err
+	}
+	if m.Format != Format || (m.SchemaVersion != 1 && m.SchemaVersion != SchemaVersion) {
 		return errors.New("unsupported archive format or schema")
 	}
 	if m.SnapshotID == "" || m.CreatedAt.IsZero() || m.Counts == nil || m.Checksums == nil {
@@ -298,4 +305,20 @@ func readEntry(r io.Reader, h *tar.Header) ([]byte, error) {
 		return nil, errors.New("invalid archive entry type or size")
 	}
 	return io.ReadAll(io.LimitReader(r, MaxRecordBytes+1))
+}
+
+// SourceIdentity binds legacy archives explicitly and refuses to relabel an
+// archive that already declares a different source. It is not authorization.
+func SourceIdentity(manifest Manifest, override string) (string, error) {
+	if manifest.SourceID != "" && override != "" && manifest.SourceID != override {
+		return "", errors.New("source id disagrees with archive provenance")
+	}
+	id := manifest.SourceID
+	if id == "" {
+		id = override
+	}
+	if strings.TrimSpace(id) != id || len(id) > 256 {
+		return "", errors.New("source id must be trimmed and at most 256 bytes")
+	}
+	return id, nil
 }

@@ -21,9 +21,12 @@ import (
 // operator has established that a source identity means the same person here.
 // It is not authorization: the caller must authorize destination data access.
 type ArchiveImportOptions struct {
-	Owners         map[string]string `json:"owners"`
-	SourceTimezone string            `json:"source_timezone"`
-	KeepExisting   bool              `json:"keep_existing"`
+	Skip           []ArchiveRecordRef `json:"skip,omitempty"`
+	SourceID       string             `json:"source_id,omitempty"`
+	Alongside      []ArchiveRecordRef `json:"alongside,omitempty"`
+	Owners         map[string]string  `json:"owners"`
+	SourceTimezone string             `json:"source_timezone"`
+	KeepExisting   bool               `json:"keep_existing"`
 }
 
 type ArchiveRecordRef struct {
@@ -35,12 +38,16 @@ type ArchiveRecordRef struct {
 // inventory fields, rather than inadvertently print memories with its preview.
 // A plan is a preview, not a write capability; apply must check current state.
 type ArchiveImportPlan struct {
-	Added      []ArchiveRecordRef `json:"additions"`
-	Additions  []archive.Record   `json:"-"`
-	Duplicates []ArchiveRecordRef `json:"duplicates"`
-	Conflicts  []ArchiveRecordRef `json:"conflicts"`
-	Paused     []ArchiveRecordRef `json:"paused"`
-	Embeddings int                `json:"embeddings"`
+	Skipped           []ArchiveRecordRef `json:"skipped,omitempty"`
+	sources           map[archiveRecordKey]archive.Record
+	generatedMappings map[string]bool
+	ConflictDetails   []ArchiveConflict  `json:"conflict_details,omitempty"`
+	Added             []ArchiveRecordRef `json:"additions"`
+	Additions         []archive.Record   `json:"-"`
+	Duplicates        []ArchiveRecordRef `json:"duplicates"`
+	Conflicts         []ArchiveRecordRef `json:"conflicts"`
+	Paused            []ArchiveRecordRef `json:"paused"`
+	Embeddings        int                `json:"embeddings"`
 }
 
 type archiveRecordKey struct {
@@ -52,7 +59,7 @@ type archiveRecordKey struct {
 // It never modifies either input and does not contact the embedder. Historical
 // provenance can reference retired records; executable blobs and transcript
 // parents, in contrast, must exist in the effective destination.
-func PlanArchiveImport(existing, incoming []archive.Record, opts ArchiveImportOptions) (ArchiveImportPlan, error) {
+func planArchiveRecords(existing, incoming []archive.Record, opts ArchiveImportOptions) (ArchiveImportPlan, error) {
 	var plan ArchiveImportPlan
 	destination, err := indexArchiveRecords(existing)
 	if err != nil {
@@ -165,6 +172,19 @@ func validateArchiveRecordID(record archive.Record, msg proto.Message) error {
 	}
 	id := record.ID
 	switch rec := msg.(type) {
+	case *lobslawv1.ArchiveMapping:
+		if rec.SourceId == "" || rec.Kind == "import-mappings" || rec.DestinationId == "" || rec.SourceRecordId == "" || rec.Id != archiveMappingID(rec.SourceId, rec.Kind, rec.SourceRecordId) {
+			return errors.New("invalid import mapping identity")
+		}
+		if _, err := findArchiveKind(rec.Kind); err != nil {
+			return err
+		}
+		for _, digest := range []string{rec.SourceDigest, rec.DestinationDigest} {
+			if len(digest) != len("sha256:")+64 || !strings.HasPrefix(digest, "sha256:") {
+				return errors.New("invalid import mapping fingerprint")
+			}
+		}
+		id = rec.Id
 	case *lobslawv1.SkillRecord:
 		id = SkillKey(rec.Name, rec.Version)
 		if rec.Name == "" || rec.Version == "" {

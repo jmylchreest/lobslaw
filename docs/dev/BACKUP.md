@@ -16,8 +16,10 @@ Kubernetes pod: repeat apply wrote zero records and live encrypted export
 preserved the full inventory. The live destination now has a verified encrypted
 20-record backup. Its merge preview found a conflicting Telegram session index
 and two schedule IDs; no source records have been applied. Normal service was
-restored after the preview. Production migration remains pending explicit conflict
-resolution and destination model conversion. Filesystem attachments,
+restored after the preview. The updated isolated merge drill preserves the destination's 20 records, imports
+all 355 local records with three alongside selections, rebuilds MiniLM embeddings,
+and writes zero records on repeat. Production migration remains pending explicit
+conflict resolution and destination model conversion. Filesystem attachments,
 automatic schedule activation, retained incomplete upload jobs and remote backup
 repositories remain outside this implementation. The sections below retain the
 broader design; see docs/user/ARCHIVE.md for the implemented commands.
@@ -202,7 +204,8 @@ must not claim a single point in time that it cannot provide.
 
 ### Stable identity for importing alongside
 
-Agreed extension; not implemented by the current content-based retry receipts.
+Implemented alongside and skip selections use portable mapping records, separately
+from content-based retry receipts. Interactive prompts and replacement remain pending.
 See the aide decision `archive-stable-import-mappings`.
 
 An alongside import must maintain a durable mapping from
@@ -233,7 +236,7 @@ metadata, distinct from operational Raft state and snapshot-specific retry recei
 Older archives without source identity require an explicit, consistently reused
 source association before alongside import can promise cross-generation behavior.
 
-The conflict interface offers replace, import alongside, or skip for supported
+The planned conflict interface offers replace, import alongside, or skip for supported
 record groups. Replace requires an explicit selection and a verified destination
 backup; alongside is not a way to evade an existing mapped conflict. Unattended
 imports fail on unresolved conflicts. Persist resolutions with import progress and
@@ -310,7 +313,7 @@ verification; failed or truncated writes are never listed as restorable snapshot
 | Embeddings | Recompute on import | Destination model defines vector space |
 | Skill integrity | Preserve manifests and signatures verbatim | Reserialising signed YAML invalidates signatures |
 | Backup generations | Immutable, self-contained archives | Restores do not depend on a fragile incremental chain |
-| Conflict handling | Plan first, exact duplicate no-op, conflicting ID rejected | Repeatable migration without silently overwriting new data |
+| Conflict handling | Plan first, explicit alongside/skip selections, unresolved conflicts rejected | Repeatable migration without silently overwriting new data |
 | Alongside identity | Persistent source-record mappings across generations | Repeated imports cannot multiply copies or silently recreate deleted records |
 | Failure handling | Durable resumable batches | Fits bounded Raft proposals and makes partial progress explicit |
 
