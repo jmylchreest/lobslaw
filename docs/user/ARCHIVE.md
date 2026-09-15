@@ -86,7 +86,10 @@ updates their identity-based keys.
 
 Add `--apply` to write. Identical records are skipped. Conflicting IDs stop the
 whole pending import before writes unless `--keep-existing` explicitly selects
-the destination's copy. Overwrite is not supported.
+the destination's copy. Overwrite is not supported. Matching content under different
+IDs is not deduplicated. Conflicting session indexes may need explicit resolution
+before their messages can be imported; keeping an index does not permit messages
+outside its sequence range.
 
 ### Interrupted imports
 
@@ -134,11 +137,16 @@ lobslaw backup prune --repository ./backups --keep-last 10 --keep-within 30d
 ```
 
 Create also supports `--offline` with archive export's source database/key flags.
-Every generation is independent and immutable. Backups always require encryption.
+Every generation is independent and immutable. Creating a backup always writes a
+full new generation, even when the content is unchanged; there is no cross-generation
+deduplication. Backups always require encryption.
 List checks ciphertext integrity; restore also decrypts and verifies the full
 logical archive. Before restoring, start the destination with `[memory] restore_mode = true`.
 This stops gateways and scheduling and suppresses knowledge seeds, while keeping
-authenticated archive access and the embedder available. Restore requires an
+authenticated archive access and the embedder available. In Kubernetes, temporarily
+use probes against the node's gRPC TCP port: gateway HTTP health endpoints are
+unavailable in restore mode. Restore the original probes when leaving maintenance.
+Restore requires an
 empty knowledge destination (or its own partial restore); use archive import when
 merging. After verifying the result, remove restore mode and restart. Imported
 schedules, skills and pending reminders still remain paused. Restore and prune preview by default; `--apply` writes or

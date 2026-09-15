@@ -239,6 +239,9 @@ LOBSLAW_CONTEXT=prod lobslaw memory list    # for a shell that lives in one clus
 staging and a production cluster: a bare command then refuses rather than
 picking one.
 
+For a localhost tunnel, pass `--server-name` with the hostname on the node's
+certificate. TLS still verifies the certificate chain and that hostname.
+
 **Precedence**, highest first:
 
 1. Explicit `--addr` / `--ca-cert` / `--node-cert` / `--node-key`. Overriding

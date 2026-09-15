@@ -13,7 +13,11 @@ The private 355-record local-stack fixture has round-tripped through an isolated
 Raft destination using a fresh memory key and the actual cached MiniLM model.
 The same 355 records also restored through the production binary in an isolated
 Kubernetes pod: repeat apply wrote zero records and live encrypted export
-preserved the full inventory. Production migration remains pending. Filesystem attachments,
+preserved the full inventory. The live destination now has a verified encrypted
+20-record backup. Its merge preview found a conflicting Telegram session index
+and two schedule IDs; no source records have been applied. Normal service was
+restored after the preview. Production migration remains pending explicit conflict
+resolution and destination model conversion. Filesystem attachments,
 automatic schedule activation, retained incomplete upload jobs and remote backup
 repositories remain outside this implementation. The sections below retain the
 broader design; see docs/user/ARCHIVE.md for the implemented commands.

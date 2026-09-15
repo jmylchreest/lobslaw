@@ -142,3 +142,24 @@ func TestArchivePlanRejectsInvalidRecordsBeforeApply(t *testing.T) {
 		})
 	}
 }
+
+func TestArchivePlanReportsConflictingSessionBeforeTranscriptDependencies(t *testing.T) {
+	existing := []archive.Record{
+		archiveTestRecord(t, "sessions", "chat", &lobslawv1.SessionRecord{Id: "chat", FirstSeq: 1, NextSeq: 2}),
+	}
+	incoming := []archive.Record{
+		archiveTestRecord(t, "sessions", "chat", &lobslawv1.SessionRecord{Id: "chat", FirstSeq: 10, NextSeq: 12}),
+		archiveTestRecord(t, "session-messages", sessionMessageKey("chat", 10), &lobslawv1.SessionMessage{SessionId: "chat", Seq: 10}),
+	}
+	plan, err := PlanArchiveImport(existing, incoming, ArchiveImportOptions{})
+	if err != nil {
+		t.Fatalf("conflict preview failed: %v", err)
+	}
+	if len(plan.Conflicts) != 1 || plan.Conflicts[0].Kind != "sessions" {
+		t.Fatalf("session conflict missing: %+v", plan)
+	}
+	// Keeping the destination index cannot make the source transcript valid.
+	if _, err := PlanArchiveImport(existing, incoming, ArchiveImportOptions{KeepExisting: true}); err == nil {
+		t.Fatal("accepted messages outside the retained session range")
+	}
+}

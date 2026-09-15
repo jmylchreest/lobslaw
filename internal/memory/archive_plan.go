@@ -104,8 +104,14 @@ func PlanArchiveImport(existing, incoming []archive.Record, opts ArchiveImportOp
 			plan.Embeddings++
 		}
 	}
-	if err := validateArchiveDependencies(destination); err != nil {
-		return plan, err
+	// Unresolved conflicts can change dependency validity, such as when two
+	// session indexes cover different transcript ranges. Report those conflicts
+	// first; apply refuses them before writing. Keeping existing records makes
+	// the destination concrete, so its dependencies must pass validation.
+	if len(plan.Conflicts) == 0 || opts.KeepExisting {
+		if err := validateArchiveDependencies(destination); err != nil {
+			return plan, err
+		}
 	}
 	sort.Slice(plan.Additions, func(i, j int) bool {
 		left, right := plan.Additions[i], plan.Additions[j]

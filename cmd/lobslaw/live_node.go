@@ -34,6 +34,7 @@ type liveNode struct {
 	configPath  string
 	contextName string
 	addr        string
+	serverName  string
 	caCert      string
 	nodeCert    string
 	nodeKey     string
@@ -48,6 +49,7 @@ func (l *liveNode) bind(fs *flag.FlagSet) {
 		"named cluster from contexts.toml; supplies addr and credentials")
 	fs.StringVar(&l.addr, "addr", envOr("LOBSLAW_NODE_ADDR", ""),
 		"host:port of a running node; overrides --config")
+	fs.StringVar(&l.serverName, "server-name", "", "expected TLS hostname when connecting through a tunnel")
 	fs.StringVar(&l.caCert, "ca-cert", "", "CA cert; overrides --config")
 	fs.StringVar(&l.nodeCert, "node-cert", "", "client cert; overrides --config")
 	fs.StringVar(&l.nodeKey, "node-key", "", "client key; overrides --config")
@@ -81,7 +83,11 @@ func (l *liveNode) dial() (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load client credentials: %w", err)
 	}
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	if l.serverName != "" {
+		opts = append(opts, grpc.WithAuthority(l.serverName))
+	}
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}

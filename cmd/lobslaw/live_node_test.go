@@ -1,10 +1,21 @@
 package main
 
 import (
+	"context"
+	"flag"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/jmylchreest/lobslaw/pkg/mtls"
 )
 
 // liveNode is the first CLI→running-node path in the tree, so the
@@ -222,5 +233,73 @@ func TestABindAddressIsNotSomewhereToDial(t *testing.T) {
 		if got := dialableListenAddr(c.listen); got != c.want {
 			t.Errorf("dialableListenAddr(%q) = %q, want %q", c.listen, got, c.want)
 		}
+	}
+}
+
+// A port-forward changes the dial address, but must still authenticate the
+// certificate's original hostname. An incorrect override must fail closed.
+func TestLiveNodeServerNameThroughTunnel(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	caPath, caKeyPath := filepath.Join(dir, "ca.pem"), filepath.Join(dir, "ca-key.pem")
+	certPath, keyPath := filepath.Join(dir, "node.pem"), filepath.Join(dir, "node-key.pem")
+	caPEM, caKeyPEM, err := mtls.GenerateCA(mtls.CAOpts{CommonName: "test-ca"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mtls.WriteCAFiles(caPath, caKeyPath, caPEM, caKeyPEM); err != nil {
+		t.Fatal(err)
+	}
+	ca, caKey, err := mtls.LoadCA(caPath, caKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, keyPEM, err := mtls.SignNodeCert(ca, caKey, mtls.SignOpts{NodeID: "node.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mtls.WriteNodeFiles(certPath, keyPath, certPEM, keyPEM); err != nil {
+		t.Fatal(err)
+	}
+	creds, err := mtls.LoadNodeCreds(caPath, certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.Creds(creds.ServerCreds()))
+	healthpb.RegisterHealthServer(server, health.NewServer())
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	for _, name := range []string{"node.internal", "wrong.internal", ""} {
+		t.Run(name, func(t *testing.T) {
+			var node liveNode
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+			node.bind(fs)
+			args := []string{"--addr", listener.Addr().String(), "--ca-cert", caPath, "--node-cert", certPath, "--node-key", keyPath}
+			if name != "" {
+				args = append(args, "--server-name", name)
+			}
+			if err := fs.Parse(args); err != nil {
+				t.Fatal(err)
+			}
+			conn, err := node.dial()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conn.Close() }()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err = healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+			if name == "node.internal" && err != nil {
+				t.Fatalf("verified tunnel failed: %v", err)
+			}
+			if name != "node.internal" && err == nil {
+				t.Fatal("accepted a mismatched certificate hostname")
+			}
+		})
 	}
 }
