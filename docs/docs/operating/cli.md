@@ -46,6 +46,7 @@ lobslaw grants             # see and undo per-conversation approvals
   policy approvals         # list the rules an approval minted
   policy revoke-approvals  # delete them, all or by id
 lobslaw memory             # read + edit the memory store
+lobslaw archive            # export and verify portable knowledge archives
   memory show <id>         # one record in full
   memory list              # list vector + episodic records
   memory forget            # delete records and their consolidations
@@ -430,6 +431,30 @@ Re-running is safe. Each rewrite is idempotent — a record already owned by
 fails partway. It is not atomic across records, so a failure reports **how many
 landed** before it stopped; "rebind failed" without a number leaves you unable
 to tell a no-op from a half-done move.
+
+## `lobslaw archive`
+
+Export a stopped node or consistent database snapshot into a versioned archive:
+
+```sh
+lobslaw archive export --offline --state-db ./state.db \
+  --memory-key-ref env:LOBSLAW_MEMORY_KEY \
+  --recipient age1... --out knowledge.lobarchive.age
+lobslaw archive verify knowledge.lobarchive.age --identity ./backup-key.txt
+lobslaw archive inspect knowledge.lobarchive.age --identity ./backup-key.txt
+```
+
+The age X25519 recipient encrypts the archive independently of the memory key.
+Use `--plaintext` explicitly to omit encryption. Export never overwrites an
+existing output file. Inspection verifies the complete archive and prints only
+its manifest.
+
+Includes stored memories and summaries, skills and their signed bytes, learned
+history, pinned/soul settings, sessions, preferences, schedules and commitments.
+Excludes embeddings, credentials, Raft state, worker claims, audit logs and
+filesystem attachments. Embeddings will be rebuilt on import. This first version
+implements offline export and verification only; import and live export remain
+under development. Keep existing database backups until restore is implemented.
 
 ## `lobslaw memory` and `lobslaw session`
 

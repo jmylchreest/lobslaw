@@ -90,6 +90,7 @@ func printCommandList(w *os.File) {
 // dispatchers, which is what catches a command added without a
 // description or a description outliving its command.
 var commandSummaries = map[string]string{
+	"archive":      "export and verify portable knowledge archives",
 	"cluster":      "certificates, node signing, operator export",
 	"plugin":       "install and manage plugins",
 	"audit":        "query and verify the audit chain",
