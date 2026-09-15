@@ -250,6 +250,9 @@ func (f *FSM) Apply(l *raft.Log) any {
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
+	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ArchiveBatch); ok {
+		return f.applyArchiveBatch(p.ArchiveBatch)
+	}
 	// A session append is several writes across two buckets that must
 	// land together — handled before the single-record path below.
 	if p, ok := entry.Payload.(*lobslawv1.LogEntry_SessionAppend); ok {

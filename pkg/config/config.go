@@ -82,11 +82,14 @@ func (c *Config) Dir() string {
 // and the background passes that maintain it. Disabled nodes still
 // parse the section but wire nothing.
 type MemoryConfig struct {
-	Enabled    bool             `koanf:"enabled"`
-	Encryption EncryptionConfig `koanf:"encryption"`
-	Snapshot   SnapshotConfig   `koanf:"snapshot"`
-	Dream      DreamConfig      `koanf:"dream"`
-	Session    SessionConfig    `koanf:"session"`
+	// RestoreMode keeps gateways, scheduling and knowledge seeds stopped while
+	// restoring a logical archive. Turn it off after inspecting the result.
+	RestoreMode bool             `koanf:"restore_mode"`
+	Enabled     bool             `koanf:"enabled"`
+	Encryption  EncryptionConfig `koanf:"encryption"`
+	Snapshot    SnapshotConfig   `koanf:"snapshot"`
+	Dream       DreamConfig      `koanf:"dream"`
+	Session     SessionConfig    `koanf:"session"`
 
 	// Pinned memory character caps. These blocks are rendered into
 	// every system prompt, so they are a fixed tax on every request —

@@ -531,6 +531,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		BootstrapTimeout: cfg.Cluster.BootstrapTimeout,
 		SnapshotTarget:   cfg.Memory.Snapshot.Target,
 		MemoryDream:      cfg.Memory.Dream,
+		RestoreMode:      cfg.Memory.RestoreMode,
 		MemorySession:    cfg.Memory.Session,
 
 		MemoryWriteApproval:       cfg.Memory.WriteApproval,

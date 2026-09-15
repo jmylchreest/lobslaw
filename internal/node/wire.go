@@ -76,7 +76,7 @@ func gateGateway(cfg Config) bool {
 	// One switch, not two. The gateway function normalises to compute
 	// (it cannot run without an agent), so what remains is: does this
 	// node run an agent, and did the operator enable the channels.
-	return slices.Contains(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
+	return !cfg.RestoreMode && slices.Contains(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
 }
 
 // gateStorage selects stages that need the storage function. Storage
@@ -151,9 +151,10 @@ func nodeWireStages() []WireStage {
 		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},
-		{Name: "scheduler", Gate: gateRaft, Wire: (*Node).wireScheduler},
+		{Name: "scheduler", Gate: gateScheduler, Wire: (*Node).wireScheduler},
 		{Name: "storage", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireStorageStage},
 		{Name: "skills", Gate: gateRaft, Wire: (*Node).wireSkills},
+		{Name: "archive-svc", Gate: gateRaft, Wire: (*Node).wireArchiveService},
 		{Name: "clawhub", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireClawhub},
 
 		// Always-on or function-gated platform stages.
@@ -170,3 +171,5 @@ func nodeWireStages() []WireStage {
 		{Name: "broadcast", Gate: gateBroadcast, Wire: (*Node).wireBroadcastStage},
 	}
 }
+
+func gateScheduler(cfg Config) bool { return gateRaft(cfg) && !cfg.RestoreMode }

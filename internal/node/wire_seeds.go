@@ -351,6 +351,9 @@ func (n *Node) reconcilePolicyRules(configIDs, seedIDs map[string]bool, gcRule f
 // truth on first boot; runtime edits via builtins win on subsequent
 // boots. Leader-only — Put is a raft Apply.
 func (n *Node) seedUserPrefsFromConfig(ctx context.Context) error {
+	if n.cfg.RestoreMode {
+		return nil
+	}
 	if n.userPrefsSvc == nil || n.raft == nil || !n.raft.IsLeader() {
 		return nil
 	}

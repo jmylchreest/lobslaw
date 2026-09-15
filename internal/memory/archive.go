@@ -62,9 +62,18 @@ func ReadArchiveRecords(ctx context.Context, path string, key crypto.Key) ([]arc
 	if err != nil {
 		return nil, err
 	}
+	return readArchiveRecords(ctx, db, cipher)
+}
+
+// ArchiveRecords reads a live store in one consistent transaction.
+func (s *Store) ArchiveRecords(ctx context.Context) ([]archive.Record, error) {
+	return readArchiveRecords(ctx, s.loadDB(), s.cipher)
+}
+
+func readArchiveRecords(ctx context.Context, db *bolt.DB, cipher *crypto.Cipher) ([]archive.Record, error) {
 	var records []archive.Record
 	var total int64
-	err = db.View(func(tx *bolt.Tx) error {
+	err := db.View(func(tx *bolt.Tx) error {
 		for _, kind := range archiveKinds {
 			b := tx.Bucket([]byte(kind.bucket))
 			if b == nil {

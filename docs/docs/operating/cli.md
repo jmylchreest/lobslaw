@@ -452,9 +452,45 @@ its manifest.
 Includes stored memories and summaries, skills and their signed bytes, learned
 history, pinned/soul settings, sessions, preferences, schedules and commitments.
 Excludes embeddings, credentials, Raft state, worker claims, audit logs and
-filesystem attachments. Embeddings will be rebuilt on import. This first version
-implements offline export and verification only; import and live export remain
-under development. Keep existing database backups until restore is implemented.
+filesystem attachments. Import rebuilds embeddings with the destination model and writes through Raft.
+Live export uses a consistent store transaction. Both live operations require an
+operator certificate, a configured operator data role and an explicit policy
+grant for `archive:export` or `archive:import` on `memory:*`.
+
+```sh
+lobslaw archive import knowledge.lobarchive.age --context homelab \
+  --identity ./backup-key.txt --owner user:alice=user:alice \
+  --source-timezone Europe/London
+# Add --apply to write. Repeat the same command to resume an interrupted import.
+```
+
+Exact duplicates are skipped; conflicts block writes unless `--keep-existing` is
+explicitly selected. Schedules and pending reminders restore paused. Skills and
+learned artefacts restore inactive; signed skill bytes remain unchanged.
+
+## `lobslaw backup`
+
+```sh
+lobslaw backup create --context homelab --repository ./backups --recipient age1...
+lobslaw backup list --repository ./backups
+lobslaw backup pin SNAPSHOT_ID --repository ./backups
+lobslaw backup restore SNAPSHOT_ID --repository ./backups \
+  --identity ./backup-key.txt --context recovered --owner user:alice=user:alice
+lobslaw backup prune --repository ./backups --keep-last 10 --keep-within 30d
+```
+
+Restore and prune preview by default; `--apply` performs writes or deletion.
+Start the recovery node with `[memory] restore_mode = true` to suppress
+gateways, scheduling and knowledge seeds. Restore requires an empty knowledge
+store, or its own partial restore. Each generation is independently
+encrypted and immutable. Retention preserves pinned generations and the union
+of the count and age rules. `backup unpin` removes a pin. Use `backup create
+--offline` with the same source flags as offline archive export.
+
+The local repository uses a `.lock` directory. After a crash, check that no backup
+process remains before removing a stale lock. Incomplete generations without a
+completion manifest are ignored. Filesystem attachments and deployment secrets
+remain outside this knowledge backup.
 
 ## `lobslaw memory` and `lobslaw session`
 

@@ -72,3 +72,16 @@ func TestArchiveExportRequiresExplicitEncryptionAndOfflineMode(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveImportRejectsMissingArchiveAndInvalidMapping(t *testing.T) {
+	for _, args := range [][]string{
+		{},
+		{"--owner", "alice", "missing.age"},
+		{"--owner", "alice=", "missing.age"},
+		{"--owner", "alice=bob", "--owner", "alice=carol", "missing.age"},
+	} {
+		if err := archiveImport(args, false); err == nil {
+			t.Fatalf("accepted invalid import arguments: %v", args)
+		}
+	}
+}

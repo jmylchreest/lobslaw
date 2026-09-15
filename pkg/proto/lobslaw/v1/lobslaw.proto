@@ -1959,6 +1959,8 @@ message LogEntry {
     SkillRecord skill = 33;
     SkillBlob skill_blob = 34;
     EnrolmentRecord enrolment = 35;
+    // A portable import commits records and its resume receipt together.
+    ArchiveBatch archive_batch = 36;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -1980,6 +1982,48 @@ message LogEntry {
   // prevent. LOG_OP_CLAIM requires it and is rejected without it;
   // PUT / DELETE ignore it, since a create has no prior revision.
   optional uint64 expected_revision = 24;
+}
+
+// ArchiveBatch is bounded by the importer and applied in one store transaction.
+// Only allowlisted knowledge kinds are accepted. Existing records are never
+// overwritten; dependencies carry their expected digest and are read-only.
+service ArchiveService {
+  rpc ExportArchive(ArchiveExportRequest) returns (stream ArchiveChunk);
+  rpc ImportArchive(stream ArchiveChunk) returns (ArchiveImportResponse);
+}
+
+message ArchiveExportRequest {}
+
+// The first import chunk carries options_json and apply. Remaining chunks
+// carry archive bytes only. Transport is authenticated mTLS; archive encryption
+// and decryption stay on the operator's machine.
+message ArchiveChunk {
+  bytes data = 1;
+  bytes options_json = 2;
+  bool apply = 3;
+  bool require_empty = 4;
+}
+
+message ArchiveImportResponse {
+  bytes plan_json = 1;
+  bytes result_json = 2;
+  // An apply failure still returns durable progress for a resumable import.
+  string error = 3;
+}
+
+message ArchiveBatch {
+  string import_id = 1;
+  string batch_id = 2;
+  repeated ArchiveMutation records = 3;
+  bytes receipt = 4;
+}
+
+message ArchiveMutation {
+  string kind = 1;
+  string id = 2;
+  bytes payload = 3;
+  string expected_digest = 4;
+  bool dependency_only = 5;
 }
 
 // PromptDecision is the resolution state of a confirmation.

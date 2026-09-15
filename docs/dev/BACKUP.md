@@ -2,14 +2,19 @@
 
 Status: implementation in progress on `feat/portable-backups`.
 
-The first slice implements offline `archive export`, `archive inspect`, and
-`archive verify`, including age encryption. It reads one consistent transaction
-without modifying the source database and exports stored memories, skill records
-and blobs, learned history, sessions, preferences, schedules and commitments.
-Archives are bounded to 256 MiB of record payloads and are assembled in memory in
-this first slice. Records are individual numbered JSON entries; their checksums
-and counts live in the manifest. Live export, import, repository retention and
-attachment support below remain proposed. No restore capability is claimed yet.
+Implemented: encrypted offline/live export, verification, explicit owner mapping,
+conflict previews, destination embedding, resumable Raft batches, paused execution
+state, and local backup generations with pinning and count/age retention. The CLI
+re-sends the original archive to resume; receipts survive in encrypted Raft state.
+A transcript and its index form one batch; each batch is limited to 8 MiB. The
+archive remains bounded to 256 MiB and is assembled in memory.
+
+The private 355-record local-stack fixture has round-tripped through an isolated
+Raft destination using a fresh memory key and the actual cached MiniLM model.
+Kubernetes deployment verification remains pending. Filesystem attachments,
+automatic schedule activation, retained incomplete upload jobs and remote backup
+repositories remain outside this implementation. The sections below retain the
+broader design; see docs/user/ARCHIVE.md for the implemented commands.
 
 ## Overview
 

@@ -22,18 +22,22 @@ import (
 const archiveUsage = `lobslaw archive — portable versioned knowledge archives
 
   export --offline --state-db PATH --out FILE --recipient age1...
+  export --context NAME --out FILE --recipient age1...
+  import FILE --context NAME --identity PATH [--apply]
   inspect FILE --identity PATH
   verify FILE --identity PATH
 
-Export requires a stopped source node or a consistent database snapshot and its
+Offline export requires a stopped source node or a consistent database snapshot and its
 memory key (--memory-key-ref, --config or LOBSLAW_MEMORY_KEY). It includes stored
 memories, skills and their versions, soul/pinned content, sessions, preferences,
 schedules and commitments. Embeddings, credentials and Raft state are excluded.
 
 Encryption is the default; --plaintext explicitly opts out. --recipient may be
 repeated. Existing output files are never replaced. inspect prints only the
-verified manifest, not memory content. Import and live export are not available
-in this first implementation.
+verified manifest, not memory content. Import defaults to a preview; --apply writes
+through Raft. Repeat the same archive and owner mappings with --apply to resume.
+Use --owner source=destination for each nonempty identity and --source-timezone
+for cron expressions without an explicit timezone. Restored jobs remain paused.
 `
 
 func dispatchArchive(args []string) bool {
@@ -50,7 +54,13 @@ func dispatchArchive(args []string) bool {
 	var err error
 	switch args[0] {
 	case "export":
-		err = archiveExport(args[1:])
+		if _, offline := takeOffline(args[1:]); offline {
+			err = archiveExport(args[1:])
+		} else {
+			err = archiveExportLive(args[1:])
+		}
+	case "import":
+		err = archiveImport(args[1:], false)
 	case "inspect", "verify":
 		err = archiveInspect(args[1:], args[0] == "inspect")
 	default:

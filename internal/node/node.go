@@ -98,6 +98,9 @@ type Config struct {
 	// values fall back to the seed defaults (enabled, 02:00 daily).
 	MemoryDream config.DreamConfig
 
+	// RestoreMode suppresses execution and knowledge seeds during archive recovery.
+	RestoreMode bool
+
 	// Identity is the [identity] block: the alias map that resolves
 	// per-channel user ids to cluster-wide principals. Empty means
 	// every channel id is its own principal, which is correct for a

@@ -154,18 +154,23 @@ func (s *skillService) RemoveSkill(ctx context.Context, req *lobslawv1.RemoveSki
 //
 // The feedback belongs at the door, where somebody is watching.
 func (s *skillService) validate(bundle *memory.Bundle) error {
+	_, err := s.parseBundle(bundle)
+	return err
+}
+
+func (s *skillService) parseBundle(bundle *memory.Bundle) (*skills.Skill, error) {
 	dir, err := os.MkdirTemp("", "lobslaw-import-")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
 	if err := os.WriteFile(filepath.Join(dir, memory.ManifestFile), bundle.Manifest, 0o600); err != nil {
-		return err
+		return nil, err
 	}
 	if len(bundle.Signature) > 0 {
 		if err := os.WriteFile(filepath.Join(dir, memory.SignatureFile), bundle.Signature, 0o600); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for rel, content := range bundle.Files {
@@ -174,18 +179,17 @@ func (s *skillService) validate(bundle *memory.Bundle) error {
 		// a local directory, not more.
 		cleaned := filepath.Clean(filepath.FromSlash(rel))
 		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
-			return fmt.Errorf("bundled file %q is outside the skill directory", rel)
+			return nil, fmt.Errorf("bundled file %q is outside the skill directory", rel)
 		}
 		dest := filepath.Join(dir, cleaned)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-			return err
+			return nil, err
 		}
 		if err := os.WriteFile(dest, content, 0o600); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	_, err = skills.ParseWithPolicy(dir, s.policy, s.verifier)
-	return err
+	return skills.ParseWithPolicy(dir, s.policy, s.verifier)
 }
 
 // ActivateSkill makes a stored version the one in force — the whole of
