@@ -54,21 +54,17 @@ func ApplyArchiveImport(ctx context.Context, raft RebindApplier, store *Store, i
 	if err != nil {
 		return result, err
 	}
-	if len(plan.Conflicts) > 0 && (!opts.KeepExisting || len(plan.ConflictDetails) > 0) {
-		return result, fmt.Errorf("archive import has %d conflicts; no records written", len(plan.Conflicts))
+	if err := validateArchiveApply(store, existing, plan, opts, embedder); err != nil {
+		return result, err
 	}
 	result.Completed += len(plan.Duplicates) + len(plan.Conflicts) + len(plan.Skipped)
-	if plan.Embeddings > 0 && (embedder == nil || embedder.Model() == "") {
-		return result, errors.New("destination embedder unavailable; import can be resumed")
-	}
-	if plan.Embeddings > 0 {
-		if err := checkArchiveEmbeddingModel(store, embedder.Model()); err != nil {
-			return result, err
-		}
-	}
+
 	groups, err := archiveImportGroups(plan.Additions)
 	if err != nil {
 		return result, err
+	}
+	if len(plan.Replaced) > 0 {
+		groups = [][]archive.Record{plan.Additions}
 	}
 	sources := plan.sources
 	if sources == nil {
@@ -86,6 +82,9 @@ func ApplyArchiveImport(ctx context.Context, raft RebindApplier, store *Store, i
 			return result, err
 		}
 		if err := guardArchiveMappings(batch, plan.generatedMappings); err != nil {
+			return result, err
+		}
+		if err := prepareArchiveReplacement(batch, plan, opts.BackupDigest); err != nil {
 			return result, err
 		}
 		entry := putEntry(batch.BatchId, &lobslawv1.LogEntry{
@@ -384,6 +383,30 @@ func guardArchiveMappings(batch *lobslawv1.ArchiveBatch, generated map[string]bo
 	}
 	if proto.Size(batch) > maxArchiveBatchBytes {
 		return errors.New("dependency-complete archive batch exceeds size limit")
+	}
+	return nil
+}
+
+func validateArchiveApply(store *Store, existing []archive.Record, plan ArchiveImportPlan, opts ArchiveImportOptions, embedder ReembedEmbedder) error {
+	if len(plan.Conflicts) > 0 && (!opts.KeepExisting || len(plan.ConflictDetails) > 0) {
+		return fmt.Errorf("archive import has %d conflicts; no records written", len(plan.Conflicts))
+	}
+	if len(plan.Replaced) > 0 {
+		digest, err := ArchiveStateDigest(existing)
+		if err != nil {
+			return err
+		}
+		if opts.BackupDigest == "" || opts.BackupDigest != digest {
+			return errors.New("replacement requires a verified backup of the current destination; export and verify a fresh backup")
+		}
+	}
+	if plan.Embeddings > 0 && (embedder == nil || embedder.Model() == "") {
+		return errors.New("destination embedder unavailable; import can be resumed")
+	}
+	if plan.Embeddings > 0 {
+		if err := checkArchiveEmbeddingModel(store, embedder.Model()); err != nil {
+			return err
+		}
 	}
 	return nil
 }

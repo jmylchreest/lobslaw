@@ -21,6 +21,10 @@ import (
 // operator has established that a source identity means the same person here.
 // It is not authorization: the caller must authorize destination data access.
 type ArchiveImportOptions struct {
+	Replace      []ArchiveRecordRef `json:"replace,omitempty"`
+	BackupDigest string             `json:"backup_digest,omitempty"`
+	targets      map[archiveRecordKey]string
+
 	Skip           []ArchiveRecordRef `json:"skip,omitempty"`
 	SourceID       string             `json:"source_id,omitempty"`
 	Alongside      []ArchiveRecordRef `json:"alongside,omitempty"`
@@ -38,6 +42,9 @@ type ArchiveRecordRef struct {
 // inventory fields, rather than inadvertently print memories with its preview.
 // A plan is a preview, not a write capability; apply must check current state.
 type ArchiveImportPlan struct {
+	Replaced []ArchiveRecordRef `json:"replaced,omitempty"`
+	removed  []ArchiveRecordRef
+
 	Skipped           []ArchiveRecordRef `json:"skipped,omitempty"`
 	sources           map[archiveRecordKey]archive.Record
 	generatedMappings map[string]bool

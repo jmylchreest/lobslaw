@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -35,6 +36,9 @@ func (f *FSM) applyArchiveBatch(batch *lobslawv1.ArchiveBatch) error {
 				return errors.New("archive receipt collision")
 			}
 			return nil
+		}
+		if err := f.checkArchiveReplacement(tx, batch); err != nil {
+			return err
 		}
 		for _, mutation := range batch.Records {
 			bucket, err := f.applyArchiveMutation(tx, mutation)
@@ -102,39 +106,37 @@ func (f *FSM) applyArchiveMutation(tx *bolt.Tx, mutation *lobslawv1.ArchiveMutat
 		}
 		return "", nil
 	}
-	if existing != nil {
+	if existing != nil && !mutation.Replace && !mutation.Delete {
 		return "", fmt.Errorf("archive target %s/%s changed; re-plan import", kind.kind, mutation.Id)
+	}
+	previous := proto.Clone(kind.message)
+	if existing != nil {
+		raw, err := f.store.cipher.OpenTo(nil, existing)
+		if err != nil {
+			return "", err
+		}
+		if err := proto.Unmarshal(raw, previous); err != nil {
+			return "", err
+		}
+	}
+	if mutation.Replace || mutation.Delete {
+		if err := removeArchiveDisputes(tx, previous); err != nil {
+			return "", err
+		}
+	}
+	if mutation.Delete {
+		return kind.bucket, bucket.Delete([]byte(mutation.Id))
 	}
 	msg := proto.Clone(kind.message)
 	if err := proto.Unmarshal(mutation.Payload, msg); err != nil {
 		return "", err
 	}
-	if mapping, ok := msg.(*lobslawv1.ArchiveMapping); ok && mutation.ExpectedDigest != "" {
-		target, err := findArchiveKind(mapping.Kind)
-		if err != nil {
-			return "", err
-		}
-		sealed := tx.Bucket([]byte(target.bucket)).Get([]byte(mapping.DestinationId))
-		if sealed == nil {
-			return "", errors.New("mapped destination disappeared; re-plan import")
-		}
-		raw, err := f.store.cipher.OpenTo(nil, sealed)
-		if err != nil {
-			return "", err
-		}
-		current := proto.Clone(target.message)
-		if err := proto.Unmarshal(raw, current); err != nil {
-			return "", err
-		}
-		digest, err := archiveFingerprint(current)
-		if err != nil {
-			return "", err
-		}
-		if digest != mutation.ExpectedDigest || digest != mapping.DestinationDigest {
-			return "", errors.New("mapped destination changed; re-plan import")
-		}
+	if err := f.checkArchiveMapping(tx, msg, mutation.ExpectedDigest); err != nil {
+		return "", err
 	}
-	setRevision(msg, 1)
+
+	revision, _ := revisionOf(previous)
+	setRevision(msg, revision+1)
 	if vector, ok := msg.(*lobslawv1.VectorRecord); ok {
 		vector.Norm = norm(vector.Embedding)
 	}
@@ -157,4 +159,67 @@ func (f *FSM) applyArchiveMutation(tx *bolt.Tx, mutation *lobslawv1.ArchiveMutat
 		}
 	}
 	return kind.bucket, nil
+}
+
+func (f *FSM) checkArchiveReplacement(tx *bolt.Tx, batch *lobslawv1.ArchiveBatch) error {
+	for _, mutation := range batch.Records {
+		if (mutation.Replace || mutation.Delete) && batch.BackupDigest == "" {
+			return errors.New("replacement mutation requires backup state guard")
+		}
+	}
+	if batch.BackupDigest == "" {
+		return nil
+	}
+	records, err := archiveRecordsTx(context.Background(), tx, f.store.cipher)
+	if err != nil {
+		return err
+	}
+	digest, err := ArchiveStateDigest(records)
+	if err != nil {
+		return err
+	}
+	if digest != batch.BackupDigest {
+		return errors.New("destination changed since replacement backup; no records written")
+	}
+	return nil
+}
+
+func removeArchiveDisputes(tx *bolt.Tx, msg proto.Message) error {
+	if rec, ok := msg.(*lobslawv1.ConsolidationRecord); ok {
+		for _, source := range rec.SourceIds {
+			if err := tx.Bucket([]byte(BucketDisputes)).Delete([]byte(source + "/" + rec.Id)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (f *FSM) checkArchiveMapping(tx *bolt.Tx, msg proto.Message, expected string) error {
+	if mapping, ok := msg.(*lobslawv1.ArchiveMapping); ok && expected != "" {
+		target, err := findArchiveKind(mapping.Kind)
+		if err != nil {
+			return err
+		}
+		sealed := tx.Bucket([]byte(target.bucket)).Get([]byte(mapping.DestinationId))
+		if sealed == nil {
+			return errors.New("mapped destination disappeared; re-plan import")
+		}
+		raw, err := f.store.cipher.OpenTo(nil, sealed)
+		if err != nil {
+			return err
+		}
+		current := proto.Clone(target.message)
+		if err := proto.Unmarshal(raw, current); err != nil {
+			return err
+		}
+		digest, err := archiveFingerprint(current)
+		if err != nil {
+			return err
+		}
+		if digest != expected || digest != mapping.DestinationDigest {
+			return errors.New("mapped destination changed; re-plan import")
+		}
+	}
+	return nil
 }

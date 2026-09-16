@@ -11898,6 +11898,7 @@ type ArchiveBatch struct {
 	BatchId       string                 `protobuf:"bytes,2,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
 	Records       []*ArchiveMutation     `protobuf:"bytes,3,rep,name=records,proto3" json:"records,omitempty"`
 	Receipt       []byte                 `protobuf:"bytes,4,opt,name=receipt,proto3" json:"receipt,omitempty"`
+	BackupDigest  string                 `protobuf:"bytes,5,opt,name=backup_digest,json=backupDigest,proto3" json:"backup_digest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11958,6 +11959,13 @@ func (x *ArchiveBatch) GetReceipt() []byte {
 		return x.Receipt
 	}
 	return nil
+}
+
+func (x *ArchiveBatch) GetBackupDigest() string {
+	if x != nil {
+		return x.BackupDigest
+	}
+	return ""
 }
 
 // Portable import provenance. Retained even when the destination record is deleted.
@@ -12060,6 +12068,8 @@ type ArchiveMutation struct {
 	Payload        []byte                 `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
 	ExpectedDigest string                 `protobuf:"bytes,4,opt,name=expected_digest,json=expectedDigest,proto3" json:"expected_digest,omitempty"`
 	DependencyOnly bool                   `protobuf:"varint,5,opt,name=dependency_only,json=dependencyOnly,proto3" json:"dependency_only,omitempty"`
+	Replace        bool                   `protobuf:"varint,6,opt,name=replace,proto3" json:"replace,omitempty"`
+	Delete         bool                   `protobuf:"varint,7,opt,name=delete,proto3" json:"delete,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -12125,6 +12135,20 @@ func (x *ArchiveMutation) GetExpectedDigest() string {
 func (x *ArchiveMutation) GetDependencyOnly() bool {
 	if x != nil {
 		return x.DependencyOnly
+	}
+	return false
+}
+
+func (x *ArchiveMutation) GetReplace() bool {
+	if x != nil {
+		return x.Replace
+	}
+	return false
+}
+
+func (x *ArchiveMutation) GetDelete() bool {
+	if x != nil {
+		return x.Delete
 	}
 	return false
 }
@@ -13797,12 +13821,13 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\tplan_json\x18\x01 \x01(\fR\bplanJson\x12\x1f\n" +
 	"\vresult_json\x18\x02 \x01(\fR\n" +
 	"resultJson\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\x97\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xbc\x01\n" +
 	"\fArchiveBatch\x12\x1b\n" +
 	"\timport_id\x18\x01 \x01(\tR\bimportId\x12\x19\n" +
 	"\bbatch_id\x18\x02 \x01(\tR\abatchId\x125\n" +
 	"\arecords\x18\x03 \x03(\v2\x1b.lobslaw.v1.ArchiveMutationR\arecords\x12\x18\n" +
-	"\areceipt\x18\x04 \x01(\fR\areceipt\"\xf6\x01\n" +
+	"\areceipt\x18\x04 \x01(\fR\areceipt\x12#\n" +
+	"\rbackup_digest\x18\x05 \x01(\tR\fbackupDigest\"\xf6\x01\n" +
 	"\x0eArchiveMapping\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tsource_id\x18\x02 \x01(\tR\bsourceId\x12\x12\n" +
@@ -13810,13 +13835,15 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x10source_record_id\x18\x04 \x01(\tR\x0esourceRecordId\x12%\n" +
 	"\x0edestination_id\x18\x05 \x01(\tR\rdestinationId\x12#\n" +
 	"\rsource_digest\x18\x06 \x01(\tR\fsourceDigest\x12-\n" +
-	"\x12destination_digest\x18\a \x01(\tR\x11destinationDigest\"\xa1\x01\n" +
+	"\x12destination_digest\x18\a \x01(\tR\x11destinationDigest\"\xd3\x01\n" +
 	"\x0fArchiveMutation\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\x12'\n" +
 	"\x0fexpected_digest\x18\x04 \x01(\tR\x0eexpectedDigest\x12'\n" +
-	"\x0fdependency_only\x18\x05 \x01(\bR\x0edependencyOnly\"\xeb\x03\n" +
+	"\x0fdependency_only\x18\x05 \x01(\bR\x0edependencyOnly\x12\x18\n" +
+	"\areplace\x18\x06 \x01(\bR\areplace\x12\x16\n" +
+	"\x06delete\x18\a \x01(\bR\x06delete\"\xeb\x03\n" +
 	"\vSkillRecord\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12)\n" +

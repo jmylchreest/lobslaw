@@ -57,6 +57,14 @@ func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOption
 		opts.Alongside = append(opts.Alongside, memory.ArchiveRecordRef{Kind: kind, ID: id})
 		return nil
 	})
+	fs.Func("replace", "replace source kind/id after a verified destination backup (repeatable)", func(value string) error {
+		kind, id, ok := strings.Cut(value, "/")
+		if !ok || kind == "" || id == "" {
+			return errors.New("replace requires kind/id")
+		}
+		opts.Replace = append(opts.Replace, memory.ArchiveRecordRef{Kind: kind, ID: id})
+		return nil
+	})
 	opts.Owners = make(map[string]string)
 	fs.StringVar(&opts.SourceTimezone, "source-timezone", "", "source cron timezone, e.g. Europe/London")
 	fs.BoolVar(&opts.KeepExisting, "keep-existing", false, "explicitly skip conflicting destination records")
@@ -82,6 +90,9 @@ func archiveImport(args []string, requireEmpty bool) error {
 	bindArchiveImportOptions(fs, &opts)
 	identity := fs.String("identity", "", "age identity file")
 	apply := fs.Bool("apply", false, "apply the validated import through Raft")
+	interactive := fs.Bool("interactive", false, "prompt for each conflicting record group")
+	backupPath := fs.String("backup-repository", "", "repository for the pinned pre-replacement backup")
+	backupIdentity := fs.String("backup-identity", "", "X25519 age identity to encrypt and verify the destination backup")
 	pos, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {
 		return err
@@ -93,45 +104,11 @@ func archiveImport(args []string, requireEmpty bool) error {
 	if err != nil {
 		return err
 	}
-	return importArchiveSnapshot(&node, snapshot, opts, *apply, requireEmpty)
+	return resolveArchiveImport(&node, snapshot, opts, *apply, requireEmpty, *interactive, *backupPath, *backupIdentity)
 }
 
 func importArchiveSnapshot(node *liveNode, snapshot archive.Snapshot, opts memory.ArchiveImportOptions, apply, requireEmpty bool) error {
-	sourceID, err := archive.SourceIdentity(snapshot.Manifest, opts.SourceID)
-	if err != nil {
-		return err
-	}
-	opts.SourceID = sourceID
-	// Verify and serialize before opening a connection. The private backup
-	// identity stays here; plaintext records travel only through mutual TLS.
-	var payload bytes.Buffer
-	if err := archive.Write(&payload, snapshot); err != nil {
-		return err
-	}
-	options, err := json.Marshal(opts)
-	if err != nil {
-		return err
-	}
-	conn, err := node.dial()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-	ctx, cancel := node.ctx()
-	defer cancel()
-	stream, err := lobslawv1.NewArchiveServiceClient(conn).ImportArchive(ctx)
-	if err != nil {
-		return err
-	}
-	if err := stream.Send(&lobslawv1.ImportArchiveRequest{OptionsJson: options, Apply: apply, RequireEmpty: requireEmpty}); err != nil {
-		return err
-	}
-	for payload.Len() > 0 {
-		if err := stream.Send(&lobslawv1.ImportArchiveRequest{Data: payload.Next(memory.ArchiveChunkBytes)}); err != nil {
-			return err
-		}
-	}
-	response, err := stream.CloseAndRecv()
+	response, err := requestArchiveImport(node, snapshot, opts, apply, requireEmpty)
 	if err != nil {
 		return err
 	}
@@ -145,6 +122,51 @@ func importArchiveSnapshot(node *liveNode, snapshot archive.Snapshot, opts memor
 		return errors.New(response.Error)
 	}
 	return nil
+}
+
+func requestArchiveImport(node *liveNode, snapshot archive.Snapshot, opts memory.ArchiveImportOptions, apply, requireEmpty bool) (*lobslawv1.ImportArchiveResponse, error) {
+	sourceID, err := archive.SourceIdentity(snapshot.Manifest, opts.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	opts.SourceID = sourceID
+	// Verify and serialize before opening a connection. The private backup
+	// identity stays here; plaintext records travel only through mutual TLS.
+	var payload bytes.Buffer
+	if err := archive.Write(&payload, snapshot); err != nil {
+		return nil, err
+	}
+	options, err := json.Marshal(opts)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := node.dial()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	ctx, cancel := node.ctx()
+	defer cancel()
+	stream, err := lobslawv1.NewArchiveServiceClient(conn).ImportArchive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := stream.Send(&lobslawv1.ImportArchiveRequest{OptionsJson: options, Apply: apply, RequireEmpty: requireEmpty}); err != nil {
+		return nil, err
+	}
+	for payload.Len() > 0 {
+		if err := stream.Send(&lobslawv1.ImportArchiveRequest{Data: payload.Next(memory.ArchiveChunkBytes)}); err != nil {
+			return nil, err
+		}
+	}
+	response, err := stream.CloseAndRecv()
+	if err != nil {
+		return nil, err
+	}
+	if response.Error != "" {
+		return response, errors.New(response.Error)
+	}
+	return response, nil
 }
 
 func exportArchiveSnapshot(node *liveNode) (archive.Snapshot, error) {

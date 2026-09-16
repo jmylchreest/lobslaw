@@ -511,7 +511,32 @@ transcript. `--skip kind/id` keeps the destination and omits that source group.
 Both flags are repeatable. They are unavailable on `backup restore`, which preserves
 existing provenance in an empty destination. Neither flag overwrites data. Changed
 or deleted mapped copies remain explicit conflicts; alongside cannot create another
-copy to avoid one. Interactive prompts and replacement are not implemented.
+copy to avoid one.
+
+Use `--interactive` to choose replace, alongside, skip or cancel for each conflict.
+Messages are grouped under their session. A mapped copy offers replace or skip;
+repeated imports never create another alongside copy. EOF and cancel stop before
+writing. Without `--apply`, the resolved plan is only a preview.
+
+`--replace kind/id` replaces the selected destination group, including the entire
+transcript for a session. Replacement requires a stable source ID and these flags:
+
+```sh
+lobslaw archive import knowledge.lobarchive.age --context homelab \
+  --identity ./backup-key.txt --source-id local-stack \
+  --owner user:alice=user:alice --source-timezone Europe/London \
+  --interactive --apply --backup-repository ./backups \
+  --backup-identity ./backup-key.txt
+```
+
+The CLI exports the destination, encrypts a new generation using the X25519 age
+identity, reads it back to verify it, and pins it before applying replacement.
+The Raft transaction checks that portable destination contents still match that
+backup. Concurrent edits, deletions or transcript appends abort the transaction.
+Replacement and other additions in that invocation commit together, subject to
+an 8 MiB batch limit; an oversized replacement fails before writing. Retry with
+the same source and selections: unchanged imported copies are skipped. Schedules,
+reminders and executable skills still follow the normal paused import rules.
 
 ### `memory reembed` needs the node UP, unlike the rest
 

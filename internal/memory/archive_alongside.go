@@ -42,6 +42,9 @@ func archiveFingerprint(msg proto.Message) (string, error) {
 // conflict planner. A snapshot-specific receipt must not hide edits or deletions
 // to a mapped record, even when the caller repeats the very same archive.
 func PlanArchiveImport(existing, incoming []archive.Record, opts ArchiveImportOptions) (ArchiveImportPlan, error) {
+	if len(opts.Replace) > 0 {
+		return planArchiveReplacement(existing, incoming, opts)
+	}
 	if len(opts.Skip) > 0 {
 		filtered, skipped, err := skipArchiveRecords(incoming, opts)
 		if err != nil {
@@ -247,6 +250,9 @@ func archiveImportTargets(source, destination map[archiveRecordKey]proto.Message
 			id = mapping.DestinationId
 		} else if selected[key] {
 			id = "import:" + mappingID
+		}
+		if override, ok := opts.targets[key]; ok {
+			id = override
 		}
 		targets[key] = id
 	}

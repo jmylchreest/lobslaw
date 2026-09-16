@@ -73,43 +73,48 @@ func (s *Store) ArchiveRecords(ctx context.Context) ([]archive.Record, error) {
 
 func readArchiveRecords(ctx context.Context, db *bolt.DB, cipher *crypto.Cipher) ([]archive.Record, error) {
 	var records []archive.Record
-	var total int64
 	err := db.View(func(tx *bolt.Tx) error {
-		for _, kind := range archiveKinds {
-			b := tx.Bucket([]byte(kind.bucket))
-			if b == nil {
-				continue
-			}
-			if err := b.ForEach(func(k, v []byte) error {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if len(records) >= archive.MaxRecords || int64(len(v)) > archive.MaxRecordBytes {
-					return errors.New("archive source exceeds size limit")
-				}
-				data, err := kind.encode(cipher, v)
-				if err != nil {
-					return err
-				}
+		var err error
+		records, err = archiveRecordsTx(ctx, tx, cipher)
+		return err
+	})
+	return records, err
+}
 
-				total += int64(len(data))
-				if total > archive.MaxArchiveBytes || int64(len(data)) > archive.MaxRecordBytes {
-					return errors.New("archive source exceeds size limit")
-				}
-				records = append(records, archive.Record{
-					Kind: kind.kind,
-					ID:   string(k),
-					Data: data,
-				})
-				return nil
-			}); err != nil {
+func archiveRecordsTx(ctx context.Context, tx *bolt.Tx, cipher *crypto.Cipher) ([]archive.Record, error) {
+	var records []archive.Record
+	var total int64
+
+	for _, kind := range archiveKinds {
+		b := tx.Bucket([]byte(kind.bucket))
+		if b == nil {
+			continue
+		}
+		if err := b.ForEach(func(k, v []byte) error {
+			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if len(records) >= archive.MaxRecords || int64(len(v)) > archive.MaxRecordBytes {
+				return errors.New("archive source exceeds size limit")
+			}
+			data, err := kind.encode(cipher, v)
+			if err != nil {
+				return err
+			}
+
+			total += int64(len(data))
+			if total > archive.MaxArchiveBytes || int64(len(data)) > archive.MaxRecordBytes {
+				return errors.New("archive source exceeds size limit")
+			}
+			records = append(records, archive.Record{
+				Kind: kind.kind,
+				ID:   string(k),
+				Data: data,
+			})
+			return nil
+		}); err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return records, nil
 }

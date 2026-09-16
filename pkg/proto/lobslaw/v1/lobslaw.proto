@@ -2020,6 +2020,7 @@ message ArchiveBatch {
   string batch_id = 2;
   repeated ArchiveMutation records = 3;
   bytes receipt = 4;
+  string backup_digest = 5;
 }
 
 // Portable import provenance. Retained even when the destination record is deleted.
@@ -2039,6 +2040,8 @@ message ArchiveMutation {
   bytes payload = 3;
   string expected_digest = 4;
   bool dependency_only = 5;
+  bool replace = 6;
+  bool delete = 7;
 }
 
 // PromptDecision is the resolution state of a confirmation.
