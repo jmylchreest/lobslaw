@@ -21,9 +21,10 @@ import (
 // operator has established that a source identity means the same person here.
 // It is not authorization: the caller must authorize destination data access.
 type ArchiveImportOptions struct {
-	Replace      []ArchiveRecordRef `json:"replace,omitempty"`
-	BackupDigest string             `json:"backup_digest,omitempty"`
-	targets      map[archiveRecordKey]string
+	ReplaceOriginal []ArchiveRecordRef `json:"replace_original,omitempty"`
+	Replace         []ArchiveRecordRef `json:"replace,omitempty"`
+	BackupDigest    string             `json:"backup_digest,omitempty"`
+	targets         map[archiveRecordKey]string
 
 	Skip           []ArchiveRecordRef `json:"skip,omitempty"`
 	SourceID       string             `json:"source_id,omitempty"`

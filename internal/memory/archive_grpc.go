@@ -193,7 +193,7 @@ func bindArchiveSource(manifest archive.Manifest, opts *ArchiveImportOptions, re
 	}
 	opts.SourceID = source
 	if restore {
-		if len(opts.Alongside) > 0 || len(opts.Skip) > 0 || len(opts.Replace) > 0 {
+		if len(opts.Alongside) > 0 || len(opts.Skip) > 0 || len(opts.Replace) > 0 || len(opts.ReplaceOriginal) > 0 {
 			return errors.New("backup restore does not support conflict resolutions; use archive import")
 		}
 		// Restore existing provenance rather than adopting the backup as a new source.

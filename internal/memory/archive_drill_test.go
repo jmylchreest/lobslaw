@@ -95,6 +95,27 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 	if err != nil || repeated.Applied != 0 || repeated.Completed != len(snapshot.Records) {
 		t.Fatalf("repeat import: %+v, %v", repeated, err)
 	}
+	if os.Getenv("LOBSLAW_ARCHIVE_REPLACE_ORIGINAL") == "1" {
+		opts.ReplaceOriginal = opts.Alongside
+		opts.Alongside = nil
+		opts.BackupDigest, err = ArchiveStateDigest(restored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replacement, err := ApplyArchiveImport(ctx, node, fsm.Store(), snapshot.Records, opts, destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("replaced original groups: %d source records applied", replacement.Applied)
+		opts.BackupDigest, err = ArchiveStateDigest(mustArchiveRecords(t, fsm.Store()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		repeated, err = ApplyArchiveImport(ctx, node, fsm.Store(), snapshot.Records, opts, destination)
+		if err != nil || repeated.Applied != 0 {
+			t.Fatalf("replacement repeat: %+v %v", repeated, err)
+		}
+	}
 	t.Logf("restored %d records through Raft into a fresh key; destination embeddings rebuilt", result.Completed)
 }
 

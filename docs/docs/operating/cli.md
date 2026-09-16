@@ -538,6 +538,14 @@ an 8 MiB batch limit; an oversized replacement fails before writing. Retry with
 the same source and selections: unchanged imported copies are skipped. Schedules,
 reminders and executable skills still follow the normal paused import rules.
 
+To change an earlier alongside decision, use
+`--replace-original sessions/ID` or `--replace-original scheduled-tasks/ID`.
+This explicitly replaces the original ID, retires its mapped alongside copy,
+and retargets the same source mapping in one backup-protected transaction.
+It requires the same backup flags as `--replace`. Unchanged retries write nothing.
+Ordinary `--replace` continues to update the mapped copy. Other source-reference
+conflicts must be resolved explicitly; this option does not overwrite them silently.
+
 ### `memory reembed` needs the node UP, unlike the rest
 
 Changing `[compute.embeddings] model` is refused at boot: vectors from
