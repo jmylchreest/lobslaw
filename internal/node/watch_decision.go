@@ -75,12 +75,16 @@ const watchBackoffFactor = 1.5
 // decideWatchExpiry runs before the probe. A watch that has run out
 // has no reason to spend a provider call proving it.
 //
+// Expiry is inclusive of the boundary: now >= ExpiresAt means expired.
+// clampToExpiry can land DueAt exactly on ExpiresAt; using After alone
+// would still probe at that instant and then re-arm past expiry.
+//
 // The message is not optional. A watch that ends in silence is
 // indistinguishable from one that is still running and has nothing to
 // say, so the user goes on believing they are covered by something
 // that stopped weeks ago.
 func decideWatchExpiry(st *lobslawv1.WatchState, what string, now time.Time) (watchDecision, bool) {
-	if st.ExpiresAt == nil || st.ExpiresAt.AsTime().IsZero() || !now.After(st.ExpiresAt.AsTime()) {
+	if st.ExpiresAt == nil || st.ExpiresAt.AsTime().IsZero() || now.Before(st.ExpiresAt.AsTime()) {
 		return watchDecision{}, false
 	}
 	st.SuspendedReason = "expired"
@@ -174,15 +178,19 @@ func decideWatchFailure(st *lobslawv1.WatchState, what, why string, now time.Tim
 // has expired. The user is told a day late that they stopped being
 // covered a day ago. Landing exactly on the expiry costs one check and
 // makes the ending punctual.
+//
+// At or past expiry, Retry must be zero: returning the full backoff
+// here is how expiry used to slip by up to max_interval after DueAt
+// landed on ExpiresAt.
 func clampToExpiry(st *lobslawv1.WatchState, now time.Time, d time.Duration) time.Duration {
 	if st.ExpiresAt == nil || st.ExpiresAt.AsTime().IsZero() {
 		return d
 	}
 	remaining := st.ExpiresAt.AsTime().Sub(now)
-	if remaining <= 0 || remaining >= d {
-		// Already past, or the next check lands before it anyway. The
-		// already-past case is handled by decideWatchExpiry on the next
-		// fire, which is what sends the message.
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining >= d {
 		return d
 	}
 	return remaining
