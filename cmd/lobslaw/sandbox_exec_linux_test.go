@@ -309,3 +309,40 @@ func TestSandboxExecRejectsBadTarget(t *testing.T) {
 		t.Errorf("expected 'must be absolute' in stderr, got: %s", stderr.String())
 	}
 }
+
+func TestSandboxExecPolicySpecExecutePermission(t *testing.T) {
+	if !landlockSupported(t) {
+		t.Skip("kernel doesn't expose Landlock LSM")
+	}
+	bin := buildHelperBinary(t)
+	target := filepath.Join(t.TempDir(), "probe")
+	data, err := os.ReadFile("/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"r", "rx", "rw", "rwx"} {
+		t.Run(mode, func(t *testing.T) {
+			p, err := (&sandbox.PolicySpec{Presets: []string{"system-libs"}, Paths: []string{target + ":" + mode}, NoNewPrivs: true}).ToPolicy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := sandbox.EncodePolicy(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", target)
+			cmd.Env = []string{sandbox.PolicyEnvVar + "=" + encoded}
+			out, err := cmd.CombinedOutput()
+			if strings.Contains(mode, "x") {
+				if err != nil {
+					t.Fatalf("executable grant failed: %v: %s", err, out)
+				}
+			} else if err == nil || !strings.Contains(strings.ToLower(string(out)), "permission denied") {
+				t.Fatalf("non-executable grant was not enforced: %v: %s", err, out)
+			}
+		})
+	}
+}

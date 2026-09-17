@@ -63,8 +63,9 @@ type Policy struct {
 	// substitution. Exact string match against the joined argv.
 	DangerousCmdsDeny []string `json:"dangerous_cmds_deny,omitempty"`
 
-	// EnvWhitelist names env vars visible to the subprocess. Empty →
-	// empty env. Enforced by the executor's buildEnv, not the sandbox.
+	// EnvWhitelist names parent env vars visible to the subprocess. Nil inherits
+	// the executor default; an explicit empty slice passes none. Enforced by
+	// the executor before sandbox reexec.
 	EnvWhitelist []string `json:"env_whitelist,omitempty"`
 
 	// CPUQuota in millicpus (2000 = 2 cores). 0 = unlimited. Enforced

@@ -311,13 +311,18 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 
 	cmd := exec.CommandContext(runCtx, path, argv...)
 	cmd.Dir = e.cfg.WorkDir
-	cmd.Env = buildEnv(e.cfg.EnvWhitelist)
+	sbPolicy := e.resolvePolicy(req.ToolName)
+	whitelist := e.cfg.EnvWhitelist
+	if sbPolicy != nil && sbPolicy.EnvWhitelist != nil {
+		whitelist = sbPolicy.EnvWhitelist
+	}
+	cmd.Env = buildEnv(whitelist)
 	// WaitDelay force-closes stdio after context cancel so a child
 	// process that inherited our pipes (e.g. sleep inside a shell)
 	// can't stall Wait().
 	cmd.WaitDelay = 500 * time.Millisecond
 
-	if err := sandbox.Apply(cmd, e.resolvePolicy(req.ToolName)); err != nil {
+	if err := sandbox.Apply(cmd, sbPolicy); err != nil {
 		return nil, fmt.Errorf("sandbox: %w", err)
 	}
 

@@ -191,13 +191,13 @@ func init() {
 var BuiltinPresets = []Preset{
 	{
 		Name:        "system-libs",
-		Description: "OS executables + shared libraries (RO)",
+		Description: "OS executables + shared libraries (RX)",
 		Rules: []PathRule{
-			{"/usr", AccessR},
-			{"/bin", AccessR},
-			{"/sbin", AccessR},
-			{"/lib", AccessR},
-			{"/lib64", AccessR},
+			{"/usr", AccessRX},
+			{"/bin", AccessRX},
+			{"/sbin", AccessRX},
+			{"/lib", AccessRX},
+			{"/lib64", AccessRX},
 		},
 	},
 	{
@@ -399,7 +399,7 @@ func mergeByRealpath(rules []PathRule) []PathRule {
 }
 
 // WithPresets returns a copy of the receiver with the named presets
-// resolved into AllowedPaths / ReadOnlyPaths. Inline rules supplied
+// resolved into Mounts. Inline rules supplied
 // via Policy.AllowedPaths (treated as RW) and Policy.ReadOnlyPaths
 // (RO) are honoured — they're added as PathRules and composed with
 // the preset rules per the rules in Resolve.
@@ -407,7 +407,7 @@ func mergeByRealpath(rules []PathRule) []PathRule {
 // Returns the input on resolution error so callers can surface it
 // alongside the policy that was attempted.
 func (p Policy) WithPresets(names ...string) (Policy, error) {
-	inline := make([]PathRule, 0, len(p.AllowedPaths))
+	inline := make([]PathRule, 0, len(p.AllowedPaths)+len(p.Mounts))
 	roSet := make(map[string]struct{}, len(p.ReadOnlyPaths))
 	for _, ro := range p.ReadOnlyPaths {
 		roSet[ro] = struct{}{}
@@ -420,6 +420,20 @@ func (p Policy) WithPresets(names ...string) (Policy, error) {
 		inline = append(inline, PathRule{Path: allow, Access: access})
 	}
 
+	for _, m := range p.Mounts {
+		var access Access
+		if m.Read {
+			access |= AccessR
+		}
+		if m.Write {
+			access |= AccessW
+		}
+		if m.Exec {
+			access |= AccessX
+		}
+		inline = append(inline, PathRule{Path: m.Path, Access: access})
+	}
+
 	resolved, err := Resolve(names, inline)
 	if err != nil {
 		return p, err
@@ -428,11 +442,6 @@ func (p Policy) WithPresets(names ...string) (Policy, error) {
 	out := p
 	out.AllowedPaths = nil
 	out.ReadOnlyPaths = nil
-	for _, r := range resolved {
-		out.AllowedPaths = append(out.AllowedPaths, r.Path)
-		if !r.Access.Has(AccessW) {
-			out.ReadOnlyPaths = append(out.ReadOnlyPaths, r.Path)
-		}
-	}
+	out.Mounts = policyMounts(resolved)
 	return out, nil
 }

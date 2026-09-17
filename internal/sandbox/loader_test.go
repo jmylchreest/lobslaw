@@ -34,14 +34,11 @@ func TestPolicySpecToPolicyInlinePaths(t *testing.T) {
 	if !p.NoNewPrivs {
 		t.Error("NoNewPrivs didn't transfer")
 	}
-	if !slices.Contains(p.AllowedPaths, "/tmp") {
-		t.Errorf("/tmp should be in AllowedPaths; got %v", p.AllowedPaths)
+	if !p.AllowsPath("/tmp", AccessRW) || p.AllowsPath("/tmp", AccessX) {
+		t.Errorf("/tmp permissions = %+v", p.Mounts)
 	}
-	if slices.Contains(p.ReadOnlyPaths, "/tmp") {
-		t.Errorf("/tmp is RW; should NOT be in ReadOnlyPaths")
-	}
-	if !slices.Contains(p.ReadOnlyPaths, "/usr") {
-		t.Errorf("/usr is RO; should be in ReadOnlyPaths; got %v", p.ReadOnlyPaths)
+	if !p.AllowsPath("/usr", AccessR) || p.AllowsPath("/usr", AccessW) || p.AllowsPath("/usr", AccessX) {
+		t.Errorf("/usr permissions = %+v", p.Mounts)
 	}
 }
 
@@ -290,8 +287,8 @@ presets = ["`+presetName+`"]
 	if !ok {
 		t.Fatal("mytool policy not loaded")
 	}
-	if !slices.Contains(p.AllowedPaths, "/tmp") {
-		t.Errorf("preset's /tmp should be in tool's AllowedPaths; got %v", p.AllowedPaths)
+	if !p.AllowsPath("/tmp", AccessR) {
+		t.Errorf("preset's /tmp should be in tool's mounts; got %v", p.Mounts)
 	}
 }
 
@@ -453,8 +450,8 @@ paths = ["/var/tmp:rw"]
 	if !ok {
 		t.Fatal("git policy missing from merged result")
 	}
-	if !slices.Contains(p.AllowedPaths, "/var/tmp") {
-		t.Errorf("expected dirB's /var/tmp in merged policy; got %v", p.AllowedPaths)
+	if !p.AllowsPath("/var/tmp", AccessR) {
+		t.Errorf("expected dirB's /var/tmp in merged policy; got %v", p.Mounts)
 	}
 }
 

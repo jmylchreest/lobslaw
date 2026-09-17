@@ -2,14 +2,14 @@ package sandbox
 
 import (
 	"fmt"
+	"slices"
 )
 
 // PolicySpec is the on-disk representation of a tool policy — the
 // TOML schema for `policy.d/<tool>.toml` files. A PolicySpec is
 // resolved to a runtime *Policy via ToPolicy() which walks the
 // presets list, parses path:flags entries, and composes everything
-// into the AllowedPaths / ReadOnlyPaths split that sandbox.Apply
-// consumes.
+// into the per-path Mounts permissions that sandbox.Apply consumes.
 //
 // The koanf tags mirror the on-disk field names (snake_case per
 // project convention); struct field names follow Go style.
@@ -30,6 +30,10 @@ type PolicySpec struct {
 	// presets. Flag suffixes: r | rw | rx | rwx. Default when missing:
 	// r (read-only — principle of least privilege).
 	Paths []string `koanf:"paths"`
+
+	// EnvWhitelist overrides the executor environment allowlist. Omitted inherits
+	// the executor default; an explicit empty list passes no parent variables.
+	EnvWhitelist []string `koanf:"env_whitelist"`
 
 	// NoNewPrivs sets PR_SET_NO_NEW_PRIVS. Required by Landlock; the
 	// helper sets it automatically when AllowedPaths is non-empty but
@@ -91,6 +95,7 @@ func (s *PolicySpec) ToPolicy() (*Policy, error) {
 
 	p := &Policy{
 		NoNewPrivs:       s.NoNewPrivs,
+		EnvWhitelist:     slices.Clone(s.EnvWhitelist),
 		NetworkAllowCIDR: s.NetworkAllowCIDR,
 		Namespaces: NamespaceSet{
 			User:    s.Namespaces.User,
@@ -102,12 +107,7 @@ func (s *PolicySpec) ToPolicy() (*Policy, error) {
 		},
 	}
 
-	for _, r := range resolved {
-		p.AllowedPaths = append(p.AllowedPaths, r.Path)
-		if !r.Access.Has(AccessW) {
-			p.ReadOnlyPaths = append(p.ReadOnlyPaths, r.Path)
-		}
-	}
+	p.Mounts = policyMounts(resolved)
 
 	switch {
 	case len(s.SeccompDeny) > 0 && s.SeccompDefault:
@@ -153,4 +153,13 @@ func parsePathList(entries []string) ([]PathRule, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// policyMounts retains execute permission instead of folding rx into r.
+func policyMounts(rules []PathRule) []PolicyMount {
+	mounts := make([]PolicyMount, 0, len(rules))
+	for _, r := range rules {
+		mounts = append(mounts, PolicyMount{Path: r.Path, Read: r.Access.Has(AccessR), Write: r.Access.Has(AccessW), Exec: r.Access.Has(AccessX)})
+	}
+	return mounts
 }

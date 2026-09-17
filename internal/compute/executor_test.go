@@ -803,3 +803,31 @@ func TestCappedBuffer(t *testing.T) {
 		t.Errorf("buffered = %q, want 0123456789", buf.Bytes())
 	}
 }
+
+func TestExecutorPolicyEnvironment(t *testing.T) {
+	t.Setenv("LOBSLAW_TEST_FLEET", "fleet")
+	t.Setenv("LOBSLAW_TEST_TOOL", "tool")
+	for _, tc := range []struct {
+		name   string
+		policy *sandbox.Policy
+		want   string
+	}{
+		{"fleet whitelist", nil, "fleet:unset"},
+		{"policy inherits", &sandbox.Policy{}, "fleet:unset"},
+		{"policy overrides", &sandbox.Policy{EnvWhitelist: []string{"LOBSLAW_TEST_TOOL"}}, "unset:tool"},
+		{"explicit empty", &sandbox.Policy{EnvWhitelist: []string{}}, "unset:unset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newTestEnv(t, func(cfg *ExecutorConfig) { cfg.EnvWhitelist = []string{"LOBSLAW_TEST_FLEET"} })
+			env.reg.SetPolicy("env", tc.policy)
+			script := writeScript(t, t.TempDir(), "env.sh", `echo "${LOBSLAW_TEST_FLEET:-unset}:${LOBSLAW_TEST_TOOL:-unset}"`)
+			result, err := env.executor.runSubprocess(context.Background(), InvokeRequest{ToolName: "env"}, script, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(result.Stdout)); got != tc.want {
+				t.Fatalf("environment = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

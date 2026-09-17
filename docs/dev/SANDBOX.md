@@ -224,7 +224,7 @@ Every preset is **read-only by default**. Operators compose explicit `path:rw` o
 
 | Preset | Description | Paths |
 |---|---|---|
-| `system-libs` | OS executables + shared libraries (RO) | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` |
+| `system-libs` | OS executables + shared libraries (RX) | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64` |
 | `system-certs` | TLS CA bundles for HTTPS (RO) | `/etc/ssl`, `/etc/ca-certificates`, `/etc/pki` |
 | `dns` | DNS resolver + hosts file (RO) | `/etc/resolv.conf`, `/etc/nsswitch.conf`, `/etc/hosts` |
 | `tmp` | `/tmp` scratch space (**RW**) | `/tmp` |
@@ -328,6 +328,17 @@ user = true
 mount = true
 pid = true
 ```
+
+Path modes retain their execute bit through policy loading and preset composition:
+`r` and `rw` do not grant execution; use `rx` or `rwx` where execution is needed.
+The `system-libs` preset grants `rx` so executables and dynamic loaders remain usable.
+Existing custom policies that relied on implicit execution from `r` must add `x`.
+
+For executor subprocesses, `env_whitelist = ["PATH", "LANG"]` replaces the default
+environment allowlist. Omit the field to inherit the executor default, or set
+`env_whitelist = []` to pass no parent environment variables. This selects variable
+names from the node's environment; it does not store their values in the policy file.
+The subprocess itself may create variables such as `PWD`.
 
 ### Preset override / extension schema
 

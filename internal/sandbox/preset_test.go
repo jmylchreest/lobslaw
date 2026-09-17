@@ -283,29 +283,18 @@ func TestResolveSystemLibsBuiltinProducesRealPaths(t *testing.T) {
 	}
 }
 
-// TestWithPresetsProducesAllowedAndReadOnly confirms the Policy
-// convenience method maps resolved rules back into Policy's native
-// AllowedPaths/ReadOnlyPaths split that sandbox.Apply consumes.
-func TestWithPresetsProducesAllowedAndReadOnly(t *testing.T) {
+func TestWithPresetsProducesMounts(t *testing.T) {
 	t.Parallel()
-	p := Policy{
-		AllowedPaths:  []string{"/tmp"},
-		ReadOnlyPaths: []string{},
-	}
+	p := Policy{AllowedPaths: []string{"/tmp"}}
 	out, err := p.WithPresets("system-libs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// system-libs is all RO; /tmp inline is RW.
-	if !slices.Contains(out.AllowedPaths, "/tmp") {
-		t.Error("inline /tmp should survive to AllowedPaths")
+	if !out.AllowsPath("/tmp", AccessRW) || out.AllowsPath("/tmp", AccessX) {
+		t.Fatalf("inline permissions: %+v", out.Mounts)
 	}
-	if slices.Contains(out.ReadOnlyPaths, "/tmp") {
-		t.Error("/tmp should NOT be in ReadOnlyPaths (it's RW inline)")
-	}
-	// At least one system-libs path should surface as RO.
-	if len(out.ReadOnlyPaths) == 0 {
-		t.Errorf("system-libs should produce RO entries; got %+v", out.ReadOnlyPaths)
+	if !out.AllowsPath("/usr", AccessRX) || out.AllowsPath("/usr", AccessW) {
+		t.Fatalf("runtime permissions: %+v", out.Mounts)
 	}
 }
 
