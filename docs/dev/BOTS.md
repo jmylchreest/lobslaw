@@ -531,6 +531,29 @@ fallback, so the two cannot disagree about what ran.
 
 ---
 
+## Decisions recorded
+
+Five, in the project's aide store (`aide decision list`), which is
+where `aide-decision-persistence` says architectural choices belong —
+they are injected into every session rather than sitting in a commit
+message nobody re-reads:
+
+| Topic | Decision |
+|---|---|
+| `bot-teams-ownership` | A bot belongs to exactly one team; authority over a bot comes from that team's owner |
+| `turn-bot-resolution-order` | A turn's bot is resolved before `turn.Identity` is built, not during `fillDefaults` |
+| `streaming-as-side-channel` | Token streaming is a transport detail inside `LLMClient`, never a second turn implementation |
+| `console-multi-user-auth` | Console identity comes from per-user tokens in `[[user]]`; every handler gates itself |
+| `peer-bot-text-is-untrusted` | Text written by another bot is wrapped as untrusted before it reaches a turn |
+
+Each carries the failure that produced it. The rule alone does not
+explain why it is drawn where it is — "resolve the bot before the
+identity" reads as arbitrary until you know that getting it backwards
+gave the coordinator its own soul and tool list while every bot tool
+refused the turn.
+
+---
+
 ## Deliberate limits
 
 - **No per-bot channel identity.** One token, attribution in the body.
