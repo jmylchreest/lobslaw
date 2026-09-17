@@ -635,6 +635,21 @@ type ChannelHandler interface {
 
 **gRPC gateway:** Single port serves all gRPC services with external TLS termination and the external channel surface (webhook endpoints, REST/WebSocket).
 
+**Web console:** An operator surface for the bot team — the roster, each
+bot's queue and transcripts, and per-bot chat — served off the *same*
+listener as the REST API behind `[gateway.ui] enabled`. No second
+listener, no CORS, no second deployable. Embedded with `go:embed`, so
+the release path must build it before the binary or the console is
+present but empty.
+
+It is an admin surface: it can rewrite what every bot does. Enabling it
+on a non-loopback bind forces `auth.require_auth`, and the node refuses
+to start rather than warning. There is no auth middleware — routes bind
+straight to handlers — so every console handler authenticates itself.
+
+Was listed as out of scope until bots made it necessary: a team of
+agents has no legible surface in a chat window.
+
 ---
 
 ## Authentication
@@ -1588,7 +1603,6 @@ func WrapContext(blocks []ContextBlock) string   // adds trust delimiters
 
 - Multi-cloud storage beyond S3-compatible and R2 (GCS, Azure Blob)
 - mTLS cert rotation hot-swap (requires custom gRPC transport-creds wrapper)
-- Web dashboard UI (beyond REST channel + `agenda` skill output)
 - WASM runtime (Python/bash/go handlers only in MVP)
 - Deep OpenCode plugin import (metadata-only adapter; full TS SDK runtime is future)
 - LDAP/AD integration (JWKS-based SSO only in MVP)

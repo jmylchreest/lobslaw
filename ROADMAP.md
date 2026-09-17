@@ -76,7 +76,7 @@ Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detai
 | **R30** | [Cross-network node enrolment](#r30--cross-network-node-enrolment) | ⬜ | 🔵 P2 | M | R29 |
 | **R31** | [Run it before believing it](#r31--run-it-before-believing-it) | ✅ | 🔴 P0 | S | — |
 | **R32** | [MCP over SSE, off unless asked for](#r32--mcp-over-sse-off-unless-asked-for) | ⬜ | 🟡 P2 | M | — |
-| **R33** | [Delegation as a primitive](#r33--delegation-as-a-primitive) | ⬜ | 🟠 P1 | M | — |
+| **R33** | [Delegation as a primitive](#r33--delegation-as-a-primitive) | 🟡 | 🟠 P1 | M | 33a + 33c done; 33b (concurrency) remains |
 | **R34** | [Skill bundles and the bootstrap](#r34--skill-bundles-and-the-bootstrap) | ⬜ | 🟠 P1 | M | — |
 | **R35** | [What the sandbox actually enforces](#r35--what-the-sandbox-actually-enforces) | ⬜ | 🔴 P0 | M | — |
 | **R36** | [The agent cannot say what it can do](#r36--the-agent-cannot-say-what-it-can-do) | 🟨 | 🟠 P1 | S | — |
@@ -157,8 +157,9 @@ intention, and the code has moved past it in a way nobody wrote down.*
 1. **Delegation already exists.** `research:run` is a planner → workers → synthesiser fan-out where
    each worker is a full agent turn with tools. The open question was never "should lobslaw
    delegate"; it is why the fan-out is bound to one hardcoded workflow. See [R33](#r33--delegation-as-a-primitive).
-2. **The research fan-out's budget does not add up**, and its tool description tells the model that
-   it does. Live defect. See [R33](#r33--delegation-as-a-primitive), step 33a.
+2. ~~**The research fan-out's budget does not add up**, and its tool description tells the model that
+   it does. Live defect.~~ **Fixed** — see [R33](#r33--delegation-as-a-primitive), step 33a.
+   `TurnBudget.Sub` gives a child a reservation drawn from its parent rather than a fresh clone.
 3. **RRF, temporal decay and MMR do not need the inverted index.** They were filed behind it, and
    the whole retrieval group was then deferred as one unit. Re-split into
    [R6a](#r6a--ranking-that-needs-no-index) and [R6b](#r6b--the-lexical-index-in-the-fsm).
@@ -170,6 +171,12 @@ inside a group deferred for performance reasons that do not apply to either.
 
 **The whole open set**, after the corrections above: R6a, R6b, R7, R11, R20 (20d only), R20e,
 R21, R23, R30, R32, R33, R34, R35. Everything else in the index is done.
+
+> **Since (2026-09-17):** R33 is now partly landed — 33a and 33c shipped
+> with the bot team, leaving 33b (concurrent fan-out workers). The
+> delegation primitive the entry asks for exists as `compute.TurnRunner`
+> plus `ask_bot` / `inbox_post`; what is still sequential is the
+> execution, not the shape.
 
 ### Bookkeeping (2026-08-18, later the same day)
 
@@ -4439,7 +4446,29 @@ descriptions — an injection path that starts in a channel and ends in the mode
 
 ## R33 — delegation as a primitive
 
-⬜ **Not started.** 🟠 P1.
+🟡 **Partly landed.** 🟠 P1. **33a** and **33c** shipped with the bot
+team; **33b** (running fan-out workers concurrently) has not.
+
+What landed, and where to read it:
+
+- **33a — the spend adds up.** `TurnBudget.Sub` gives a child a
+  reservation drawn from its parent rather than a fresh clone, so a
+  tree of delegated turns is bounded by the one number the root
+  authorised however the tree is shaped. A refused call does not draw
+  on the reservation.
+- **33c — the coordinator is a general primitive.** `compute.TurnRunner`
+  is the one place a headless turn starts, and `ask_bot` / `inbox_post`
+  are the general form of what `research:run` did for one hardcoded
+  workflow. All four constraints hold: a child's registry has `ask_bot`
+  filtered out so a fork bomb is not expressible, a child draws on the
+  parent's reservation, a child writes its own session, and a queued
+  child that trips `require_confirmation` fails closed — while a turn a
+  person started can now ask them, through `TurnRequest.Confirm`.
+
+**33b is the remaining piece.** The inbox drain works one item per bot
+per pass and `ask_bot` is synchronous, so a fan-out is still sequential
+on one node. The note below still applies: parallelising an unbounded
+budget makes it burn faster, and 33a is what made it bounded.
 
 ### Problem — restated, because the review got this wrong first
 
@@ -4488,6 +4517,8 @@ Three steps, each independently landable, in this order.
 
 #### 33a · Make the spend add up
 
+✅ **Done.** Landed with the bot team.
+
 **XS, and it is a live defect — do it first, independent of everything else.**
 
 One reservation computed at fan-out, from which every worker draws. `TurnBudget` already tracks
@@ -4498,6 +4529,8 @@ ten sub-questions" should divide a budget, not multiply one — which is also th
 what the operator asked for, and what the tool description already claims happens.
 
 #### 33b · Run the workers concurrently
+
+⬜ **Still open.** The one part of R33 the bot work did not cover.
 
 **S.** Bounded concurrency, starting at 3. Same per-worker timeout. Depth-5 wall clock drops from
 five sequential 90-second windows to two.
@@ -4510,6 +4543,8 @@ five sequential 90-second windows to two.
 - **Land it after 33a.** Parallelising an unbounded budget makes it burn faster.
 
 #### 33c · Promote the coordinator to a general primitive
+
+✅ **Done.** `compute.TurnRunner` plus `ask_bot` / `inbox_post`.
 
 **M.** Planner → workers → synthesiser is a *fan-out turn*. Research becomes one configured instance
 of it; a `delegate` builtin becomes another. Four constraints, and the first is the load-bearing one.
