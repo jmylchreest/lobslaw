@@ -195,6 +195,12 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 			s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
 			return
 		}
+		// Creating a bot inside a team is writing to that team.
+		if !s.mayUseGroup(r, body.GroupID) {
+			s.jsonErr(w, http.StatusForbidden,
+				"that team belongs to somebody else")
+			return
+		}
 		rec, err := s.cfg.Bots.Put(r.Context(), &lobslawv1.BotRecord{
 			Id:           body.ID,
 			DisplayName:  body.DisplayName,
@@ -213,6 +219,7 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 			s.jsonErr(w, botStatusFor(err), err.Error())
 			return
 		}
+		s.auditRegistry(r, "bot:create", rec.GetId(), rec.GetDisplayName())
 		respondJSON(w, http.StatusCreated, botToJSON(rec))
 	default:
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET or POST")
@@ -240,6 +247,10 @@ func (s *Server) handleBotItem(w http.ResponseWriter, r *http.Request, id string
 			s.jsonErr(w, botStatusFor(err), err.Error())
 			return
 		}
+		// Deleting a bot destroys the record of what it did. Needing
+		// authorisation and leaving no trace of who exercised it is the
+		// worse half of the pair.
+		s.auditRegistry(r, "bot:delete", id, "")
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET, PATCH or DELETE")
@@ -253,6 +264,31 @@ func (s *Server) handleBotItem(w http.ResponseWriter, r *http.Request, id string
 // indistinguishable from "set instructions to empty", and clearing a
 // bot's brief by editing its display name is the kind of surprise a
 // GUI should be incapable of.
+// mayUseGroup reports whether the caller may put a bot into a team.
+//
+// The destination half of the question. mayModifyBot answers "may you
+// touch this bot", which is about where it IS — and on a move the
+// interesting team is the one it is going TO. Without this, creating
+// a bot inside somebody else's team, or moving one into it, both
+// walked straight past the guard that exists to stop exactly that.
+func (s *Server) mayUseGroup(r *http.Request, groupID string) bool {
+	if s.cfg.Groups == nil {
+		return true
+	}
+	if strings.TrimSpace(groupID) == "" {
+		// No team named means the default, which is unowned on a fresh
+		// install and therefore open — the same answer groupMayModify
+		// gives it.
+		groupID = defaultGroupID
+	}
+	group, err := s.cfg.Groups.Get(r.Context(), groupID)
+	if err != nil {
+		// A team that cannot be read is not a team you may write into.
+		return false
+	}
+	return groupMayModify(group, s.principalOf(r))
+}
+
 // mayModifyBot reports whether the caller may change this bot.
 //
 // Authority comes from the bot's TEAM, not from the bot. Teams gained
@@ -275,9 +311,13 @@ func (s *Server) mayModifyBot(r *http.Request, botID string) bool {
 	}
 	group, err := s.cfg.Groups.Get(r.Context(), groupOfBot(rec))
 	if err != nil {
-		// A bot pointing at a team that is not there is not somebody
-		// else's team.
-		return true
+		// Fail CLOSED. This looked like a harmless gap — "a bot
+		// pointing at a team that is not there is not somebody else's
+		// team" — but it is reachable on purpose: delete a team and
+		// every bot left in it becomes editable by anyone signed in.
+		// An unreadable team is a reason to refuse, not to wave
+		// through.
+		return false
 	}
 	return groupMayModify(group, s.principalOf(r))
 }
@@ -332,6 +372,14 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 			s.jsonErr(w, http.StatusBadRequest,
 				"the coordinator belongs to its own team and cannot be moved; "+
 					"make another bot the coordinator there first")
+			return
+		}
+		// And the team it is going TO. The check above this block asks
+		// whether you may touch the bot, which is about where it is —
+		// on a move, the interesting team is the destination.
+		if !s.mayUseGroup(r, *body.GroupID) {
+			s.jsonErr(w, http.StatusForbidden,
+				"that team belongs to somebody else")
 			return
 		}
 		current.GroupId = *body.GroupID
@@ -397,10 +445,12 @@ func (s *Server) handleBotInbox(w http.ResponseWriter, r *http.Request, botID st
 		// the console can tell people apart, an operator has a name,
 		// and it follows the work — so a report this produces can say
 		// who asked for it even after it has changed hands.
-		requester := "operator"
-		if claims, aerr := s.authenticate(r); aerr == nil && claims != nil && claims.UserID != "" {
-			requester = claims.UserID
-		}
+		// principalOf, not a second authenticate: handleBots has
+		// already gated this path, so the error branch was
+		// unreachable and the "operator" fallback it guarded could
+		// never be taken. Two ways of asking the same question is how
+		// they come to disagree.
+		requester := s.principalOf(r)
 		item, err := s.cfg.Inbox.Post(r.Context(), &lobslawv1.BotInboxItem{
 			Recipient: botID,
 			// An operator assigning work from the GUI is the sender.

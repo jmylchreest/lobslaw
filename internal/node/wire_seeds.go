@@ -134,6 +134,20 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		"credentials_grant":     true,
 		"credentials_revoke":    true,
 		"clawhub_install":       true,
+		// bot_create mints a PRINCIPAL and sets its tool allowlist —
+		// strictly more reach than soul_tune, which is three lines
+		// above for exactly this reason. A bot created this way owns
+		// memory, appears in policy as a subject, and runs turns. The
+		// plan called for it to be require_confirmation for the
+		// coordinator and allow for an operator; seeding it allow made
+		// the first half impossible to express.
+		//
+		// bot_update and bot_delete follow: re-briefing a bot is
+		// rewriting what a principal does, and deleting one destroys
+		// the record of what it did.
+		"bot_create": true,
+		"bot_update": true,
+		"bot_delete": true,
 		// remote_ssh runs commands the MODEL composed, on a host that
 		// holds a git push token. The default-allow seed exists because
 		// builtins are lobslaw-curated with a well-understood blast

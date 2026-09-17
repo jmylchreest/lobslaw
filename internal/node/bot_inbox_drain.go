@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -216,7 +217,11 @@ func inboxResult(resp *compute.ProcessMessageResponse) string {
 	if silent := compute.DescribeSilentTurn(resp); silent != "" {
 		return silent
 	}
-	return resp.Reply
+	// Trimmed, as it was before DescribeSilentTurn was extracted: that
+	// function TESTS the trimmed value but returns nothing when there
+	// is a reply, so the trim has to happen here or a result is stored
+	// with whatever whitespace the model left on it.
+	return strings.TrimSpace(resp.Reply)
 }
 
 // the same way — it starts doing the work described in a result it

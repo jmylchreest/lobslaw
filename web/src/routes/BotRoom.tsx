@@ -63,6 +63,9 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   // early would leave a half-sentence in the thread if the turn then
   // failed.
   const [partial, setPartial] = useState("");
+  // One sentence, announced to assistive tech when the turn changes
+  // state. See the region it renders into, below.
+  const [notice, setNotice] = useState("");
   const [sendErr, setSendErr] = useState<Error | null>(null);
   // The turn is blocked on the other end of the open stream, so this
   // is a live question rather than a record of one. Cleared as soon as
@@ -118,11 +121,18 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   // `ask` belongs in here: a confirmation can arrive taller than the
   // space left and land with its buttons below the fold, so the one
   // message that REQUIRES an action was the one you could not see.
-  useEffect(() => { end.current?.scrollIntoView({ behavior: "smooth" }); }, [said, work, working, partial, ask]);
+  useEffect(() => {
+    // The reduced-motion rule in the stylesheet cannot reach this:
+    // `behavior` is a JS argument, and an explicit "smooth" wins over
+    // any `scroll-behavior` the CSS sets. Asked directly instead.
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    end.current?.scrollIntoView({ behavior: still ? "auto" : "smooth" });
+  }, [said, work, working, partial, ask]);
 
   async function send() {
     const text = draft.trim();
     if (!text) return;
+    setNotice("");
     setSaid((p) => [...p, { kind: "said", from: "me", text, at: Date.now() }]);
     setDraft("");
     // Immediately, not when the server's heartbeat arrives. That
@@ -140,6 +150,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
         }
         if (event === "reply") {
           setWorking(false); setAsk(null); setPartial("");
+          setNotice(`${bot?.display_name || botId} replied.`);
           setSaid((p) => [...p, {
             kind: "said", from: "bot", text: String(data.text ?? ""), at: Date.now(),
             tools: (data.tools_used as string[]) ?? [],
@@ -149,6 +160,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           }]);
         }
         if (event === "needs_confirmation") {
+          setNotice(`${bot?.display_name || botId} needs your approval to continue.`);
           setAsk({
             id: String(data.prompt_id ?? ""),
             reason: String(data.reason ?? ""),
@@ -158,6 +170,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
         }
         if (event === "error") {
           setWorking(false); setAsk(null); setPartial("");
+          setNotice("The turn failed.");
           setSendErr(new Error(String(data.message ?? "the turn failed")));
         }
       });
@@ -203,14 +216,28 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
         </button>
       </header>
 
+      {/* What a screen reader is told, and the only thing on this
+          screen that is live.
+          
+          Not the thread itself: `partial` grows a token at a time, and
+          a live transcript would read every prefix of the reply aloud.
+          So the region carries ONE short sentence per event — replied,
+          needs approval, failed — and the reply itself stays in the
+          thread to be read at the user's pace. */}
+      <div className="sr-only" role="status" aria-live="polite">{notice}</div>
+
       {settings ? (
-        <div className="thread"><div className="thread-in">
+        <div className="thread" tabIndex={0}><div className="thread-in">
           <Settings bot={bot} onSaved={() => { reload(); onChanged(); setSettings(false); }} />
           <Routines botId={bot.id} />
           <Knows botId={bot.id} />
         </div></div>
       ) : (
-        <div className="thread">
+        /* tabIndex because this region scrolls. Without it the pane
+           cannot take focus, so there is no way to scroll the
+           transcript from the keyboard — and the :focus-visible ring
+           written for it could never match. */
+        <div className="thread" tabIndex={0}>
           <div className="thread-in">
             {thread.length === 0 && !working && (
               <div className="opening">

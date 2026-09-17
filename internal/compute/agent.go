@@ -889,6 +889,14 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	// Same ordering as RunToolCallLoop: a resumed turn is still a turn,
 	// and its tools read the identity too.
 	a.resolveDefaultBot(ctx, &req)
+	// And its caps. The comment above claimed the ordering matched and
+	// it did — but only half of it was here, so a turn resuming after
+	// an approval ran on node-default caps. That is the worst path to
+	// leave uncapped: it is the one where a guarded tool is about to
+	// run, having just been authorised.
+	if req.Bot != nil && req.Budget != nil {
+		req.Budget.Tighten(req.Bot.Caps)
+	}
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
 	// Carried so a builtin that starts a CHILD turn — ask_bot — can
 	// make it draw on this reservation rather than minting its own.

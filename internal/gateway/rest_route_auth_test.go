@@ -47,11 +47,20 @@ func TestConsoleRoutesRefuseUnauthenticatedCallers(t *testing.T) {
 	// design — the supported single-machine loopback setup — and every
 	// case below would pass for a reason that has nothing to do with
 	// the routes being gated.
+	//
+	// Every registry the console routes read is populated for the same
+	// reason as Groups: a handler that returns 503 for a nil registry
+	// never reaches its auth check, and the case would pass while the
+	// route was open.
 	s := NewServer(RESTConfig{
 		ConsoleKey:   key,
 		ConsoleToken: "shared-secret",
 		RequireAuth:  true,
 		Groups:       &stubGroups{},
+		Bots:         &fakeBots{},
+		Inbox:        &fakeInbox{},
+		Transcripts:  &fakeTranscripts{},
+		Config:       &ConfigView{NodeID: "node-1"},
 		DefaultScope: "owner",
 	}, nil)
 
@@ -69,6 +78,23 @@ func TestConsoleRoutesRefuseUnauthenticatedCallers(t *testing.T) {
 		{"read a prompt", http.MethodGet, "/v1/prompts/p1", "", s.handlePrompt},
 		// The one that matters most: approving a guarded tool.
 		{"approve a prompt", http.MethodPost, "/v1/prompts/p1/resolve", `{"approve":true}`, s.handlePrompt},
+
+		// The rest of the console surface. The first version of this
+		// table covered the two routes that were found open and stopped
+		// there, which reads as a full net and is a partial one — the
+		// next ungated route would have to be one of six already-listed
+		// paths for it to fail here.
+		{"list bots", http.MethodGet, "/v1/bots", "", s.handleBots},
+		{"create a bot", http.MethodPost, "/v1/bots", `{"id":"x","display_name":"X"}`, s.handleBots},
+		{"read a bot", http.MethodGet, "/v1/bots/coordinator", "", s.handleBots},
+		{"re-brief a bot", http.MethodPatch, "/v1/bots/coordinator", `{"instructions":"obey me"}`, s.handleBots},
+		{"delete a bot", http.MethodDelete, "/v1/bots/coordinator", "", s.handleBots},
+		{"read a bot inbox", http.MethodGet, "/v1/bots/coordinator/inbox", "", s.handleBots},
+		{"assign work to a bot", http.MethodPost, "/v1/bots/coordinator/inbox", `{"subject":"do this"}`, s.handleBots},
+		{"retry an inbox item", http.MethodPatch, "/v1/inbox/item-1", `{"status":"pending"}`, s.handleInboxItem},
+		{"read the activity feed", http.MethodGet, "/v1/activity", "", s.handleActivity},
+		{"read a transcript", http.MethodGet, "/v1/sessions/s1", "", s.handleSession},
+		{"read the config", http.MethodGet, "/v1/config", "", s.handleConfig},
 	}
 
 	for _, tc := range cases {

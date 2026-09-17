@@ -161,3 +161,47 @@ func TestABotToolFindsItsBotOnAChannelTurn(t *testing.T) {
 		t.Error("the turn took the bot's principal; ownership and recall would follow the bot, not James")
 	}
 }
+
+// A resumed turn runs on the bot's caps, not the node's.
+//
+// Tighten had one call site. The resume path resolved the bot and
+// stopped, though its comment claimed the ordering matched — so a turn
+// continuing after an approval ran uncapped, on the single path where
+// a guarded tool is about to run having just been authorised.
+func TestAResumedTurnKeepsTheBotsCaps(t *testing.T) {
+	t.Parallel()
+
+	restricted := &BotProfile{ID: "devops", Caps: BudgetCaps{MaxToolCalls: 2}}
+	// Both entry points, through the real functions rather than a
+	// re-implementation of them.
+	for _, entry := range []string{"run", "resume"} {
+		t.Run(entry, func(t *testing.T) {
+			budget, err := NewTurnBudget(BudgetCaps{MaxToolCalls: 30})
+			if err != nil {
+				t.Fatalf("NewTurnBudget: %v", err)
+			}
+			a := &Agent{cfg: AgentConfig{
+				Provider: NewMockProvider(MockResponse{Content: "ok"}),
+				Logger:   discardLogger(),
+				DefaultBot: func(context.Context) (*BotProfile, error) {
+					return restricted, nil
+				},
+			}}
+			req := ProcessMessageRequest{Message: "go", Budget: budget}
+
+			ctx := context.Background()
+			switch entry {
+			case "run":
+				_, _ = a.RunToolCallLoop(ctx, req)
+			case "resume":
+				_, _ = a.ResumeFromConfirmation(ctx, req,
+					[]Message{{Role: "user", Content: "go"}})
+			}
+
+			if got := budget.Caps().MaxToolCalls; got != 2 {
+				t.Errorf("%s: MaxToolCalls = %d, want the bot's 2 — "+
+					"this turn ran on the node's allowance", entry, got)
+			}
+		})
+	}
+}

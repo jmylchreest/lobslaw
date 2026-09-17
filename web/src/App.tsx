@@ -61,6 +61,10 @@ function Shell() {
 
   return (
     <div className={`shell${nav ? " nav-open" : ""}`}>
+      {/* First in the tab order, invisible until focused. The roster
+          below is a tab stop per bot, on every page. */}
+      <a className="skip" href="#main">Skip to content</a>
+
       {/* Only rendered on small screens. It carries the current
           location as well as the toggle, because once the sidebar is
           hidden there is nothing else saying which bot you are in. */}
@@ -137,7 +141,7 @@ function Shell() {
         </div>
       </aside>
 
-      <main className="main">
+      <main className="main" id="main" tabIndex={-1}>
         <Routes>
           {/* Chat-first: opening the console lands you in a
               conversation with the coordinator, and clicking a bot

@@ -253,7 +253,11 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
   box-shadow: var(--lift);
 }
 .btn:hover:not(:disabled) { background: var(--s3); border-color: rgba(255,255,255,0.2); }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+/* 0.4 put a disabled label at roughly 2:1 on the surface behind it —
+   below the 3:1 that even non-text UI is held to, and Send spends most
+   of its life disabled. Dimmed enough to read as unavailable, legible
+   enough to read at all. */
+.btn:disabled { opacity: 0.62; cursor: not-allowed; }
 .btn.primary {
   background: linear-gradient(180deg, var(--brand-hi), var(--brand));
   border-color: transparent; color: #2a1408; font-weight: 700;
@@ -648,7 +652,7 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
   text-decoration: underline; text-underline-offset: 2px;
 }
 .ev-act:hover { color: #fff; }
-.ev-act:disabled { opacity: 0.5; cursor: default; }
+.ev-act:disabled { opacity: 0.65; cursor: default; }
 
 .ev-body { margin-top: 8px; color: var(--mid); }
 .ev-body.bad { color: var(--bad); font-size: 13px; line-height: 1.6; }
@@ -985,4 +989,53 @@ a:focus-visible {
   background: none; border: 0; padding: 0; margin: 0;
   font: inherit; color: inherit; text-align: left;
   width: 100%;
+}
+
+
+/* ---- Reaching the console without a mouse ---------------------- */
+
+/* Visible only to assistive technology. Used for the chat's status
+   region, which has nothing to show sighted users — they can see the
+   reply arrive. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip-path: inset(50%); overflow: hidden; white-space: nowrap;
+}
+
+/* Skip to the content.
+ *
+ * The sidebar is a roster, so on a team of eight it is the better part
+ * of thirty tab stops in front of every page — and it is the same
+ * thirty on every page. The link is the first thing in the tab order
+ * and invisible until it has focus.
+ */
+.skip {
+  position: absolute; left: 8px; top: -60px; z-index: 60;
+  padding: 10px 14px; border-radius: 8px;
+  background: var(--brand); color: #fff; font-weight: 600;
+  text-decoration: none; transition: top 120ms;
+}
+.skip:focus { top: 8px; }
+
+/* Honour a system-level request for less movement.
+ *
+ * Nothing here animates to convey meaning — the status dot's pulse
+ * says "working" and so does the word next to it — so all of it can
+ * stop. Kept as near-instant rather than 0s: `animation: none` on a
+ * spinner mid-turn leaves a static arc that reads as frozen, and
+ * transition-less state changes make the console feel like it is
+ * repainting rather than responding.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* The spinner and the typing dots mean nothing frozen, so they
+     become opacity rather than motion. */
+  .spin { border-top-color: transparent; opacity: 0.6; }
+  .dots i { opacity: 0.55; }
 }

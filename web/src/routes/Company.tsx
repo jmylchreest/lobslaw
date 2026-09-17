@@ -229,14 +229,14 @@ function Ledger({ items, names }: { items: InboxItem[]; names: Map<string, strin
   const done = items.filter((i) => i.status !== "pending").slice(0, 25);
   if (done.length === 0) {
     return (
-      <aside className="ledger">
+      <aside className="ledger" tabIndex={0}>
         <div className="lbl">Recent work</div>
         <div className="empty sm"><b>Nothing yet</b><span>Assign someone a task and it shows up here.</span></div>
       </aside>
     );
   }
   return (
-    <aside className="ledger">
+    <aside className="ledger" tabIndex={0}>
       <div className="lbl">Recent work</div>
       <div className="col" style={{ marginTop: 10 }}>
         {done.map((i) => (
