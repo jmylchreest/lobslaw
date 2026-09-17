@@ -60,5 +60,8 @@ internal/gateway/ui/dist/*
 !internal/gateway/ui/dist/.gitkeep
 web/node_modules/
 
-# aide writes this wherever it is invoked from.
-.aide/
+# aide's local/runtime paths — keep shared decision records tracked.
+.aide/*
+!.aide/shared/
+!.aide/shared/**
+.aide/shared/memories/
