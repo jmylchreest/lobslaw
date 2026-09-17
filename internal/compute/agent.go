@@ -630,6 +630,9 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if req.Budget == nil {
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
+	// Which bot is taking this turn, before the identity is built from
+	// it — see resolveDefaultBot.
+	a.resolveDefaultBot(ctx, &req)
 	// Attached before fillDefaults, not inside runLoop: fillDefaults is
 	// where the ContextEngine runs its passive recall, and that recall
 	// needs to know whose memories it may read. Getting this order wrong
@@ -681,23 +684,6 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		// crosses ~100 we swap to semantic top-K retrieval against
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
-	}
-	// A turn that names no bot runs as the default team's coordinator.
-	// Before the resolve, so the filter below and the soul lookup
-	// further down both see it.
-	if req.Bot == nil && req.BotID == "" && a.cfg.DefaultBot != nil {
-		bot, err := a.cfg.DefaultBot(ctx)
-		if err != nil {
-			// Not fatal. A turn that cannot find the coordinator
-			// should still answer as the node default — the failure
-			// mode being avoided is an unanswered Telegram message,
-			// and refusing the turn is a worse version of it.
-			a.cfg.Logger.Warn("agent: could not resolve the default bot; running as the node assistant",
-				"err", err)
-		} else if bot != nil {
-			req.Bot = bot
-			req.BotID = bot.botID()
-		}
 	}
 	// The bot's registry filter runs HERE, before the turn starts and
 	// before the tool list reaches promptgen — so the model is never
@@ -894,6 +880,9 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
+	// Same ordering as RunToolCallLoop: a resumed turn is still a turn,
+	// and its tools read the identity too.
+	a.resolveDefaultBot(ctx, &req)
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
 	// Carried so a builtin that starts a CHILD turn — ask_bot — can
 	// make it draw on this reservation rather than minting its own.
@@ -1744,6 +1733,37 @@ func IsRetryableProviderError(ctx context.Context, err error) bool {
 		}
 	}
 	return false
+}
+
+// resolveDefaultBot fills in which bot a turn runs as, when the caller
+// named none.
+//
+// Called BEFORE turn.WithIdentity, and that ordering is the whole
+// point. It used to live in fillDefaults, which runs after — so the
+// identity was stamped from a request whose BotID was still empty.
+// The turn got the coordinator's soul and tool list, and every bot
+// tool then refused it: callerBot reads the IDENTITY, which said no
+// bot was taking the turn. A coordinator on Telegram could talk but
+// could not touch its own inbox or delegate to anyone.
+//
+// Not fatal on error. A turn that cannot find the coordinator should
+// still answer as the node assistant — the failure being avoided is
+// an unanswered message, and refusing the turn is a worse version of
+// it.
+func (a *Agent) resolveDefaultBot(ctx context.Context, req *ProcessMessageRequest) {
+	if req.Bot != nil || req.BotID != "" || a.cfg.DefaultBot == nil {
+		return
+	}
+	bot, err := a.cfg.DefaultBot(ctx)
+	if err != nil {
+		a.cfg.Logger.Warn("agent: could not resolve the default bot; running as the node assistant",
+			"err", err)
+		return
+	}
+	if bot != nil {
+		req.Bot = bot
+		req.BotID = bot.botID()
+	}
 }
 
 // TurnIdentityFor derives the caller identity from the request.

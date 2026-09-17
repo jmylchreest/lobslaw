@@ -6,6 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/turn"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // A turn that names no bot runs as the default team's coordinator.
@@ -30,6 +33,7 @@ func TestATurnWithNoBotRunsAsTheCoordinator(t *testing.T) {
 	}}
 
 	req := &ProcessMessageRequest{Message: "hello from telegram"}
+	a.resolveDefaultBot(context.Background(), req)
 	if err := a.fillDefaults(context.Background(), req); err != nil {
 		t.Fatalf("fillDefaults: %v", err)
 	}
@@ -38,6 +42,21 @@ func TestATurnWithNoBotRunsAsTheCoordinator(t *testing.T) {
 	}
 	if req.Bot == nil {
 		t.Fatal("no profile resolved, so the tool filter and soul lookup both miss")
+	}
+
+	// And, crucially, the CONTEXT IDENTITY — which is what the bot
+	// tools actually read.
+	//
+	// The first version of this test stopped at req.BotID and passed
+	// while the feature was broken: the identity was built before the
+	// resolution ran, so the turn got the coordinator's soul and tool
+	// list and every bot tool refused it with "no bot is taking this
+	// turn". Asserting the field the caller sets rather than the one
+	// the callee reads is how a test agrees with the code and both are
+	// wrong together.
+	id := a.TurnIdentityFor(*req)
+	if id.BotID != "coordinator" {
+		t.Errorf("identity.BotID = %q — inbox_list, inbox_post and ask_bot will all refuse this turn", id.BotID)
 	}
 }
 
@@ -53,6 +72,7 @@ func TestAnExplicitBotIsNotOverriddenByTheDefault(t *testing.T) {
 		},
 	}}
 	req := &ProcessMessageRequest{Message: "hi", BotID: "devops"}
+	a.resolveDefaultBot(context.Background(), req)
 	if err := a.fillDefaults(context.Background(), req); err != nil {
 		t.Fatalf("fillDefaults: %v", err)
 	}
@@ -76,6 +96,7 @@ func TestAFailedCoordinatorLookupStillAnswers(t *testing.T) {
 		},
 	}}
 	req := &ProcessMessageRequest{Message: "hello"}
+	a.resolveDefaultBot(context.Background(), req)
 	if err := a.fillDefaults(context.Background(), req); err != nil {
 		t.Fatalf("a failed lookup failed the turn: %v", err)
 	}
@@ -86,4 +107,57 @@ func TestAFailedCoordinatorLookupStillAnswers(t *testing.T) {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// toolSeeingLoop records the identity a tool would see mid-turn.
+type identityProbe struct{ botID string }
+
+// A bot tool called during a channel turn must find a bot.
+//
+// This is the assertion that would have caught the real failure. The
+// unit tests above check the request; the tools check the CONTEXT, and
+// for a while those disagreed: a Telegram turn ran with the
+// coordinator's soul and tool list while inbox_list, inbox_post and
+// ask_bot all refused it with "no bot is taking this turn". The
+// coordinator could talk and could not delegate.
+func TestABotToolFindsItsBotOnAChannelTurn(t *testing.T) {
+	t.Parallel()
+
+	probe := &identityProbe{}
+	a := &Agent{cfg: AgentConfig{
+		Logger: discardLogger(),
+		DefaultBot: func(context.Context) (*BotProfile, error) {
+			return &BotProfile{ID: "coordinator", IsCoordinator: true}, nil
+		},
+	}}
+
+	// A turn arriving from a channel: claims for a person, no bot named.
+	req := ProcessMessageRequest{
+		Message: "delegate this",
+		Claims:  &types.Claims{UserID: "user:james"},
+		Channel: "telegram", ChannelID: "5053517285",
+	}
+
+	// Exactly what RunToolCallLoop does, in order.
+	ctx := context.Background()
+	a.resolveDefaultBot(ctx, &req)
+	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+
+	// And exactly what a bot tool does with it.
+	id, ok := turn.IdentityFrom(ctx)
+	if !ok {
+		t.Fatal("no identity in the turn context")
+	}
+	probe.botID = id.BotID
+	if probe.botID == "" {
+		t.Fatal("a bot tool would refuse this turn: no bot is taking it")
+	}
+	if probe.botID != "coordinator" {
+		t.Errorf("tools see bot %q, want the coordinator", probe.botID)
+	}
+	// The person is still the person — the bot is doing the work, not
+	// becoming the caller.
+	if id.Principal.IsBot() {
+		t.Error("the turn took the bot's principal; ownership and recall would follow the bot, not James")
+	}
 }
