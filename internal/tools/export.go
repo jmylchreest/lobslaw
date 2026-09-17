@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -84,6 +85,10 @@ func ExportToolDef() *types.ToolDef {
 	}
 }
 
+// exportCollisionRetries bounds how many times a lost name race is
+// retried before the copy is reported as failed.
+const exportCollisionRetries = 4
+
 func newExportHandler(cfg ExportConfig) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		path := strings.TrimSpace(args["path"])
@@ -98,9 +103,21 @@ func newExportHandler(cfg ExportConfig) compute.BuiltinFunc {
 				fmt.Sprintf("artifact mount %q is not available", cfg.Resolver.DefaultMount), "")
 		}
 
-		src, errPayload, exitCode := confineToMount(root, path)
+		src, realRoot, errPayload, exitCode := confineToMount(root, path)
 		if exitCode != 0 {
 			return errPayload, exitCode, nil
+		}
+
+		// Confined to the mount is not enough. The same mount carries the
+		// operator's workspace and inbound attachments, and export/ is the
+		// one directory retention never sweeps, so anything reachable here
+		// could be made permanent by asking for it by name.
+		generatedRoot := filepath.Join(realRoot, compute.GeneratedDir)
+		if !strings.HasPrefix(src, generatedRoot+string(filepath.Separator)) {
+			return compute.MarshalToolError("not_generated",
+				fmt.Sprintf("%q is not under %s/", path, compute.GeneratedDir),
+				fmt.Sprintf("export copies generated files; pass a path like %q",
+					filepath.Join(compute.GeneratedDir, "some-file.mp4")))
 		}
 
 		// Lstat, never Stat: Stat follows a symlink and would report the
@@ -136,28 +153,41 @@ func newExportHandler(cfg ExportConfig) compute.BuiltinFunc {
 			return compute.MarshalToolError("export_dir_failed", err.Error(), "")
 		}
 
-		dest, deduped, err := exportDestination(exportRoot, filepath.Base(src), src)
-		if err != nil {
-			return compute.MarshalToolError("collision_check_failed", err.Error(), "")
-		}
-
-		var size int64
-		if deduped {
-			// The bytes are already there under this name — a second copy
-			// of identical content would only be waste, and repeating the
-			// same export call needs to be safe rather than producing a
-			// fresh suffix every time.
-			fi, statErr := os.Stat(dest)
-			if statErr != nil {
-				return compute.MarshalToolError("stat_failed", statErr.Error(), "")
+		// exportDestination picks a free name and copyFile claims it with
+		// O_EXCL. A concurrent export can take that name in between, so a
+		// lost race tries the next suffix instead of reporting a failure
+		// the model has no way to act on.
+		var (
+			dest string
+			size int64
+		)
+		for attempt := 0; ; attempt++ {
+			candidate, deduped, destErr := exportDestination(exportRoot, filepath.Base(src), src)
+			if destErr != nil {
+				return compute.MarshalToolError("collision_check_failed", destErr.Error(), "")
 			}
-			size = fi.Size()
-		} else {
-			n, copyErr := copyFile(src, dest)
-			if copyErr != nil {
+			if deduped {
+				// Identical bytes already sit under this name, so exporting
+				// the same file twice is safe rather than endlessly suffixed.
+				fi, statErr := os.Stat(candidate)
+				if statErr != nil {
+					return compute.MarshalToolError("stat_failed", statErr.Error(), "")
+				}
+				dest, size = candidate, fi.Size()
+				break
+			}
+			n, copyErr := copyFile(src, candidate)
+			if copyErr == nil {
+				dest, size = candidate, n
+				break
+			}
+			if errors.Is(copyErr, syscall.ELOOP) {
+				return compute.MarshalToolError("symlink_refused",
+					fmt.Sprintf("%q became a symlink before it could be copied", path), "")
+			}
+			if !os.IsExist(copyErr) || attempt == exportCollisionRetries {
 				return compute.MarshalToolError("copy_failed", copyErr.Error(), "")
 			}
-			size = n
 		}
 
 		relPath := filepath.Join(compute.ExportDir, filepath.Base(dest))
@@ -196,7 +226,7 @@ func newExportHandler(cfg ExportConfig) compute.BuiltinFunc {
 // actually confines the result, and the join-then-prefix-check
 // artifactOpener uses to confine a read against the same kind of mount
 // (wire_generation.go).
-func confineToMount(root, path string) (full string, errPayload []byte, exitCode int) {
+func confineToMount(root, path string) (full, realRoot string, errPayload []byte, exitCode int) {
 	// An absolute path is never a legitimate export argument — every
 	// generated file is reported mount-relative — so treating one as
 	// data to resolve inside the mount would be surprising even though
@@ -205,25 +235,43 @@ func confineToMount(root, path string) (full string, errPayload []byte, exitCode
 		payload, code, _ := compute.MarshalToolError("path_escape",
 			fmt.Sprintf("%q is an absolute path", path),
 			"pass a path relative to the artifact mount, e.g. \"generated/some-file.mp4\"")
-		return "", payload, code
+		return "", "", payload, code
 	}
 	clean := filepath.Clean(path)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		payload, code, _ := compute.MarshalToolError("path_escape",
 			fmt.Sprintf("%q escapes the artifact mount", path), "")
-		return "", payload, code
+		return "", "", payload, code
 	}
 	full = filepath.Join(root, clean)
-	// The check that actually confines the result. Clean above already
-	// rules out a leading "..", but this is what still stops the copy if
-	// a caller reaches this function with something that skipped Clean,
-	// or if root resolves through a symlink whose target moved.
-	if !strings.HasPrefix(full, filepath.Clean(root)+string(filepath.Separator)) {
+
+	// Canonicalise before the prefix check, which lobslaw-sandbox
+	// requires: a lexical check cannot see an intermediate symlink, so a
+	// directory inside the mount pointing out of it would pass. The
+	// PARENT is resolved rather than the whole path, so a symlink in the
+	// final position is still refused by name below instead of followed.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		payload, code, _ := compute.MarshalToolError("mount_unavailable", err.Error(), "")
+		return "", "", payload, code
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(full))
+	if err != nil {
+		if os.IsNotExist(err) {
+			payload, code, _ := compute.MarshalToolError("source_not_found",
+				fmt.Sprintf("%q does not exist in the mount", path), "")
+			return "", "", payload, code
+		}
+		payload, code, _ := compute.MarshalToolError("stat_failed", err.Error(), "")
+		return "", "", payload, code
+	}
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(parent+sep, realRoot+sep) {
 		payload, code, _ := compute.MarshalToolError("path_escape",
 			fmt.Sprintf("%q escapes the artifact mount", path), "")
-		return "", payload, code
+		return "", "", payload, code
 	}
-	return full, nil, 0
+	return filepath.Join(parent, filepath.Base(full)), realRoot, nil, 0
 }
 
 // exportDestination decides where a copy of src lands under exportRoot.
@@ -318,7 +366,10 @@ func sameContent(a, b string) (bool, error) {
 // collision — it needs to hold under a race, not only in the common
 // case where nothing else touches export/ between the two calls.
 func copyFile(src, dest string) (int64, error) {
-	in, err := os.Open(src)
+	// O_NOFOLLOW, not a plain Open: the handler's Lstat already refused a
+	// symlink, but the file can be swapped for one between that check and
+	// this open. lobslaw-sandbox names this pattern for that reason.
+	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return 0, err
 	}

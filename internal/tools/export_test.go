@@ -431,3 +431,86 @@ func TestExportRequiresAResolver(t *testing.T) {
 		t.Error("registered an export tool with no artifact resolver")
 	}
 }
+
+// --- confined to generated/ ---------------------------------------------
+
+// errorTypeOf reads the structured refusal a handler returned. Asserting
+// on the type rather than merely on a non-zero code is what stops a test
+// passing because some other guard happened to fire.
+func errorTypeOf(t *testing.T, out []byte) string {
+	t.Helper()
+	var toolErr struct {
+		ErrorType string `json:"error_type"`
+	}
+	if err := json.Unmarshal(out, &toolErr); err != nil {
+		t.Fatalf("result is not JSON: %v (%s)", err, out)
+	}
+	return toolErr.ErrorType
+}
+
+// TestExportRefusesSourcesOutsideGenerated plants a real, readable file
+// at each path first. Without that the handler would refuse them for
+// being absent, and the test would pass with no confinement at all.
+func TestExportRefusesSourcesOutsideGenerated(t *testing.T) {
+	t.Parallel()
+	h, root := exportBuiltin(t)
+
+	for _, rel := range []string{
+		filepath.Join("incoming", "attachment.pdf"),
+		filepath.Join(compute.ExportDir, "already-kept.mp4"),
+		"workspace-note.txt",
+	} {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("real bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		out, code, err := h(context.Background(), map[string]string{"path": rel})
+		if code == 0 {
+			t.Fatalf("%s was exported (out=%s)", rel, out)
+		}
+		if err != nil {
+			t.Fatalf("%s: expected a structured JSON error, got: %v", rel, err)
+		}
+		if got := errorTypeOf(t, out); got != "not_generated" {
+			t.Errorf("%s: error_type = %q, want \"not_generated\"", rel, got)
+		}
+	}
+}
+
+// TestExportRefusesAnIntermediateSymlink covers the gap a lexical prefix
+// check cannot see: the final component is an ordinary file, so Lstat and
+// O_NOFOLLOW both pass, and only canonicalising the parent catches that
+// the directory above it leaves the mount.
+func TestExportRefusesAnIntermediateSymlink(t *testing.T) {
+	t.Parallel()
+	h, root := exportBuiltin(t)
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("not yours"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, compute.GeneratedDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, compute.GeneratedDir, "sub")); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code, err := h(context.Background(), map[string]string{"path": "generated/sub/secret.txt"})
+	if code == 0 {
+		t.Fatalf("a file reached through a symlinked directory was exported (out=%s)", out)
+	}
+	if err != nil {
+		t.Fatalf("expected a structured JSON error, got: %v", err)
+	}
+	if got := errorTypeOf(t, out); got != "path_escape" {
+		t.Errorf("error_type = %q, want \"path_escape\"", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, compute.ExportDir, "secret.txt")); statErr == nil {
+		t.Error("the file outside the mount was copied into export/")
+	}
+}
