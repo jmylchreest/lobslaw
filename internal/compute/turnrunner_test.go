@@ -730,3 +730,42 @@ func TestTheRunnerPassesItsRequestThrough(t *testing.T) {
 		}
 	}
 }
+
+// A bot that is a real team member is told how to talk to a person.
+//
+// The machinery leaked without it: asked for a status on Telegram, the
+// coordinator replied with tool names, a ULID and "the durable route
+// is open" — an accurate account of its own plumbing and no use to
+// somebody holding a phone.
+func TestATeamMemberIsToldHowToReport(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a bot with a brief gets it", func(t *testing.T) {
+		got := appendBotBrief("Baseline.", &BotProfile{
+			ID: "devops", DisplayName: "DevOps", Instructions: "You own the cluster.",
+		})
+		if !strings.Contains(got, "not writing a log") {
+			t.Error("no reporting guidance; the bot will narrate its plumbing")
+		}
+		if !strings.Contains(got, "You own the cluster.") {
+			t.Error("the operator's brief was dropped")
+		}
+	})
+
+	t.Run("a named bot with no brief still gets it", func(t *testing.T) {
+		got := appendBotBrief("Baseline.", &BotProfile{ID: "devops", DisplayName: "DevOps"})
+		if !strings.Contains(got, "not writing a log") {
+			t.Error("a named team member was left without guidance")
+		}
+	})
+
+	// The upgrade case. A profile with neither a brief nor a name is
+	// the node's own assistant wearing a bot record, and changing how
+	// it talks is a behaviour change nobody asked for.
+	t.Run("an unconfigured profile leaves the soul untouched", func(t *testing.T) {
+		const body = "Operator baseline."
+		if got := appendBotBrief(body, &BotProfile{ID: "quiet"}); got != body {
+			t.Errorf("an upgraded deployment's assistant changed voice: %q", got)
+		}
+	})
+}

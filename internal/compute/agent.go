@@ -2248,6 +2248,33 @@ func confirmationOperation(err error, toolName string) (action, resource string,
 	return "tool:exec", toolName, true, nil
 }
 
+// DescribeSilentTurn says what a turn did when it produced no text.
+//
+// A turn can succeed and say nothing: the model spends itself on tool
+// calls and never writes a closing message. Handing that empty string
+// on is the worst possible answer, because the receiver cannot tell it
+// from "nothing to report" and will invent a reason — a coordinator
+// asked engineering for a status, got "", and told the operator the
+// bot was asleep and had nothing to say. Neither was true.
+//
+// Returns empty when the turn DID produce text, so callers can use it
+// as a fallback rather than a branch.
+func DescribeSilentTurn(resp *ProcessMessageResponse) string {
+	if resp == nil {
+		return "The turn finished but returned nothing."
+	}
+	if strings.TrimSpace(resp.Reply) != "" {
+		return ""
+	}
+	if len(resp.ToolCalls) == 0 {
+		return "Finished without doing anything or saying anything. " +
+			"Worth asking again with more detail."
+	}
+	return fmt.Sprintf(
+		"Did the work but wrote no answer. Ran %d tool call(s): %s.",
+		len(resp.ToolCalls), strings.Join(InvokedToolNames(resp.ToolCalls), ", "))
+}
+
 // InvokedToolNames reduces a turn's invocations to the distinct tool
 // names, sorted.
 //

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -208,32 +207,15 @@ func (n *Node) drainOneInboxItem(ctx context.Context, recipient string) error {
 // "here is what happened when you asked me to do that" answers both
 // inboxResult is what the item records as its outcome.
 //
-// A turn can succeed and still say nothing: the model spends the turn
-// on tool calls and never writes a closing message. Storing that empty
-// string marked the item DONE with a blank body, which in the console
-// is indistinguishable from an item that never ran — the exact
-// disappearance the queue exists to prevent. It is also the least
-// recoverable failure shape, because nothing looks wrong.
-//
-// So an empty reply gets an honest description instead. Deliberately
-// not a retry: the tools already ran, and running them again to
-// obtain a nicer summary would repeat their side effects.
+// An empty reply gets an honest description instead — see
+// compute.DescribeSilentTurn, which ask_bot uses for the same reason.
+// Deliberately not a retry: the tools already ran, and running them
+// again to obtain a nicer summary would repeat their side effects.
 func inboxResult(resp *compute.ProcessMessageResponse) string {
-	if resp == nil {
-		return "The turn finished but returned nothing."
+	if silent := compute.DescribeSilentTurn(resp); silent != "" {
+		return silent
 	}
-	if reply := strings.TrimSpace(resp.Reply); reply != "" {
-		return reply
-	}
-	if len(resp.ToolCalls) == 0 {
-		return "Finished without doing anything or saying anything. " +
-			"Worth re-sending with more detail."
-	}
-
-	return fmt.Sprintf(
-		"Did the work but wrote no summary. Ran %d tool call(s): %s.",
-		len(resp.ToolCalls),
-		strings.Join(compute.InvokedToolNames(resp.ToolCalls), ", "))
+	return resp.Reply
 }
 
 // the same way — it starts doing the work described in a result it

@@ -544,18 +544,61 @@ func appendBotBrief(body string, profile *BotProfile) string {
 		return body
 	}
 	brief := strings.TrimSpace(profile.Instructions)
-	if brief == "" {
+	name := strings.TrimSpace(profile.DisplayName)
+	// A profile with neither a brief nor a name is not a team member —
+	// it is the node's own assistant wearing a bot record, which is
+	// what an upgraded deployment has before anybody writes one. That
+	// case leaves the operator's soul byte-identical, and the voice
+	// below would be a change to how the assistant talks that nobody
+	// asked for.
+	if brief == "" && name == "" {
 		return body
 	}
+
 	var b strings.Builder
 	if body != "" {
 		b.WriteString(body)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("## Your role\n\n")
-	if name := strings.TrimSpace(profile.DisplayName); name != "" {
-		fmt.Fprintf(&b, "You are %s.\n\n", name)
+	if brief != "" {
+		b.WriteString("## Your role\n\n")
+		if name != "" {
+			fmt.Fprintf(&b, "You are %s.\n\n", name)
+		}
+		b.WriteString(brief)
+		b.WriteString("\n\n")
+	} else {
+		fmt.Fprintf(&b, "## Your role\n\nYou are %s.\n\n", name)
 	}
-	b.WriteString(brief)
+	b.WriteString(botVoice)
 	return b.String()
 }
+
+// botVoice is how a bot addresses a person, appended to every bot turn
+// whether or not the operator wrote a brief.
+//
+// Added because the machinery leaked. Asked for a status on Telegram,
+// the coordinator replied with tool names, a ULID and the phrase "the
+// durable route is open" — an accurate account of its own plumbing and
+// no use at all to somebody holding a phone. Left to themselves models
+// narrate the mechanism, because the mechanism is what just happened
+// to them.
+//
+// The last paragraph earns its place separately: that same reply took
+// an empty answer from another bot and reported it as "he didn't
+// respond — possibly a sleeping agent, probably nothing to report".
+// None of that was known. A silence is a thing to say plainly, not a
+// thing to explain.
+const botVoice = `## How to report
+
+You are talking to a person, not writing a log. Say what happened and
+what it means for them.
+
+Do not name your tools, quote record ids, or describe the mechanism.
+"I've asked engineering and I'll come back when they answer" — not
+"ask_bot returned empty so I used inbox_post, id 01M2R5N60Z...". The
+plumbing is yours; the outcome is theirs.
+
+If you could not find something out, say so plainly and say what you
+are doing about it. Do not invent a reason for a silence and report the
+guess as a finding.`

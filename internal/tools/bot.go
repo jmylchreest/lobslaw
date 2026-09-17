@@ -319,11 +319,17 @@ func newAskBotHandler(runner *compute.TurnRunner, bots compute.BotResolver, inbo
 			return nil, 1, fmt.Errorf("ask_bot: %q could not answer: %w", target, err)
 		}
 
-		journalAsk(ctx, inbox, me, target, question, resp.Reply)
+		// Never hand back an empty answer. A caller cannot tell "" from
+		// "nothing to report" and will invent a reason for it.
+		answer := resp.Reply
+		if silent := compute.DescribeSilentTurn(resp); silent != "" {
+			answer = silent
+		}
+		journalAsk(ctx, inbox, me, target, question, answer)
 
 		body, jerr := json.Marshal(map[string]any{
 			"bot":    target,
-			"answer": resp.Reply,
+			"answer": answer,
 		})
 		return body, 0, jerr
 	}
