@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/jmylchreest/lobslaw/pkg/types"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // ErrGroupNotFound is returned for an unknown group id.

@@ -227,6 +227,6 @@ const ChannelBot = "bot"
 // necessary — it silently turned "notify whoever asked to be told"
 // into "reply into a transcript", and notify started failing with
 // "no sink registered for channel \"bot\"".
-func (i Identity) IsHumanChannel() bool {
-	return i.Channel != "" && i.Channel != ChannelBot
+func (t Identity) IsHumanChannel() bool {
+	return t.Channel != "" && t.Channel != ChannelBot
 }

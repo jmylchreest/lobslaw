@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -64,7 +63,7 @@ func TestChatSurvivesATurnLongerThanTheWriteTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var got []string
 	scanner := bufio.NewScanner(resp.Body)
@@ -108,7 +107,7 @@ func (c *confirmingTurns) Run(ctx context.Context, req compute.TurnRequest) (*co
 }
 
 // autoPrompts approves everything the moment it is asked.
-type autoPrompts struct{ mu sync.Mutex }
+type autoPrompts struct{}
 
 func (a *autoPrompts) Create(NewPrompt) (*Prompt, error)                 { return &Prompt{ID: "p1"}, nil }
 func (a *autoPrompts) Get(string) (*Prompt, error)                       { return &Prompt{ID: "p1"}, nil }
@@ -149,7 +148,7 @@ func TestAskingForApprovalDoesNotCrashTheStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
