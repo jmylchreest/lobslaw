@@ -233,7 +233,13 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
                       text does not reflow when the turn ends. A half
                       table looks odd either way; a paragraph that
                       suddenly re-lays-out looks broken. */}
-                  <div className="txt"><Markdown>{partial}</Markdown><span className="caret" /></div>
+                  {/* aria-live on the finished reply, not on this:
+                      announcing a token at a time is unusable. The
+                      caret is decorative and hidden. */}
+                  <div className="txt" aria-busy="true">
+                    <Markdown>{partial}</Markdown>
+                    <span className="caret" aria-hidden="true" />
+                  </div>
                 </div>
               </div>
             )}
@@ -275,6 +281,19 @@ function Approval({ ask, onAnswered }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const approve = useRef<HTMLButtonElement>(null);
+
+  // Move focus here when the question appears.
+  //
+  // It interrupts the thread to demand a decision, which is the one
+  // case where taking focus is right rather than rude: a keyboard user
+  // would otherwise have to hunt for a control that arrived without
+  // warning, and a screen reader would not be told at all.
+  //
+  // Approve is focused rather than Deny because it is the affirmative
+  // action of the pair, and both are one Tab apart. Neither fires on
+  // Enter without the button being focused first.
+  useEffect(() => { approve.current?.focus(); }, [ask.id]);
 
   async function answer(approve: boolean) {
     setBusy(true); setError(null);
@@ -283,9 +302,22 @@ function Approval({ ask, onAnswered }: {
   }
 
   return (
-    <div className="ask">
-      <div className="ask-hd">Needs your approval</div>
-      <div className="ask-reason">{ask.reason}</div>
+    // role="group" with aria-labelledby, not role="dialog": this is
+    // inline in the thread rather than modal, and claiming to be a
+    // dialog would promise a focus trap and an Escape-to-dismiss that
+    // do not exist — and should not, because dismissing the question
+    // is not the same as answering it.
+    <div
+      className="ask"
+      role="group"
+      aria-labelledby={`ask-${ask.id}-title`}
+      aria-describedby={`ask-${ask.id}-reason`}
+    >
+      {/* Announced the moment it arrives, for anyone not watching. */}
+      <div className="ask-hd" id={`ask-${ask.id}-title`} role="status">
+        Needs your approval
+      </div>
+      <div className="ask-reason" id={`ask-${ask.id}-reason`}>{ask.reason}</div>
       {ask.resource && (
         // The exact operation, verbatim and monospaced. An approval
         // dialog that paraphrases what it is asking about is how you
@@ -294,10 +326,18 @@ function Approval({ ask, onAnswered }: {
       )}
       {error && <Err error={error} />}
       <div className="ask-btns">
-        <button className="btn primary sm" onClick={() => answer(true)} disabled={busy}>
+        <button
+          ref={approve} className="btn primary sm"
+          onClick={() => answer(true)} disabled={busy}
+          aria-label={`Approve: ${ask.reason}`}
+        >
           {busy ? "…" : "Approve"}
         </button>
-        <button className="btn ghost sm" onClick={() => answer(false)} disabled={busy}>
+        <button
+          className="btn ghost sm"
+          onClick={() => answer(false)} disabled={busy}
+          aria-label={`Deny: ${ask.reason}`}
+        >
           Deny
         </button>
       </div>
@@ -472,10 +512,18 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
           text beside it can be plain language. */}
       <span className="ev-node" aria-hidden="true" />
       <div className="ev-main">
-        <div className={`ev-head${open ? " open" : ""}`} onClick={toggle}>
+        {/* A button, because it is one: a div with onClick cannot be
+            reached by Tab and does not respond to Enter or Space. */}
+        <button
+          type="button"
+          className={`ev-head${open ? " open" : ""}`}
+          onClick={toggle}
+          aria-expanded={open}
+          aria-label={`${open ? "Collapse" : "Expand"}: ${item.subject || "untitled item"}`}
+        >
           <span className="ev-ttl">{item.subject || "(no subject)"}</span>
           <span className="ev-chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>
-        </div>
+        </button>
         <div className="ev-meta">
           <span className="ev-state">{LINE[item.status] ?? item.status}</span>
           <span className="ev-dot">·</span>

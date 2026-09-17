@@ -152,12 +152,18 @@ function GroupName({ group, onRenamed }: { group?: Group; onRenamed: () => void 
     );
   }
   return (
-    <h1
-      className="h1-edit"
-      title="Click to rename"
-      onClick={() => { setDraft(group.name); setEditing(true); }}
-    >
-      {group.name}
+    <h1 className="h1-edit">
+      {/* The heading stays a heading; the control inside it is a
+          button, so it is reachable by keyboard and announces what it
+          does rather than looking like inert text. */}
+      <button
+        type="button"
+        className="h1-btn"
+        onClick={() => { setDraft(group.name); setEditing(true); }}
+        aria-label={`Rename team, currently ${group.name}`}
+      >
+        {group.name}
+      </button>
     </h1>
   );
 }

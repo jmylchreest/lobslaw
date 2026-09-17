@@ -31,7 +31,12 @@
      gets scanned, and it must outweigh the body beneath it. */
   --hi: #f4f4f7;
   --mid: #a3a3b0;
-  --low: #63636f;
+  /* 4.85:1 on the input surface. It was #63636f — 3.10:1, below the
+     4.5:1 body-text floor — and this token is not only decoration: it
+     carries placeholders, receipts, timestamps and every "last thing
+     this bot said" preview. De-emphasis comes from the hierarchy with
+     --mid and --hi above it, not from being hard to read. */
+  --low: #82828f;
 
   --brand: #ff7a45;
   --brand-hi: #ff9166;
@@ -927,3 +932,57 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .signed::before { content: "signed in as "; color: var(--edge-hi); }
+
+/* ---------- focus ----------
+
+   There was one focus rule in the whole stylesheet, and it was not on
+   anything you can tab to. Every interactive element now shows where
+   the keyboard is.
+
+   :focus-visible rather than :focus, so a mouse click does not leave a
+   ring behind — that is the usual reason these get deleted again.
+
+   The brand orange measures 8.12:1 against the canvas and 7.11:1
+   against the input surface, comfortably past the 3:1 the guidelines
+   ask of a focus indicator. */
+
+.btn:focus-visible,
+.in:focus-visible,
+.ta:focus-visible,
+.roster a:focus-visible,
+.desknav:focus-visible,
+.gp-cur:focus-visible,
+.gp-item:focus-visible,
+.burger:focus-visible,
+.ev-act:focus-visible,
+.ev-head:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* The thread and the ledger scroll, so they are focusable for keyboard
+   scrolling; a ring on a whole scrolling region is noise, and the
+   region is not an action. */
+.thread:focus-visible,
+.ledger:focus-visible {
+  outline: 2px solid var(--edge-hi);
+  outline-offset: -2px;
+}
+
+/* The rename control inherits the heading entirely — it should look
+   like the title, not like a button sitting in one. */
+.h1-btn {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; letter-spacing: inherit;
+  cursor: text; text-align: left;
+}
+
+/* .ev-head is a <button> now, so it needs the layout a div gave it
+   for free. */
+.ev-head {
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-align: left;
+  width: 100%;
+}
