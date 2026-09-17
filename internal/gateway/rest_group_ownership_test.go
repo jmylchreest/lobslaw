@@ -50,13 +50,10 @@ func TestOnlyTheOwnerMayChangeATeam(t *testing.T) {
 			want:      false,
 		},
 		{
-			// The hole this test missed first time round. Every case
-			// above pairs an empty principal with an OWNED team, so
-			// "unowned is editable by anyone signed in" was never
-			// checked against somebody who is not signed in at all —
-			// and it returned true, which made the default team
-			// modifiable without authenticating.
-			name:      "an unauthenticated caller cannot touch an unowned team either",
+			// Empty principal must not inherit the "unowned = editable"
+			// rule — that rule is for signed-in operators on upgrade,
+			// not for anonymous callers on a require_auth node.
+			name:      "an unauthenticated caller cannot take an unowned team either",
 			owner:     "",
 			principal: "",
 			want:      false,
