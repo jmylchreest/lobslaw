@@ -65,3 +65,13 @@ web/node_modules/
 !.aide/shared/
 !.aide/shared/**
 .aide/shared/memories/
+
+# The same for a NESTED .aide. The rules above are anchored to the
+# repository root, and aide creates a directory wherever it is run —
+# one appeared under web/ and its binary store.db and bleve index were
+# committed by a `git add -A` before anybody noticed. Same shape as
+# above so a nested shared/ would still be tracked if one ever existed.
+*/**/.aide/*
+!*/**/.aide/shared/
+!*/**/.aide/shared/**
+*/**/.aide/shared/memories/
