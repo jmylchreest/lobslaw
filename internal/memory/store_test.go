@@ -3,9 +3,12 @@ package memory
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -201,4 +204,61 @@ func TestRestoreFromSnapshotKeepsOutsideStorePointerValid(t *testing.T) {
 	if string(got) != "v0" {
 		t.Errorf("got %q, want v0", got)
 	}
+}
+
+// ForEachKeys walks keys and opens nothing.
+//
+// Keys are the bucket's plaintext index. A caller that only needs them
+// — the inbox drain reads recipient prefixes off them, on a
+// thirty-second tick on every node — went through ForEach, which
+// decrypts every value first. On a busy queue that is the whole inbox
+// opened, repeatedly, to read a substring that was never encrypted.
+//
+// Asserted by planting bytes that cannot decrypt: if the walk still
+// completes, it never looked at a value.
+func TestForEachKeysNeverOpensAValue(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newTestStore(t)
+	for _, k := range []string{"devops:01A", "devops:01B", "engineering:01C"} {
+		if err := store.Put(BucketBotInbox, k, []byte("payload")); err != nil {
+			t.Fatalf("Put %s: %v", k, err)
+		}
+	}
+	// A record this store's cipher cannot open.
+	if err := store.putUnencrypted(BucketBotInbox, "devops:corrupt", []byte("not ciphertext")); err != nil {
+		t.Fatalf("plant: %v", err)
+	}
+
+	var keys []string
+	if err := store.ForEachKeys(BucketBotInbox, func(k string) error {
+		keys = append(keys, k)
+		return nil
+	}); err != nil {
+		t.Fatalf("ForEachKeys opened a value it did not need: %v", err)
+	}
+	if len(keys) != 4 {
+		t.Errorf("walked %d keys, want 4: %v", len(keys), keys)
+	}
+
+	// And the contrast: ForEach, which does open them, fails here.
+	// That is what makes the assertion above mean something.
+	err := store.ForEach(BucketBotInbox, func(string, []byte) error { return nil })
+	if err == nil {
+		t.Error("ForEach opened an undecryptable record without complaint; " +
+			"the keys-only walk is not being tested against anything")
+	}
+}
+
+// putUnencrypted writes bytes straight into a bucket, bypassing the
+// cipher — a record this store cannot open. Test-only, which is why it
+// lives here rather than beside Put.
+func (s *Store) putUnencrypted(bucket, key string, value []byte) error {
+	return s.loadDB().Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		return b.Put([]byte(key), value)
+	})
 }

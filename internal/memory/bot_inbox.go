@@ -382,8 +382,11 @@ func (s *InboxService) Recipients(_ context.Context) ([]string, error) {
 	if s.store == nil {
 		return nil, errors.New("inbox: store not wired")
 	}
+	// Keys only. The recipient is the key's prefix and keys are stored
+	// in plaintext, so decrypting every value to read one — on a
+	// thirty-second tick, on every node — bought nothing.
 	seen := map[string]struct{}{}
-	err := s.store.ForEach(BucketBotInbox, func(key string, _ []byte) error {
+	err := s.store.ForEachKeys(BucketBotInbox, func(key string) error {
 		if recipient, _, ok := strings.Cut(key, ":"); ok {
 			seen[recipient] = struct{}{}
 		}

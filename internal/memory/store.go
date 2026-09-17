@@ -158,6 +158,30 @@ func (s *Store) ForEach(bucket string, fn func(key string, value []byte) error) 
 	})
 }
 
+// ForEachKeys walks a bucket's KEYS, decrypting nothing.
+//
+// Keys are stored in plaintext — they are the bucket's index — so a
+// caller that only needs them should not pay to open every value.
+// The inbox drain does exactly that: it reads recipient prefixes off
+// the keys to decide which queues to look at, on a thirty-second tick
+// on every node, and went through ForEach to get them. On a cluster
+// with a busy queue that is the whole inbox decrypted, repeatedly, to
+// read a substring that was never encrypted.
+//
+// Deliberately a separate method rather than a nil-callback mode on
+// ForEach: a caller that wants values and a caller that wants keys
+// should not be one signature apart, because the cheap one is easy to
+// reach for by accident.
+func (s *Store) ForEachKeys(bucket string, fn func(key string) error) error {
+	return s.loadDB().View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		return b.ForEach(func(k, _ []byte) error { return fn(string(k)) })
+	})
+}
+
 // ForEachDecryptable walks a bucket, SKIPPING records it cannot
 // decrypt, and returns how many it skipped.
 //
