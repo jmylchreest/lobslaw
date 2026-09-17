@@ -61,13 +61,6 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		s.jsonErr(w, http.StatusBadRequest, "message is required")
 		return
 	}
-	// Authenticate BEFORE the 200 / SSE headers. Doing it later leaves an
-	// unauthenticated caller holding a streamed error instead of a 401.
-	if _, err := s.authenticate(r); err != nil {
-		s.jsonErr(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		// Without flushing, SSE is just a slow JSON response that
