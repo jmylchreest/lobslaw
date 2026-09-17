@@ -31,6 +31,23 @@ jobs:
           go mod download
           go mod verify
 
+      # Build the console so the integration test that boots a node and
+      # fetches it actually RUNS here.
+      #
+      # It skips when the assets are absent, which is right for a fresh
+      # clone but was wrong for CI: the skip was added to stop a bare
+      # 404 failing the suite, and the effect was that the one test
+      # covering the console end to end never ran anywhere.
+      - name: setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: build the console
+        run: make web
+
       - name: test
         run: go test -race -cover -coverprofile=coverage.out ./...
 

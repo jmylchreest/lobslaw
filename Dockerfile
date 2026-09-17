@@ -23,6 +23,28 @@
 ARG GO_VERSION=1.27
 
 # ---- Build stage ---------------------------------------------------
+# The console is a separate build with a separate toolchain, so it gets
+# its own stage: the Go layer does not need node, and the web layer
+# does not invalidate on a Go change.
+#
+# Without this the image shipped an EMPTY console.
+# internal/gateway/ui/dist is gitignored and embedded with go:embed, so
+# a `go build` that has not been preceded by the Vite build produces a
+# binary whose console answers ErrNotBuilt. Every published image and
+# release binary was in that state.
+FROM node:22-slim AS web
+
+WORKDIR /web
+# Lockfile layer: only invalidates when dependencies change.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY web/ ./
+# vite.config.ts writes to ../internal/gateway/ui/dist, so that path
+# has to exist relative to /web.
+RUN mkdir -p /internal/gateway/ui && npm run build
+
+
 FROM golang:${GO_VERSION} AS build
 
 WORKDIR /src
@@ -33,6 +55,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY . .
+
+# The built console, over the gitignored empty directory that go:embed
+# would otherwise pick up.
+COPY --from=web /internal/gateway/ui/dist/ ./internal/gateway/ui/dist/
 
 ARG VERSION=dev
 ARG COMMIT=unknown

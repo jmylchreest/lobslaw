@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -241,6 +242,20 @@ func inboxPrompt(item *lobslawv1.BotInboxItem) string {
 	if sender == "" {
 		sender = "unknown"
 	}
-	return fmt.Sprintf("%s\n\nFrom: %s\nSubject: %s\n\n%s",
-		lead, sender, item.GetSubject(), item.GetBody())
+	// The lead is ours and stays trusted. Everything the SENDER wrote
+	// — subject and body — is wrapped, because another bot's text is
+	// no more trustworthy than a fetched page.
+	//
+	// It was interpolated straight into the turn before, which is the
+	// exact shape this repo wraps everywhere else. Combined with
+	// inbox_post being seeded default-allow, a bot that had read a
+	// hostile web page could put instructions in another bot's
+	// trusted prompt slot and they would read as the operator's.
+	// NeutraliseDelimiters is what stops the payload closing the tag
+	// and writing its own.
+	return lead + "\n\n" + promptgen.WrapContext([]promptgen.ContextBlock{{
+		Source:  "inbox:" + sender,
+		Trust:   promptgen.TrustUntrusted,
+		Content: "Subject: " + item.GetSubject() + "\n\n" + item.GetBody(),
+	}})
 }

@@ -45,6 +45,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The console is embedded with go:embed from a gitignored
+      # directory, so a `go build` that has not been preceded by this
+      # produces a binary whose console answers ErrNotBuilt. Every
+      # published binary was in that state.
+      #
+      # Runs on every matrix entry rather than once: the assets are
+      # identical across platforms, but sharing them would mean an
+      # artifact upload/download pair to save a ten-second npm build.
       - name: setup node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:

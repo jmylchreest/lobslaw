@@ -12,6 +12,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/turn"
+	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -304,9 +305,17 @@ func newAskBotHandler(runner *compute.TurnRunner, bots compute.BotResolver, inbo
 		child, cancel := context.WithTimeout(ctx, askBotTimeout)
 		defer cancel()
 		resp, err := runner.Run(child, compute.TurnRequest{
-			Profile:     profile.Without("ask_bot"),
-			BotID:       target,
-			Prompt:      fmt.Sprintf("%s asks:\n\n%s", me, question),
+			Profile: profile.Without("ask_bot"),
+			BotID:   target,
+			// Same reasoning as the inbox: "X asks" is ours, the
+			// question is the asking bot's and gets wrapped. A bot
+			// that has read a hostile page must not be able to put
+			// instructions into a peer's trusted prompt slot.
+			Prompt: me + " asks:\n\n" + promptgen.WrapContext([]promptgen.ContextBlock{{
+				Source:  "ask_bot:" + me,
+				Trust:   promptgen.TrustUntrusted,
+				Content: question,
+			}}),
 			Origin:      "ask",
 			OriginID:    identity.TurnID,
 			Reservation: compute.BudgetFrom(ctx),
