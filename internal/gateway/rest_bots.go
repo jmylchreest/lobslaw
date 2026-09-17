@@ -152,12 +152,10 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the bot registry")
 		return
 	}
-	claims, err := s.authenticate(r)
-	if err != nil {
+	if _, err := s.authenticate(r); err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	_ = claims
 
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/bots"), "/")
 	switch {
@@ -205,7 +203,11 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 			Tools:        body.Tools,
 			MayMessage:   body.MayMessage,
 			Enabled:      true,
-			CreatedBy:    "operator",
+			GroupId:      body.GroupID,
+			// The real principal, not a placeholder. The session knows
+			// who is asking; recording "operator" threw that away at
+			// the one point where it is worth keeping.
+			CreatedBy: s.principalOf(r),
 		}, 0)
 		if err != nil {
 			s.jsonErr(w, botStatusFor(err), err.Error())
@@ -229,6 +231,11 @@ func (s *Server) handleBotItem(w http.ResponseWriter, r *http.Request, id string
 	case http.MethodPatch:
 		s.patchBot(w, r, id)
 	case http.MethodDelete:
+		if !s.mayModifyBot(r, id) {
+			s.jsonErr(w, http.StatusForbidden,
+				"that bot belongs to somebody else's team")
+			return
+		}
 		if err := s.cfg.Bots.Delete(r.Context(), id); err != nil {
 			s.jsonErr(w, botStatusFor(err), err.Error())
 			return
@@ -246,6 +253,35 @@ func (s *Server) handleBotItem(w http.ResponseWriter, r *http.Request, id string
 // indistinguishable from "set instructions to empty", and clearing a
 // bot's brief by editing its display name is the kind of surprise a
 // GUI should be incapable of.
+// mayModifyBot reports whether the caller may change this bot.
+//
+// Authority comes from the bot's TEAM, not from the bot. Teams gained
+// owners in this work and bots did not, which left the team check
+// bypassable one route over: a bot you could not move between teams
+// you could still re-brief, re-tool, or delete — including the
+// coordinator, which decides who answers on Telegram for that team.
+//
+// A node with no group registry falls back to "anyone signed in",
+// which is the behaviour before teams existed.
+func (s *Server) mayModifyBot(r *http.Request, botID string) bool {
+	if s.cfg.Groups == nil || s.cfg.Bots == nil {
+		return true
+	}
+	rec, err := s.cfg.Bots.Get(r.Context(), botID)
+	if err != nil {
+		// Let the caller's own lookup produce the proper 404 rather
+		// than reporting a missing bot as a permissions problem.
+		return true
+	}
+	group, err := s.cfg.Groups.Get(r.Context(), groupOfBot(rec))
+	if err != nil {
+		// A bot pointing at a team that is not there is not somebody
+		// else's team.
+		return true
+	}
+	return groupMayModify(group, s.principalOf(r))
+}
+
 func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 	var body struct {
 		DisplayName  *string   `json:"display_name"`
@@ -263,6 +299,10 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 	current, err := s.cfg.Bots.Get(r.Context(), id)
 	if err != nil {
 		s.jsonErr(w, botStatusFor(err), err.Error())
+		return
+	}
+	if !s.mayModifyBot(r, id) {
+		s.jsonErr(w, http.StatusForbidden, "that bot belongs to somebody else's team")
 		return
 	}
 	if body.DisplayName != nil {

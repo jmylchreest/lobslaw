@@ -888,6 +888,19 @@ func anonClaims(scope string) *types.Claims {
 // expires. Resolution is idempotent-on-conflict: a second attempt
 // after the first (or after timeout) returns 409.
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
+	// Authenticated before anything else.
+	//
+	// This route APPROVES GUARDED TOOLS. Ungated, a prompt id was the
+	// only thing standing between an unauthenticated caller and
+	// running whatever a turn had been stopped for — and a prompt id
+	// travels in the SSE stream, the Slack callback and the node log.
+	// There is no auth middleware on this surface: routes bind
+	// straight to handlers, so each one gates itself or is not gated.
+	if _, err := s.authenticate(r); err != nil {
+		s.jsonErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+
 	// Parse path: /v1/prompts/<id>[/resolve]
 	path := strings.TrimPrefix(r.URL.Path, "/v1/prompts/")
 	if path == "" {
