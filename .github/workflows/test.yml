@@ -48,6 +48,14 @@ jobs:
       - name: build the console
         run: make web
 
+      # ~2,700 lines of TSX shipped with no tests and nothing running
+      # them. These cover the parts with real logic rather than
+      # rendering: the colour assignment (which had a bug putting two
+      # bots on one hue), relative-time formatting, and the API
+      # client's error handling.
+      - name: test the console
+        run: npm --prefix web test
+
       - name: test
         run: go test -race -cover -coverprofile=coverage.out ./...
 

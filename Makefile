@@ -1,4 +1,4 @@
-.PHONY: proto proto-lint proto-breaking proto-tools build test smoke lint lint-tools tidy hooks hook-tools web web-deps web-check
+.PHONY: proto proto-lint proto-breaking proto-tools build test smoke lint lint-tools tidy hooks hook-tools web web-deps web-test web-check
 
 # Go-tool-installed binaries live under $(go env GOPATH)/bin. Prepend to PATH
 # for targets that shell out to them (buf invokes protoc-gen-go via PATH).
@@ -52,6 +52,12 @@ proto-breaking:
 web: web-deps
 	@rm -rf internal/gateway/ui/dist/assets
 	@cd web && npm run build
+
+# The console's own tests. Separate from `test` because that target is
+# Go and adding a node dependency to it would make `make test` need a
+# toolchain it otherwise does not.
+web-test: web-deps
+	@cd web && npm test
 
 web-deps:
 	@cd web && npm ci --no-audit --no-fund
