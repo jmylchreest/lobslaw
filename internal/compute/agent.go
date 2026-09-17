@@ -633,6 +633,12 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// Which bot is taking this turn, before the identity is built from
 	// it — see resolveDefaultBot.
 	a.resolveDefaultBot(ctx, &req)
+	// And its caps, now that we know whose they are. The caller built
+	// this budget from the node default before anything knew which bot
+	// would take the turn.
+	if req.Bot != nil && req.Budget != nil {
+		req.Budget.Tighten(req.Bot.Caps)
+	}
 	// Attached before fillDefaults, not inside runLoop: fillDefaults is
 	// where the ContextEngine runs its passive recall, and that recall
 	// needs to know whose memories it may read. Getting this order wrong

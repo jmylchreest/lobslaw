@@ -162,3 +162,40 @@ func TestAskingForApprovalDoesNotCrashTheStream(t *testing.T) {
 		}
 	}
 }
+
+// An unauthenticated chat request gets a 401, not a streamed error.
+//
+// Authentication used to happen inside runBotTurn — after the 200, the
+// SSE headers and a `start` event were already on the wire. The caller
+// was refused, but anything speaking HTTP rather than SSE saw a
+// successful request, and the refusal arrived as stream content.
+func TestChatRefusesBeforeOpeningTheStream(t *testing.T) {
+	t.Parallel()
+
+	key, err := DeriveConsoleKey([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("DeriveConsoleKey: %v", err)
+	}
+	s := NewServer(RESTConfig{
+		ConsoleKey:   key,
+		ConsoleToken: "shared-secret",
+		RequireAuth:  true,
+		Turns:        slowTurns{took: time.Millisecond},
+		DefaultScope: "owner",
+	}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/bots/coordinator/messages",
+		strings.NewReader(`{"message":"hello"}`))
+	s.handleBotChat(rec, req, "coordinator")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "event-stream") {
+		t.Errorf("Content-Type = %q — the stream was opened for a caller who was refused", ct)
+	}
+	if strings.Contains(rec.Body.String(), "event: start") {
+		t.Error("a start event was emitted before the caller was authenticated")
+	}
+}

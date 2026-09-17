@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // handleBotChat serves POST /v1/bots/{id}/messages.
@@ -35,6 +36,19 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+	// Authenticated here, before the 200 and the SSE headers go out.
+	//
+	// runBotTurn used to be the first thing that checked, by which
+	// point the status line, the stream headers and a `start` event
+	// were already on the wire — so an unauthenticated caller got a
+	// streamed error instead of a 401, and anything speaking HTTP
+	// rather than SSE saw a successful request.
+	claims, authErr := s.authenticate(r)
+	if authErr != nil {
+		s.jsonErr(w, http.StatusUnauthorized, authErr.Error())
+		return
+	}
 
 	var body struct {
 		Message string `json:"message"`
@@ -175,7 +189,7 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		emit("delta", map[string]any{"text": text})
 	}
 
-	resp, err := s.runBotTurn(r, botID, body.Message, turnID, confirm, onDelta)
+	resp, err := s.runBotTurn(r, claims, botID, body.Message, turnID, confirm, onDelta)
 	close(done)
 
 	if err != nil {
@@ -212,14 +226,10 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	})
 }
 
-func (s *Server) runBotTurn(r *http.Request, botID, message, turnID string,
+func (s *Server) runBotTurn(r *http.Request, claims *types.Claims, botID, message, turnID string,
 	confirm func(context.Context, string, string, string) (bool, error),
 	onDelta func(string),
 ) (*compute.ProcessMessageResponse, error) {
-	claims, err := s.authenticate(r)
-	if err != nil {
-		return nil, err
-	}
 	return s.cfg.Turns.Run(r.Context(), compute.TurnRequest{
 		BotID:    botID,
 		Prompt:   message,

@@ -280,3 +280,54 @@ func TestBudgetTokenAccounting(t *testing.T) {
 		t.Errorf("Restore moved the counter BACKWARDS to %d; usage can be laundered", got)
 	}
 }
+
+// A bot's caps apply on every path, not just the console.
+//
+// Telegram, Slack, REST and the inbound webhook build a budget from
+// the node default and hand it to the agent, which only then resolves
+// which bot is taking the turn. Bot caps were read in TurnRunner
+// alone, so a bot you had deliberately restricted spent the node's
+// full allowance on four of the five paths.
+func TestABotCanTightenAChannelBudgetButNotWidenIt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a tighter bot cap wins", func(t *testing.T) {
+		b, err := NewTurnBudget(BudgetCaps{MaxToolCalls: 30, MaxSpendUSD: 1.00})
+		if err != nil {
+			t.Fatalf("NewTurnBudget: %v", err)
+		}
+		b.Tighten(BudgetCaps{MaxToolCalls: 5})
+		if got := b.Caps().MaxToolCalls; got != 5 {
+			t.Errorf("MaxToolCalls = %d, want the bot's tighter 5", got)
+		}
+		// A dimension the bot says nothing about keeps the node's.
+		if got := b.Caps().MaxSpendUSD; got != 1.00 {
+			t.Errorf("MaxSpendUSD = %v, want the node's 1.00 left alone", got)
+		}
+	})
+
+	t.Run("a bot cannot buy itself room", func(t *testing.T) {
+		b, err := NewTurnBudget(BudgetCaps{MaxToolCalls: 5, MaxSpendUSD: 0.10})
+		if err != nil {
+			t.Fatalf("NewTurnBudget: %v", err)
+		}
+		b.Tighten(BudgetCaps{MaxToolCalls: 500, MaxSpendUSD: 99})
+		if got := b.Caps().MaxToolCalls; got != 5 {
+			t.Errorf("MaxToolCalls = %d — a turn already under way widened its own budget", got)
+		}
+		if got := b.Caps().MaxSpendUSD; got != 0.10 {
+			t.Errorf("MaxSpendUSD = %v — spend cap was widened mid-turn", got)
+		}
+	})
+
+	t.Run("an unrestricted bot changes nothing", func(t *testing.T) {
+		b, err := NewTurnBudget(BudgetCaps{MaxToolCalls: 30})
+		if err != nil {
+			t.Fatalf("NewTurnBudget: %v", err)
+		}
+		b.Tighten(BudgetCaps{})
+		if got := b.Caps().MaxToolCalls; got != 30 {
+			t.Errorf("MaxToolCalls = %d, want the node's 30", got)
+		}
+	})
+}

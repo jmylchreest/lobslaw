@@ -287,6 +287,26 @@ func (b *TurnBudget) Records() []CostRecord {
 // "unlimited on that dimension".
 func (b *TurnBudget) Caps() BudgetCaps { return b.caps }
 
+// Tighten narrows this budget's caps, never widens them.
+//
+// Needed because a channel builds its budget before anything knows
+// which bot is taking the turn: Telegram, Slack, REST and the inbound
+// webhook all construct one from the node default and hand it to the
+// agent, and the bot is only resolved inside. Without this a bot's
+// caps applied on exactly one of the five paths — the console, which
+// goes through TurnRunner — and a bot you had deliberately restricted
+// spent the node's full allowance everywhere else.
+//
+// Only ever downward. mergeCaps already clamps a bot asking for MORE
+// than the node allows, and the guard here is the same idea at a
+// different moment: a turn already under way must not be able to buy
+// itself room.
+func (b *TurnBudget) Tighten(caps BudgetCaps) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.caps = mergeCaps(b.caps, caps)
+}
+
 // Restore replays already-spent budget onto a fresh TurnBudget, for a
 // turn resuming after a confirmation — possibly on a different node
 // and after a restart, so there is no live budget to carry over.
