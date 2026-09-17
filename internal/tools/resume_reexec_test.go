@@ -73,7 +73,7 @@ func resumeAgent(t *testing.T) *compute.Agent {
 		t.Fatal(err)
 	}
 	builtins := NewBuiltins()
-	if err := RegisterShellBuiltin(builtins); err != nil {
+	if err := RegisterShellBuiltin(builtins, reg); err != nil {
 		t.Fatal(err)
 	}
 

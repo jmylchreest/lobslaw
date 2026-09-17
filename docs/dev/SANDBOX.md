@@ -299,6 +299,24 @@ Whichever is set at the highest-precedence layer wins and replaces the lower lay
 
 Example: in a container at `/app/data` with user-config at `~/.config/lobslaw/policy.d/`, the default merge loads both; a site-wide `git.toml` in user-config can define baseline permissions, and a per-workspace `git.toml` in `/app/data/policy.d/` overrides specific entries.
 
+### Shell subprocess policy
+
+`shell_command` looks up its registry policy on every invocation, so the existing
+operator policy loader and watcher also apply to the shell. Its policy is composed
+with the storage mounts and compiled shell runtime paths. These filesystem grants
+are additive: a narrower operator entry does not remove a broader runtime or storage
+grant. The in-process `guardPath` subtraction described above is a separate mechanism.
+
+Operator syscall denials supplement the default seccomp deny list. Namespace and
+network-filter settings pass through to the existing sandbox helper. Unsupported CPU,
+memory and command-deny controls, and network allow rules without network filtering,
+fail the invocation instead of being silently ignored. The command approval gate and
+compiled command/path checks still run first.
+
+A non-nil `Policy.EnvWhitelist` replaces the shell's fixed `PATH`/`HOME` environment;
+an explicitly empty list passes no parent variables. Without an operator policy or
+storage mounts, the existing test/development fallback still runs without a sandbox.
+
 ### Tool policy schema
 
 ```toml

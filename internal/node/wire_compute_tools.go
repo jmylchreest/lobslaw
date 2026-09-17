@@ -674,7 +674,7 @@ func (n *Node) wireDebugTools(builtins *tools.Builtins) error {
 // a Landlock sandbox derived from the active mounts, and a 30s default
 // timeout.
 func (n *Node) wireShellTools(builtins *tools.Builtins) error {
-	if err := tools.RegisterShellBuiltin(builtins); err != nil {
+	if err := tools.RegisterShellBuiltin(builtins, n.toolRegistry); err != nil {
 		return fmt.Errorf("register shell_command: %w", err)
 	}
 	if err := n.toolRegistry.Register(tools.ShellToolDef()); err != nil {

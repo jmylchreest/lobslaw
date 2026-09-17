@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -61,8 +63,11 @@ func ShellToolDef() *types.ToolDef {
 // (once that toggle lands); today it's always registered on
 // compute-enabled nodes because the per-command approval gate in
 // shell_approval.go asks about every command before it runs.
-func RegisterShellBuiltin(b *Builtins) error {
-	return b.Register("shell_command", shellCommandBuiltin)
+func RegisterShellBuiltin(b *Builtins, registry *Registry) error {
+	return b.Register("shell_command", func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		// Resolve at invocation time so the existing policy watcher can replace or remove it.
+		return runShellCommand(ctx, args, registry.PolicyFor("shell_command"))
+	})
 }
 
 // The substring denylist that used to live here is gone.
@@ -81,6 +86,10 @@ func RegisterShellBuiltin(b *Builtins) error {
 // The compiled-in floor below is a different thing and stays.
 
 func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, int, error) {
+	return runShellCommand(ctx, args, nil)
+}
+
+func runShellCommand(ctx context.Context, args map[string]string, operator *sandbox.Policy) ([]byte, int, error) {
 	cmd := strings.TrimSpace(args["command"])
 	if cmd == "" {
 		return nil, 2, errors.New("shell_command: command is required")
@@ -129,18 +138,21 @@ func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, i
 	if cwd := strings.TrimSpace(args["cwd"]); cwd != "" {
 		c.Dir = cwd
 	}
-	// PATH only — no env leakage. Operators who need more can set
-	// tool-specific env via policy metadata once the Ask layer lands.
 	c.Env = []string{"PATH=/usr/bin:/bin:/usr/local/bin", "HOME=/tmp"}
-
-	// Landlock the subprocess to the active storage mounts so a
-	// shell_command call can't escape mount-defined boundaries. On
-	// non-Linux platforms sandbox.Apply is a no-op; we log once at
-	// boot in that case so the operator knows shell runs unsandboxed.
-	if sbPolicy := buildShellPolicy(); sbPolicy != nil {
-		if err := sandbox.Apply(c, sbPolicy); err != nil {
-			return nil, 1, fmt.Errorf("shell_command: sandbox apply: %w", err)
+	if operator != nil && operator.EnvWhitelist != nil {
+		c.Env = []string{}
+		for _, name := range operator.EnvWhitelist {
+			if value, ok := os.LookupEnv(name); ok {
+				c.Env = append(c.Env, name+"="+value)
+			}
 		}
+	}
+	sbPolicy, err := buildShellPolicy(operator)
+	if err != nil {
+		return nil, 1, fmt.Errorf("shell_command: policy: %w", err)
+	}
+	if err := sandbox.Apply(c, sbPolicy); err != nil {
+		return nil, 1, fmt.Errorf("shell_command: sandbox apply: %w", err)
 	}
 
 	// Capture stdout + stderr separately regardless of exit code
@@ -209,11 +221,12 @@ var shellNoMountWarnOnce sync.Once
 
 // buildShellPolicy returns the sandbox policy for shell_command,
 // derived from the active storage mounts plus the shellSystemPaths
-// floor. Returns nil when no mounts are wired (test/dev) so existing
+// floor and the current operator policy. Returns nil when neither mounts nor
+// an operator policy are wired (test/dev), so existing
 // integration tests that don't set up storage keep working.
-func buildShellPolicy() *sandbox.Policy {
+func buildShellPolicy(operator *sandbox.Policy) (*sandbox.Policy, error) {
 	mounts := LandlockMounts()
-	if len(mounts) == 0 {
+	if len(mounts) == 0 && operator == nil {
 		shellNoMountWarnOnce.Do(func() {
 			// One-time signal: the operator hasn't wired any storage
 			// mounts so shell_command falls open. This is the right
@@ -223,13 +236,34 @@ func buildShellPolicy() *sandbox.Policy {
 			_, _ = fmt.Fprintln(stderrForLog(),
 				"shell_command: no storage mounts active — Landlock sandbox skipped (test/dev mode)")
 		})
-		return nil
+		return nil, nil
 	}
 	policy := &sandbox.Policy{
 		NoNewPrivs: true,
 		Mounts:     append(append([]sandbox.PolicyMount(nil), shellSystemPaths...), mounts...),
 	}
-	return policy
+	if operator != nil {
+		if operator.CPUQuota != 0 || operator.MemoryLimitMB != 0 || len(operator.DangerousCmdsDeny) > 0 {
+			return nil, errors.New("CPU, memory and command deny controls are not supported by the shell sandbox")
+		}
+		if !operator.NetworkFilter && (len(operator.NetworkAllowCIDR) > 0 || operator.NetworkAllowDNS) {
+			return nil, errors.New("network allow rules require NetworkFilter enforcement")
+		}
+		// Own the slices passed to Apply: registry policies are shared across calls.
+		policy.AllowedPaths = slices.Clone(operator.AllowedPaths)
+		policy.ReadOnlyPaths = slices.Clone(operator.ReadOnlyPaths)
+		policy.Mounts = append(policy.Mounts, operator.Mounts...)
+		policy.Namespaces = operator.Namespaces
+		policy.NetworkFilter = operator.NetworkFilter
+		policy.NetworkAllowDNS = operator.NetworkAllowDNS
+		policy.NetworkAllowCIDR = slices.Clone(operator.NetworkAllowCIDR)
+		// Operator denials supplement the compiled baseline, never disable it.
+		policy.Seccomp.Deny = append(slices.Clone(sandbox.DefaultSeccompPolicy.Deny), operator.Seccomp.Deny...)
+	}
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	return policy, nil
 }
 
 // stderrForLog is the logging sink for the one-time shell-not-sandboxed
