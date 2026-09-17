@@ -49,6 +49,18 @@ func TestOnlyTheOwnerMayChangeATeam(t *testing.T) {
 			principal: "",
 			want:      false,
 		},
+		{
+			// The hole this test missed first time round. Every case
+			// above pairs an empty principal with an OWNED team, so
+			// "unowned is editable by anyone signed in" was never
+			// checked against somebody who is not signed in at all —
+			// and it returned true, which made the default team
+			// modifiable without authenticating.
+			name:      "an unauthenticated caller cannot touch an unowned team either",
+			owner:     "",
+			principal: "",
+			want:      false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

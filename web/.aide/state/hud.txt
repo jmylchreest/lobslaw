@@ -1,0 +1,1 @@
+[aide(0.0.24)] mode:idle(Bash) | 15h30m
