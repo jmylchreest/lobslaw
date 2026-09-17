@@ -1,15 +1,18 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/jmylchreest/lobslaw/internal/archive"
+	"github.com/jmylchreest/lobslaw/internal/backup"
 	"github.com/jmylchreest/lobslaw/internal/embedder"
 )
 
@@ -20,7 +23,45 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 	if path == "" {
 		t.Skip("set LOBSLAW_ARCHIVE_DRILL and LOBSLAW_ARCHIVE_IDENTITY for a private restore drill")
 	}
-	keyFile, err := os.Open(os.Getenv("LOBSLAW_ARCHIVE_IDENTITY"))
+	runArchiveFixtureDrill(t, path, os.Getenv("LOBSLAW_ARCHIVE_IDENTITY"), os.Getenv("LOBSLAW_ARCHIVE_DESTINATION"), os.Getenv("LOBSLAW_ARCHIVE_MODEL"), os.Getenv("LOBSLAW_ARCHIVE_REPLACE_ORIGINAL") == "1")
+}
+
+// Ordinary CI exercises encrypted alongside -> original replacement -> retry.
+// All records and keys are synthetic and scoped to this test's temporary directory.
+func TestArchiveReplaceOriginalEncryptedDrill(t *testing.T) {
+	existing, incoming, _ := archiveOriginalFixture(t)
+	var original []archive.Record
+	for _, record := range existing {
+		if record.ID == "chat" || record.ID == sessionMessageKey("chat", 10) || record.ID == "job" {
+			original = append(original, record)
+		}
+	}
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "identity")
+	if err := os.WriteFile(keyPath, []byte(identity.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name string, records []archive.Record) string {
+		var encrypted bytes.Buffer
+		if err := archive.Write(&encrypted, archive.Snapshot{Manifest: archive.Manifest{SnapshotID: name, CreatedAt: time.Now()}, Records: records}, identity.Recipient()); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, name+".age")
+		if err := os.WriteFile(path, encrypted.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	runArchiveFixtureDrill(t, write("source", incoming), keyPath, write("destination", original), "", true)
+}
+
+func runArchiveFixtureDrill(t *testing.T, path, identityPath, destinationPath, modelPath string, replaceOriginal bool) {
+	t.Helper()
+	keyFile, err := os.Open(identityPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,15 +70,7 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := archive.Read(file, identities...)
-	_ = file.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	snapshot := readArchiveDrill(t, path, identities)
 	opts := ArchiveImportOptions{
 		Owners: make(map[string]string), SourceTimezone: "UTC",
 	}
@@ -45,7 +78,7 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 	node, fsm := newTestRaft(t)
 	ctx := context.Background()
 	var destination ReembedEmbedder = stubEmbedder{model: "drill-model"}
-	if modelPath := os.Getenv("LOBSLAW_ARCHIVE_MODEL"); modelPath != "" {
+	if modelPath != "" {
 		encoder, err := embedder.Open(modelPath)
 		if err != nil {
 			t.Fatal(err)
@@ -53,16 +86,8 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 		t.Cleanup(func() { _ = encoder.Close() })
 		destination = archiveDrillEmbedder{encoder: encoder, model: filepath.Base(modelPath)}
 	}
-	if destinationPath := os.Getenv("LOBSLAW_ARCHIVE_DESTINATION"); destinationPath != "" {
-		file, err := os.Open(destinationPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		baseline, err := archive.Read(file, identities...)
-		_ = file.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
+	if destinationPath != "" {
+		baseline := readArchiveDrill(t, destinationPath, identities)
 		archiveDrillOwners(t, baseline.Records, opts.Owners)
 		if _, err := ApplyArchiveImport(ctx, node, fsm.Store(), baseline.Records, opts, destination); err != nil {
 			t.Fatal(err)
@@ -72,7 +97,7 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 			t.Fatal(err)
 		}
 		opts.SourceID = "private-drill-source"
-		opts.Alongside = preview.Conflicts
+		opts.Alongside = archiveDrillConflictGroups(preview.Conflicts)
 		t.Logf("isolated merge: %d baseline records, %d explicit alongside selections", len(baseline.Records), len(opts.Alongside))
 	}
 	result, err := ApplyArchiveImport(ctx, node, fsm.Store(), snapshot.Records, opts, destination)
@@ -95,16 +120,17 @@ func TestArchivePrivateFixtureDrill(t *testing.T) {
 	if err != nil || repeated.Applied != 0 || repeated.Completed != len(snapshot.Records) {
 		t.Fatalf("repeat import: %+v, %v", repeated, err)
 	}
-	if os.Getenv("LOBSLAW_ARCHIVE_REPLACE_ORIGINAL") == "1" {
+	if replaceOriginal {
 		opts.ReplaceOriginal = opts.Alongside
 		opts.Alongside = nil
-		opts.BackupDigest, err = ArchiveStateDigest(restored)
-		if err != nil {
-			t.Fatal(err)
+		opts.BackupDigest = archiveDrillBackup(t, restored, identities)
+		preview, err := PlanArchiveImport(restored, snapshot.Records, opts)
+		if err != nil || len(preview.Replaced) == 0 || len(preview.Replaced) != len(opts.ReplaceOriginal) || len(preview.Removed) == 0 {
+			t.Fatalf("replacement preview: %+v %v", preview, err)
 		}
 		replacement, err := ApplyArchiveImport(ctx, node, fsm.Store(), snapshot.Records, opts, destination)
-		if err != nil {
-			t.Fatal(err)
+		if err != nil || replacement.Applied == 0 {
+			t.Fatalf("replacement: %+v %v", replacement, err)
 		}
 		t.Logf("replaced original groups: %d source records applied", replacement.Applied)
 		opts.BackupDigest, err = ArchiveStateDigest(mustArchiveRecords(t, fsm.Store()))
@@ -151,4 +177,60 @@ func (e archiveDrillEmbedder) Embed(ctx context.Context, text string) ([]float32
 		return nil, err
 	}
 	return e.encoder.Encode(text), nil
+}
+
+func archiveDrillBackup(t *testing.T, records []archive.Record, identities []age.Identity) string {
+	t.Helper()
+	// Use a real encrypted, verified and pinned pre-replacement backup.
+	repo := backup.Repository{Path: t.TempDir()}
+	var recipients []age.Recipient
+	for _, identity := range identities {
+		if key, ok := identity.(*age.X25519Identity); ok {
+			recipients = append(recipients, key.Recipient())
+		}
+	}
+	generation, err := repo.Create(archive.Snapshot{Manifest: archive.Manifest{SnapshotID: "before-replacement", CreatedAt: time.Now()}, Records: records}, recipients...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := repo.Read(generation.Manifest.SnapshotID, identities...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Pin(generation.Manifest.SnapshotID, true); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := ArchiveStateDigest(verified.Records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}
+
+func archiveDrillConflictGroups(conflicts []ArchiveRecordRef) []ArchiveRecordRef {
+	seen := make(map[ArchiveRecordRef]bool)
+	var selections []ArchiveRecordRef
+	for _, ref := range conflicts {
+		group := archiveRecordGroup(archiveRecordKey{ref.Kind, ref.ID})
+		ref = ArchiveRecordRef{Kind: group.kind, ID: group.id}
+		if !seen[ref] {
+			selections = append(selections, ref)
+			seen[ref] = true
+		}
+	}
+	return selections
+}
+
+func readArchiveDrill(t *testing.T, path string, identities []age.Identity) archive.Snapshot {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := archive.Read(file, identities...)
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }

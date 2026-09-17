@@ -77,10 +77,20 @@ func promptArchiveConflicts(reader *bufio.Reader, out io.Writer, plan memory.Arc
 				mapped = true
 			}
 		}
+		canReplaceOriginal := mapped && (ref.Kind == "sessions" || ref.Kind == "scheduled-tasks")
+		for _, selected := range opts.ReplaceOriginal {
+			if selected == ref {
+				// Repeating the same blocked retirement cannot resolve an edit.
+				canReplaceOriginal = false
+			}
+		}
 		for {
 			choices := "replace/alongside/skip/cancel"
 			if mapped {
-				choices = "replace/skip/cancel (existing imported copy is retained)"
+				choices = "replace/skip/cancel (replace updates the mapped copy)"
+				if canReplaceOriginal {
+					choices = "replace/replace-original/skip/cancel (replace-original retires the mapped copy if unchanged)"
+				}
 			}
 			_, _ = fmt.Fprintf(out, "%s/%s [%s]: ", ref.Kind, ref.ID, choices)
 			answer, err := reader.ReadString('\n')
@@ -91,15 +101,18 @@ func promptArchiveConflicts(reader *bufio.Reader, out io.Writer, plan memory.Arc
 			if answer == "cancel" || answer == "" {
 				return errors.New("conflict resolution cancelled; no records written")
 			}
-			if answer != "replace" && answer != "skip" && (answer != "alongside" || mapped) {
+			if answer != "replace" && answer != "skip" && (answer != "alongside" || mapped) && (answer != "replace-original" || !canReplaceOriginal) {
 				continue
 			}
 			// A fresh choice supersedes the earlier choice if re-planning found a
 			// concurrent change. Never accumulate contradictory selections.
+			opts.ReplaceOriginal = withoutArchiveRef(opts.ReplaceOriginal, ref)
 			opts.Replace = withoutArchiveRef(opts.Replace, ref)
 			opts.Skip = withoutArchiveRef(opts.Skip, ref)
 			opts.Alongside = withoutArchiveRef(opts.Alongside, ref)
 			switch answer {
+			case "replace-original":
+				opts.ReplaceOriginal = append(opts.ReplaceOriginal, ref)
 			case "replace":
 				opts.Replace = append(opts.Replace, ref)
 			case "skip":

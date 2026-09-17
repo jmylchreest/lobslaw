@@ -515,7 +515,9 @@ copy to avoid one.
 
 Use `--interactive` to choose replace, alongside, skip or cancel for each conflict.
 Messages are grouped under their session. A mapped copy offers replace or skip;
-repeated imports never create another alongside copy. EOF and cancel stop before
+mapped sessions and schedules also offer replace-original. Replace updates the mapped
+copy; replace-original retires it and replaces the original group. Repeated imports
+never create another alongside copy. EOF and cancel stop before
 writing. Without `--apply`, the resolved plan is only a preview.
 
 `--replace kind/id` replaces the selected destination group, including the entire
@@ -542,7 +544,18 @@ To change an earlier alongside decision, use
 `--replace-original sessions/ID` or `--replace-original scheduled-tasks/ID`.
 This explicitly replaces the original ID, retires its mapped alongside copy,
 and retargets the same source mapping in one backup-protected transaction.
-It requires the same backup flags as `--replace`. Unchanged retries write nothing.
+It requires the same backup flags as `--replace`. Before retirement, every saved
+fingerprint in the alongside group is checked, including transcript messages omitted
+from the incoming archive. Edits, deletions and added messages without an import
+baseline remain explicit conflicts, even with a fresh backup or `--keep-existing`.
+Use skip to keep both groups, ordinary replace to update the mapped copy, or reconcile
+the copy with its saved baseline before retrying replace-original. The interactive
+prompt clears prior selections and does not offer an already blocked retirement again.
+
+Preview without `--apply`: `removed` lists the destination IDs that will be overwritten
+or deleted, including both groups, their messages and retargeted import mappings.
+It contains no content. `replaced` lists the selected source groups.
+Unchanged retries write nothing.
 Ordinary `--replace` continues to update the mapped copy. Other source-reference
 conflicts must be resolved explicitly; this option does not overwrite them silently.
 

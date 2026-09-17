@@ -44,7 +44,8 @@ type ArchiveRecordRef struct {
 // A plan is a preview, not a write capability; apply must check current state.
 type ArchiveImportPlan struct {
 	Replaced []ArchiveRecordRef `json:"replaced,omitempty"`
-	removed  []ArchiveRecordRef
+	// Removed includes overwritten records and retired records, including provenance.
+	Removed []ArchiveRecordRef `json:"removed,omitempty"`
 
 	Skipped           []ArchiveRecordRef `json:"skipped,omitempty"`
 	sources           map[archiveRecordKey]archive.Record

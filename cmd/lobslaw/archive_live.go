@@ -65,7 +65,7 @@ func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOption
 		opts.Replace = append(opts.Replace, memory.ArchiveRecordRef{Kind: kind, ID: id})
 		return nil
 	})
-	fs.Func("replace-original", "replace original session or schedule and retire its mapped alongside copy (repeatable)", func(value string) error {
+	fs.Func("replace-original", "replace original session or schedule and retire its unchanged mapped alongside copy (repeatable)", func(value string) error {
 		kind, id, ok := strings.Cut(value, "/")
 		if !ok || kind == "" || id == "" {
 			return errors.New("replace-original requires kind/id")

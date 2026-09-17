@@ -77,7 +77,7 @@ func planArchiveReplacement(existing, incoming []archive.Record, opts ArchiveImp
 	if err != nil {
 		return plan, err
 	}
-	plan.removed = removed
+	plan.Removed = removed
 	for _, ref := range selections {
 		if active[archiveRecordKey{ref.Kind, targets[archiveRecordKey{ref.Kind, ref.ID}]}] {
 			plan.Replaced = append(plan.Replaced, ref)
@@ -124,7 +124,7 @@ func prepareArchiveReplacement(batch *lobslawv1.ArchiveBatch, plan ArchiveImport
 	}
 	batch.BackupDigest = digest
 	removed := make(map[archiveRecordKey]bool)
-	for _, ref := range plan.removed {
+	for _, ref := range plan.Removed {
 		removed[archiveRecordKey{ref.Kind, ref.ID}] = true
 	}
 	for _, mutation := range batch.Records {
@@ -134,7 +134,7 @@ func prepareArchiveReplacement(batch *lobslawv1.ArchiveBatch, plan ArchiveImport
 			delete(removed, key)
 		}
 	}
-	for _, ref := range plan.removed {
+	for _, ref := range plan.Removed {
 		if removed[archiveRecordKey{ref.Kind, ref.ID}] {
 			batch.Records = append(batch.Records, &lobslawv1.ArchiveMutation{Kind: ref.Kind, Id: ref.ID, Delete: true})
 		}

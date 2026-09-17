@@ -37,6 +37,7 @@ func planArchiveOriginalReplacement(existing, incoming []archive.Record, opts Ar
 	}
 	retired := make(map[archiveRecordKey]bool)
 	var moved []ArchiveRecordRef
+	var conflicts []ArchiveConflict
 	for _, ref := range selections {
 		key := archiveRecordKey{ref.Kind, ref.ID}
 		switch ref.Kind {
@@ -55,10 +56,27 @@ func planArchiveOriginalReplacement(existing, incoming []archive.Record, opts Ar
 		if mapping.DestinationId == original {
 			continue
 		}
+		changed, err := archiveRetirementConflicts(existing, destination, ref, mapping)
+		if err != nil {
+			return empty, err
+		}
+		conflicts = append(conflicts, changed...)
 		retired[archiveRecordKey{ref.Kind, mapping.DestinationId}] = true
 		retired[archiveRecordKey{ref.Kind, original}] = true
 		targets[key] = original
 		moved = append(moved, ref)
+	}
+	if len(conflicts) > 0 {
+		seen := make(map[ArchiveRecordRef]bool)
+		for _, conflict := range conflicts {
+			ref := ArchiveRecordRef{Kind: conflict.Kind, ID: conflict.ID}
+			if !seen[ref] {
+				empty.Conflicts = append(empty.Conflicts, ref)
+				seen[ref] = true
+			}
+		}
+		empty.ConflictDetails = conflicts
+		return empty, nil
 	}
 	if len(moved) == 0 {
 		return PlanArchiveImport(existing, incoming, opts)
@@ -78,7 +96,7 @@ func planArchiveOriginalReplacement(existing, incoming []archive.Record, opts Ar
 	if err != nil {
 		return plan, err
 	}
-	plan.removed = append(plan.removed, removed...)
+	plan.Removed = append(plan.Removed, removed...)
 	plan.Replaced = append(plan.Replaced, moved...)
 	return plan, nil
 }
@@ -99,4 +117,48 @@ func retireArchiveGroups(existing []archive.Record, destination map[archiveRecor
 		}
 	}
 	return retained, removed
+}
+
+// Retirement must check the saved destination baseline, not the incoming
+// transcript: a later source generation can omit a message edited here.
+func archiveRetirementConflicts(existing []archive.Record, destination map[archiveRecordKey]proto.Message, ref ArchiveRecordRef, parent *lobslawv1.ArchiveMapping) ([]ArchiveConflict, error) {
+	group := archiveRecordKey{ref.Kind, parent.DestinationId}
+	tracked := make(map[archiveRecordKey]bool)
+	var conflicts []ArchiveConflict
+	addConflict := func(key archiveRecordKey, reason string) {
+		conflicts = append(conflicts, ArchiveConflict{
+			Kind: ref.Kind, ID: ref.ID, DestinationID: key.id,
+			Reason: "alongside " + key.kind + ": " + reason,
+		})
+	}
+	for _, record := range existing {
+		mapping, ok := destination[archiveRecordKey{record.Kind, record.ID}].(*lobslawv1.ArchiveMapping)
+		if !ok || mapping.SourceId != parent.SourceId {
+			continue
+		}
+		key := archiveRecordKey{mapping.Kind, mapping.DestinationId}
+		if archiveRecordGroup(key) != group {
+			continue
+		}
+		tracked[key] = true
+		current := destination[key]
+		digest := ""
+		if current != nil {
+			var err error
+			digest, err = archiveFingerprint(current)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if reason := archiveMappingConflict(current, digest, mapping.SourceDigest, mapping); reason != "" {
+			addConflict(key, reason)
+		}
+	}
+	for _, record := range existing {
+		key := archiveRecordKey{record.Kind, record.ID}
+		if archiveRecordGroup(key) == group && !tracked[key] {
+			addConflict(key, "destination added without an import baseline")
+		}
+	}
+	return conflicts, nil
 }

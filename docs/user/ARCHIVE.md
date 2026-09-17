@@ -128,9 +128,46 @@ destination. A session selection skips its whole transcript. Alongside currently
 supports sessions, documents, episodic records, consolidations, schedules and
 commitments. It refuses signed skills and owner-keyed settings. Archives carrying
 existing provenance cannot remap the records that provenance already describes;
-restore those records with their existing IDs. Replacement and interactive conflict
-prompts are not implemented; scripts must pass explicit selections. Unresolved
-conflicts still stop apply before pending writes.
+restore those records with their existing IDs. Use `--interactive` to resolve each
+conflict with replace, alongside, skip or cancel. Mapped sessions and schedules also
+offer replace-original; alongside is unavailable for an already mapped record.
+Scripts can pass the equivalent explicit selections. Unresolved conflicts stop apply
+before pending writes.
+
+### Replacing imported records
+
+`--replace kind/id` replaces the selected destination group; an existing source
+mapping directs it to the imported copy. Session replacement includes the whole
+transcript. Replacement requires `--source-id`, `--backup-repository` and
+`--backup-identity`: the CLI encrypts, verifies and pins a destination backup before
+applying one atomic transaction. Changes after that backup abort the transaction.
+
+`--replace-original sessions/ID` or `--replace-original scheduled-tasks/ID` changes
+an earlier alongside choice. It replaces the original group, retires the alongside
+copy and retargets the same source mapping, using the same backup requirements.
+Before retirement, the planner checks the saved fingerprints of the entire copy,
+including all previously imported transcript messages even if the new archive omits
+them. Edited or deleted records and messages added without an import baseline are
+explicit conflicts. A fresh backup or `--keep-existing` does not override them.
+Choose skip to preserve both groups, use ordinary replace to update the mapped copy,
+or reconcile the copy with its saved baseline before retrying replace-original.
+The prompt does not offer the same blocked retirement again.
+
+Preview without `--apply` first. The `removed` inventory lists every destination
+record that will be overwritten or deleted, including both session transcripts and
+retargeted mapping IDs; it contains no record content. `replaced` names the selected
+source groups. Unchanged retries write nothing.
+
+```mermaid
+flowchart TD
+    A[Select replace-original] --> B{Alongside copy matches saved baseline?}
+    B -->|No| C[Report edits, deletions or added messages; no writes]
+    B -->|Yes| D[Preview original and alongside removals]
+    D --> E[Encrypt, verify and pin destination backup]
+    E --> F{Destination still matches backup?}
+    F -->|No| G[Abort without writes]
+    F -->|Yes| H[Atomically replace original, retire copy and retarget mapping]
+```
 
 Writers emit schema 2; readers also accept schema 1. Schema 2 adds optional source
 identity and portable import provenance. Older binaries cannot read schema 2.

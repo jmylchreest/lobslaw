@@ -205,8 +205,25 @@ must not claim a single point in time that it cannot provide.
 ### Stable identity for importing alongside
 
 Implemented alongside and skip selections use portable mapping records, separately
-from content-based retry receipts. Interactive prompts and replacement remain pending.
-See the aide decision `archive-stable-import-mappings`.
+from content-based retry receipts. Interactive prompts support replace, alongside and
+skip; mapped sessions and schedules additionally support replace-original. See the
+aide decisions `archive-stable-import-mappings`, `archive-explicit-replacement` and
+`archive-original-replacement`.
+
+Replace-original may retarget a saved alongside mapping to the original ID only after
+checking the entire retired destination group against its saved fingerprints. This
+includes old message mappings absent from the incoming archive and destination messages
+without a baseline. Edits or deletions produce explicit conflicts before any group or
+mapping is removed from the planner's input. Source changes alone do not prevent the
+operation. The serialized `removed` inventory exposes all overwritten/deleted IDs,
+including both groups, their transcripts and the mappings being retargeted, without
+content. A verified, pinned encrypted backup and its transaction-level state guard
+remain mandatory; they protect concurrent changes, not acknowledgement of older edits.
+
+`TestArchiveReplaceOriginalEncryptedDrill` runs in the normal Go suite and CI with
+synthetic encrypted source/destination fixtures and a verified, pinned backup. The
+private fixture drill remains optional; it is supplementary coverage, not the
+replacement acceptance gate.
 
 An alongside import must maintain a durable mapping from
 `(source identity, record kind, source record ID)` to the destination record ID.
