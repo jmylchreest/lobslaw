@@ -51,7 +51,7 @@ type doctorEnv struct {
 // lobslawDoctor runs every check and reports pass/fail. The checks
 // themselves are methods on doctorEnv, so this stays a list.
 func lobslawDoctor(args []string) {
-	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	fs := newFlagSet("doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml")
 	offline := fs.Bool("offline", false, "skip network reachability checks")
 	_ = fs.Parse(args)
@@ -100,7 +100,7 @@ func lobslawDoctor(args []string) {
 	}
 
 	if failures > 0 {
-		fmt.Fprintf(os.Stderr, "\n%d check(s) failed\n", failures)
+		diagnosticf("\n%d check(s) failed\n", failures)
 		os.Exit(1)
 	}
 	fmt.Println("\nall checks passed")
@@ -130,7 +130,7 @@ func (d doctorEnv) checkSecretProviders() (string, error) {
 	if len(d.cfg.Secrets.Providers) == 0 {
 		return "none declared (env: and file: always available)", nil
 	}
-	resolver, err := secrets.FromConfig(d.cfg.Secrets, secrets.DefaultRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	resolver, err := secrets.FromConfig(d.cfg.Secrets, secrets.DefaultRegistry(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		return "", err
 	}

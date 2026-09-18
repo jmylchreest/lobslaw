@@ -8,6 +8,8 @@ import (
 	"log/slog"
 
 	"github.com/hashicorp/go-hclog"
+
+	"github.com/jmylchreest/lobslaw/internal/logging"
 )
 
 // hclogToSlog adapts an *slog.Logger to hashicorp/go-hclog's Logger
@@ -115,10 +117,10 @@ func (h *hclogToSlog) GetLevel() hclog.Level {
 }
 
 func (h *hclogToSlog) StandardLogger(*hclog.StandardLoggerOptions) *stdlog.Logger {
-	return stdlog.New(h.StandardWriter(nil), "", 0)
+	return logging.StandardLogger(h.base, slog.LevelInfo)
 }
 func (h *hclogToSlog) StandardWriter(*hclog.StandardLoggerOptions) io.Writer {
-	return io.Discard
+	return logging.Writer(h.base, slog.LevelInfo)
 }
 
 func toSlogLevel(l hclog.Level) slog.Level {

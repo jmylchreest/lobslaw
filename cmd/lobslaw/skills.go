@@ -66,11 +66,11 @@ func dispatchSkills(args []string) bool {
 	case "rollback":
 		err = skillsRollback(sub[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "unknown skills subcommand %q\n\n%s\n", sub[0], skillsUsage)
+		diagnosticf("unknown skills subcommand %q\n\n%s\n", sub[0], skillsUsage)
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "skills %s: %v\n", sub[0], err)
+		diagnosticf("skills %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
 	return true
@@ -86,7 +86,7 @@ func skillClient(node *liveNode) (lobslawv1.SkillServiceClient, func(), error) {
 }
 
 func skillsList(args []string) error {
-	fs := flag.NewFlagSet("skills list", flag.ExitOnError)
+	fs := newFlagSet("skills list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	all := fs.Bool("all", false, "include superseded versions")
@@ -124,7 +124,7 @@ func skillsList(args []string) error {
 }
 
 func skillsImport(args []string) error {
-	fs := flag.NewFlagSet("skills import", flag.ExitOnError)
+	fs := newFlagSet("skills import", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	tier := fs.String("tier", "operator", "operator | signed")
@@ -194,7 +194,7 @@ func skillsImport(args []string) error {
 }
 
 func skillsExport(args []string) error {
-	fs := flag.NewFlagSet("skills export", flag.ExitOnError)
+	fs := newFlagSet("skills export", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	positional, err := parseFlagsAndPositionals(fs, args)
@@ -255,7 +255,7 @@ func skillsExport(args []string) error {
 }
 
 func skillsRemove(args []string) error {
-	fs := flag.NewFlagSet("skills remove", flag.ExitOnError)
+	fs := newFlagSet("skills remove", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	positional, err := parseFlagsAndPositionals(fs, args)
@@ -380,7 +380,7 @@ func tierLabel(t lobslawv1.SkillTier) string {
 // saying which. `lobslaw skills list --all` is where to find the
 // versions that are not currently in force.
 func skillsRollback(args []string) error {
-	fs := flag.NewFlagSet("skills rollback", flag.ExitOnError)
+	fs := newFlagSet("skills rollback", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	positional, err := parseFlagsAndPositionals(fs, args)

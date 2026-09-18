@@ -25,7 +25,7 @@ import (
 // wire the whole time and only the rendering was missing.
 
 func learnedShowLive(args []string) error {
-	fs := flag.NewFlagSet("learned show", flag.ExitOnError)
+	fs := newFlagSet("learned show", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	archived := fs.Bool("archived", false, "look in the archive instead of the live set")

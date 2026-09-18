@@ -42,7 +42,7 @@ type initAnswers struct {
 }
 
 func lobslawInit(args []string) {
-	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	fs := newFlagSet("init", flag.ExitOnError)
 	dir := fs.String("dir", defaultInitDir(), "where to write config.toml, .env, SOUL.md, certs/")
 	nonInteractive := fs.Bool("non-interactive", envOr("LOBSLAW_NONINTERACTIVE", "") != "", "skip prompts; read values from LOBSLAW_INIT_* env vars")
 	force := fs.Bool("force", false, "overwrite existing files in --dir")

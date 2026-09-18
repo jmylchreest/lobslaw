@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/logging"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -206,10 +207,9 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 			"params_len", len(t.Parameters),
 			"params", string(t.Parameters))
 	}
-	// System prompt + first user turn get logged at DEBUG so
-	// operators can see exactly what the model is reasoning over.
-	// Each message body is truncated at 2KB; the full prompt goes
-	// to multiple log records to avoid single-line bloat.
+	// DEBUG logs a 512-byte excerpt of every message, including tool results.
+	// Credential redaction is defense in depth; excerpts may still contain
+	// private conversation or file content.
 	for i, m := range req.Messages {
 		c.log.Debug("llm: request.message",
 			"endpoint", c.endpoint,
@@ -326,6 +326,7 @@ func classifyHTTPError(status int, body []byte) error {
 // truncateBody caps a body excerpt at 512 bytes so error messages
 // don't carry a full malformed page payload into logs / telemetry.
 func truncateBody(body []byte) string {
+	body = []byte(logging.SanitizeText(string(body)))
 	const max = 512
 	if len(body) <= max {
 		return string(body)

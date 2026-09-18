@@ -28,7 +28,7 @@ func identityClient(node *liveNode) (lobslawv1.IdentityServiceClient, func(), er
 }
 
 func identityRebindLive(args []string) error {
-	fs := flag.NewFlagSet("identity rebind", flag.ExitOnError)
+	fs := newFlagSet("identity rebind", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	apply := fs.Bool("apply", false, "actually rewrite (default is a dry run)")

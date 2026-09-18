@@ -43,7 +43,7 @@ survive a restart.
 `
 
 func memoryReembedLive(args []string) error {
-	fs := flag.NewFlagSet("memory reembed", flag.ExitOnError)
+	fs := newFlagSet("memory reembed", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	limit := fs.Int("limit", 0, "process at most this many records (0 = all)")

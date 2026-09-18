@@ -95,7 +95,7 @@ func dispatchTrace(args []string) bool {
 	}
 
 	if err := traceRoute(name, offline)(showArgs); err != nil {
-		fmt.Fprintf(os.Stderr, "trace: %v\n", err)
+		diagnosticf("trace: %v\n", err)
 		os.Exit(1)
 	}
 	return true
@@ -136,7 +136,7 @@ func resolveTraceDir(cfgPath, dir string) (string, error) {
 }
 
 func traceList(args []string) error {
-	fs := flag.NewFlagSet("trace list", flag.ExitOnError)
+	fs := newFlagSet("trace list", flag.ExitOnError)
 	cfgPath, dir := traceDir(fs)
 	limit := fs.Int("limit", 20, "how many turns to list")
 	if err := fs.Parse(args); err != nil {
@@ -171,7 +171,7 @@ func traceShow(args []string) error {
 	if len(args) == 0 {
 		return errors.New("a turn id is required: lobslaw trace <turn-id>")
 	}
-	fs := flag.NewFlagSet("trace", flag.ExitOnError)
+	fs := newFlagSet("trace", flag.ExitOnError)
 	cfgPath, dir := traceDir(fs)
 	// The turn id is positional and comes first, so parse the rest.
 	turnID := args[0]

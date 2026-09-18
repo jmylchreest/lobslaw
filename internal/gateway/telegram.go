@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/logging"
+
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -1085,7 +1087,8 @@ func (h *TelegramHandler) rolesFor(userID string) []string {
 // builtin so scheduled tasks can deliver replies to chats they
 // weren't invoked from. Safe to call concurrently — the underlying
 // http.Client is a pool.
-func (h *TelegramHandler) Send(chatID int64, text string) error {
+func (h *TelegramHandler) Send(chatID int64, text string) (retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	body := map[string]any{
 		"chat_id": chatID,
 		"text":    text,
@@ -1553,7 +1556,8 @@ func (h *TelegramHandler) persistOffset(ctx context.Context, nextOffset int64) {
 // getUpdates calls the Bot API's getUpdates with the supplied offset
 // and long-poll timeout. Returns the decoded updates and the offset
 // to pass on the next call (lastUpdateID + 1).
-func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout time.Duration) ([]tgUpdate, int64, error) {
+func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout time.Duration) (result []tgUpdate, resultOffset int64, retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	body := map[string]any{
 		"timeout": int(timeout.Seconds()),
 	}
@@ -1636,7 +1640,8 @@ func isPollerConflict(err error) bool  { return errors.Is(err, errPollerConflict
 
 // deleteWebhook clears any registered webhook so getUpdates works.
 // No-op if no webhook is set.
-func (h *TelegramHandler) deleteWebhook(ctx context.Context) error {
+func (h *TelegramHandler) deleteWebhook(ctx context.Context) (retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	url := fmt.Sprintf("%s/bot%s/deleteWebhook", h.base, h.cfg.BotToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {

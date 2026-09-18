@@ -60,12 +60,12 @@ func dispatchAudit(args []string) bool {
 
 	run := auditRoute(sub[0], offline)
 	if run == nil {
-		fmt.Fprintf(os.Stderr, "unknown audit subcommand %q\n\n%s\n", sub[0], auditUsage)
+		diagnosticf("unknown audit subcommand %q\n\n%s\n", sub[0], auditUsage)
 		os.Exit(2)
 	}
 	err := run(rest)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "audit %s: %v\n", sub[0], err)
+		diagnosticf("audit %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
 	return true
@@ -115,7 +115,7 @@ func auditClient(node *liveNode) (lobslawv1.AuditServiceClient, func(), error) {
 var auditSinks = []string{"raft", "local"}
 
 func auditVerifyLive(args []string) error {
-	fs := flag.NewFlagSet("audit verify", flag.ExitOnError)
+	fs := newFlagSet("audit verify", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	sink := fs.String("sink", "", "raft or local; default checks each separately")
@@ -229,7 +229,7 @@ func renderSinkResults(w io.Writer, source string, results []sinkResult) (broken
 }
 
 func auditVerifyOffline(args []string) error {
-	fs := flag.NewFlagSet("audit verify --offline", flag.ExitOnError)
+	fs := newFlagSet("audit verify --offline", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml (used to locate the local audit file)")
 	path := fs.String("path", envOr("LOBSLAW_AUDIT_PATH", ""), "explicit path to audit.jsonl; overrides --config")
 	asJSON := fs.Bool("json", false, "emit JSON")
@@ -259,7 +259,7 @@ func auditVerifyOffline(args []string) error {
 		fmt.Printf("audit OK: %d entries checked at %s\n", res.EntriesChecked, abs)
 		return nil
 	}
-	fmt.Fprintf(os.Stderr, "audit BROKEN at entry %s (after %d entries) — %s\n",
+	diagnosticf("audit BROKEN at entry %s (after %d entries) — %s\n",
 		res.FirstBreakID, res.EntriesChecked, abs)
 	// gocritic exitAfterDefer: the deferred sink.Close is knowingly
 	// skipped. `audit verify` never appends, and LocalSink's
@@ -338,7 +338,7 @@ func parseWhen(v string) (time.Time, error) {
 }
 
 func auditQueryLive(args []string) error {
-	fs := flag.NewFlagSet("audit query", flag.ExitOnError)
+	fs := newFlagSet("audit query", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	var filter auditFilterFlags
@@ -389,7 +389,7 @@ func auditQueryLive(args []string) error {
 }
 
 func auditQueryOffline(args []string) error {
-	fs := flag.NewFlagSet("audit query --offline", flag.ExitOnError)
+	fs := newFlagSet("audit query --offline", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml (used to locate the local audit file)")
 	path := fs.String("path", envOr("LOBSLAW_AUDIT_PATH", ""), "explicit path to audit.jsonl; overrides --config")
 	var filter auditFilterFlags

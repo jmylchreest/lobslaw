@@ -69,14 +69,14 @@ func dispatchEmbedEval(args []string) bool {
 		return false
 	}
 	if err := runEmbedEval(args[idx+1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "lobslaw: embed-eval:", err)
+		diagnosticln("lobslaw: embed-eval:", err)
 		os.Exit(1)
 	}
 	return true
 }
 
 func runEmbedEval(args []string) error {
-	fs := flag.NewFlagSet("embed-eval", flag.ExitOnError)
+	fs := newFlagSet("embed-eval", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	downloadURL := fs.String("download-url", "", "where to fetch a model that is not already present")

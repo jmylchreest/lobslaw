@@ -90,7 +90,7 @@ func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOption
 }
 
 func archiveImport(args []string, requireEmpty bool) error {
-	fs := flag.NewFlagSet("archive import", flag.ContinueOnError)
+	fs := newFlagSet("archive import", flag.ContinueOnError)
 	var node liveNode
 	node.bind(fs)
 	node.timeout = 30 * time.Minute
@@ -207,7 +207,7 @@ func exportArchiveSnapshot(node *liveNode) (archive.Snapshot, error) {
 }
 
 func archiveExportLive(args []string) error {
-	fs := flag.NewFlagSet("archive export", flag.ContinueOnError)
+	fs := newFlagSet("archive export", flag.ContinueOnError)
 	var node liveNode
 	node.bind(fs)
 	out := fs.String("out", "", "new output archive path")

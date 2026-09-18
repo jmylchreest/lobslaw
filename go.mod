@@ -14,7 +14,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.2
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
-	github.com/jmylchreest/slog-logfilter v0.2.1
+	github.com/jmylchreest/slog-logfilter v0.2.2-0.20260918192531-3bdec9f86914
 	github.com/knadh/koanf/parsers/toml/v2 v2.2.0
 	github.com/knadh/koanf/providers/env/v2 v2.0.0
 	github.com/knadh/koanf/providers/file v1.2.1

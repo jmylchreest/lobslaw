@@ -132,26 +132,25 @@ func dispatchLearned(args []string) bool {
 	run, liveMissing, err := learnedRoute(sub[0], offline)
 	switch {
 	case err != nil:
-		fmt.Fprintf(os.Stderr, "learned %s: %v\n", sub[0], err)
+		diagnosticf("learned %s: %v\n", sub[0], err)
 		os.Exit(1)
 	case run == nil:
-		fmt.Fprintf(os.Stderr, "unknown learned subcommand %q\n\n%s\n", sub[0], learnedUsage)
+		diagnosticf("unknown learned subcommand %q\n\n%s\n", sub[0], learnedUsage)
 		os.Exit(2)
 	}
 	if liveMissing {
-		fmt.Fprintf(os.Stderr,
-			"lobslaw learned %s: no live form yet — running against a local state.db, "+
-				"which is NOT the cluster's unless this machine is the node\n", sub[0])
+		diagnosticf("lobslaw learned %s: no live form yet — running against a local state.db, "+
+			"which is NOT the cluster's unless this machine is the node\n", sub[0])
 	}
 	if err := run(rest); err != nil {
-		fmt.Fprintf(os.Stderr, "learned %s: %v\n", sub[0], err)
+		diagnosticf("learned %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
 	return true
 }
 
 func learnedList(args []string) error {
-	fs := flag.NewFlagSet("learned list", flag.ExitOnError)
+	fs := newFlagSet("learned list", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	archived := fs.Bool("archived", false, "read the archive instead of the live set")
@@ -312,7 +311,7 @@ func archiveIDs(st *memory.OfflineSelfTaught, ids []string, apply bool, reason s
 }
 
 func mutateLearned(name string, args []string, fn func(*memory.OfflineSelfTaught, []string, bool) error) error {
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs := newFlagSet(name, flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually write (default is a dry run)")
@@ -346,7 +345,7 @@ func mutateLearned(name string, args []string, fn func(*memory.OfflineSelfTaught
 // asks what the agent has, `pending` asks what it wants to change —
 // and the second is the one somebody has to act on.
 func learnedPending(args []string) error {
-	fs := flag.NewFlagSet("learned pending", flag.ExitOnError)
+	fs := newFlagSet("learned pending", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	if err := fs.Parse(args); err != nil {
@@ -433,7 +432,7 @@ func decidePending(st *memory.OfflineSelfTaught, ids []string, apply, accept boo
 }
 
 func learnedHistory(args []string) error {
-	fs := flag.NewFlagSet("learned history", flag.ExitOnError)
+	fs := newFlagSet("learned history", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	positional, err := parseFlagsAndPositionals(fs, args)
@@ -482,7 +481,7 @@ func renderLearnedHistory(w io.Writer, current *lobslawv1.SelfTaughtRecord,
 }
 
 func learnedRollback(args []string) error {
-	fs := flag.NewFlagSet("learned rollback", flag.ExitOnError)
+	fs := newFlagSet("learned rollback", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually write (default is a dry run)")

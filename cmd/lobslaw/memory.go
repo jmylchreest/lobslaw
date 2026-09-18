@@ -96,8 +96,7 @@ func memoryRoute(sub string, offline bool) (fn func([]string) error, liveMissing
 			// Refused rather than silently ignoring --offline: an
 			// operator who asked for offline and got a live call would
 			// be surprised by the node needing to be up.
-			fmt.Fprintf(os.Stderr,
-				"lobslaw: memory %s has no offline form — it writes through raft, which needs a running node\n", sub)
+			diagnosticf("lobslaw: memory %s has no offline form — it writes through raft, which needs a running node\n", sub)
 			os.Exit(2)
 		}
 		return fn, false
@@ -121,7 +120,7 @@ func dispatchMemory(args []string) bool {
 	rest, offline := takeOffline(sub[1:])
 	run, liveMissing := memoryRoute(sub[0], offline)
 	if run == nil {
-		fmt.Fprintf(os.Stderr, "lobslaw memory: unknown subcommand %q\n\n", sub[0])
+		diagnosticf("lobslaw memory: unknown subcommand %q\n\n", sub[0])
 		fmt.Fprintln(os.Stderr, memoryUsage)
 		os.Exit(2)
 	}
@@ -130,9 +129,8 @@ func dispatchMemory(args []string) bool {
 		// --offline believes they are talking to the cluster, and a
 		// command that quietly opened a local state.db instead is the
 		// exact failure this work exists to remove.
-		fmt.Fprintf(os.Stderr,
-			"lobslaw memory %s: no live form yet — running against a local state.db, "+
-				"which is NOT the cluster's unless this machine is the node\n", sub[0])
+		diagnosticf("lobslaw memory %s: no live form yet — running against a local state.db, "+
+			"which is NOT the cluster's unless this machine is the node\n", sub[0])
 	}
 	runOffline("memory "+sub[0], run, rest)
 	return true
@@ -149,7 +147,7 @@ func runOffline(name string, fn func(args []string) error, args []string) {
 }
 
 func memoryShow(args []string) error {
-	fs := flag.NewFlagSet("memory show", flag.ExitOnError)
+	fs := newFlagSet("memory show", flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
@@ -197,7 +195,7 @@ func memoryShow(args []string) error {
 }
 
 func memoryList(args []string) error {
-	fs := flag.NewFlagSet("memory list", flag.ExitOnError)
+	fs := newFlagSet("memory list", flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	var filter memory.RecordFilter
@@ -318,7 +316,7 @@ func (p recordPage) print() {
 const unownedNote = "unowned records belong to no principal — investigate before sharing or forgetting them"
 
 func memoryForget(args []string) error {
-	fs := flag.NewFlagSet("memory forget", flag.ExitOnError)
+	fs := newFlagSet("memory forget", flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	var ids stringList
@@ -391,7 +389,7 @@ func memoryUnshare(args []string) error {
 // runVisibility is the shared body of share and unshare — the only
 // difference between them is the target visibility.
 func runVisibility(name string, args []string, to lobslawv1.Visibility) error {
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs := newFlagSet(name, flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	apply := fs.Bool("apply", false, "actually write; without it this is a dry run")

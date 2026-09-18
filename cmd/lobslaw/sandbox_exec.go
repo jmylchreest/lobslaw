@@ -24,7 +24,7 @@ func dispatchSandboxExec(args []string) bool {
 		return false
 	}
 	if err := runSandboxExec(args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "lobslaw sandbox-exec:", err)
+		diagnosticln("lobslaw sandbox-exec:", err)
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "lobslaw sandbox-exec: exec returned without error (unreachable)")

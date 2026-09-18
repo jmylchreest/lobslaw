@@ -73,7 +73,7 @@ func dispatchSession(args []string) bool {
 	rest, offline := takeOffline(sub[1:])
 	run := sessionRoute(sub[0], offline)
 	if run == nil {
-		fmt.Fprintf(os.Stderr, "lobslaw session: unknown subcommand %q\n\n", sub[0])
+		diagnosticf("lobslaw session: unknown subcommand %q\n\n", sub[0])
 		fmt.Fprintln(os.Stderr, sessionUsage)
 		os.Exit(2)
 	}
@@ -82,7 +82,7 @@ func dispatchSession(args []string) bool {
 }
 
 func sessionList(args []string) error {
-	fs := flag.NewFlagSet("session list", flag.ExitOnError)
+	fs := newFlagSet("session list", flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	channel := fs.String("channel", "", "only conversations on this channel kind (telegram, rest, ...)")
@@ -106,7 +106,7 @@ func sessionList(args []string) error {
 }
 
 func sessionShow(args []string) error {
-	fs := flag.NewFlagSet("session show", flag.ExitOnError)
+	fs := newFlagSet("session show", flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	trunc := fs.Int("truncate", 0, "cap each message at N characters (0 = full text)")
@@ -147,7 +147,7 @@ func sessionShow(args []string) error {
 }
 
 func sessionSearch(args []string) error {
-	fs := flag.NewFlagSet("session search", flag.ExitOnError)
+	fs := newFlagSet("session search", flag.ExitOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	channel := fs.String("channel", "", "restrict to one channel kind")

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/logging"
+
 	"github.com/jmylchreest/lobslaw/internal/tools"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -78,7 +80,8 @@ func (h *TelegramHandler) downloadAttachments(ctx context.Context, turnID string
 // (/file/bot<TOKEN>/<path>) and write to turnDir/<file_id>.<ext>.
 // Filename uses file_id (already unique) plus an extension picked
 // from the upstream MimeType / Filename so MCP tools can sniff it.
-func (h *TelegramHandler) downloadOne(ctx context.Context, turnDir string, a *types.Attachment) (string, error) {
+func (h *TelegramHandler) downloadOne(ctx context.Context, turnDir string, a *types.Attachment) (result string, retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	fileURL, err := h.resolveFileURL(ctx, a.Reference)
 	if err != nil {
 		return "", err
@@ -127,7 +130,8 @@ func (h *TelegramHandler) downloadOne(ctx context.Context, turnDir string, a *ty
 // constructs the full file URL. Telegram's API has a 20MB max for
 // bot file downloads — we don't pre-check size; HTTP errors with
 // "file is too big" are surfaced naturally.
-func (h *TelegramHandler) resolveFileURL(ctx context.Context, fileID string) (string, error) {
+func (h *TelegramHandler) resolveFileURL(ctx context.Context, fileID string) (result string, retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	getCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"file_id": fileID})
