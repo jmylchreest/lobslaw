@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"maps"
+
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -94,6 +96,12 @@ func messageToProto(m compute.Message) *lobslawv1.SessionMessage {
 		Content:    m.Content,
 		ToolCallId: m.ToolCallID,
 	}
+	if p := m.PreparedToolCall; p != nil {
+		out.PreparedToolCall = &lobslawv1.PreparedToolCall{CallId: p.CallID, ToolName: p.ToolName, TurnId: p.TurnID, OriginalArguments: p.OriginalArguments, Params: maps.Clone(p.Params)}
+		for _, op := range p.Approvals {
+			out.PreparedToolCall.Approvals = append(out.PreparedToolCall.Approvals, &lobslawv1.PreparedApproval{Action: op.Action, Resource: op.Resource})
+		}
+	}
 	for _, tc := range m.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, &lobslawv1.SessionToolCall{
 			Id: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
@@ -107,6 +115,12 @@ func messageFromProto(m *lobslawv1.SessionMessage) compute.Message {
 		Role:       m.Role,
 		Content:    m.Content,
 		ToolCallID: m.ToolCallId,
+	}
+	if p := m.PreparedToolCall; p != nil {
+		out.PreparedToolCall = &compute.PreparedToolCall{CallID: p.CallId, ToolName: p.ToolName, TurnID: p.TurnId, OriginalArguments: p.OriginalArguments, Params: maps.Clone(p.Params)}
+		for _, op := range p.Approvals {
+			out.PreparedToolCall.Approvals = append(out.PreparedToolCall.Approvals, compute.PreparedApproval{Action: op.Action, Resource: op.Resource})
+		}
 	}
 	for _, tc := range m.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, compute.ToolCall{

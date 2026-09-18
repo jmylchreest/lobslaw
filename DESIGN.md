@@ -527,15 +527,21 @@ Optional stdout response:
 {
   "decision": "approve" | "block" | "modify",
   "reason": "...",
-  "hookSpecificOutput": { ... }
+  "hookSpecificOutput": { "updatedInput": { "command": "rtk git status" } }
 }
 ```
+
+`modify` is supported for `PreToolUse` only. `updatedInput` is a string-valued
+argument patch, applied in hook order; subsequent hooks see earlier changes.
+The executor rechecks the effective arguments before execution. Confirmation
+continuations retain prepared input so approval does not rerun the hook chain.
+See [Hooks](docs/docs/reference/hooks.md) for the supported contract.
 
 **Events:**
 
 | Event | Fires | Use case |
 |-------|-------|----------|
-| `PreToolUse` | before tool exec (after policy allow) | RTK command rewrite; env injection; dry-run logging |
+| `PreToolUse` | before argument-dependent approval and tool exec (after denial checks) | argument rewriting; blocking; dry-run logging |
 | `PostToolUse` | after tool exec, before result enters context | RTK output compression; redaction; audit emit |
 | `UserPromptSubmit` | inbound channel message received | classification tagging; PII scrub |
 | `SessionStart` / `SessionEnd` | conversation lifecycle | warm cache; persist session summary |

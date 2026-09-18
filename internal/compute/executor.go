@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,9 @@ type InvokeRequest struct {
 	TurnID   string
 	// Timeout bounds the subprocess. Zero uses ExecutorConfig default.
 	Timeout time.Duration
+	// prepared is set only when resuming a validated server-owned continuation.
+	prepared bool
+	approved []PreparedApproval
 }
 
 // InvokeResult carries the subprocess output plus status. Stdout /
@@ -41,6 +45,7 @@ type InvokeResult struct {
 	Stdout    []byte
 	Stderr    []byte
 	Truncated bool
+	params    map[string]string
 }
 
 // ExecutorConfig tunes executor behaviour. Zero values take safe
@@ -157,7 +162,8 @@ var (
 )
 
 // Invoke executes the requested tool end-to-end.
-func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult, error) {
+func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *InvokeResult, err error) {
+	req.Params = maps.Clone(req.Params)
 	if req.ToolName == "" {
 		return nil, fmt.Errorf("InvokeRequest: ToolName required")
 	}
@@ -180,6 +186,48 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	if err := hardlineCheck(req.Params); err != nil {
 		return nil, err
 	}
+
+	// Refuse policy denials before running operator hooks, without consuming
+	// one-shot approvals. Confirmation checks run only on the effective input.
+	if e.hooks != nil && !req.prepared {
+		dec, err := e.policyDecision(ctx, req.Claims, "tool:exec", tool.Name)
+		if err != nil {
+			return nil, err
+		}
+		if dec.Effect != types.EffectAllow && dec.Effect != types.EffectRequireConfirmation {
+			return nil, fmt.Errorf("%w: %s", ErrPolicyDenied, dec.Reason)
+		}
+
+		preResp, err := e.hooks.Dispatch(ctx, types.HookPreToolUse, hooks.Payload{
+			"session_id":  req.TurnID,
+			"tool_name":   tool.Name,
+			"tool_input":  req.Params,
+			"cwd":         e.cfg.WorkDir,
+			"actor_scope": scopeOf(req.Claims),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if preResp != nil && preResp.UpdatedInput != nil {
+			req.Params = preResp.UpdatedInput
+		}
+	}
+
+	if err := hardlineCheck(req.Params); err != nil {
+		return nil, err
+	}
+	// Keep preparation across every confirmation (including a second gate on
+	// resume). No hook or caller retains the map that will be persisted.
+	preparedParams := maps.Clone(req.Params)
+	ctx, approvals := withInvocationApprovals(ctx, req.approved)
+	defer func() {
+		if errors.Is(err, ErrRequireConfirm) {
+			err = &preparedConfirmation{err: err, params: preparedParams, approvals: approvals.snapshot()}
+		}
+		if result != nil {
+			result.params = preparedParams
+		}
+	}()
 
 	// Policy + PreToolUse hook fire the same way for both builtin
 	// and subprocess tools — the dispatch target differs, but the
@@ -215,24 +263,7 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	if err := e.CheckGate(ctx, req.Claims, tool.Name, req.Params); err != nil {
 		return nil, err
 	}
-	if e.hooks != nil {
-		preResp, err := e.hooks.Dispatch(ctx, types.HookPreToolUse, hooks.Payload{
-			"session_id":  req.TurnID,
-			"tool_name":   tool.Name,
-			"tool_input":  req.Params,
-			"cwd":         e.cfg.WorkDir,
-			"actor_scope": scopeOf(req.Claims),
-		})
-		if err != nil {
-			return nil, err
-		}
-		_ = preResp
-	}
 
-	var (
-		result *InvokeResult
-		err    error
-	)
 	if name, isBuiltin := isBuiltinPath(tool.Path); isBuiltin {
 		result, err = e.runBuiltin(ctx, req, name)
 	} else {
@@ -381,18 +412,9 @@ func (e *Executor) CheckPolicy(ctx context.Context, claims *types.Claims, action
 // — callers in Phase 6 will convert ErrRequireConfirm into a
 // Channel.Prompt flow.
 func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action, resource string) error {
-	var dec policy.Decision
-	var err error
-	switch {
-	case e.policy != nil:
-		dec, err = e.policy.Evaluate(ctx, claims, action, resource)
-	case e.cfg.PolicyFallback != nil:
-		dec, err = e.cfg.PolicyFallback(ctx, claims, action, resource)
-	default:
-		return ErrNoPolicyEngine
-	}
+	dec, err := e.policyDecision(ctx, claims, action, resource)
 	if err != nil {
-		return fmt.Errorf("policy evaluate: %w", err)
+		return err
 	}
 	switch dec.Effect {
 	case types.EffectAllow:

@@ -336,3 +336,29 @@ func TestUnknownScopeParsesAsOnce(t *testing.T) {
 		t.Error("always did not parse")
 	}
 }
+
+func TestPreparedInputSurvivesDurableContinuation(t *testing.T) {
+	asker, answerer := twoNodes(t, compute.BudgetCaps{MaxToolCalls: 10, MaxSpendUSD: 1})
+	cont := pausedTurn()
+	cont.Messages[2].PreparedToolCall = &compute.PreparedToolCall{
+		CallID: "c1", ToolName: "write_file", TurnID: "turn-7", OriginalArguments: cont.Messages[1].ToolCalls[0].Arguments,
+		Params:    map[string]string{"path": "notes/rewritten.md"},
+		Approvals: []compute.PreparedApproval{{Action: "tool:exec", Resource: "write_file"}},
+	}
+	created, err := asker.Create(NewPrompt{TurnID: "turn-7", SessionID: "sess-3", Channel: "telegram", ChannelID: "-100", TTL: time.Minute, Continuation: cont})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := answerer.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := got.Continuation.Messages[2].PreparedToolCall
+	if p == nil || p.CallID != "c1" || p.ToolName != "write_file" || p.TurnID != "turn-7" || p.Params["path"] != "notes/rewritten.md" || p.OriginalArguments != cont.Messages[1].ToolCalls[0].Arguments || len(p.Approvals) != 1 || p.Approvals[0].Action != "tool:exec" {
+		t.Fatalf("prepared input lost: %+v", p)
+	}
+	p.Params["path"] = "changed"
+	if cont.Messages[2].PreparedToolCall.Params["path"] != "notes/rewritten.md" {
+		t.Fatal("continuation aliases input")
+	}
+}

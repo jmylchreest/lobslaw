@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os/exec"
 	"time"
 
@@ -32,6 +33,10 @@ type Response struct {
 	Decision           types.HookDecision `json:"decision,omitempty"`
 	Reason             string             `json:"reason,omitempty"`
 	HookSpecificOutput map[string]any     `json:"hookSpecificOutput,omitempty"`
+	// UpdatedInput is the complete effective input after a PreToolUse chain.
+	UpdatedInput map[string]string `json:"-"`
+	// Recognise the formerly documented spelling so it cannot be silently ignored.
+	ArgsOverride json.RawMessage `json:"args_override,omitempty"`
 }
 
 // Dispatcher fires subprocess hooks for each registered event.
@@ -59,8 +64,8 @@ func NewDispatcher(hooks map[types.HookEvent][]types.HookConfig, logger *slog.Lo
 //
 // The chain aborts on the first hook that blocks (explicit
 // decision="block" or non-zero exit). Otherwise the returned Response
-// is the LAST non-nil hook response; nil when no hook fired or all
-// returned empty responses.
+// is the last non-nil response, with any PreToolUse modifications accumulated
+// into UpdatedInput. Later hooks see the effective input from earlier hooks.
 //
 // Returns ErrHookBlocked (from pkg/types) wrapping the hook's reason
 // when any hook blocks.
@@ -70,12 +75,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event types.HookEvent, payloa
 		return nil, nil
 	}
 
+	payload = maps.Clone(payload)
 	if payload == nil {
 		payload = Payload{}
 	}
 	payload["hook_event_name"] = string(event)
 
 	var last *Response
+	var updated map[string]string
 	for i, cfg := range hooks {
 		resp, err := d.runHook(ctx, cfg, payload)
 		if err != nil {
@@ -89,8 +96,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event types.HookEvent, payloa
 			return resp, fmt.Errorf("%w: %s", types.ErrHookBlocked, resp.Reason)
 		}
 		if resp != nil {
+			input, err := applyModification(event, payload, resp)
+			if err != nil {
+				return nil, fmt.Errorf("hook %q response: %w", cfg.Command, err)
+			}
+			if input != nil {
+				updated = input
+				payload["tool_input"] = input
+			}
 			last = resp
 		}
+	}
+	if last != nil {
+		last.UpdatedInput = updated
 	}
 	return last, nil
 }
@@ -189,6 +207,9 @@ func (d *Dispatcher) runHook(ctx context.Context, cfg types.HookConfig, payload 
 	var resp Response
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		return nil, fmt.Errorf("hook %q response parse: %w (stdout=%q)", cfg.Command, err, stdout.String())
+	}
+	if resp.ArgsOverride != nil {
+		return nil, errors.New("args_override is unsupported; use decision=modify with hookSpecificOutput.updatedInput")
 	}
 	return &resp, nil
 }

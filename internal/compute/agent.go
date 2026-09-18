@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -549,6 +550,7 @@ type ProcessMessageResponse struct {
 
 // ToolInvocation records one tool call's lifecycle within a turn.
 type ToolInvocation struct {
+	prepared *PreparedToolCall
 	CallID   string
 	ToolName string
 	Args     string
@@ -870,12 +872,19 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	// Approving a spend increase must not re-run anything.
 	if resuming && turnApprovalPending(ctx) {
 		if tc, idx, ok := pendingToolCall(messages); ok {
-			inv, confirmation, err := a.runToolCall(ctx, req, tc)
+			resumeCtx := ctx
+			// Old continuations have no prepared input. When hooks are configured,
+			// prepare afresh and ask again rather than apply an old answer to a rewrite.
+			if messages[idx].PreparedToolCall == nil && a.cfg.Executor != nil && a.cfg.Executor.hooks != nil && (a.cfg.Skills == nil || !a.cfg.Skills.Has(tc.Name)) {
+				resumeCtx = context.WithValue(ctx, turnApprovalKey{}, &turnApproval{})
+			}
+			inv, confirmation, err := a.runToolCallWithPrepared(resumeCtx, req, tc, messages[idx].PreparedToolCall)
 			if err != nil {
 				return nil, fmt.Errorf("resume tool call %q: %w", tc.Name, err)
 			}
 			resp.ToolCalls = append(resp.ToolCalls, inv)
 			if confirmation != nil {
+				messages[idx] = toolResultMessage(tc, inv)
 				// Still gated — a second, different question rather
 				// than the one just answered. Hand it back up so the
 				// channel can ask it, instead of looping here.
@@ -1735,6 +1744,14 @@ func (a *Agent) logToolFailure(req ProcessMessageRequest, tool, reason string, e
 }
 
 func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, *pendingConfirmation, error) {
+	return a.runToolCallWithPrepared(ctx, req, tc, nil)
+}
+
+func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageRequest, tc ToolCall, prepared *PreparedToolCall) (ToolInvocation, *pendingConfirmation, error) {
+	if prepared != nil && (prepared.CallID != tc.ID || prepared.ToolName != tc.Name || prepared.TurnID != req.TurnID || prepared.OriginalArguments != tc.Arguments) {
+		return ToolInvocation{}, nil, fmt.Errorf("prepared tool call does not match the pending call")
+	}
+
 	budgetDec := req.Budget.RecordToolCall()
 	if budgetDec.Exceeded {
 		return ToolInvocation{
@@ -1778,6 +1795,9 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		}, nil, nil
 	}
 
+	if prepared != nil {
+		params = maps.Clone(prepared.Params)
+	}
 	inv := ToolInvocation{
 		CallID:   tc.ID,
 		ToolName: tc.Name,
@@ -1795,6 +1815,9 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	// dispatch uses internally, so allow rules behave
 	// identically across all dispatch paths.
 	if a.cfg.Skills != nil && a.cfg.Skills.Has(tc.Name) {
+		if prepared != nil {
+			return inv, nil, fmt.Errorf("prepared executor tool now resolves to a skill")
+		}
 		if a.cfg.Executor != nil {
 			if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
 				inv.Error = err.Error()
@@ -1843,8 +1866,22 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		Params:   params,
 		Claims:   req.Claims,
 		TurnID:   req.TurnID,
+		prepared: prepared != nil,
+	}
+	if prepared != nil {
+		invReq.approved = prepared.Approvals
 	}
 	result, err := a.cfg.Executor.Invoke(ctx, invReq)
+	var staged *preparedConfirmation
+	if errors.As(err, &staged) {
+		inv.prepared = &PreparedToolCall{CallID: tc.ID, ToolName: tc.Name, TurnID: req.TurnID, OriginalArguments: tc.Arguments, Params: maps.Clone(staged.params), Approvals: staged.approvals}
+		raw, _ := json.Marshal(staged.params)
+		inv.Args = string(raw)
+	}
+	if result != nil && result.params != nil {
+		raw, _ := json.Marshal(result.params)
+		inv.Args = string(raw)
+	}
 	if err != nil {
 		// A policy rule asking for confirmation must reach the USER.
 		// Returning it as a tool error hands it to the model instead,
@@ -2048,9 +2085,10 @@ func toolResultMessage(tc ToolCall, inv ToolInvocation) Message {
 		}})
 	}
 	return Message{
-		Role:       "tool",
-		Content:    content,
-		ToolCallID: tc.ID,
+		Role:             "tool",
+		Content:          content,
+		ToolCallID:       tc.ID,
+		PreparedToolCall: inv.prepared.clone(),
 	}
 }
 
@@ -2077,9 +2115,11 @@ func confirmationReason(err error) string {
 		// the second is answerable.
 		return cr.Summary
 	}
-	msg := err.Error()
-	if _, rest, found := strings.Cut(msg, ErrRequireConfirm.Error()+": "); found {
-		return rest
+	msg := strings.TrimPrefix(err.Error(), ErrRequireConfirm.Error()+": ")
+	var staged *preparedConfirmation
+	if errors.As(err, &staged) {
+		raw, _ := json.Marshal(staged.params)
+		return msg + "\nArguments: " + promptguard.Redact(string(raw))
 	}
 	return msg
 }

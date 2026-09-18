@@ -4,114 +4,104 @@ sidebar_position: 2
 
 # Hooks
 
-Hooks let operators inject code into the agent loop at specific points. Each hook is a shell command that receives JSON on stdin and is allowed to modify or block the next action.
-
-## Events
-
-| Event | Fires | Can block? |
-|---|---|---|
-| `SessionStart` | Once at node boot | yes (boot fails) |
-| `PreToolUse` | Before every tool dispatch | yes (call denied) |
-| `PostToolUse` | After every tool returns | no (advisory) |
-| `UserPromptSubmit` | Before agent reads a user message | yes (turn rejected) |
+Hooks run operator-configured subprocesses with JSON on stdin and optional JSON on stdout. `PreToolUse` hooks can block an executor call or rewrite its arguments. This applies to builtin and subprocess tools dispatched by the executor; the separate skill/MCP dispatch path does not gain hook support from this feature.
 
 ## Configuration
 
 ```toml
 [[hooks.PreToolUse]]
-match   = "tool:exec:gws-workspace.gmail.send"
-command = ["./hooks/confirm-send.sh"]
-timeout = "10s"
+command = "/opt/lobslaw/hooks/rewrite.sh"
+args = []
+timeout_seconds = 5
+match = { tool_name = "shell_command" }
 
 [[hooks.PostToolUse]]
-match   = "tool:exec:*"
-command = ["./hooks/log-tool-call.sh"]
+command = "/opt/lobslaw/hooks/audit.sh"
+timeout_seconds = 5
 ```
 
-`match` patterns:
+`match` is a map of exact string comparisons against input fields. All entries must match. Omit it to match every invocation for that event. Matching does not support glob patterns.
 
-- Exact: `tool:exec:gws-workspace.gmail.send`
-- Glob: `tool:exec:*` (every tool), `tool:exec:gws-*` (every gws skill tool)
-- Empty / `*` — every event of that type
+## Input
 
-## Input + output
-
-Stdin (JSON):
+A `PreToolUse` subprocess receives:
 
 ```json
 {
-  "event": "PreToolUse",
-  "tool": "gws-workspace.gmail.send",
-  "args": {"to": "...", "subject": "...", "body": "..."},
-  "claims": {"scope": "owner", "user_id": "alice", "channel": "telegram"},
-  "turn_id": "01HX...",
-  "ts": "2026-04-28T13:45:01Z"
+  "session_id": "turn-123",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "shell_command",
+  "tool_input": {"command": "git status"},
+  "cwd": "/workspace",
+  "actor_scope": "owner"
 }
 ```
 
-Stdout (optional, JSON):
+`session_id` currently carries the turn ID. `tool_input` contains the executor's string-valued arguments. Identity and authorization claims are carried separately and cannot be changed by an argument patch.
+
+## Decisions and argument rewrites
+
+Use `approve`, `block`, or `modify`. Empty stdout or an empty decision means no opinion. Exit code 2 blocks with stderr as its reason; other nonzero exits and invalid responses fail the pre-hook chain.
 
 ```json
 {
-  "decision": "allow",                  // allow | deny
-  "reason": "...",                       // shown to the agent
-  "args_override": {"to": "...", ...}    // only PreToolUse
+  "decision": "modify",
+  "hookSpecificOutput": {
+    "updatedInput": {"command": "rtk git status"}
+  }
 }
 ```
 
-If stdout is empty, hook is advisory only — the action proceeds.
+`updatedInput` is a patch: supplied keys replace or add values, omitted keys remain unchanged. Values must be strings; encode structured tool arguments as JSON strings if that tool expects them. Numbers, booleans, objects, arrays and null values are rejected. Empty and `__`-prefixed keys are reserved. There is no deletion operation; an empty string is a value, not deletion.
 
-If `decision: "deny"`, the action is blocked. For PreToolUse, the agent gets the reason as a tool error and can retry / explain to the user.
+A modification must contain exactly `hookSpecificOutput.updatedInput`. It cannot change the tool name, caller claims, working directory or process environment. `updatedInput` without `decision: "modify"` is an error. The formerly documented `args_override` spelling and `allow`/`deny` decisions are unsupported and now fail explicitly instead of silently doing nothing.
 
-## Common patterns
+Hooks run in configuration order. Each hook sees the effective input produced by earlier hooks. Later patches win for overlapping keys; an approval or empty response preserves accumulated changes. A block stops the chain and the tool does not execute:
 
-### Confirm before sending mail
-
-```sh
-#!/bin/sh
-input=$(cat)
-to=$(echo "$input" | jq -r '.args.to')
-subj=$(echo "$input" | jq -r '.args.subject')
-
-# ask via desktop notification + text reply
-zenity --question --text="Send email to $to with subject '$subj'?"
-case $? in
-  0) echo '{"decision": "allow"}' ;;
-  *) echo '{"decision": "deny", "reason": "user declined"}' ;;
-esac
+```json
+{"decision": "block", "reason": "command rejected by local policy"}
 ```
 
-For most operators this is overkill — `[[policy.rules]] effect = "require_confirmation"` is the simpler equivalent. Hooks are for non-trivial logic (rate limits, content scans, integration with external approval systems).
+Only `PreToolUse` supports modification. `PostToolUse` is advisory: its errors cannot undo an already executed tool, and its output is not applied to tool results.
 
-### Audit every tool call to syslog
+## Safety and confirmation
+
+The executor checks the original input against the hard safety rules and rejects tool-policy denials before running pre-hooks. It checks the effective input again afterwards, then evaluates current policy, sensitive-path confirmation and per-tool gates before execution. An `approve` hook response does not grant authorization or waive those checks.
+
+Confirmation prompts describe the effective operation. The prepared arguments are retained in the existing durable continuation, together with answered gates scoped to that exact call. Approving a paused call does not rerun pre-hooks: it executes the prepared input after checking current policy and safety rules. A newly configured policy denial still stops it. The saved arguments are not sent to the model as preparation metadata and cannot be supplied through model argument JSON.
+
+If another gate asks a second question, the first answer remains valid only for that prepared call. Subsequent calls need their own approvals unless an existing conversation grant or policy rule permits them.
+
+Old continuations without prepared input remain readable. If pre-hooks are configured, they are prepared again and any required confirmation is asked again; an old answer is not applied to newly rewritten arguments. During a rolling upgrade, resume these new continuations on upgraded nodes: older binaries do not understand prepared-call metadata.
+
+## Examples
+
+### Reject outgoing text containing an AWS access key pattern
 
 ```sh
 #!/bin/sh
 input=$(cat)
-logger -t lobslaw "$(echo "$input" | jq -c '{event, tool, args, claims}')"
-```
-
-PostToolUse, no decision — just logs.
-
-### Block content with secrets
-
-```sh
-#!/bin/sh
-input=$(cat)
-text=$(echo "$input" | jq -r '.args.text // .args.body // ""')
-
-if echo "$text" | grep -E 'AKIA[0-9A-Z]{16}' > /dev/null; then
-  echo '{"decision": "deny", "reason": "AWS key pattern detected in outbound text"}'
+text=$(printf '%s' "$input" | jq -r '.tool_input.text // .tool_input.body // ""')
+if printf '%s' "$text" | grep -Eq 'AKIA[0-9A-Z]{16}'; then
+  printf '%s\n' '{"decision":"block","reason":"AWS key pattern detected"}'
 fi
 ```
 
-Useful as a backstop on `notify` and `gmail.send`.
+### Audit a completed tool call
+
+```sh
+#!/bin/sh
+input=$(cat)
+logger -t lobslaw "$(printf '%s' "$input" | jq -c '{hook_event_name, tool_name, session_id}')"
+```
 
 ## Timeouts
 
-Hook commands have a per-event timeout (default 10s). Exceeded → action denied with a "hook timeout" error. Don't put long-running work in a hook; queue and return.
+`timeout_seconds` defaults to 5 seconds. A pre-hook timeout fails the call; an outer context cancellation also stops the hook. Keep hooks short and avoid interactive subprocesses: use the normal confirmation gates to ask the user.
 
 ## Reference
 
-- `internal/hooks/dispatcher.go` — event registry, command spawn, timeout enforcement
-- `pkg/types/hooks.go` — event constants, input/output schema
+- `internal/hooks/dispatcher.go` — matching, subprocess execution and ordered chaining
+- `internal/hooks/modify.go` — argument patch validation
+- `internal/compute/executor.go` — safety checks, gates and dispatch
+- `pkg/types/hook.go` — event and response types
