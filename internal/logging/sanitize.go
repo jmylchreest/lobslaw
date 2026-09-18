@@ -14,6 +14,7 @@ import (
 // One immutable policy serves logs and errors returned across API boundaries.
 // Secrets are recognized by field/context/shape; no credential cache is kept.
 var sanitizer = logfilter.NewRedactor(logfilter.RedactorOptions{
+	SensitiveKeys: []string{"x-api-key", "x-auth-token", "x-amz-security-token", "bot_token"},
 	Patterns: []*regexp.Regexp{
 		regexp.MustCompile(`/bot[0-9]+(?::|%3[aA])[A-Za-z0-9_-]+`),
 		regexp.MustCompile(`\b[0-9]{5,}:[A-Za-z0-9_-]{20,}\b`),

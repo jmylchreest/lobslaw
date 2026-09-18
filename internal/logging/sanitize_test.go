@@ -17,7 +17,7 @@ func TestAllOutputSanitized(t *testing.T) {
 		t.Run(string(format), func(t *testing.T) {
 			var out bytes.Buffer
 			l := New(&out, slog.LevelDebug, format)
-			l.With("refresh_token", "hidden-value").WithGroup("request").Error("https://api.telegram.org/bot"+token+"/sendMessage", "error", &url.Error{Op: "Post", URL: "https://api.telegram.org/file/bot" + token + "/audio.ogg", Err: errors.New("dial failed")}, "data", map[string]any{"password": testValue, "count": 2})
+			l.With("refresh_token", "hidden-value").WithGroup("request").Error("https://api.telegram.org/bot"+token+"/sendMessage", "error", &url.Error{Op: "Post", URL: "https://api.telegram.org/file/bot" + token + "/audio.ogg", Err: errors.New("dial failed")}, "data", map[string]any{"password": testValue, "count": 2, "headers": map[string]string{"X-API-Key": testValue}})
 			for _, secret := range []string{token, "hidden-value"} {
 				if strings.Contains(out.String(), secret) {
 					t.Fatal(out.String())
