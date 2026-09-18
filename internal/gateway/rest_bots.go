@@ -152,7 +152,7 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the bot registry")
 		return
 	}
-	if _, err := s.authenticate(r); err != nil {
+	if _, err := s.authenticateRequest(r); err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -458,7 +458,7 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the bot inbox")
 		return
 	}
-	if _, err := s.authenticate(r); err != nil {
+	if _, err := s.authenticateRequest(r); err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -519,7 +519,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the bot inbox")
 		return
 	}
-	if _, err := s.authenticate(r); err != nil {
+	if _, err := s.authenticateRequest(r); err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}

@@ -68,14 +68,17 @@ func (s *Server) loginWithJWT(w http.ResponseWriter, r *http.Request, token stri
 func (s *Server) loginWithCode(w http.ResponseWriter, r *http.Request, code string) {
 	userID, roles, scope, ok := s.logins.consumeCode(code)
 	if !ok {
+		s.log.Warn("rest: sign-in code rejected", "remote", r.RemoteAddr, "digits", len(code))
 		s.jsonErr(w, http.StatusUnauthorized, "that code is wrong or has expired — run `lobslaw login` again")
 		return
 	}
+	s.log.Info("rest: sign-in code accepted", "user", userID, "remote", r.RemoteAddr)
 	s.issueLoginCookie(w, r, config.UserConfig{ID: userID, Roles: roles}, scope)
 }
 
 func (s *Server) loginFromLoopback(w http.ResponseWriter, r *http.Request) {
 	if !requestIsLoopback(r) {
+		s.log.Warn("rest: loopback sign-in refused", "remote", r.RemoteAddr)
 		s.jsonErr(w, http.StatusForbidden, "this sign-in only works from the computer running the node")
 		return
 	}

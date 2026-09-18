@@ -269,7 +269,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.listener = ln
 	s.httpSrv = &http.Server{
-		Handler:      mux,
+		Handler:      s.withAccessLog(mux),
 		ReadTimeout:  s.cfg.ReadTimeout,
 		WriteTimeout: s.cfg.WriteTimeout,
 		IdleTimeout:  s.cfg.IdleTimeout,

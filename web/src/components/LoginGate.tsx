@@ -21,6 +21,11 @@ export function LoginGate({ children }: { children: ReactNode }) {
       });
   }, []);
   useEffect(refresh, [refresh]);
+  useEffect(() => {
+    function bounce() { setNeedLogin(true); setUserId(null); setError(null); }
+    window.addEventListener("lobslaw:unauthorized", bounce);
+    return () => window.removeEventListener("lobslaw:unauthorized", bounce);
+  }, []);
 
   if (needLogin) return <SignIn onIn={refresh} error={error} onClearError={() => setError(null)} />;
   if (!userId) return <div className="center"><Spinner /></div>;

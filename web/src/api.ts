@@ -62,6 +62,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 204) {
     return undefined as T;
   }
+  if (res.status === 401 && path !== "/v1/session") {
+    // A protected call lost its session (node restart, expired or
+    // dropped cookie). Tell the gate to show sign-in again rather
+    // than rendering "missing bearer token" at the user.
+    window.dispatchEvent(new Event("lobslaw:unauthorized"));
+  }
   const text = await res.text();
   if (!res.ok) {
     let message = text;

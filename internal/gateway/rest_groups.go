@@ -54,7 +54,7 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the group registry")
 		return
 	}
-	if _, err := s.authenticate(r); err != nil {
+	if _, err := s.authenticateRequest(r); err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -244,9 +244,9 @@ func groupMayModify(rec *lobslawv1.GroupRecord, principal string) bool {
 // principalOf is who is making this request, or empty for an
 // unauthenticated one.
 func (s *Server) principalOf(r *http.Request) string {
-	claims, err := s.authenticate(r)
-	if err != nil || claims == nil {
+	authn, err := s.authenticateRequest(r)
+	if err != nil || authn.Claims == nil {
 		return ""
 	}
-	return claims.UserID
+	return authn.Claims.UserID
 }

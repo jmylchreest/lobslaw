@@ -17,22 +17,18 @@ function Shell() {
   if (!caps.data["compute-teams"].enabled) {
     return <SingleChat computeOn={caps.data.compute.available} />;
   }
-  return <TeamGate />;
+  return <TeamGate computeOn={caps.data.compute.available} />;
 }
 
-function TeamGate() {
+function TeamGate({ computeOn }: { computeOn: boolean }) {
   const groups = useLoad(() => api.listGroups());
   if (groups.loading) return <div className="center"><Spinner /></div>;
   if (groups.error) return <DiscoveryError error={groups.error} />;
   if (!groups.data?.length) {
-    return (
-      <Frame>
-        <Empty
-          title="No teams"
-          hint="Teams are enabled, but none belong to this account. The console will not invent a default."
-        />
-      </Frame>
-    );
+    // Teams are on but none belong to this account. Chat with the
+    // node's own assistant rather than inventing a default team; the
+    // team chrome simply is not shown.
+    return <SingleChat computeOn={computeOn} />;
   }
   return (
     <Frame>
