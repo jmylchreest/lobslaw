@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -220,4 +221,53 @@ func originValue(base string) string {
 
 func jwtlibRoles(roles ...string) jwtlib.MapClaims {
 	return jwtlib.MapClaims{"roles": roles}
+}
+
+func TestLoopbackLoginSetsCookie(t *testing.T) {
+	t.Parallel()
+	srv := startWebREST(t, &captureRunner{}, nil)
+	resp := doJSON(t, http.MethodPost, webBaseURL(srv)+"/v1/session", `{"loopback":true}`, nil)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("loopback login %d body=%s", resp.StatusCode, body)
+	}
+	if loginCookie(resp) == nil {
+		t.Fatal("loopback login did not Set-Cookie")
+	}
+}
+
+func TestSignInCodeRoundTrip(t *testing.T) {
+	t.Parallel()
+	srv := startWebREST(t, &captureRunner{}, nil)
+	base := webBaseURL(srv)
+
+	mint := doJSON(t, http.MethodPost, base+"/v1/session/code", `{}`, nil)
+	if mint.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(mint.Body)
+		t.Fatalf("mint code %d body=%s", mint.StatusCode, body)
+	}
+	var out struct {
+		Code   string `json:"code"`
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(mint.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.UserID != "alice" || len(out.Code) != LoginCodeDigits {
+		t.Fatalf("minted %+v", out)
+	}
+
+	login := doJSON(t, http.MethodPost, base+"/v1/session", `{"code":"`+out.Code[:3]+" "+out.Code[3:]+`"}`, nil)
+	if login.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(login.Body)
+		t.Fatalf("code login %d body=%s", login.StatusCode, body)
+	}
+	if loginCookie(login) == nil {
+		t.Fatal("code login did not Set-Cookie")
+	}
+
+	again := doJSON(t, http.MethodPost, base+"/v1/session", `{"code":"`+out.Code+`"}`, nil)
+	if again.StatusCode != http.StatusUnauthorized {
+		t.Errorf("reused code = %d, want 401", again.StatusCode)
+	}
 }

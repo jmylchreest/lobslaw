@@ -237,6 +237,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/v1/session", s.handleSession)
+	mux.HandleFunc("/v1/session/code", s.handleSessionCode)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
 		mux.Handle("/telegram", s.cfg.Telegram)

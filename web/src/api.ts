@@ -84,6 +84,18 @@ export const api = {
       headers: { Authorization: `Bearer ${token}` },
     }),
 
+  loginCode: (code: string) =>
+    request<SessionInfo>("/v1/session", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+
+  loginLoopback: () =>
+    request<SessionInfo>("/v1/session", {
+      method: "POST",
+      body: JSON.stringify({ loopback: true }),
+    }),
+
   logout: () => request<{ status: string }>("/v1/session", { method: "DELETE" }),
 
   capabilities: () => request<Capabilities>("/v1/capabilities"),

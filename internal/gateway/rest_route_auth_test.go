@@ -39,6 +39,7 @@ func restRouteAuthTable() map[string]restRouteClass {
 		"/v1/prompts/":     restRouteUserData,
 		"/v1/capabilities": restRouteUserData,
 		"/v1/session":      restRouteUserData,
+		"/v1/session/code": restRouteOwnAuth,
 		"/v1/bots":         restRouteUserData,
 		"/v1/bots/":        restRouteUserData,
 		"/v1/groups":       restRouteUserData,

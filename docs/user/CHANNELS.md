@@ -49,7 +49,7 @@ enabled = true
 require_auth = true
 ```
 
-Then open the gateway HTTP port in a browser (8443 by default). Sign in with a JWT for an enrolled `[[user]]` — there is no self-signup. The console talks to the same REST routes as above (`/v1/session`, `/v1/capabilities`, `/v1/messages`).
+Then open the gateway HTTP port in a browser (8443 by default). On the same computer, click **Continue on this computer**. From a phone, run `lobslaw login --config <path>` on the node and type the six-digit code. There is no password and no self-signup: the person must already be in `[[user]]`.
 
 If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
 

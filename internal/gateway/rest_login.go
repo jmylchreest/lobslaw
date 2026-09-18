@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
-	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -38,12 +37,21 @@ type loginStore struct {
 	mu       sync.Mutex
 	sessions map[string]*loginSession
 	streams  map[string][]context.CancelFunc
+	codes    map[string]loginCode
+}
+
+type loginCode struct {
+	UserID    string
+	Roles     []string
+	Scope     string
+	ExpiresAt time.Time
 }
 
 func newLoginStore() *loginStore {
 	return &loginStore{
 		sessions: make(map[string]*loginSession),
 		streams:  make(map[string][]context.CancelFunc),
+		codes:    make(map[string]loginCode),
 	}
 }
 
@@ -127,38 +135,24 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
 	token := auth.ExtractBearer(r.Header.Get("Authorization"))
-	if token == "" {
-		s.jsonErr(w, http.StatusUnauthorized, "missing bearer token")
+	if token != "" {
+		s.loginWithJWT(w, r, token)
 		return
 	}
-	if s.cfg.JWTValidator == nil {
-		s.jsonErr(w, http.StatusUnauthorized, "auth required but no validator configured")
+	var body struct {
+		Code     string `json:"code"`
+		Loopback bool   `json:"loopback"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if code := digitsOnly(body.Code); code != "" {
+		s.loginWithCode(w, r, code)
 		return
 	}
-	claims, err := s.cfg.JWTValidator.Validate(token)
-	if err != nil {
-		s.jsonErr(w, http.StatusUnauthorized, "token validation failed: "+err.Error())
+	if body.Loopback {
+		s.loginFromLoopback(w, r)
 		return
 	}
-	user, ok := s.enrolledUser(r.Context(), claims.UserID)
-	if !ok {
-		s.jsonErr(w, http.StatusForbidden, "user is not enrolled")
-		return
-	}
-	sess := &loginSession{
-		ID:        loginSessionIDPrefix + ids.New(),
-		UserID:    user.ID,
-		Roles:     append([]string(nil), user.Roles...),
-		Scope:     claims.Scope,
-		ExpiresAt: time.Now().Add(DefaultLoginSessionTTL),
-	}
-	if sess.Scope == "" {
-		sess.Scope = s.cfg.DefaultScope
-	}
-	s.logins.put(sess)
-	http.SetCookie(w, s.loginCookie(r, sess))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"user_id": user.ID})
+	s.jsonErr(w, http.StatusUnauthorized, "enter the code from `lobslaw login`, or a Bearer JWT")
 }
 
 func (s *Server) handleSessionGet(w http.ResponseWriter, r *http.Request) {

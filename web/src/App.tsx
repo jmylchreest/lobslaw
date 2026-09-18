@@ -55,7 +55,16 @@ function DiscoveryError({ error }: { error: Error }) {
       </Frame>
     );
   }
-  return <div className="center"><div style={{ maxWidth: 420 }}><Err error={error} /></div></div>;
+  return (
+    <div className="center">
+      <div style={{ maxWidth: 420, width: "100%", padding: 16 }}>
+        <Err error={error} />
+        <button className="btn ghost login-wide" type="button" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Frame({ children }: { children: ReactNode }) {

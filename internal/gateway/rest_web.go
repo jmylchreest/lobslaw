@@ -27,6 +27,12 @@ const (
 	// CapabilityUIWeb is reported for discovery; this story leaves
 	// it disabled. The node function itself is not added here.
 	CapabilityUIWeb = "ui-web"
+
+	// LoginCodeTTL is how long a console sign-in code lasts.
+	LoginCodeTTL = 5 * time.Minute
+
+	// LoginCodeDigits is the length of a console sign-in code.
+	LoginCodeDigits = 6
 )
 
 // loginSessionIDPrefix distinguishes login-session ids from user ids,

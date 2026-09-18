@@ -66,7 +66,7 @@ export function Spinner() { return <div className="spin" />; }
 export function Err({ error }: { error: Error }) {
   const status = error instanceof ApiError ? error.status : undefined;
   const hint =
-    status === 401 ? "Sign in, or reach this node over loopback."
+    status === 401 ? "Run `lobslaw login` on this machine and enter the code, or try again."
     : status === 503 ? "This node cannot serve that yet. It is unavailable, not gone."
     : undefined;
   return (
