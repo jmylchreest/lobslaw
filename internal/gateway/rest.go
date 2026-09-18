@@ -29,6 +29,9 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	// IncomingDir holds temporary, owner-bound REST media uploads.
+	IncomingDir string
+
 	// Notices appends operator notices to outbound replies. Nil
 	// disables them entirely, which is what a deployment that never
 	// opted this channel in gets.
@@ -165,10 +168,11 @@ type Server struct {
 	// gate serialises turns per session. See turnqueue.go.
 	gate *TurnGate
 
-	cfg   RESTConfig
-	agent *compute.Agent
-	log   *slog.Logger
-	conv  *conversationLog
+	cfg     RESTConfig
+	agent   *compute.Agent
+	log     *slog.Logger
+	conv    *conversationLog
+	uploads *restUploads
 
 	mu       sync.Mutex
 	httpSrv  *http.Server
@@ -197,11 +201,12 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg.Logger = slog.Default()
 	}
 	return &Server{
-		cfg:   cfg,
-		agent: agent,
-		log:   cfg.Logger,
-		gate:  NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
-		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
+		cfg:     cfg,
+		uploads: newRESTUploads(cfg.IncomingDir),
+		agent:   agent,
+		log:     cfg.Logger,
+		gate:    NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
+		conv:    newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 	}
 }
 
@@ -211,6 +216,7 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", s.handleMessages)
+	mux.HandleFunc("/v1/uploads", s.handleUpload)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
@@ -242,6 +248,10 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.ready = true
 	s.mu.Unlock()
+
+	uploadCtx, stopUploads := context.WithCancel(ctx)
+	defer func() { stopUploads(); s.uploads.close() }()
+	go s.uploads.run(uploadCtx)
 
 	s.log.Info("rest server listening", "addr", ln.Addr().String(), "tls", s.cfg.TLSCert != "")
 
@@ -316,9 +326,10 @@ func (s *Server) Addr() string {
 // compute.ProcessMessageRequest server-side from this + config +
 // any auth context.
 type messageRequest struct {
-	Message string `json:"message"`
-	TurnID  string `json:"turn_id,omitempty"`
-	Model   string `json:"model,omitempty"` // optional override
+	UploadIDs []string `json:"upload_ids,omitempty"`
+	Message   string   `json:"message"`
+	TurnID    string   `json:"turn_id,omitempty"`
+	Model     string   `json:"model,omitempty"` // optional override
 	// SessionID opts this request into a durable conversation: the
 	// prior transcript is replayed into the turn and this turn is
 	// appended to it. Omitting it keeps the legacy stateless
@@ -433,7 +444,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Message) == "" {
+	if len(req.UploadIDs) > restMessageMaxUploads {
+		s.jsonErr(w, http.StatusBadRequest, "at most 16 uploads per message")
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" && len(req.UploadIDs) == 0 {
 		s.jsonErr(w, http.StatusBadRequest, "message is required")
 		return
 	}
@@ -460,6 +475,16 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	attachments, releaseUploads, err := s.uploads.acquire(claims.UserID, req.UploadIDs, time.Now())
+	if err != nil {
+		s.jsonErr(w, http.StatusNotFound, errUploadUnavailable.Error())
+		return
+	}
+	defer releaseUploads()
+	if strings.TrimSpace(req.Message) == "" {
+		req.Message = "Please examine the attached media."
+	}
+
 	var sessionRef SessionRef
 	var prior Transcript
 	if req.SessionID != "" {
@@ -476,7 +501,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		// Telegram path does: Load → run → Append is not atomic, and
 		// each request is its own goroutine. Only sessioned requests
 		// need it — a session-less call has no transcript to corrupt.
-		lease, disposition := s.gate.Acquire(r.Context(), cacheKey(sessionRef), req.TurnID, req.Message)
+		lease, disposition := s.gate.acquire(r.Context(), cacheKey(sessionRef), req.TurnID, req.Message, len(attachments) > 0)
 		switch disposition {
 		case Folded:
 			// Another in-flight turn absorbed this message and will
@@ -506,6 +531,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agentReq := compute.ProcessMessageRequest{
+		Attachments:         attachments,
 		Message:             req.Message,
 		Claims:              claims,
 		TurnID:              req.TurnID,

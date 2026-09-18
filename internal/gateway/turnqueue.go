@@ -247,6 +247,8 @@ type gateState struct {
 }
 
 type waiter struct {
+	// noFold keeps media and other caller-owned payloads in their own turn.
+	noFold     bool
 	ready      chan Disposition
 	turnID     string
 	batch      []string
@@ -308,6 +310,12 @@ const DefaultHeartbeat = 30 * time.Second
 // gone, and running a turn to answer nobody costs tokens and may
 // still write to the transcript.
 func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Lease, Disposition) {
+	return g.acquire(ctx, key, turnID, text, false)
+}
+
+// acquire can keep payload-bearing requests separate while using the same
+// session lock as text turns. Dropping modes still return an explicit rejection.
+func (g *TurnGate) acquire(ctx context.Context, key, turnID, text string, noFold bool) (*Lease, Disposition) {
 	g.mu.Lock()
 
 	st := g.sessions[key]
@@ -329,7 +337,7 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 		// Zero means start now. That is smart's default: the window
 		// is the entire latency cost of these modes, and a session
 		// that has never bursted should not pay it.
-		if (g.mode == QueueDebounce || g.mode == QueueSmart) && window > 0 {
+		if !noFold && (g.mode == QueueDebounce || g.mode == QueueSmart) && window > 0 {
 			// Disposition comes from foldWindow, not from here. It used
 			// to be a hardcoded Admitted, which was a lie the moment a
 			// leaser refused: mint returns (nil, Dropped) when another
@@ -356,7 +364,7 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 	case QueueDebounce:
 		// Fold into whoever is already waiting; only start a new
 		// waiter if nobody is.
-		if len(st.waiters) > 0 {
+		if !noFold && canFoldWaiters(st.waiters) {
 			w := st.waiters[0]
 			w.batch = append(w.batch, text)
 			g.mu.Unlock()
@@ -368,7 +376,7 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 		// messages. The judge runs OUTSIDE the lock: it makes a
 		// network call, and holding the gate across one would stall
 		// every other conversation on this node.
-		if len(st.waiters) > 0 {
+		if !noFold && canFoldWaiters(st.waiters) {
 			pending := append([]string(nil), st.waiters[0].batch...)
 			g.mu.Unlock()
 			if g.foldsWith(ctx, pending, text) {
@@ -377,7 +385,7 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 				// been admitted or dropped while the judge thought.
 				// Folding into a batch that has already run would
 				// answer nobody.
-				if st := g.sessions[key]; st != nil && len(st.waiters) > 0 {
+				if st := g.sessions[key]; st != nil && canFoldWaiters(st.waiters) {
 					st.waiters[0].batch = append(st.waiters[0].batch, text)
 					g.mu.Unlock()
 					return nil, Folded
@@ -394,7 +402,7 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 				st = &gateState{running: true}
 				g.sessions[key] = st
 			}
-			w := &waiter{ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}}
+			w := &waiter{noFold: noFold, ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}}
 			st.waiters = append(st.waiters, w)
 			g.mu.Unlock()
 			return g.wait(ctx, key, w)
@@ -408,16 +416,30 @@ func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Leas
 		}
 		dropped := len(st.waiters)
 		st.waiters = nil
-		w := &waiter{ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}, superseded: dropped}
+		w := &waiter{noFold: noFold, ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}, superseded: dropped}
 		st.waiters = append(st.waiters, w)
 		g.mu.Unlock()
 		return g.wait(ctx, key, w)
 	}
 
-	w := &waiter{ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}}
+	w := &waiter{noFold: noFold, ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}}
 	st.waiters = append(st.waiters, w)
 	g.mu.Unlock()
 	return g.wait(ctx, key, w)
+}
+
+// A media waiter is an ordering barrier: text after it must not fold into
+// a preceding text turn and overtake the media.
+func canFoldWaiters(waiters []*waiter) bool {
+	if len(waiters) == 0 {
+		return false
+	}
+	for _, w := range waiters {
+		if w.noFold {
+			return false
+		}
+	}
+	return true
 }
 
 // wait blocks until this waiter is handed the session or gives up.
@@ -513,9 +535,11 @@ func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string, win
 
 		// Judged outside the lock — each call is a round trip, and
 		// the gate is shared by every conversation on this node.
+		mediaBarrier := false
 		for _, w := range waiters {
+			mediaBarrier = mediaBarrier || w.noFold
 			joined := strings.Join(w.batch, "\n")
-			if g.mode == QueueSmart && !g.foldsWith(ctx, batch, joined) {
+			if mediaBarrier || (g.mode == QueueSmart && !g.foldsWith(ctx, batch, joined)) {
 				keep = append(keep, w)
 				continue
 			}
@@ -565,12 +589,13 @@ func (g *TurnGate) release(key string) {
 	// Under debounce, everything still queued belongs to this turn:
 	// they arrived while it was blocked, which is exactly the burst
 	// the mode folds.
-	if g.mode == QueueDebounce {
-		for _, w := range st.waiters {
+	if g.mode == QueueDebounce && !next.noFold {
+		for canFoldWaiters(st.waiters) {
+			w := st.waiters[0]
+			st.waiters = st.waiters[1:]
 			next.batch = append(next.batch, w.batch...)
 			w.ready <- Folded
 		}
-		st.waiters = nil
 	}
 	next.ready <- Admitted
 }
