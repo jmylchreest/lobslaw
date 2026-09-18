@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+	"github.com/jmylchreest/lobslaw/internal/httpbody"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
@@ -1046,7 +1047,7 @@ func (h *TelegramHandler) postJSON(method string, body any) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		h.log.Error("telegram: "+method+" non-2xx",
 			"status", resp.StatusCode, "body", string(raw))
 	}
@@ -1125,7 +1126,7 @@ func (h *TelegramHandler) sendText(chatID int64, text string) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		h.log.Error("telegram: sendMessage non-2xx",
 			"status", resp.StatusCode, "body", string(raw))
 	}
@@ -1581,7 +1582,7 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := httpbody.Read(resp.Body, 8<<20)
 	if err != nil {
 		return nil, 0, err
 	}
