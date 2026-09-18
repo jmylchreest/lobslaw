@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -305,6 +306,15 @@ func TestRetainedGRPCConnectionReconnectsAfterCAReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.Stop()
+	// Wait until the client observes the stopped transport before making another
+	// RPC. WaitForReady does not retry a call sent on the dying connection.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	for conn.GetState() == connectivity.Ready {
+		if !conn.WaitForStateChange(ctx, connectivity.Ready) {
+			t.Fatal("client did not observe the stopped transport:", ctx.Err())
+		}
+	}
 	_, _ = start(address)
 	check()
 }
