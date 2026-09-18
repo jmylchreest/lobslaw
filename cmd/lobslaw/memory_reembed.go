@@ -47,7 +47,7 @@ func memoryReembedLive(args []string) error {
 	var node liveNode
 	node.bind(fs)
 	limit := fs.Int("limit", 0, "process at most this many records (0 = all)")
-	fs.Usage = func() { _, _ = fmt.Fprint(fs.Output(), memoryReembedUsage) }
+	fs.Usage = func() { _, _ = fmt.Fprint(os.Stderr, memoryReembedUsage) }
 	positional, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {
 		return err
