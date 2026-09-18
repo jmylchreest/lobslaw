@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -232,11 +233,10 @@ func (s *Server) groupErr(w http.ResponseWriter, err error) {
 	}
 }
 
-// groupMayModify mirrors memory.MayModify. An unowned team — the
-// seeded default, and anything created before ownership existed — is
-// editable by anyone who can sign in, so an upgrade locks nobody out
-// of their own default. An empty principal never grants: unauthenticated
-// callers must not slip through as if they owned the room.
+// groupMayModify mirrors memory.MayModifyGroup, which fails closed: an
+// empty principal is nobody and an empty owner is nobody, so an
+// unowned team is inaccessible rather than public. Ownership must have
+// been established explicitly (see ensureOwnersTeam).
 func groupMayModify(rec *lobslawv1.GroupRecord, principal string) bool {
 	return memory.MayModifyGroup(rec, principal)
 }
@@ -249,4 +249,41 @@ func (s *Server) principalOf(r *http.Request) string {
 		return ""
 	}
 	return authn.Claims.UserID
+}
+
+// ensureOwnersTeam returns the caller's own team, creating it on first
+// use with the caller as owner.
+//
+// A fresh node has no teams, the console's "new bot" names none, and an
+// unowned team is inaccessible by design — so without this the first
+// bot a person creates can never succeed. This is not the "invent a
+// default team for display" the discovery rules forbid: the team is
+// made because the caller asked for a bot, and it is theirs.
+func (s *Server) ensureOwnersTeam(ctx context.Context, principal string) (string, error) {
+	principal = strings.TrimSpace(principal)
+	if principal == "" {
+		return "", errors.New("sign in before creating a bot")
+	}
+	if s.cfg.Groups == nil {
+		return "", errors.New("this node does not host the team registry")
+	}
+	groups, err := s.cfg.Groups.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, g := range groups {
+		if strings.TrimSpace(g.GetOwner()) == principal {
+			return g.GetId(), nil
+		}
+	}
+	rec, err := s.cfg.Groups.Put(ctx, &lobslawv1.GroupRecord{
+		Id:        defaultGroupID,
+		Name:      "Your team",
+		IsDefault: true,
+		Owner:     principal,
+	}, 0)
+	if err != nil {
+		return "", err
+	}
+	return rec.GetId(), nil
 }

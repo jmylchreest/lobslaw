@@ -83,8 +83,10 @@ func botToJSON(rec *lobslawv1.BotRecord) botJSON {
 		Description:   rec.GetDescription(),
 		Instructions:  rec.GetInstructions(),
 		IsCoordinator: rec.GetIsCoordinator(),
-		// Resolved, never raw: an empty group_id means the default,
-		// and a console that had to know that would get it wrong.
+		// Raw, not resolved to a default: memory.GroupOf is explicit
+		// that empty stays empty, because routing a bot into somebody
+		// else's team is the failure this exists to prevent. New bots
+		// always carry their owner's team id (see ensureOwnersTeam).
 		GroupID:    groupOfBot(rec),
 		Enabled:    rec.GetEnabled(),
 		Tools:      rec.GetTools(),
@@ -195,8 +197,23 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 			s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
 			return
 		}
+		principal := s.principalOf(r)
+		groupID := strings.TrimSpace(body.GroupID)
+		if groupID == "" {
+			// The console creates a bot without naming a team, which
+			// means "my own". Establish that team explicitly rather
+			// than leaving the bot unowned — an unowned bot is
+			// inaccessible, and an empty group is never a shared
+			// default.
+			gid, err := s.ensureOwnersTeam(r.Context(), principal)
+			if err != nil {
+				s.jsonErr(w, http.StatusForbidden, err.Error())
+				return
+			}
+			groupID = gid
+		}
 		// Creating a bot inside a team is writing to that team.
-		if !s.mayUseGroup(r, body.GroupID) {
+		if !s.mayUseGroup(r, groupID) {
 			s.jsonErr(w, http.StatusForbidden,
 				"that team belongs to somebody else")
 			return
@@ -209,7 +226,7 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 			Tools:        body.Tools,
 			MayMessage:   body.MayMessage,
 			Enabled:      true,
-			GroupId:      body.GroupID,
+			GroupId:      groupID,
 			// The real principal, not a placeholder. The session knows
 			// who is asking; recording "operator" threw that away at
 			// the one point where it is worth keeping.

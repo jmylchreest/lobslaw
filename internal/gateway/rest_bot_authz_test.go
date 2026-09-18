@@ -39,7 +39,7 @@ func (s stubGroups) Delete(context.Context, string) error { return s.err }
 func TestMayModifyBotFailsClosedOnGroupLookupMiss(t *testing.T) {
 	t.Parallel()
 	srv := &Server{cfg: RESTConfig{
-		Bots: stubBots{rec: &lobslawv1.BotRecord{Id: "eng", GroupId: "missing"}},
+		Bots:   stubBots{rec: &lobslawv1.BotRecord{Id: "eng", GroupId: "missing"}},
 		Groups: stubGroups{err: errGroupMissing},
 	}}
 	req, _ := http.NewRequest(http.MethodDelete, "/v1/bots/eng", nil)
@@ -59,6 +59,56 @@ func TestMayUseGroupFailsClosedOnMissingDestination(t *testing.T) {
 	}
 	if srv.mayUseGroup(req, "") {
 		t.Fatal("empty destination must not fall through to a shared default")
+	}
+}
+
+// memGroups is a stateful stub so ensureOwnersTeam can be tested for
+// the thing that matters: it creates the caller's own team once, and
+// then reuses it rather than creating a second.
+type memGroups struct{ recs []*lobslawv1.GroupRecord }
+
+func (m *memGroups) List(context.Context) ([]*lobslawv1.GroupRecord, error) { return m.recs, nil }
+func (m *memGroups) Get(_ context.Context, id string) (*lobslawv1.GroupRecord, error) {
+	for _, r := range m.recs {
+		if r.GetId() == id {
+			return r, nil
+		}
+	}
+	return nil, errGroupMissing
+}
+func (m *memGroups) Put(_ context.Context, rec *lobslawv1.GroupRecord, _ uint64) (*lobslawv1.GroupRecord, error) {
+	rec.Revision = 1
+	m.recs = append(m.recs, rec)
+	return rec, nil
+}
+func (m *memGroups) Delete(context.Context, string) error { return nil }
+
+func TestEnsureOwnersTeamCreatesOnceAndReuses(t *testing.T) {
+	t.Parallel()
+	groups := &memGroups{}
+	srv := &Server{cfg: RESTConfig{Groups: groups}}
+
+	first, err := srv.ensureOwnersTeam(context.Background(), "user:chief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != defaultGroupID {
+		t.Fatalf("team id = %q, want %q", first, defaultGroupID)
+	}
+	if len(groups.recs) != 1 || groups.recs[0].GetOwner() != "user:chief" || !groups.recs[0].GetIsDefault() {
+		t.Fatalf("created team is not owned by the caller: %+v", groups.recs)
+	}
+
+	again, err := srv.ensureOwnersTeam(context.Background(), "user:chief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != first || len(groups.recs) != 1 {
+		t.Fatalf("second call made another team: id=%q recs=%d", again, len(groups.recs))
+	}
+
+	if _, err := srv.ensureOwnersTeam(context.Background(), ""); err == nil {
+		t.Fatal("an unauthenticated caller must not get an owned team")
 	}
 }
 
