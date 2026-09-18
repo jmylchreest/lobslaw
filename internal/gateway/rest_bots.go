@@ -163,6 +163,14 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 		s.handleBotCollection(w, r)
 	case strings.HasSuffix(rest, "/inbox"):
 		s.handleBotInbox(w, r, strings.TrimSuffix(rest, "/inbox"))
+	case strings.HasSuffix(rest, "/messages"):
+		s.handleBotChat(w, r, strings.TrimSuffix(rest, "/messages"))
+	case strings.HasSuffix(rest, "/sessions"):
+		s.handleBotSessions(w, r, strings.TrimSuffix(rest, "/sessions"))
+	case strings.HasSuffix(rest, "/routines"):
+		s.handleBotRoutines(w, r, strings.TrimSuffix(rest, "/routines"))
+	case strings.HasSuffix(rest, "/memory"):
+		s.handleBotMemory(w, r, strings.TrimSuffix(rest, "/memory"))
 	default:
 		s.handleBotItem(w, r, rest)
 	}

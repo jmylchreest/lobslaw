@@ -150,6 +150,10 @@ func (n *Node) wireGateway() error {
 		Groups:           n.teamGroupsOrNil(),
 		Inbox:            n.teamInboxOrNil(),
 		TeamRouter:       n.teamRouterOrNil(),
+		Config:           n.consoleConfigView(),
+		Transcripts:      n.newSessionBrowser(),
+		Routines:         n.newRoutineLister(),
+		Memory:           n.newMemoryLister(),
 	}
 
 	n.gatewaySrv = gateway.NewServer(cfg, runner)

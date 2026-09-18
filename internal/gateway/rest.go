@@ -170,6 +170,20 @@ type RESTConfig struct {
 	// TeamRouter picks which bot answers a channel message. Nil
 	// leaves BotID empty.
 	TeamRouter TeamRouter
+
+	// Config is the allowlisted node configuration /v1/config
+	// publishes. Nil returns 503 rather than a 404, so a console can
+	// tell "this node does not say" from "wrong path".
+	Config *ConfigView
+
+	// Transcripts is the read-only session browser the console uses to
+	// show what a bot actually did. Nil returns 503.
+	Transcripts SessionBrowser
+
+	// Routines and Memory back the read-only per-bot insight panes.
+	// Nil on a node that runs no scheduler or hosts no memory.
+	Routines RoutineAPI
+	Memory   MemoryAPI
 }
 
 // PlanService is the subset of lobslawv1.PlanServiceServer that the
@@ -239,6 +253,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/v1/session", s.handleSession)
 	mux.HandleFunc("/v1/session/code", s.handleSessionCode)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	// General to the gateway rather than gated on compute-teams: a
+	// node with no bots still has a configuration worth reading and a
+	// transcript store worth browsing. Both say 503 when unwired.
+	mux.HandleFunc("/v1/config", s.handleConfig)
+	mux.HandleFunc("/v1/sessions/", s.handleSessionTranscript)
 	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
 		mux.Handle("/telegram", s.cfg.Telegram)
 	}

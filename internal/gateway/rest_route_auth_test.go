@@ -40,6 +40,8 @@ func restRouteAuthTable() map[string]restRouteClass {
 		"/v1/capabilities": restRouteUserData,
 		"/v1/session":      restRouteUserData,
 		"/v1/session/code": restRouteOwnAuth,
+		"/v1/config":       restRouteUserData,
+		"/v1/sessions/":    restRouteUserData,
 		"/v1/bots":         restRouteUserData,
 		"/v1/bots/":        restRouteUserData,
 		"/v1/groups":       restRouteUserData,
@@ -52,7 +54,12 @@ func restRouteAuthTable() map[string]restRouteClass {
 
 func TestUnauthenticatedCallerGets401OnEveryUserDataRoute(t *testing.T) {
 	t.Parallel()
-	srv := startWebREST(t, &captureRunner{}, nil)
+	// Bots wired so the compute-teams subroutes are mounted at all;
+	// without a registry /v1/bots would 404 rather than exercise the
+	// auth gate these probes exist to check.
+	srv := startWebREST(t, &captureRunner{}, func(c *RESTConfig) {
+		c.Bots = stubBots{}
+	})
 	base := webBaseURL(srv)
 
 	// Concrete requests, not a six-path hand list: every user-data
@@ -70,6 +77,12 @@ func TestUnauthenticatedCallerGets401OnEveryUserDataRoute(t *testing.T) {
 		{http.MethodGet, "/v1/session", ""},
 		{http.MethodDelete, "/v1/session", ""},
 		{http.MethodPost, "/v1/session", ""},
+		{http.MethodGet, "/v1/config", ""},
+		{http.MethodGet, "/v1/sessions/bot:coordinator", ""},
+		{http.MethodPost, "/v1/bots/coordinator/messages", `{"message":"hi"}`},
+		{http.MethodGet, "/v1/bots/coordinator/routines", ""},
+		{http.MethodGet, "/v1/bots/coordinator/memory", ""},
+		{http.MethodGet, "/v1/bots/coordinator/sessions", ""},
 	}
 	for _, p := range probes {
 		t.Run(p.method+" "+p.path, func(t *testing.T) {
