@@ -52,6 +52,10 @@ jobs:
             type=ref,event=tag
             type=sha,prefix=sha-,format=short
 
+      - name: build timestamp
+        id: timestamp
+        run: echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # linux/amd64 only. The target cluster is x86 Proxmox nodes, and the
       # Dockerfile's build stage runs `go build` in the TARGET platform's
       # container -- so adding linux/arm64 here would compile Go under QEMU
@@ -75,5 +79,6 @@ jobs:
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ steps.timestamp.outputs.built }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
