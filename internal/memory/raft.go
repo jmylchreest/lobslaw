@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -508,11 +509,12 @@ func (n *RaftNode) Shutdown() error {
 	n.stopOnce.Do(func() { close(n.stopWatch) })
 	n.watchWG.Wait()
 	n.fwd.closeAll()
+	var shutdownErr error
 	if err := n.Raft.Shutdown().Error(); err != nil {
-		return fmt.Errorf("raft shutdown: %w", err)
+		shutdownErr = fmt.Errorf("raft shutdown: %w", err)
 	}
 	if err := n.logStore.Close(); err != nil {
-		return fmt.Errorf("raft.db close: %w", err)
+		shutdownErr = errors.Join(shutdownErr, fmt.Errorf("raft.db close: %w", err))
 	}
-	return nil
+	return shutdownErr
 }
