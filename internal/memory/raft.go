@@ -304,6 +304,10 @@ func (n *RaftNode) startStateWatch() {
 				select {
 				case <-n.stopWatch:
 					return
+				case <-n.fsm.Failed():
+					n.log.Error("stopping raft after unsupported committed entry", "err", n.fsm.Failure())
+					n.Raft.Shutdown()
+					return
 				case <-snapshot.C:
 					n.logClusterSnapshot()
 				case <-reconcile.C:

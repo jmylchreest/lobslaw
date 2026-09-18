@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -198,4 +199,42 @@ func currentRevision(t *testing.T, s *Store, id string) uint64 {
 		t.Fatalf("unmarshal %s: %v", id, err)
 	}
 	return c.Revision
+}
+
+func TestUnsupportedEntryMustNotAdvanceOrAllowLaterWrites(t *testing.T) {
+	unknownPayload := mustMarshalEntry(t, &lobslawv1.LogEntry{Op: lobslawv1.LogOp_LOG_OP_PUT, Id: "future"})
+	unknownPayload = protowire.AppendTag(unknownPayload, 999, protowire.BytesType)
+	unknownPayload = protowire.AppendBytes(unknownPayload, []byte{})
+	for name, data := range map[string][]byte{
+		"unknown operation":  mustMarshalEntry(t, &lobslawv1.LogEntry{Op: lobslawv1.LogOp(999)}),
+		"unknown payload":    unknownPayload,
+		"malformed protobuf": {0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := replayStore(t)
+			fsm := NewFSM(store)
+			valid := mustMarshalEntry(t, &lobslawv1.LogEntry{
+				Op: lobslawv1.LogOp_LOG_OP_PUT, Id: "later",
+				Payload: &lobslawv1.LogEntry_Commitment{Commitment: &lobslawv1.AgentCommitment{Id: "later"}},
+			})
+			if err, ok := fsm.Apply(&raft.Log{Index: 2, Data: data}).(error); !ok || err == nil {
+				t.Fatal("unsupported entry accepted")
+			}
+			if got := fsm.lastApplied(); got != 0 {
+				t.Errorf("advanced past unsupported entry: %d", got)
+			}
+			fsm.Apply(&raft.Log{Index: 3, Data: valid})
+			if _, err := store.Get(BucketCommitments, "later"); err == nil {
+				t.Error("later entry applied after unsupported entry")
+			}
+			if got := NewFSM(store).lastApplied(); got != 0 {
+				t.Errorf("restart skips unsupported entry: durable index %d", got)
+			}
+			snap, err := fsm.Snapshot()
+			if err == nil {
+				snap.Release()
+				t.Error("snapshot accepted after unsupported entry")
+			}
+		})
+	}
 }

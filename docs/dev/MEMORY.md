@@ -1063,3 +1063,26 @@ is one nobody reads to the end.
 
 A **denial** carries no content. It is not a question, and the person
 seeing it is not deciding anything.
+
+
+## Unsupported committed entries
+
+The memory FSM stops on an unknown log operation, an unrecognised payload,
+or malformed protobuf. It records the failure in memory, leaves the durable
+last-applied index at the preceding entry, rejects further application and
+snapshot creation/persistence, and signals Raft and the node to shut down.
+The diagnostic includes the offending index without logging the entry payload.
+Normal deterministic rejections, including a lost claim CAS, still advance the
+index. Unknown optional protobuf fields on recognised payloads remain accepted.
+
+Retain the node's data directory and upgrade to a binary that understands the
+entry before restarting. An incompatible binary stops again when it encounters
+that entry. Corrupt entries require operator recovery rather than automatic
+skipping. This does not recover entries already skipped by older binaries, and
+it does not provide general schema-version negotiation for snapshots or new
+semantics in optional fields.
+
+Deploy compatible binaries to every voter before enabling features that write
+new log payloads. An incompatible node stops rather than serving divergent
+state; losing a voting majority makes writes unavailable. Shutdown is signalled
+asynchronously because waiting for Raft from its FSM callback would deadlock.
