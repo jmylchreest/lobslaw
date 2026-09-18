@@ -27,7 +27,7 @@ mv certs/node-key.pem.new certs/node-key.pem
 kill -HUP $(pidof lobslaw)
 ```
 
-The SIGHUP handler calls `mtls.NodeCreds.Reload()`, which atomically swaps the cert behind an `atomic.Pointer`. In-flight TLS handshakes finish on the old cert; the next handshake picks up the new one.
+The SIGHUP handler calls `mtls.NodeCreds.Reload()`, which validates and atomically publishes the certificate and trust roots together. New client and server handshakes, including reconnects through existing gRPC clients, use the new material. Failed reloads retain the previous credentials. Established TLS connections stay open; a reload does not revoke existing connections.
 
 You should see in the logs:
 
@@ -40,11 +40,11 @@ INFO  mtls: certs reloaded subject=CN=node-XXX serial=NEW
 Rotating the CA is a bigger operation — every node needs to trust the new CA before peers can present new certs:
 
 1. Generate the new CA (`cluster ca-init` to a new path).
-2. Update each node's config to trust **both** old and new CAs (a `[cluster.mtls] ca_certs = [...]` list — accepting either signs).
+2. Concatenate the old and new CA PEM certificates into a bundle and atomically replace the file configured by `[cluster.mtls] ca_cert` on each node. Keep that configured path unchanged; there is no `ca_certs` list setting.
 3. SIGHUP every node — they now trust both.
 4. Sign new node certs against the new CA, deploy + SIGHUP each.
-5. Once every node is on a new-CA-signed cert, remove the old CA from each node's trust list.
-6. SIGHUP each. Old CA no longer trusted.
+5. Once every node is on a new-CA-signed cert, replace each node's CA bundle with the new CA alone.
+6. SIGHUP each. New handshakes no longer trust the old CA.
 
 This ratchet pattern avoids a window where any node has a cert nothing else trusts.
 
