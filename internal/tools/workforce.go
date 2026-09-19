@@ -36,6 +36,8 @@ func WorkforceToolDefs() []*types.ToolDef {
 		{"workforce_project_get", "Read this turn's owned project context and bot roster. Available only inside a running workforce task or project conversation.", `{"type":"object","properties":{},"additionalProperties":false}`},
 		{"workforce_task_list", "List this project's recent task summaries, dependencies, progress, result previews and artifact references. Use workforce_task_get for full results.", `{"type":"object","properties":{},"additionalProperties":false}`},
 		{"workforce_task_get", "Read a task and its actual result/artifact references in the current project. Omit task_id for your own task.", `{"type":"object","properties":{"task_id":{"type":"string"}},"additionalProperties":false}`},
+		{"workforce_routine_list", "List recent reusable routines in this project and their approval status. Only the human owner can approve a draft or changed definition.", `{"type":"object","properties":{},"additionalProperties":false}`},
+		{"workforce_routine_run", "Run an already approved routine from this project as a durable child task. This cannot approve or edit a routine and does not mean the work has completed.", `{"type":"object","properties":{"routine_id":{"type":"string"}},"required":["routine_id"],"additionalProperties":false}`},
 		{"workforce_task_create", "Create durable work for a bot on the current project's roster. Workers execute it asynchronously. depends_on references existing same-project tasks; their real outputs are delivered at dispatch. Creating a task does not mean it is complete.", `{"type":"object","properties":{"title":{"type":"string"},"instructions":{"type":"string"},"assignee_bot_id":{"type":"string"},"depends_on":{"type":"array","items":{"type":"string"}},"acceptance_criteria":{"type":"array","items":{"type":"string"}}},"required":["title","instructions"],"additionalProperties":false}`},
 		{"workforce_task_checkpoint", "Persist concise progress for your own running task. Record verified observations and remaining work; this does not mark the task done.", `{"type":"object","properties":{"progress":{"type":"string"}},"required":["progress"],"additionalProperties":false}`},
 		{"workforce_task_block", "Stop your current task and ask the human owner a specific question. Attention will show the blocker. The owner can answer and resume; this grants no approval or authority.", `{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}`},
@@ -58,6 +60,11 @@ func runWorkforceTool(ctx context.Context, s *workforce.Service, name string, ar
 		return map[string]any{"tasks": tasks}, e
 	case "workforce_task_get":
 		return s.AgentTask(ctx, args["task_id"])
+	case "workforce_routine_list":
+		routines, err := s.AgentRoutines(ctx)
+		return map[string]any{"routines": routines}, err
+	case "workforce_routine_run":
+		return s.AgentRunRoutine(ctx, args["routine_id"])
 	case "workforce_task_checkpoint":
 		return s.AgentCheckpoint(ctx, args["progress"])
 	case "workforce_task_block":

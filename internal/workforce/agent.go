@@ -98,6 +98,50 @@ func (s *Service) AgentTask(ctx context.Context, id string) (*Task, error) {
 	t.Artifacts = publicArtifacts(t)
 	return t, nil
 }
+
+func (s *Service) AgentRoutines(ctx context.Context) ([]Routine, error) {
+	st, err := s.agentState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Routine, 0, len(st.Routines))
+	for _, stored := range st.Routines {
+		r := *stored
+		r.Name, r.Description = preview(r.Name), preview(r.Description)
+		r.Instructions, r.Steps = "", nil
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
+	return out[:min(len(out), MaxAgentTaskList)], nil
+}
+
+// AgentRunRoutine delegates an approved workflow, but never approves or edits its
+// definition. It consumes the same child/depth allowance as task creation.
+func (s *Service) AgentRunRoutine(ctx context.Context, id string) (*Task, error) {
+	st, err := s.agentState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out *Task
+	err = s.mutate(ctx, st.Project.Owner, st.Project.ID, func(current *State) error {
+		parent, x, err := authorizeExecution(ctx, current)
+		if err != nil {
+			return err
+		}
+		if x.Children >= MaxDelegatedTasks || x.Depth >= MaxDelegationDepth {
+			return fmt.Errorf("%w: delegation limit reached", ErrInvalid)
+		}
+		out, err = s.routineTask(ctx, current, current.Routines[id], x.Claims)
+		if err != nil {
+			return err
+		}
+		out.ParentID = parent.ID
+		current.Executions[out.ID].Depth = x.Depth + 1
+		x.Children++
+		return nil
+	})
+	return out, err
+}
 func (s *Service) AgentCreateTask(ctx context.Context, input Task) (*Task, error) {
 	st, e := s.agentState(ctx)
 	if e != nil {

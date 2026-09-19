@@ -59,7 +59,8 @@ You can also ask the coordinator in project chat to plan and delegate the work.
 Its workforce tools create actual durable tasks, inspect results, save progress
 and ask you blocker questions. If the bot has an explicit tool allowlist, include
 `workforce_project_get`, `workforce_task_list`, `workforce_task_get`,
-`workforce_task_create`, `workforce_task_checkpoint` and `workforce_task_block` as
+`workforce_task_create`, `workforce_task_checkpoint`, `workforce_task_block`,
+`workforce_routine_list` and `workforce_routine_run` as
 appropriate, and allow them through your normal tool policy. These tools cannot
 approve work or mark a task completed on demand.
 

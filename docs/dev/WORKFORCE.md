@@ -129,7 +129,7 @@ caller-pinned context instead of replacing it, and the user question remains las
 
 ## Agent-facing project work
 
-`internal/tools/workforce.go` registers six tools through the ordinary tool
+`internal/tools/workforce.go` registers workforce tools through the ordinary tool
 registry/executor and policy path:
 
 - `workforce_project_get`: current project context and roster.
@@ -138,6 +138,9 @@ registry/executor and policy path:
 - `workforce_task_create`: delegate durable work with existing dependencies.
 - `workforce_task_checkpoint`: persist verified progress for the current task.
 - `workforce_task_block`: ask the human a question and stop the current attempt.
+- `workforce_routine_list`: discover recent routines and their approval state.
+- `workforce_routine_run`: delegate an already-approved routine as child work,
+  consuming the same child/depth allowance without granting new authority.
 
 There are no agent approval or force-completion tools. A task becomes done only
 through its claim-fenced worker completion. Blocking persists the question before

@@ -289,6 +289,11 @@ func (s *Service) CreateTask(ctx context.Context, owner, project string, in Task
 	return out, e
 }
 func bump(t *Task) { t.Revision++; t.UpdatedAt = time.Now().UTC() }
+
+func taskRestartable(status, action string) bool {
+	return status == StatusPlanned || status == StatusBlocked || status == StatusFailed || action == "retry" && status == StatusCancelled
+}
+
 func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64, action, answer string, claims *types.Claims) (*Task, error) {
 	st, e := s.find(ctx, owner, id, "task")
 	if e != nil {
@@ -315,7 +320,7 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 			x.Claim = ""
 			x.Approved = false
 		case "start", "retry", "answer":
-			if t.Status != StatusPlanned && t.Status != StatusBlocked && t.Status != StatusFailed && !(action == "retry" && t.Status == StatusCancelled) {
+			if !taskRestartable(t.Status, action) {
 				return ErrInvalid
 			}
 			if !validText(answer) {

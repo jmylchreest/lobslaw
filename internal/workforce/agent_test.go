@@ -27,6 +27,17 @@ func TestAgentWorkRequiresOriginalClaimAndCaller(t *testing.T) {
 	}
 	ctx := withExecution(base, p.ID, parent.ID, "claim")
 	ctx = turn.WithIdentity(ctx, turn.Identity{Principal: identity.Bot("worker"), BotOwner: identity.User("alice"), BotID: "worker", TurnID: parent.ID, Channel: "workforce", ChannelID: p.ID})
+	routine, e := s.CreateRoutine(base, p.Owner, p.ID, Routine{Name: "learned reporting", Instructions: "prepare report"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.AgentRunRoutine(ctx, routine.ID); !errors.Is(e, ErrForbidden) {
+		t.Fatal("agent ran unapproved workflow", e)
+	}
+	routine, e = s.ActRoutine(base, p.Owner, routine.ID, routine.Revision, "approve", Routine{}, &types.Claims{UserID: "alice"})
+	if e != nil {
+		t.Fatal(e)
+	}
 	child, e := s.AgentCreateTask(ctx, Task{Title: "child", Instructions: "work", Owner: "user:bob", ProjectID: "elsewhere"})
 	if e != nil {
 		t.Fatal(e)
@@ -50,6 +61,46 @@ func TestAgentWorkRequiresOriginalClaimAndCaller(t *testing.T) {
 	}
 	if _, e = s.AgentCreateTask(ctx, Task{Title: "overflow", Instructions: "work"}); !errors.Is(e, ErrInvalid) {
 		t.Fatal("delegation budget bypass", e)
+	}
+	if _, e = s.AgentRunRoutine(ctx, routine.ID); !errors.Is(e, ErrInvalid) {
+		t.Fatal("routine bypassed child allowance", e)
+	}
+}
+
+func TestAgentCanReuseAnApprovedDemonstration(t *testing.T) {
+	t.Parallel()
+	s, repo, _, p := fixture(t)
+	base := context.Background()
+	parent, err := s.CreateTask(base, p.Owner, p.ID, Task{Title: "reuse", Instructions: "run the reporting routine"}, &types.Claims{UserID: "alice", Scope: "restricted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := repo.Get(base, p.ID)
+	st.Tasks[parent.ID].Status = StatusRunning
+	st.Executions[parent.ID].Claim = "claim"
+	if err = repo.Put(base, st, st.Revision); err != nil {
+		t.Fatal(err)
+	}
+	ctx := turn.WithIdentity(withExecution(base, p.ID, parent.ID, "claim"), turn.Identity{Principal: identity.Bot("worker"), BotOwner: identity.User("alice"), BotID: "worker", TurnID: parent.ID, Channel: "workforce", ChannelID: p.ID})
+	routine, err := s.CreateRoutine(base, p.Owner, p.ID, Routine{Name: "report", Instructions: "prepare the approved report"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routine, err = s.ActRoutine(base, p.Owner, routine.ID, routine.Revision, "approve", Routine{}, &types.Claims{UserID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := s.AgentRoutines(ctx)
+	if err != nil || len(listed) != 1 || listed[0].ID != routine.ID {
+		t.Fatal("routine not discoverable", listed, err)
+	}
+	child, err := s.AgentRunRoutine(ctx, routine.ID)
+	if err != nil || child.ParentID != parent.ID {
+		t.Fatal("approved routine did not become child work", child, err)
+	}
+	stored, _ := repo.Get(base, p.ID)
+	if stored.Executions[child.ID].Routine.ApprovedDigest != routine.ApprovedDigest || stored.Executions[child.ID].Claims.Scope != "restricted" {
+		t.Fatal("workflow definition or authority changed")
 	}
 }
 
