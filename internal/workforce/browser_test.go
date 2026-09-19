@@ -2,12 +2,27 @@ package workforce
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
+
+func TestRoutineDefinitionsDoNotStoreBrowserCredentials(t *testing.T) {
+	t.Parallel()
+	s, _, _, p := fixture(t)
+	for _, step := range []RoutineStep{{Action: "fill", Value: "password"}, {Action: "fill", Sensitive: true, Value: "password"}, {Action: "navigate", URL: "https://example.test/?token=credential"}, {Action: "navigate", URL: "https://name:password@example.test/"}, {Action: "navigate", Sensitive: true, URL: "https://example.test/?token=credential"}} {
+		if _, e := s.CreateRoutine(context.Background(), p.Owner, p.ID, Routine{Name: "secret", Steps: []RoutineStep{step}}); !errors.Is(e, ErrInvalid) {
+			t.Fatalf("credential-bearing step accepted: action=%s error=%v", step.Action, e)
+		}
+	}
+	routines, e := s.ListRoutines(context.Background(), p.Owner, p.ID)
+	if e != nil || len(routines) != 0 {
+		t.Fatal("rejected draft persisted", routines, e)
+	}
+}
 
 type restrictedBots struct{}
 

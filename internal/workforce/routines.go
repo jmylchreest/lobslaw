@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -39,8 +40,14 @@ func validRoutine(r *Routine) error {
 		default:
 			return ErrInvalid
 		}
-		if !validText(step.Value+step.Selector+step.URL+step.Description) || step.Sensitive && step.Value != "" {
+		if !validText(step.Value+step.Selector+step.URL+step.Description) || step.Sensitive && (step.Value != "" || step.Selector != "" || step.URL != "") || step.Action == "fill" && !step.Sensitive {
 			return fmt.Errorf("%w: sensitive steps must not contain literal input", ErrInvalid)
+		}
+		if step.Action == "navigate" && !step.Sensitive {
+			parsed, e := url.Parse(step.URL)
+			if e != nil || parsed.Host == "" || parsed.Scheme != "https" && parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return fmt.Errorf("%w: credential-bearing navigation must be a manual step", ErrInvalid)
+			}
 		}
 	}
 	return nil
