@@ -539,3 +539,14 @@ func TestUnenumeratedFlagsFailClosed(t *testing.T) {
 		t.Errorf("pacman -Rdd = %v, want deletes+privilege", got.Labels)
 	}
 }
+
+func TestFindFileListingRequiresWriteApproval(t *testing.T) {
+	t.Parallel()
+	v := ClassifyRisk("find /etc -fls /tmp/etc-inventory")
+	if !sameLabels(v.Labels, L(LabelWrites)) {
+		t.Fatalf("labels = %v, want writes", v.Labels)
+	}
+	if v.Approved(map[RiskLabel]bool{LabelReads: true}) {
+		t.Fatal("file listing accepted with read-only approval")
+	}
+}
