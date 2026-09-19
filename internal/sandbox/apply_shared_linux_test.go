@@ -13,16 +13,17 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/tools"
 )
 
-func checkChildPolicyDefaults(t *testing.T, cmd *exec.Cmd) {
+func checkChildPolicyDefaults(t *testing.T, cmd *exec.Cmd, mounts []sandbox.PolicyMount) {
 	t.Helper()
-	for _, entry := range cmd.Env {
+	for i := len(cmd.Env) - 1; i >= 0; i-- {
+		entry := cmd.Env[i]
 		if raw, ok := strings.CutPrefix(entry, sandbox.PolicyEnvVar+"="); ok {
 			child, err := sandbox.DecodePolicy(raw)
 			if err != nil {
 				t.Error(err)
 				return
 			}
-			if !child.NoNewPrivs || !reflect.DeepEqual(child.Seccomp, sandbox.DefaultSeccompPolicy) {
+			if !child.NoNewPrivs || !reflect.DeepEqual(child.Seccomp, sandbox.DefaultSeccompPolicy) || !reflect.DeepEqual(child.Mounts, mounts) {
 				t.Errorf("child did not receive defaults: %+v", child)
 			}
 			return
@@ -38,10 +39,11 @@ func TestApplyPreservesCallerPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("/bin/true")
+	cmd.Env = []string{sandbox.PolicyEnvVar + "=stale"}
 	if err := sandbox.Apply(cmd, p); err != nil {
 		t.Fatal(err)
 	}
-	checkChildPolicyDefaults(t, cmd)
+	checkChildPolicyDefaults(t, cmd, p.Mounts)
 	after, err := sandbox.EncodePolicy(p)
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +55,8 @@ func TestApplyPreservesCallerPolicy(t *testing.T) {
 
 // Each goroutine owns its command but shares the registry policy, as the
 // subprocess executor does. Apply only prepares commands; none are started.
+// Run with -race: this concurrent regression detects shared writes, while
+// TestApplyPreservesCallerPolicy detects mutation without the race detector.
 func TestApplySharedRegistryPolicyConcurrently(t *testing.T) {
 	registry := tools.NewRegistry()
 	for round := 0; round < 30; round++ {
@@ -68,7 +72,7 @@ func TestApplySharedRegistryPolicyConcurrently(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				checkChildPolicyDefaults(t, cmd)
+				checkChildPolicyDefaults(t, cmd, p.Mounts)
 			})
 		}
 		close(start)
