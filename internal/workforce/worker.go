@@ -136,6 +136,9 @@ func (s *Service) execute(parent context.Context, p Project, t *Task, x *Executi
 	if !s.holdsClaim(ctx, p.ID, t.ID, token) {
 		return
 	}
+	watchDone := make(chan struct{})
+	go s.watchClaim(ctx, cancel, p.ID, t.ID, token, watchDone)
+	defer func() { cancel(); <-watchDone }()
 	var resp *turn.Response
 	var err error
 	if x.Approved {
@@ -335,6 +338,25 @@ func (s *Service) finish(ctx context.Context, project, id, token string, resp *t
 		bump(t)
 		return nil
 	})
+}
+
+// Cancellation may be written through another backend. Observe the durable
+// fence as well as the local cancellation map, so tools see that cancellation.
+func (s *Service) watchClaim(ctx context.Context, cancel context.CancelFunc, project, id, token string, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(PollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !s.holdsClaim(ctx, project, id, token) {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 func boundedText(text string) string {

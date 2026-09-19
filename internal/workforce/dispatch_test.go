@@ -4,11 +4,53 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
+
+type cancellationWatcher struct{ started chan struct{} }
+
+func (r *cancellationWatcher) Run(ctx context.Context, _ turn.Request) (*turn.Response, error) {
+	close(r.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (r *cancellationWatcher) Resume(ctx context.Context, req turn.Request, _ []turn.Message) (*turn.Response, error) {
+	return r.Run(ctx, req)
+}
+func TestCancellationFromAnotherBackendClosesWorker(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		s, repo, _, p := fixture(t)
+		runner := &cancellationWatcher{started: make(chan struct{})}
+		s.cfg.Runner = runner
+		ctx := context.Background()
+		task, e := s.CreateTask(ctx, p.Owner, p.ID, Task{Title: "remote cancellation", Instructions: "work"}, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		done := make(chan struct{})
+		go func() { s.WorkOnce(ctx); close(done) }()
+		<-runner.started
+		other := New(Config{Repository: repo, Bots: testBots{}})
+		task, e = other.GetTask(ctx, p.Owner, task.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		start := time.Now()
+		if _, e = other.ActTask(ctx, p.Owner, task.ID, task.Revision, "cancel", "", nil); e != nil {
+			t.Fatal(e)
+		}
+		<-done
+		if time.Since(start) > 2*PollInterval {
+			t.Fatal("remote cancellation waited for the task timeout")
+		}
+	})
+}
 
 type agentBotResolver struct{}
 
