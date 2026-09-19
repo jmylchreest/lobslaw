@@ -1,9 +1,13 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,6 +54,38 @@ func TestSkillsShareOfflinePublishInspectAndSign(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := sharing.Verify(a, map[string]ed25519.PublicKey{"alice": pub}, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSkillsFetchClawhubToPortableFile(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("---\nname: demo\n---\nUse demo.\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(buf.Bytes()) }))
+	defer srv.Close()
+	t.Setenv("LOBSLAW_CLAWHUB_BASE_URL", srv.URL)
+	ref := "file:" + filepath.Join(t.TempDir(), "demo.share")
+	if err := skillsFetch([]string{"clawhub:demo", "--to", ref}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := (sharing.FileBackend{}).Fetch(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Package().Origin == nil || a.Package().Name != "demo" {
+		t.Fatal("fetch lost source metadata")
+	}
+	if err := skillsInspect([]string{ref}); err != nil {
 		t.Fatal(err)
 	}
 }

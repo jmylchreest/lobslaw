@@ -157,10 +157,11 @@ func (s *skillService) shareResult(ctx context.Context, p *memory.SharePlan, a s
 	// review. Its declarations are requests, never policy grants.
 	raw, err := json.Marshal(struct {
 		*memory.SharePlan
-		Manifest  string `json:"manifest"`
-		Publisher string `json:"publisher,omitempty"`
-		Applied   bool   `json:"applied"`
-	}{p, string(a.Package().Manifest), a.Publisher(), apply})
+		Manifest  string          `json:"manifest"`
+		Publisher string          `json:"publisher,omitempty"`
+		Applied   bool            `json:"applied"`
+		Origin    *sharing.Origin `json:"origin,omitempty"`
+	}{p, string(a.Package().Manifest), a.Publisher(), apply, a.Package().Origin})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

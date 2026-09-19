@@ -91,9 +91,12 @@ func (c *Client) GetSkill(ctx context.Context, name, version string) (*SkillEntr
 		return nil, fmt.Errorf("clawhub: GET %s: %w", endpoint, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil {
 		return nil, fmt.Errorf("clawhub: read response: %w", err)
+	}
+	if len(body) > 1<<20 {
+		return nil, errors.New("clawhub: catalogue metadata exceeds 1 MiB limit")
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("clawhub: skill %q version %q not in catalog", name, version)

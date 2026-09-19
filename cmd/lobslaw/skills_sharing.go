@@ -118,12 +118,7 @@ func skillsInspect(args []string) error {
 	for path, raw := range p.Files {
 		files[path] = string(raw)
 	}
-	return printShareJSON(struct {
-		Digest, Publisher, SignatureStatus, Name, Version, Manifest string
-		Files                                                       map[string]string
-		Schedules                                                   []sharing.Schedule
-		Inputs                                                      []string
-	}{a.Digest(), a.Publisher(), "not verified; destination trust policy is checked on install", p.Name, p.Version, string(p.Manifest), files, p.Schedules, p.Inputs})
+	return printShareJSON(map[string]any{"digest": a.Digest(), "publisher": a.Publisher(), "signature_status": "not verified; destination trust policy is checked on install", "name": p.Name, "version": p.Version, "manifest": string(p.Manifest), "files": files, "schedules": p.Schedules, "inputs": p.Inputs, "origin": p.Origin})
 }
 
 func skillsSign(args []string) error {
@@ -198,9 +193,15 @@ func skillsInstall(args []string) error {
 		return err
 	}
 	if len(rest) != 1 || *owner == "" {
-		return errors.New("supply --owner user:<id> and file:<package>")
+		return errors.New("supply --owner user:<id> and file:<package> or clawhub:<slug>")
 	}
-	a, err := (sharing.FileBackend{}).Fetch(context.Background(), rest[0])
+	source, err := skillShareSource(&node, rest[0])
+	if err != nil {
+		return err
+	}
+	fetchCtx, fetchCancel := node.ctx()
+	defer fetchCancel()
+	a, err := source.Fetch(fetchCtx, rest[0])
 	if err != nil {
 		return err
 	}

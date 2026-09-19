@@ -40,6 +40,15 @@ type Package struct {
 	Files             map[string][]byte `json:"files"`
 	Schedules         []Schedule        `json:"schedules,omitempty"`
 	Inputs            []string          `json:"inputs,omitempty"`
+	Origin            *Origin           `json:"origin,omitempty"`
+}
+
+// Origin is provenance, not a verified publisher identity or a policy grant.
+type Origin struct {
+	Reference string `json:"reference"`
+	Catalog   string `json:"catalog"`
+	Digest    string `json:"digest"`
+	Format    string `json:"format"`
 }
 
 // Schedule is a template, not a runtime record. Source owners, addresses,
@@ -135,6 +144,9 @@ func Decode(raw []byte) (Artifact, error) {
 }
 
 func validate(p Package) error {
+	if err := validateOrigin(p.Origin); err != nil {
+		return err
+	}
 	if p.Format != Format || p.Schema != 1 {
 		return errors.New("sharing: unsupported package format or schema")
 	}
@@ -267,4 +279,11 @@ func VerifyWith(a Artifact, required bool, verify func([]byte, []byte) (string, 
 		}
 	}
 	return errors.New("sharing: publisher is untrusted or signature is invalid")
+}
+
+func validateOrigin(origin *Origin) error {
+	if origin != nil && (len(origin.Reference) > 512 || len(origin.Catalog) > 2048 || len(origin.Format) > 32 || len(origin.Digest) != 71 || !strings.HasPrefix(origin.Digest, "sha256:")) {
+		return errors.New("sharing: invalid source provenance")
+	}
+	return nil
 }

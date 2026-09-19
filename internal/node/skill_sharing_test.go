@@ -1,13 +1,18 @@
 package node
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/sharing"
 	"github.com/jmylchreest/lobslaw/internal/skills"
@@ -71,6 +76,69 @@ func TestShareRPCPreviewInstallActivate(t *testing.T) {
 	activate.Owner = "user:bob"
 	if _, err := svc.ActivateShare(ctx, activate); status.Code(err) != codes.PermissionDenied {
 		t.Fatal("cross-owner activation accepted", err)
+	}
+}
+
+func TestClawhubArtifactUsesSharedRaftInstallAndActivation(t *testing.T) {
+	var raw bytes.Buffer
+	zw := zip.NewWriter(&raw)
+	w, err := zw.Create("SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("---\nname: demo\n---\nUse this skill for demo tasks.\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(raw.Bytes()) }))
+	defer srv.Close()
+	source, err := clawhub.NewShareSource(srv.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := source.Fetch(context.Background(), "clawhub:demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := skillSvc(t, skills.SigningOff, nil)
+	svc.authorizeShare = func(context.Context, string, string) (string, error) { return "user:alice", nil }
+	ctx := context.Background()
+	req := &lobslawv1.InstallShareRequest{Artifact: artifact.Bytes(), Owner: "user:alice"}
+	preview, err := svc.InstallShare(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan memory.SharePlan
+	if err := json.Unmarshal(preview.PlanJson, &plan); err != nil {
+		t.Fatal(err)
+	}
+	req.Apply = true
+	req.ExpectedPlan = plan.Digest
+	if _, err := svc.InstallShare(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := svc.store.Get("demo", "0.0.0")
+	if err != nil || rec.Active {
+		t.Fatal("ClawHub install didn't stage", err)
+	}
+	activate := &lobslawv1.ActivateShareRequest{InstallationId: plan.InstallationID, Owner: "user:alice"}
+	activation, err := svc.ActivateShare(ctx, activate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(activation.PlanJson, &plan); err != nil {
+		t.Fatal(err)
+	}
+	activate.Apply = true
+	activate.ExpectedPlan = plan.Digest
+	if _, err := svc.ActivateShare(ctx, activate); err != nil {
+		t.Fatal(err)
+	}
+	rec, err = svc.store.Get("demo", "0.0.0")
+	if err != nil || !rec.Active {
+		t.Fatal("ClawHub activation failed", err)
 	}
 }
 

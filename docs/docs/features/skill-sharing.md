@@ -13,7 +13,49 @@ backend: `Publisher.Publish` transports a complete immutable artifact and return
 its reference and digest; `Source.Fetch` retrieves it. A future HTTP or ClawHub
 adapter can implement either interface without owning trust or installation.
 Publisher **identity** names a signing key; the publishing **backend** hosts bytes.
-Remote publishing and fetching are not implemented in this release.
+ClawHub retrieval is implemented through the existing catalogue client and
+bundle converter. Remote publishing and generic HTTP sources remain follow-ups.
+
+## Retrieve a known ClawHub skill
+
+Configure `security.clawhub_base_url` in the CLI's `--config` file, or set
+`LOBSLAW_CLAWHUB_BASE_URL`. Requests use the existing `clawhub` egress role.
+`--context` selects the destination cluster; source catalogue configuration is
+read locally by the CLI.
+
+```bash
+# Public ClawHub-style slug API (owner prefix is informational).
+lobslaw skills install clawhub:steipete/gog --context home --owner user:alice
+
+# Native catalogue API, requesting a specific name and version.
+lobslaw skills install clawhub:weather@1.0.0 --context home --owner user:alice
+
+# Save an exact copy to inspect, optionally sign, and install later.
+lobslaw skills fetch clawhub:steipete/gog --to file:./gog.share
+lobslaw skills inspect file:./gog.share
+lobslaw skills install file:./gog.share --context home --owner user:alice
+```
+
+These install commands use the same preview/apply and separate activation flow
+below. A direct install fetches again on apply; changed remote content invalidates
+the preview. Fetch to a local file to review a fixed artifact.
+
+Native manifests and signatures remain unchanged. For ClawHub `SKILL.md` bundles,
+the existing converter produces a manifest and handler adapter, retains the
+original instructions/assets, and uses `_meta.json`'s version where available
+(otherwise `0.0.0`). The generated manifest exposes the instructions and retains
+binary requirements. The package records its source reference, catalogue and
+download digest as provenance. This is not a publisher signature: converted
+packages remain unsigned and destination signing policy still applies.
+
+Versioned catalogue downloads check the advertised digest and any present
+catalogue signature against locally configured trusted publisher keys. Slug
+downloads have no advertised digest in the existing API; their downloaded bytes
+are fingerprinted for review. Neither path installs host binaries, runs setup
+scripts, changes a live skill mount or grants permissions during retrieval.
+Required binaries must already be available on execution nodes. The legacy
+`plugin install clawhub:...` and agent `clawhub_install` entry points retain their
+existing behavior; the reviewed flow is exposed through `skills install`.
 
 ## Publish and inspect
 

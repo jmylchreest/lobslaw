@@ -34,10 +34,11 @@ lobslaw skills             # skills held in the cluster store
   skills list              # what is installed
   skills import <path>     # add one
   skills remove <name>     # take one out
+  skills fetch clawhub:<slug> --to file:<path> # retrieve for review
   skills publish --dir <path> --to file:<path> # create a portable release
   skills inspect file:<path> # inspect without connecting to a node
   skills sign file:<path> --key <key> --publisher <name> --to file:<path>
-  skills install file:<path> --owner user:<id> # preview staged installation
+  skills install <file:path|clawhub:slug> --owner user:<id> # preview staged installation
   skills activate-install <id> --owner user:<id> # preview activation
 lobslaw learned            # what the agent taught itself
   learned list             # artefacts it wrote for itself

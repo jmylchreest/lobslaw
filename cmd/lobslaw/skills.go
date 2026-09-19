@@ -27,10 +27,11 @@ import (
 
 const skillsUsage = `lobslaw skills — install and inspect skills on a RUNNING cluster
 
+  fetch <source> --to file:<path>  retrieve a ClawHub skill for review
   publish --to file:<path> [--dir <dir> | <name> [version]]
   inspect file:<path>             inspect a portable package offline
   sign --key <path> --publisher <name> --to file:<path> file:<source>
-  install --owner user:<id> file:<path>  preview a staged installation
+  install --owner user:<id> <source>  preview a staged installation
   activate-install --owner user:<id> <id>  preview activation
     Add --apply --expected-plan <digest> to apply a reviewed preview.
 
@@ -62,6 +63,8 @@ func dispatchSkills(args []string) bool {
 
 	var err error
 	switch sub[0] {
+	case "fetch":
+		err = skillsFetch(sub[1:])
 	case "publish":
 		err = skillsPublish(sub[1:])
 	case "inspect":
