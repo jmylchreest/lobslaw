@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -103,5 +104,39 @@ func TestDecodePolicyBase64ButNotJSONErrors(t *testing.T) {
 	t.Parallel()
 	if _, err := sandbox.DecodePolicy("aGVsbG8gd29ybGQ="); err == nil || !strings.Contains(err.Error(), "unmarshal") {
 		t.Errorf("non-JSON base64 should fail with unmarshal error, got %v", err)
+	}
+}
+
+// An absent policy must fail before the helper can replace this process.
+func TestRunSandboxExecRequiresPolicy(t *testing.T) {
+	for _, unset := range []bool{false, true} {
+		t.Run(map[bool]string{false: "empty", true: "unset"}[unset], func(t *testing.T) {
+			t.Setenv(sandbox.PolicyEnvVar, "")
+			if unset {
+				if err := os.Unsetenv(sandbox.PolicyEnvVar); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := runSandboxExec([]string{"--", "/bin/true"})
+			if err == nil || !strings.Contains(err.Error(), sandbox.PolicyEnvVar+" is required") {
+				t.Fatalf("expected missing-policy error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRunSandboxExecDecodesSuppliedPolicy(t *testing.T) {
+	raw, err := sandbox.EncodePolicy(&sandbox.Policy{NoNewPrivs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(sandbox.PolicyEnvVar, raw)
+	// Invalid target stops before exec, after decoding and scrubbing the policy.
+	err = runSandboxExec([]string{"relative"})
+	if err == nil || !strings.Contains(err.Error(), "must be absolute") {
+		t.Fatalf("expected target validation, got %v", err)
+	}
+	if _, ok := os.LookupEnv(sandbox.PolicyEnvVar); ok {
+		t.Fatal("policy was not scrubbed")
 	}
 }
