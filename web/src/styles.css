@@ -881,6 +881,15 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
     box-sizing: border-box;
   }
 
+  /* One header on a phone. The top bar already names where you are, so
+     a page title directly underneath it is the same word twice and eats
+     the first screenful — Config, New bot and every team did exactly
+     that. The subtitle and any action stay; only the repeated title
+     goes. */
+  .main .head h1 { display: none; }
+  .main .head { margin-bottom: 18px; }
+  .main .room-head .room-nm { display: none; }
+
   .wrap, .wrap.wide {
     padding: 20px 16px calc(40px + env(safe-area-inset-bottom));
     max-width: 100%;
