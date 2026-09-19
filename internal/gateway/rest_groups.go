@@ -305,10 +305,48 @@ func (s *Server) ensureOwnersTeam(ctx context.Context, principal string) (string
 			return "", err
 		}
 	}
+	// Bots created before they inherited a team (or by a tool that did
+	// not set one) are in no team, so the roster's filter hides them.
+	// Adopt the caller's own orphans before the coordinator's contact
+	// list is derived, so they appear and are reachable.
+	s.adoptOrphanBots(ctx, principal, team.GetId())
+
 	if err := s.ensureTeamCoordinator(ctx, principal, team); err != nil {
 		return "", err
 	}
 	return team.GetId(), nil
+}
+
+// adoptOrphanBots puts the caller's team-less bots into their team.
+//
+// Only bots that are already theirs, or that nobody owns, are touched:
+// a bot owned by somebody else is left exactly where it is. An unowned
+// bot becomes the caller's, which is the same rule startup adoption
+// uses for the unique operator.
+func (s *Server) adoptOrphanBots(ctx context.Context, principal, teamID string) {
+	if s.cfg.Bots == nil || strings.TrimSpace(principal) == "" || strings.TrimSpace(teamID) == "" {
+		return
+	}
+	bots, err := s.cfg.Bots.List(ctx)
+	if err != nil {
+		return
+	}
+	for _, b := range bots {
+		if strings.TrimSpace(b.GetGroupId()) != "" {
+			continue
+		}
+		owner := strings.TrimSpace(b.GetOwner())
+		if owner != "" && owner != principal {
+			continue
+		}
+		b.GroupId = teamID
+		if owner == "" {
+			b.Owner = principal
+		}
+		if _, err := s.cfg.Bots.Put(ctx, b, b.GetRevision()); err != nil {
+			s.log.Warn("rest: adopt orphan bot", "bot", b.GetId(), "err", err)
+		}
+	}
 }
 
 // ensureTeamCoordinator gives a team the bot that answers for it.

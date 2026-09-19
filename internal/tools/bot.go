@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
@@ -207,6 +208,7 @@ func newBotCreateHandler(reg BotRegistry) compute.BuiltinFunc {
 		if instructions == "" {
 			return nil, 2, errors.New("bot_create: instructions are required; a bot with no brief is the assistant with a different name")
 		}
+		owner, group := callerScope(ctx, reg)
 		rec := &lobslawv1.BotRecord{
 			Id:           id,
 			DisplayName:  strings.TrimSpace(args["display_name"]),
@@ -215,7 +217,13 @@ func newBotCreateHandler(reg BotRegistry) compute.BuiltinFunc {
 			Tools:        splitList(args["tools"]),
 			MayMessage:   splitList(args["may_message"]),
 			Enabled:      true,
-			CreatedBy:    creatorPrincipal(ctx),
+			// A bot created by the coordinator belongs to the same
+			// person, in the same team. Without this it was unowned and
+			// in no team, so it was invisible in the console and
+			// inaccessible to everyone.
+			Owner:     owner,
+			GroupId:   group,
+			CreatedBy: creatorPrincipal(ctx),
 		}
 		created, err := reg.Put(ctx, rec, 0)
 		if err != nil {
@@ -462,6 +470,32 @@ func requesterLabel(id turn.Identity) string {
 		return "bot:" + id.BotID
 	}
 	return ""
+}
+
+// callerScope is the owner and team a new bot inherits from whoever
+// asked for it.
+//
+// A bot created by the coordinator takes the coordinator's owner and
+// team; one created by a person takes that person. Group is empty for
+// a person because the registry does not own team resolution — the
+// console's team-ensure fills it in.
+func callerScope(ctx context.Context, reg BotRegistry) (owner, group string) {
+	id, ok := turn.IdentityFrom(ctx)
+	if !ok {
+		return "", ""
+	}
+	p := id.Principal
+	if p.IsBot() {
+		botID := strings.TrimPrefix(p.String(), identity.KindBot+":")
+		if rec, err := reg.Get(ctx, botID); err == nil && rec != nil {
+			return strings.TrimSpace(rec.GetOwner()), strings.TrimSpace(rec.GetGroupId())
+		}
+		return "", ""
+	}
+	if strings.HasPrefix(p.String(), identity.KindUser+":") {
+		return p.String(), ""
+	}
+	return "", ""
 }
 
 func creatorPrincipal(ctx context.Context) string {
