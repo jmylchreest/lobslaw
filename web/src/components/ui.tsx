@@ -68,6 +68,7 @@ export function Err({ error }: { error: Error }) {
   const hint =
     status === 401 ? "Run `lobslaw login` on this machine and enter the code, or try again."
     : status === 503 ? "This node cannot serve that yet. It is unavailable, not gone."
+    : status === 409 ? "This record changed or the operation conflicts with its current state. Reload the latest revision, review it, then try again."
     : undefined;
   return (
     <div className="err">
