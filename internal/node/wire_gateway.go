@@ -159,6 +159,7 @@ func (n *Node) wireGateway() error {
 
 	n.gatewaySrv = gateway.NewServer(cfg, runner)
 	n.mountWebConsole(uiWeb)
+	n.registerConsoleCodeTool(uiWeb)
 	n.log.Info("gateway wired",
 		"http_port", port,
 		"tls", tlsCert != "",
@@ -184,6 +185,24 @@ func (n *Node) mountWebConsole(enabled bool) {
 	}
 	n.gatewaySrv.RegisterConsole(handler)
 	n.log.Info("gateway: web console mounted", "path", "/")
+}
+
+// registerConsoleCodeTool exposes console_code: "give me a code to sign
+// in". Registered after the gateway exists because the code store
+// lives on it, and only when the console is actually on — a node with
+// no console has no code to give. The tool itself refuses anyone
+// without role:operator.
+func (n *Node) registerConsoleCodeTool(uiWeb bool) {
+	if !uiWeb || n.gatewaySrv == nil || n.builtinsRegistry == nil || n.toolRegistry == nil {
+		return
+	}
+	if err := tools.RegisterConsoleCodeBuiltin(n.builtinsRegistry, n.gatewaySrv); err != nil {
+		n.log.Warn("console_code: register failed", "err", err)
+		return
+	}
+	if err := n.toolRegistry.Register(tools.ConsoleCodeToolDef()); err != nil {
+		n.log.Warn("console_code: tool def register failed", "err", err)
+	}
 }
 
 // registerSlackTools exposes slack_read_channel / slack_search.

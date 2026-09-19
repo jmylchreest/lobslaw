@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -12,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
@@ -63,6 +66,37 @@ func (s *Server) loginWithJWT(w http.ResponseWriter, r *http.Request, token stri
 		return
 	}
 	s.issueLoginCookie(w, r, user, claims.Scope)
+}
+
+// MintLoginCode issues a one-time console sign-in code for the account
+// a principal names. Exposed so the agent can hand the operator a code
+// from a channel they are already talking to; the caller must have
+// checked that the asker is an operator.
+func (s *Server) MintLoginCode(ctx context.Context, principal string) (string, string, int, error) {
+	if !s.consoleEnabled() {
+		return "", "", 0, errors.New("the web console is not enabled on this node")
+	}
+	if s.cfg.JWTValidator == nil {
+		return "", "", 0, errors.New("console sign-in is not configured on this node")
+	}
+	p := strings.TrimSpace(principal)
+	// A turn run as a bot asks on behalf of its human. The code belongs
+	// to the owner, not the bot — a bot has no console account.
+	if strings.HasPrefix(p, identity.KindBot+":") && s.cfg.Bots != nil {
+		if rec, err := s.cfg.Bots.Get(ctx, strings.TrimPrefix(p, identity.KindBot+":")); err == nil && rec != nil {
+			p = strings.TrimSpace(rec.GetOwner())
+		}
+	}
+	id := strings.TrimPrefix(p, identity.KindUser+":")
+	user, ok := s.loginUser(id)
+	if !ok {
+		return "", "", 0, errors.New("no enrolled user matches this account")
+	}
+	code, err := s.logins.issueCode(user, s.cfg.DefaultScope, LoginCodeTTL)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return code, user.ID, int(LoginCodeTTL.Seconds()), nil
 }
 
 func (s *Server) loginWithCode(w http.ResponseWriter, r *http.Request, code string) {
