@@ -35,6 +35,11 @@ func Apply(cmd *exec.Cmd, p *Policy) error {
 	if p == nil {
 		return nil
 	}
+	// Registry and fleet-default policies may be shared across invocations.
+	// Normalise replaces fields but does not mutate slice elements, so a shallow
+	// copy keeps both normalization and helper serialization local to this call.
+	local := *p
+	p = &local
 	p.Normalise()
 
 	if cmd.SysProcAttr == nil {

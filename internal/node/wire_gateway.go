@@ -91,6 +91,7 @@ func (n *Node) wireGateway() error {
 	}
 
 	cfg := gateway.RESTConfig{
+		IncomingDir:      n.incomingDir(),
 		Notices:          n.notices,
 		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
 		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
@@ -342,6 +343,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		// Nil when enrolment is not wired, which disables channel
 		// approval and leaves the CLI path working.
 		Enrolments:        n.enrolmentDecider(),
+		Learned:           n.learnedReviews(),
 		CommandAuthorizer: n.commandAuthorizerOrNil(),
 		SessionGrants:     n.sessionGrantsView(),
 		Roles:             n.resolveUserRoles,

@@ -224,7 +224,7 @@ func PendingReviewNotice(proposals, refinements int) []Notice {
 		parts = append(parts, fmt.Sprintf("%s waiting for review", plural(refinements, "refinement")))
 	}
 	return []Notice{{Text: fmt.Sprintf(
-		"%s — `lobslaw learned pending --all`", strings.Join(parts, ", "))}}
+		"%s — review in Telegram with /learned, or `lobslaw learned pending --all`", strings.Join(parts, ", "))}}
 }
 
 // CombineNoticeSources reads several sources as one.

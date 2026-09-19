@@ -36,9 +36,8 @@ COPY . .
 
 ARG VERSION=dev
 ARG COMMIT=unknown
-# BUILD_DATE is when this image was compiled, RFC3339 UTC. Empty falls
-# back to the commit time the toolchain embeds, so an image built
-# without it still says something true rather than nothing.
+# BUILD_DATE is when this image was compiled, RFC3339 UTC. When omitted,
+# stamp the compilation time here: .git is excluded from the build context.
 ARG BUILD_DATE=
 
 # The AVX2 embedding kernel, which is off unless asked for.
@@ -66,6 +65,7 @@ ARG GOEXPERIMENT=simd
 # info (~30% smaller binary).
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    BUILD_DATE=${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)} && \
     CGO_ENABLED=0 GOOS=linux GOEXPERIMENT=${GOEXPERIMENT} go build \
         -trimpath \
         -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \

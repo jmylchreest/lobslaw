@@ -1086,3 +1086,29 @@ Deploy compatible binaries to every voter before enabling features that write
 new log payloads. An incompatible node stops rather than serving divergent
 state; losing a voting majority makes writes unavailable. Shutdown is signalled
 asynchronously because waiting for Raft from its FSM callback would deadlock.
+
+## Snapshot restore recovery
+
+A failed rollback stops the node and leaves `state.db.restore-*.previous`
+(and sometimes candidate/rollback files) beside `state.db`. Startup refuses
+these markers because the canonical image may be ambiguous. A successful
+publication followed by an old-handle close warning still removes the marker;
+a failed marker removal requires inspection before restart.
+
+1. Stop the affected service and its automatic restart loop. For Docker Compose,
+   run `docker compose stop SERVICE`; `restart: unless-stopped` does not interpret
+   a special recovery exit code. For systemd, stop the unit before inspection.
+2. Preserve a copy of the entire data directory, including Raft state and all
+   recovery images. Do not delete markers merely to force startup.
+3. Use offline read commands with `--recovery-read-only --state-db PATH` and the
+   original encryption key to inspect the canonical or `.previous` image.
+   This mode creates no buckets and refuses writes and snapshot restores.
+   Normal write commands, including `backfill-embeddings`, remain blocked.
+4. Recover the node using a consistent database and matching Raft state from a
+   verified backup, or rebuild the affected replica from healthy cluster peers
+   using the normal membership/rejoin procedure. A standalone database swap is
+   insufficient: the Raft applied index must agree with the restored image.
+5. After recovery and removal of resolved markers, explicitly start the service.
+
+The read-only bypass is diagnostic access, not evidence that an image is safe
+for service. Keep the original recovery files until the node is healthy.

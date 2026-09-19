@@ -28,12 +28,8 @@ func (p pendingReviewSource) Notices(_ context.Context, principal string) ([]gat
 	}
 	var proposals, refinements int
 	for _, rec := range live {
-		// Owner-scoped, like every other read. Somebody permitted to
-		// receive notices is not thereby permitted to learn what a
-		// different principal has pending — and an artefact with no
-		// owner is nobody's private business, so it counts for
-		// everyone.
-		if rec.GetOwner() != "" && rec.GetOwner() != principal {
+		// Match the review queue: an unowned record is readable by nobody.
+		if principal == "" || rec.GetOwner() != principal {
 			continue
 		}
 		if rec.GetState() == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED {
