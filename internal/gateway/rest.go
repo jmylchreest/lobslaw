@@ -22,6 +22,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/turn"
+	"github.com/jmylchreest/lobslaw/internal/workforce"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -30,6 +31,7 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	Workforce     *workforce.Service
 	RemoteConsole lobslawv1.ConsoleServiceClient
 	// Notices appends operator notices to outbound replies. Nil
 	// disables them entirely, which is what a deployment that never
@@ -281,6 +283,7 @@ func (s *Server) Start(ctx context.Context) error {
 		mux.HandleFunc("/v1/plan", s.consoleRoute(s.handlePlan))
 	}
 	s.registerTeamRoutes(mux)
+	s.registerWorkforceRoutes(mux)
 	s.mountConsole(mux)
 
 	if s.consoleEnabled() {

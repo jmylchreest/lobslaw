@@ -155,6 +155,7 @@ func (n *Node) wireGateway() error {
 		Config:           n.consoleConfigView(),
 		Transcripts:      n.newSessionBrowser(),
 		Routines:         n.newRoutineLister(),
+		Workforce:        n.workforce,
 		Memory:           n.newMemoryLister(),
 	}
 

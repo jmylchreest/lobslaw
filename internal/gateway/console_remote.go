@@ -66,6 +66,8 @@ func (s *Server) ConsoleForward(in *lobslawv1.ConsoleForwardRequest, stream grpc
 
 func (s *Server) backendConsoleHandler(path string) http.HandlerFunc {
 	switch {
+	case path == "/v1/projects" || strings.HasPrefix(path, "/v1/projects/") || strings.HasPrefix(path, "/v1/tasks/") || strings.HasPrefix(path, "/v1/routines/") || strings.HasPrefix(path, "/v1/triggers/") || path == "/v1/attention":
+		return s.handleWorkforce
 	case path == "/v1/messages":
 		return s.handleMessages
 	case path == "/v1/capabilities":

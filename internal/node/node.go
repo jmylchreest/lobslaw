@@ -15,6 +15,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/tools"
+	"github.com/jmylchreest/lobslaw/internal/workforce"
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
@@ -358,9 +359,10 @@ type Node struct {
 	// botOwner is the unique operator unowned bots are adopted onto.
 	// Adoption is an Apply, so it waits for leadership in Start rather
 	// than running at wire time where there is no leader yet.
-	botOwner identity.Principal
-	groupSvc *memory.GroupService
-	inboxSvc *memory.InboxService
+	botOwner  identity.Principal
+	groupSvc  *memory.GroupService
+	workforce *workforce.Service
+	inboxSvc  *memory.InboxService
 	// inboxAPI is inboxSvc wrapped so a post wakes the drain.
 	inboxAPI     wakingInbox
 	inboxWake    chan struct{}
@@ -727,6 +729,9 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// branch in New gated that).
 	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
 		go n.runInboxDrain(ctx)
+	}
+	if n.workforce != nil && !n.cfg.RestoreMode {
+		go n.workforce.Run(ctx)
 	}
 	if n.scheduler != nil {
 		go func() {
