@@ -230,7 +230,7 @@ labels = ["reads"]
 
 [commands."find"]
 labels = ["reads"]
-escalate = { "-delete" = ["deletes"], "-exec" = ["unreadable"], "-execdir" = ["unreadable"], "-fprint*" = ["writes"], "-ok" = ["unreadable"], "-okdir" = ["unreadable"] }
+escalate = { "-delete" = ["deletes"], "-exec" = ["unreadable"], "-execdir" = ["unreadable"], "-fprint*" = ["writes"], "-fls" = ["writes"], "-ok" = ["unreadable"], "-okdir" = ["unreadable"] }
 
 [commands."fish"]
 labels = ["unreadable"]
