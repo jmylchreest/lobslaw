@@ -358,7 +358,7 @@ Two validation modes, independently configurable — a deployment can enable eit
 
 Misconfiguration fails at `NewValidator` rather than on the first inbound request:
 
-- `AllowHS256=true` with no secret → error.
+- `AllowHS256=true` with a secret shorter than 32 bytes → startup error. Use a randomly generated secret; length validation cannot establish entropy. Existing shorter secrets must be replaced before upgrading.
 - Secret supplied but `AllowHS256=false` → error.
 - No HS256 AND no JWKS → `Validate` always returns `ErrNoValidator`. The REST server maps this to anon-fallback (when `RequireAuth=false`) or 401 (when `RequireAuth=true`).
 
