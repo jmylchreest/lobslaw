@@ -29,7 +29,7 @@ func taskContext(st *State, t *Task) (string, error) {
 			result = strings.ToValidUTF8(result[:limit], "�")
 		}
 		remaining -= min(len(result), remaining)
-		deps = append(deps, dependencyContext{ID: id, Title: preview(d.Title), Result: result, Artifacts: d.Artifacts, Truncated: truncated})
+		deps = append(deps, dependencyContext{ID: id, Title: preview(d.Title), Result: result, Artifacts: publicArtifacts(d), Truncated: truncated})
 	}
 	body, e := json.Marshal(struct {
 		Project      Project             `json:"project"`

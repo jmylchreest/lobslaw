@@ -2508,6 +2508,8 @@ message ConsoleForwardResponse {
   int32 status = 1;
   string content_type = 2;
   bytes data = 3;
+  string content_disposition = 4;
+  int64 content_length = 5;
 }
 
 message WorkforceRecord {

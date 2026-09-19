@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -144,6 +145,11 @@ func (s *Server) forwardConsole(w http.ResponseWriter, r *http.Request) {
 		if !started {
 			w.Header().Set("Content-Type", part.ContentType)
 			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			if part.ContentDisposition != "" {
+				w.Header().Set("Content-Disposition", part.ContentDisposition)
+				w.Header().Set("Content-Length", strconv.FormatInt(part.ContentLength, 10))
+			}
 			w.Header().Set("X-Accel-Buffering", "no")
 			if part.ContentType == "text/event-stream" {
 				_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
@@ -228,6 +234,7 @@ func (w *consoleStreamWriter) send(p []byte) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	w.err = w.stream.Send(&lobslawv1.ConsoleForwardResponse{Status: int32(w.status), ContentType: w.header.Get("Content-Type"), Data: p})
+	length, _ := strconv.ParseInt(w.header.Get("Content-Length"), 10, 64)
+	w.err = w.stream.Send(&lobslawv1.ConsoleForwardResponse{Status: int32(w.status), ContentType: w.header.Get("Content-Type"), Data: p, ContentDisposition: w.header.Get("Content-Disposition"), ContentLength: length})
 	w.sent = true
 }

@@ -25,7 +25,7 @@ func (n *Node) wireWorkforce() error {
 	if n.raft == nil || n.store == nil {
 		return nil
 	}
-	n.workforce = workforce.New(workforce.Config{Repository: &workforce.RaftRepository{Raft: n.raft, Store: n.store}, Bots: n.botSvc, Groups: n.groupSvc, Runner: compute.Adapt(n.agent), Leader: func() bool { return !n.cfg.RestoreMode && n.raft.IsLeader() }, Schedule: n.scheduleWorkforceRoutine, SaveTranscript: n.saveWorkforceTranscript, LoadTranscript: n.loadWorkforceTranscript, AuthorizeStep: n.authorizeWorkforceStep})
+	n.workforce = workforce.New(workforce.Config{OpenArtifact: n.artifactOpener(), Repository: &workforce.RaftRepository{Raft: n.raft, Store: n.store}, Bots: n.botSvc, Groups: n.groupSvc, Runner: compute.Adapt(n.agent), Leader: func() bool { return !n.cfg.RestoreMode && n.raft.IsLeader() }, Schedule: n.scheduleWorkforceRoutine, SaveTranscript: n.saveWorkforceTranscript, LoadTranscript: n.loadWorkforceTranscript, AuthorizeStep: n.authorizeWorkforceStep})
 	if err := n.registerWorkforceTools(); err != nil {
 		return err
 	}

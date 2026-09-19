@@ -14598,12 +14598,14 @@ func (x *ConsoleForwardRequest) GetEventStream() bool {
 }
 
 type ConsoleForwardResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Status        int32                  `protobuf:"varint,1,opt,name=status,proto3" json:"status,omitempty"`
-	ContentType   string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Status             int32                  `protobuf:"varint,1,opt,name=status,proto3" json:"status,omitempty"`
+	ContentType        string                 `protobuf:"bytes,2,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Data               []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	ContentDisposition string                 `protobuf:"bytes,4,opt,name=content_disposition,json=contentDisposition,proto3" json:"content_disposition,omitempty"`
+	ContentLength      int64                  `protobuf:"varint,5,opt,name=content_length,json=contentLength,proto3" json:"content_length,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ConsoleForwardResponse) Reset() {
@@ -14655,6 +14657,20 @@ func (x *ConsoleForwardResponse) GetData() []byte {
 		return x.Data
 	}
 	return nil
+}
+
+func (x *ConsoleForwardResponse) GetContentDisposition() string {
+	if x != nil {
+		return x.ContentDisposition
+	}
+	return ""
+}
+
+func (x *ConsoleForwardResponse) GetContentLength() int64 {
+	if x != nil {
+		return x.ContentLength
+	}
+	return 0
 }
 
 type WorkforceRecord struct {
@@ -15926,11 +15942,13 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
 	"\x04body\x18\x03 \x01(\fR\x04body\x12*\n" +
 	"\x06claims\x18\x04 \x01(\v2\x12.lobslaw.v1.ClaimsR\x06claims\x12!\n" +
-	"\fevent_stream\x18\x05 \x01(\bR\veventStream\"g\n" +
+	"\fevent_stream\x18\x05 \x01(\bR\veventStream\"\xbf\x01\n" +
 	"\x16ConsoleForwardResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\x05R\x06status\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x12\n" +
-	"\x04data\x18\x03 \x01(\fR\x04data\"\xb8\x01\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\x12/\n" +
+	"\x13content_disposition\x18\x04 \x01(\tR\x12contentDisposition\x12%\n" +
+	"\x0econtent_length\x18\x05 \x01(\x03R\rcontentLength\"\xb8\x01\n" +
 	"\x0fWorkforceRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12\x1a\n" +

@@ -99,7 +99,7 @@ transcript or external system before retrying. Cancellation stops local work and
 rejects a late completion; it cannot undo an external action already performed.
 
 Task actions use `PATCH /v1/tasks/TASK_ID` with a current `revision` and one of
-`start`, `retry`, `cancel`, `answer`, `approve` or `complete_step`. `answer` accepts
+`start`, `retry`, `cancel`, `answer`, `approve`, `complete_step` or `acknowledge`. `answer` accepts
 an `answer` string for a blocked task. Status, claim and result fields cannot be
 set directly. Task approvals use this route, **not** `/v1/prompts`.
 
@@ -107,8 +107,27 @@ set directly. Task approvals use this route, **not** `/v1/prompts`.
 
 `GET /v1/attention` returns only your projects' blockers, approvals, failures and
 completed task deliverables. Configured browser adapters can add human-control
-items. Each text artifact references `GET /v1/tasks/TASK_ID/result`, which checks
-ownership again. Artifact URLs are authenticated API routes, not disk paths.
+items. Mark a completed or failed item reviewed with:
+
+```json
+{"revision": 7, "action": "acknowledge"}
+```
+
+Send this to `PATCH /v1/tasks/TASK_ID` with the task's actual current revision.
+The persisted `acknowledged:true` flag hides it from Attention; its task and
+deliverables remain accessible. Retry resets the flag. Running work, blockers
+and approval requests cannot be acknowledged away, and agents have no tool that
+can perform this review action.
+
+Text results and generated files expose authenticated relative download references
+under `/v1/tasks/TASK_ID/artifacts/ARTIFACT_ID`. File metadata includes its name,
+kind, `mime_type` and reported `size`; private storage paths are not exposed.
+Downloads recheck your ownership and stream through the configured storage mount,
+with attachment disposition and no browser caching. Up to 16 file attachments are
+retained per task, with a 64 MiB per-file download cap. Files live in storage, not
+inside Raft: keep the relevant storage volume and its retention policy alongside
+your state backup. A missing file returns 404. The older `/result` text endpoint
+remains available.
 
 ## Save and run a routine
 
@@ -182,6 +201,7 @@ as untrusted data and do not grant tools, ownership or approval.
 | `/v1/projects/{id}/tasks` | GET, POST |
 | `/v1/tasks/{id}` | GET, PATCH explicit action with revision |
 | `/v1/tasks/{id}/result` | GET authenticated text deliverable |
+| `/v1/tasks/{id}/artifacts/{artifactID}` | GET owner-authorized text/file download |
 | `/v1/attention` | GET |
 | `/v1/projects/{id}/routines` | GET, POST draft |
 | `/v1/routines/{id}` | PATCH `approve`, `disable` or `edit`, with revision |
@@ -201,7 +221,8 @@ rolls out automatically once its full transcript is saved: the hot view retains
 conversation messages. Full transcripts remain in the owner-authorized session
 store. Receipt targets and live dependency predecessors are protected, and
 unfinished/blocked/approval work is never silently removed. Other completed task
-records remain available on the task board. Receipts are retained so old deliveries
+records and chat tasks with file deliverables remain available on the task board.
+Receipts are retained so old deliveries
 cannot replay; there is no automatic receipt pruning. Start a new project when
 capacity is reached. Archive a project to prevent new work from dispatching.
 

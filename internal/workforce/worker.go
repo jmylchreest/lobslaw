@@ -286,12 +286,16 @@ func (s *Service) finish(ctx context.Context, project, id, token string, resp *t
 		}
 		x.Claim = ""
 		x.Approved = false
+		t.Acknowledged = false
 		var approval *ApprovalRequired
 		if errors.As(runErr, &approval) {
 			resp = &turn.Response{NeedsConfirmation: true, ConfirmationAction: approval.Action, ConfirmationResource: approval.Resource, ConfirmationReason: approval.Reason}
 			runErr = nil
 		}
 		if resp != nil {
+			if err := recordAttachments(t, x, resp.Attachments); err != nil {
+				runErr = err
+			}
 			oversizedContinuation := false
 			if resp.NeedsConfirmation {
 				raw, marshalErr := json.Marshal(resp.Messages)
@@ -341,7 +345,7 @@ func (s *Service) finish(ctx context.Context, project, id, token string, resp *t
 			t.Result = resp.Reply
 			t.Question = ""
 			t.PromptID = ""
-			t.Artifacts = []Artifact{{ID: ids.New(), Name: "Result", Kind: "text", Reference: "/v1/tasks/" + id + "/result", CreatedAt: time.Now().UTC()}}
+			recordResult(t)
 			if x.Chat {
 				st.Messages = append(st.Messages, ProjectMessage{ID: ids.New(), ProjectID: project, Role: "assistant", SpeakerID: "bot:" + t.AssigneeBotID, Content: resp.Reply, TaskID: id, CreatedAt: time.Now().UTC()})
 			}

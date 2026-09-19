@@ -58,6 +58,10 @@ func (s *Server) handleWorkforce(w http.ResponseWriter, r *http.Request) {
 		s.workforceError(w, e)
 		return
 	}
+	if download, ok := result.(*workforce.ArtifactDownload); ok {
+		s.serveWorkforceArtifact(w, r, download)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/messages") && r.Method == http.MethodPost {
 		task, ok := result.(*workforce.Task)
 		if !ok {
@@ -231,6 +235,9 @@ func (q workforceRequest) tasks(parts []string) (any, error) {
 	}
 	ctx := q.request.Context()
 	id := parts[0]
+	if len(parts) == 3 && parts[1] == "artifacts" && q.request.Method == http.MethodGet {
+		return q.service.OpenTaskArtifact(ctx, q.owner, id, parts[2])
+	}
 	if len(parts) == 2 && parts[1] == "result" && q.request.Method == http.MethodGet {
 		t, e := q.service.GetTask(ctx, q.owner, id)
 		if e != nil {
