@@ -352,6 +352,18 @@ func TestRestoreCleanupFailureIsCommitted(t *testing.T) {
 			if _, err := s.Get(BucketPolicyRules, "extra"); !IsNotFound(err) {
 				t.Fatalf("old state survived: %v", err)
 			}
+
+			if stage == "old close" {
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := OpenStore(s.path, s.key)
+				if err != nil {
+					t.Fatalf("committed restore cannot reopen: %v", err)
+				}
+				defer func() { _ = reopened.Close() }()
+				assertRestoreOriginal(t, reopened)
+			}
 		})
 	}
 }
@@ -449,5 +461,42 @@ func TestRestoreFatalFailureStopsRaft(t *testing.T) {
 			t.Fatal("Raft continued after terminal store failure")
 		case <-ticker.C:
 		}
+	}
+}
+
+func TestRecoveryInspectionIsReadOnly(t *testing.T) {
+	s, _ := newTestStore(t)
+	if err := s.Put(BucketPolicyRules, "original", []byte("retained")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	marker := s.path + ".restore-inspect.previous"
+	if err := os.Link(s.path, marker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenStore(s.path, s.key); !errors.Is(err, ErrRestoreRecoveryRequired) {
+		t.Fatalf("write open: %v", err)
+	}
+	ro, err := OpenStoreReadOnly(s.path, s.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ro.Close() }()
+	if got, err := ro.Get(BucketPolicyRules, "original"); err != nil || string(got) != "retained" {
+		t.Fatalf("read: %q %v", got, err)
+	}
+	if err := ro.Put(BucketPolicyRules, "changed", []byte("no")); err == nil {
+		t.Fatal("inspection allowed write")
+	}
+	if err := ro.RestoreFromSnapshot(bytes.NewReader(nil)); err == nil {
+		t.Fatal("inspection allowed restore")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("inspection removed recovery marker")
+	}
+	if _, err := OpenStoreReadOnly(s.path+".missing", s.key); err == nil {
+		t.Fatal("inspection created missing database")
 	}
 }

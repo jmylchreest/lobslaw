@@ -28,6 +28,7 @@ type Store struct {
 	lifecycle sync.Mutex
 	path      string
 	closed    bool
+	readOnly  bool
 	failed    chan struct{}
 	failure   atomic.Pointer[restoreFailure]
 
@@ -40,33 +41,48 @@ type Store struct {
 // Every configured bucket is ensured on open. The key is used to
 // encrypt/decrypt every value.
 func OpenStore(path string, key crypto.Key) (*Store, error) {
-	if err := checkRestoreRecovery(path); err != nil {
-		return nil, err
+	return openStore(path, key, false)
+}
+
+// OpenStoreReadOnly opens an existing image for offline recovery inspection.
+// It bypasses recovery markers but cannot mutate buckets or restore snapshots.
+// Stop the node and retain all recovery files before inspecting either image.
+func OpenStoreReadOnly(path string, key crypto.Key) (*Store, error) {
+	return openStore(path, key, true)
+}
+
+func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
+	if !readOnly {
+		if err := checkRestoreRecovery(path); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("create state.db parent dir: %w", err)
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create state.db parent dir: %w", err)
-	}
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
+	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: readOnly, Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("open state.db %q: %w", path, err)
 	}
-	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, name := range allBuckets {
-			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
-				return fmt.Errorf("create bucket %q: %w", name, err)
+	if !readOnly {
+		if err := db.Update(func(tx *bolt.Tx) error {
+			for _, name := range allBuckets {
+				if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+					return fmt.Errorf("create bucket %q: %w", name, err)
+				}
 			}
+			return nil
+		}); err != nil {
+			_ = db.Close()
+			return nil, err
 		}
-		return nil
-	}); err != nil {
-		_ = db.Close()
-		return nil, err
 	}
 	c, err := crypto.NewCipher(key)
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("prepare cipher: %w", err)
 	}
-	s := &Store{key: key, cipher: c, path: path, failed: make(chan struct{})}
+	s := &Store{key: key, cipher: c, path: path, readOnly: readOnly, failed: make(chan struct{})}
 	s.db.Store(db)
 	return s, nil
 }

@@ -89,6 +89,9 @@ func (s *Store) restoreSnapshot(r io.Reader, ops snapshotRestoreOps) (out snapsh
 	if failure := s.Failure(); failure != nil {
 		return out, failure
 	}
+	if s.readOnly {
+		return out, errors.New("cannot restore a read-only store")
+	}
 	if s.closed {
 		return out, errors.New("store already closed")
 	}
@@ -164,13 +167,10 @@ func (s *Store) restoreSnapshot(r io.Reader, ops snapshotRestoreOps) (out snapsh
 	s.db.Store(fresh)
 	out.committed = true
 	if err := ops.closeOld(old); err != nil {
-		out.warning = fmt.Errorf("close previous database; retained %s: %w", backup, err)
-		return out, nil
+		out.warning = fmt.Errorf("close previous database: %w", err)
 	}
 	removeBackup()
-	if out.warning == nil {
-		out.warning = ops.syncDir(dir)
-	}
+	out.warning = errors.Join(out.warning, ops.syncDir(dir))
 	return out, nil
 }
 
