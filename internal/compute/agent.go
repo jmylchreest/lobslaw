@@ -651,6 +651,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 	if req.Bot != nil {
 		req.Tools = req.Bot.FilterTools(req.Tools)
 	}
+	guidance := botGuidance(req.Bot)
 	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil || a.cfg.SoulSnapshotFor != nil) {
 		var config *types.SoulConfig
 		var body string
@@ -674,6 +675,12 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			config = a.cfg.Soul()
 		}
 		if config != nil {
+			// The bot's brief is trusted guidance and belongs with the
+			// soul, not in the user turn. Without this every bot spoke
+			// as the node's assistant: "what's your role" answered
+			// "general-purpose assistant" for a bot whose whole brief
+			// said designer.
+			body = joinBotGuidance(body, guidance)
 			// Language choice is turn-local. Never mutate a shared baseline or
 			// classify configuration, recalled context, or the previous reply.
 			turnConfig := *config
@@ -714,6 +721,10 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 				},
 			})
 		}
+	}
+	// A node with no soul configured still owes a bot its role.
+	if req.SystemPrompt == "" && guidance != "" {
+		req.SystemPrompt = guidance
 	}
 	// Recall is carried on the request rather than folded into the
 	// system prompt. Recalled episodes are untrusted — ingest stores
@@ -813,6 +824,40 @@ func userIDFor(req *ProcessMessageRequest) string {
 		return ""
 	}
 	return req.Claims.UserID
+}
+
+// botGuidance is a bot's standing brief as a trusted prompt block.
+func botGuidance(bot *BotProfile) string {
+	if bot == nil {
+		return ""
+	}
+	name := strings.TrimSpace(bot.DisplayName)
+	ins := strings.TrimSpace(bot.Instructions)
+	if name == "" && ins == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# Your role\n\n")
+	if name != "" {
+		b.WriteString("You are " + name + ".")
+		if ins != "" {
+			b.WriteString("\n\n")
+		}
+	}
+	b.WriteString(ins)
+	return strings.TrimSpace(b.String())
+}
+
+// joinBotGuidance appends a bot's brief to the soul body, so the model
+// reads it as part of who it is rather than as something the user said.
+func joinBotGuidance(body, guidance string) string {
+	if guidance == "" {
+		return body
+	}
+	if strings.TrimSpace(body) == "" {
+		return guidance
+	}
+	return strings.TrimSpace(body) + "\n\n" + guidance
 }
 
 func (a *Agent) resolveBot(ctx context.Context, req *ProcessMessageRequest) error {
