@@ -3,6 +3,7 @@ package mtls
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"sync"
 
@@ -33,9 +34,9 @@ func (c *clientCredentials) ClientHandshake(ctx context.Context, authority strin
 	return credentials.NewTLS(c.config()).ClientHandshake(ctx, authority, raw)
 }
 
-// Preserve NewTLS's server-side behavior if used through the full interface.
+// Client credentials must not accidentally become a server without client authentication.
 func (c *clientCredentials) ServerHandshake(raw net.Conn) (net.Conn, credentials.AuthInfo, error) {
-	return credentials.NewTLS(c.config()).ServerHandshake(raw)
+	return nil, nil, errors.New("client-only credentials: use NodeCreds.ServerCreds for servers")
 }
 
 func (c *clientCredentials) Info() credentials.ProtocolInfo {

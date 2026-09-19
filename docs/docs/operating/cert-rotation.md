@@ -71,3 +71,11 @@ Useful for verifying rotations completed across a fleet.
 - `pkg/mtls/mtls.go` — `NodeCreds.Reload`
 - `cmd/lobslaw/main.go` — SIGHUP handler
 - `cmd/lobslaw/cluster.go` — `cluster sign-node` subcommand
+
+
+Before starting CA overlap or removing a trust root, upgrade **every node** to a
+version with reload-aware client credentials. Older retained connections use
+frozen trust roots even after reload. Verify all nodes have upgraded before the
+first rotation step. `NodeCreds.NodeID` is now `NodeCreds.NodeID()` for callers
+of the Go API. Client credentials are client-only; gRPC servers must use
+`NodeCreds.ServerCreds()`.

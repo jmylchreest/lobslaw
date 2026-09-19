@@ -3,10 +3,12 @@ package mtls
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,13 @@ import (
 
 // Exercise a retained credential, not a newly built tls.Config after Reload.
 func clientHandshake(t *testing.T, client credentials.TransportCredentials, server *NodeCreds, authority string) (string, error) {
+	name, clientErr, serverErr := clientHandshakeErrors(t, client, server, authority)
+	return name, errors.Join(clientErr, serverErr)
+}
+
+// Keep client verification separate: a server rejecting our certificate cannot
+// prove that the client rejected an untrusted server.
+func clientHandshakeErrors(t *testing.T, client credentials.TransportCredentials, server *NodeCreds, authority string) (string, error, error) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -55,7 +64,7 @@ func clientHandshake(t *testing.T, client credentials.TransportCredentials, serv
 	defer cancel()
 	_, _, err = client.ClientHandshake(ctx, authority, raw)
 	other := <-done
-	return other.name, errors.Join(err, other.err)
+	return other.name, err, other.err
 }
 
 func TestRetainedClientCredentialsFollowCARotation(t *testing.T) {
@@ -87,8 +96,10 @@ func TestRetainedClientCredentialsFollowCARotation(t *testing.T) {
 		if _, err := clientHandshake(t, c, oldServer, "old-peer"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := clientHandshake(t, c, newServer, "new-peer"); err == nil {
-			t.Fatal("accepted untrusted new CA")
+		_, clientErr, _ := clientHandshakeErrors(t, c, newServer, "new-peer")
+		var unknown x509.UnknownAuthorityError
+		if !errors.As(clientErr, &unknown) {
+			t.Fatalf("client did not reject new root: %v", clientErr)
 		}
 	}
 	// The new server must trust the client's old certificate during overlap.
@@ -132,11 +143,15 @@ func TestRetainedClientCredentialsFollowCARotation(t *testing.T) {
 		if name, err := clientHandshake(t, c, newServer, "new-peer"); err != nil || name != "new-peer" {
 			t.Fatalf("rotated handshake: %q %v", name, err)
 		}
-		if _, err := clientHandshake(t, c, oldServer, "old-peer"); err == nil {
-			t.Fatal("accepted retired root")
+		_, clientErr, _ := clientHandshakeErrors(t, c, oldServer, "old-peer")
+		var unknown x509.UnknownAuthorityError
+		if !errors.As(clientErr, &unknown) {
+			t.Fatalf("client did not reject retired root: %v", clientErr)
 		}
-		if _, err := clientHandshake(t, c, newServer, "wrong-host"); err == nil {
-			t.Fatal("accepted wrong hostname")
+		_, clientErr, _ = clientHandshakeErrors(t, c, newServer, "wrong-host")
+		var hostname x509.HostnameError
+		if !errors.As(clientErr, &hostname) {
+			t.Fatalf("client did not reject hostname: %v", clientErr)
 		}
 	}
 }
@@ -353,5 +368,18 @@ func TestFailedReloadPreservesCredentialGeneration(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestClientCredentialsRejectServerUse(t *testing.T) {
+	node, _ := nodeCredsWith(t)
+	a, b := net.Pipe()
+	_ = a.Close()
+	_ = b.Close()
+	for _, c := range []credentials.TransportCredentials{node.ClientCreds(), node.ClientCreds().Clone()} {
+		_, _, err := c.ServerHandshake(a)
+		if err == nil || !strings.Contains(err.Error(), "use NodeCreds.ServerCreds") {
+			t.Fatalf("client credentials accepted server use: %v", err)
+		}
 	}
 }
