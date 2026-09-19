@@ -51,7 +51,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 		return
 	}
 
-	buttons := []any{button("Approve", "prompt:approve:"+p.ID, "primary")}
+	buttons := []any{button("Approve once", "prompt:approve:"+p.ID, "primary")}
 
 	// "for this conversation" and "always" are offered only when a
 	// policy rule asked the question. A budget confirmation is about
