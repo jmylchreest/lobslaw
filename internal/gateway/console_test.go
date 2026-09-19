@@ -64,7 +64,7 @@ func TestConsoleServesTheShellOnRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET / = %d", resp.StatusCode)
 	}
@@ -81,7 +81,7 @@ func TestConsoleNotMountedWhenUnregistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET / without console = %d, want 404", resp.StatusCode)
 	}
@@ -169,7 +169,7 @@ func TestConsoleAllowsLoopbackWithoutAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("loopback console = %d", resp.StatusCode)
 	}

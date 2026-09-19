@@ -592,10 +592,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		body = "(no caption — please inspect the attached media and respond)"
 	}
 
-	userID := ""
-	if claims != nil {
-		userID = claims.UserID
-	}
+	userID := claims.UserID
 	channelID := strconv.FormatInt(msg.Chat.ID, 10)
 	agentReq := turn.Request{
 		Message:             body,
@@ -608,7 +605,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		Channel:             "telegram",
 		ChannelID:           channelID,
 		SharedConversation:  isSharedChat(msg.Chat),
-		BotID:               resolveTeamBot(h.cfg.TeamRouter, ctx, "telegram", channelID, userID),
+		BotID:               resolveTeamBot(ctx, h.cfg.TeamRouter, "telegram", channelID, userID),
 	}
 
 	// Wrap the agent call with the responsiveness guards: typing

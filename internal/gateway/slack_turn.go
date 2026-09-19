@@ -103,10 +103,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		body = "(no comment — please inspect the attached file and respond)"
 	}
 
-	userID := ""
-	if claims != nil {
-		userID = claims.UserID
-	}
+	userID := claims.UserID
 	agentReq := turn.Request{
 		Message:             body,
 		Attachments:         im.Attachments,
@@ -118,7 +115,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		Channel:             ChannelSlack,
 		ChannelID:           convID,
 		SharedConversation:  shared,
-		BotID:               resolveTeamBot(h.cfg.TeamRouter, ctx, ChannelSlack, convID, userID),
+		BotID:               resolveTeamBot(ctx, h.cfg.TeamRouter, ChannelSlack, convID, userID),
 	}
 
 	// The placeholder goes up here, before the agent runs, and every

@@ -13,18 +13,6 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
-const loginUsage = `lobslaw login — print a one-time code for the web console
-
-  lobslaw login --config <path> [--user <id>]
-
-Talks to the running node on loopback (the console's HTTP port) and
-prints a code. Type that code in the browser. It works once and expires
-in a few minutes.
-
-This has to run on the same machine as the node. There is no password
-and no self-signup: the user must already be in [[user]].
-`
-
 func dispatchLogin(args []string) bool {
 	idx := findSubcmd(args, "login")
 	if idx < 0 {
@@ -90,6 +78,6 @@ func lobslawLogin(args []string) {
 	if len(pretty) == 6 {
 		pretty = pretty[:3] + " " + pretty[3:]
 	}
-	fmt.Fprintf(os.Stdout, "Sign-in code for %s (expires in %ds):\n\n  %s\n\nEnter it in the console. It works once.\n",
+	_, _ = fmt.Fprintf(os.Stdout, "Sign-in code for %s (expires in %ds):\n\n  %s\n\nEnter it in the console. It works once.\n",
 		out.UserID, out.ExpiresIn, pretty)
 }

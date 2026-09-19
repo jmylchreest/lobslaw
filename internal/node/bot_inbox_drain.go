@@ -72,9 +72,9 @@ func (n *Node) runInboxDrain(ctx context.Context) {
 // of posts produces one drain, and a send that finds the buffer full
 // is dropped because the pass it would have caused is already coming.
 //
-// Called from the FSM change callback, which runs under the FSM's own
-// lock — so it must not block, and must not reach for any lock a
-// mutator could be holding across raft.Apply.
+// Called from wakingInbox.Post after a successful write, so it must not
+// block: the buffer is one slot and a full buffer means a pass is
+// already pending.
 func (n *Node) wakeInboxDrain() {
 	select {
 	case n.inboxWake <- struct{}{}:

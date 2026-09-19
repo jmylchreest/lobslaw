@@ -18,6 +18,9 @@ func (n *Node) wireComputeTeamsStage() error {
 	if n.inboxWake == nil {
 		n.inboxWake = make(chan struct{}, 1)
 	}
+	if n.inboxSvc != nil {
+		n.inboxAPI = wakingInbox{InboxService: n.inboxSvc, wake: n.wakeInboxDrain}
+	}
 	return n.wireTeamTools()
 }
 
@@ -50,12 +53,12 @@ func (n *Node) wireTeamTools() error {
 		Registry: n.botSvc,
 		Resolver: botResolverOrNil(n.botSvc),
 		Runner:   n.agent,
-		Inbox:    n.inboxSvc,
+		Inbox:    n.inboxAPI,
 	}); err != nil {
 		return err
 	}
 	if err := tools.RegisterInboxBuiltins(n.builtinsRegistry, tools.InboxConfig{
-		Service: n.inboxSvc,
+		Service: n.inboxAPI,
 		Bots:    botResolverOrNil(n.botSvc),
 	}); err != nil {
 		return err

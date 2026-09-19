@@ -74,7 +74,7 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET / = %d body=%s", resp.StatusCode, body)
@@ -87,7 +87,7 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /healthz: %v", err)
 	}
-	defer health.Body.Close()
+	defer func() { _ = health.Body.Close() }()
 	if health.StatusCode != http.StatusOK {
 		t.Errorf("/healthz = %d", health.StatusCode)
 	}

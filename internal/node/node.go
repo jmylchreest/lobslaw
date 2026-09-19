@@ -358,9 +358,11 @@ type Node struct {
 	// botOwner is the unique operator unowned bots are adopted onto.
 	// Adoption is an Apply, so it waits for leadership in Start rather
 	// than running at wire time where there is no leader yet.
-	botOwner     identity.Principal
-	groupSvc     *memory.GroupService
-	inboxSvc     *memory.InboxService
+	botOwner identity.Principal
+	groupSvc *memory.GroupService
+	inboxSvc *memory.InboxService
+	// inboxAPI is inboxSvc wrapped so a post wakes the drain.
+	inboxAPI     wakingInbox
 	inboxWake    chan struct{}
 	skillAdapter *skills.AgentAdapter
 

@@ -30,10 +30,12 @@ func (n *Node) teamGroupsOrNil() gateway.GroupAPI {
 }
 
 func (n *Node) teamInboxOrNil() gateway.InboxAPI {
-	if !gateComputeTeams(n.cfg) {
+	if !gateComputeTeams(n.cfg) || n.inboxSvc == nil {
 		return nil
 	}
-	return n.inboxSvc
+	// The wrapper, not the plain service: posting work must wake the
+	// drain rather than wait for its idle tick.
+	return n.inboxAPI
 }
 
 type teamRouter struct {

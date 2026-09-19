@@ -10,7 +10,7 @@ type TeamRouter interface {
 	BotForChannel(ctx context.Context, channel, address, userID string) string
 }
 
-func resolveTeamBot(r TeamRouter, ctx context.Context, channel, address, userID string) string {
+func resolveTeamBot(ctx context.Context, r TeamRouter, channel, address, userID string) string {
 	if r == nil {
 		return ""
 	}

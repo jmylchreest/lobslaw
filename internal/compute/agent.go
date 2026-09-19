@@ -655,7 +655,8 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil || a.cfg.SoulSnapshotFor != nil) {
 		var config *types.SoulConfig
 		var body string
-		if req.BotID != "" && a.cfg.SoulSnapshotFor != nil {
+		switch {
+		case req.BotID != "" && a.cfg.SoulSnapshotFor != nil:
 			snapshot, err := a.cfg.SoulSnapshotFor(ctx, req.BotID)
 			if err != nil {
 				return fmt.Errorf("load effective soul: %w", err)
@@ -663,7 +664,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			if snapshot != nil {
 				config, body = &snapshot.Config, snapshot.Body
 			}
-		} else if a.cfg.SoulSnapshot != nil {
+		case a.cfg.SoulSnapshot != nil:
 			snapshot, err := a.cfg.SoulSnapshot(ctx)
 			if err != nil {
 				return fmt.Errorf("load effective soul: %w", err)
@@ -671,7 +672,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			if snapshot != nil {
 				config, body = &snapshot.Config, snapshot.Body
 			}
-		} else {
+		case a.cfg.Soul != nil:
 			config = a.cfg.Soul()
 		}
 		if config != nil {
