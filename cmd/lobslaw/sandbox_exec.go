@@ -36,7 +36,11 @@ func dispatchSandboxExec(args []string) bool {
 // sandbox.InstallAndExec. Kept separate from dispatch so tests can
 // exercise the arg parsing without os.Exit.
 func runSandboxExec(args []string) error {
-	policy, err := sandbox.DecodePolicy(os.Getenv(sandbox.PolicyEnvVar))
+	raw := os.Getenv(sandbox.PolicyEnvVar)
+	if raw == "" {
+		return fmt.Errorf("%s is required", sandbox.PolicyEnvVar)
+	}
+	policy, err := sandbox.DecodePolicy(raw)
 	if err != nil {
 		return err
 	}
