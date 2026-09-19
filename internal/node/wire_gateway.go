@@ -342,6 +342,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		// Nil when enrolment is not wired, which disables channel
 		// approval and leaves the CLI path working.
 		Enrolments:        n.enrolmentDecider(),
+		Learned:           n.learnedReviews(),
 		CommandAuthorizer: n.commandAuthorizerOrNil(),
 		SessionGrants:     n.sessionGrantsView(),
 		Roles:             n.resolveUserRoles,

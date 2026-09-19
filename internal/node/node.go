@@ -369,7 +369,8 @@ type Node struct {
 	// materialiser writes ACTIVE self-taught artefacts into this
 	// node's disposable skill cache. Nil when self-learning is off,
 	// for the same absence-not-a-flag reason the store is.
-	materialiser *skills.Materialiser
+	materialiser  *skills.Materialiser
+	materialiseMu sync.Mutex
 	// materialiseWake carries a coalesced request for a materialisation
 	// pass, sent from the FSM's self-taught change callback.
 	materialiseWake chan struct{}

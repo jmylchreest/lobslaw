@@ -159,6 +159,9 @@ type TelegramConfig struct {
 	// callback_data carries the prompt ID.
 	Prompts Prompts
 
+	// Learned exposes owner-scoped human review, never agent approval tools.
+	Learned LearnedReviews
+
 	// ConfirmationTTL mirrors RESTConfig.ConfirmationTTL. 0 → 5min.
 	ConfirmationTTL time.Duration
 
@@ -450,6 +453,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	}
 	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
 	RegisterBuiltinCommands(h.commands, h.conv)
+	h.registerLearnedCommand()
 	// Nil leaves /grants unregistered — see RegisterGrantCommands.
 	RegisterGrantCommands(h.commands, cfg.SessionGrants)
 	return h, nil
@@ -673,9 +677,17 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		// a Telegram username is attributed as "tg-@name", which no
 		// config file can predict, while the id is what the operator
 		// wrote down and what identity resolution is keyed on.
-		h.sendText(msg.Chat.ID, h.cfg.Notices.Append(ctx,
+		reply := h.cfg.Notices.Append(ctx,
 			"telegram", sessionRef.ChannelID, grantSubject(claims), resp.Reply,
-			numericSubject(msg.From)))
+			numericSubject(msg.From))
+		if h.cfg.Learned != nil && reply != resp.Reply && strings.Contains(strings.TrimPrefix(reply, resp.Reply), "/learned") {
+			if err := h.learnedPost(ctx, "sendMessage", map[string]any{"chat_id": msg.Chat.ID, "text": reply, "reply_markup": map[string]any{"inline_keyboard": [][]map[string]string{{{"text": "Review pending skills", "callback_data": "learned:list:1"}}}}}); err != nil {
+				h.log.Warn("telegram: review notice delivery failed", "err", err)
+				h.sendText(msg.Chat.ID, reply)
+			}
+		} else {
+			h.sendText(msg.Chat.ID, reply)
+		}
 	}
 	// After the text: a file the turn produced is context for the
 	// reply, not a replacement for it.
@@ -876,6 +888,11 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 		"callback_query_id": q.ID,
 	})
 
+	if strings.HasPrefix(q.Data, "learned:") {
+		h.handleLearnedCallback(ctx, q)
+		return
+	}
+
 	parts := strings.SplitN(q.Data, ":", 3)
 	if len(parts) != 3 || parts[0] != "prompt" {
 		h.log.Debug("telegram: unhandled callback_data shape", "data", q.Data)
@@ -889,6 +906,10 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	}
 
 	if !h.mayResolve(ctx, promptID, q) {
+		return
+	}
+	if p, err := h.cfg.Prompts.Get(promptID); err == nil && strings.HasPrefix(p.Action, "learned:") {
+		h.answerCallback(q, "Use the skill review buttons or reopen /learned.")
 		return
 	}
 
