@@ -102,7 +102,8 @@ or migrated between compute nodes. Only one service process may own a profile ro
 1. Open **Projects**, create a project, and select its coordinator and teammates.
 2. Discuss its brief in **Channel**. One selected bot answers each turn.
 3. Use **Tasks** to delegate work, set acceptance criteria and choose dependencies.
-   Open a task to start it and follow its actual status, checkpoint and result.
+   Ready tasks run automatically when their prerequisites complete. Open a task
+   to follow its actual status, checkpoint and result.
 4. Use **Attention** for pending task approvals, questions, failures, completed
    deliverables and browsers still under your control.
 
@@ -133,7 +134,9 @@ transcript. They do not include cookies, browser storage, input values or images
    text entry values are never included in recordings.
 5. Choose **Return control to bot**. For a task waiting on a manual browser step,
    open that task and choose **I completed this manual browser step** to advance
-   its checkpoint, or answer its question to retry the current step.
+   its checkpoint, or answer its question to retry the current step. The manual
+   completion button appears only for a recorded or runtime-detected manual step;
+   it cannot skip ordinary blockers such as a failed dependency or takeover.
 
 Control does **not** expire automatically. It survives service restart until you
 return it, so a bot cannot resume against a half-completed login. **Close browser**

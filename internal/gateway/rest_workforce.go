@@ -325,7 +325,10 @@ func (s *Server) streamWorkforceChat(w http.ResponseWriter, r *http.Request, own
 		case workforce.StatusApproval:
 			writeSSE(w, "needs_confirmation", map[string]string{"reason": task.Question, "prompt_id": task.PromptID, "task_id": task.ID})
 			return
-		case workforce.StatusFailed, workforce.StatusCancelled, workforce.StatusBlocked:
+		case workforce.StatusBlocked:
+			writeSSE(w, "blocked", map[string]string{"reason": task.Question, "task_id": task.ID})
+			return
+		case workforce.StatusFailed, workforce.StatusCancelled:
 			writeSSE(w, "error", map[string]string{"message": task.Error, "task_id": task.ID, "status": task.Status})
 			return
 		}

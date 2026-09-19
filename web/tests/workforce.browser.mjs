@@ -16,7 +16,7 @@ const project = { id: 'project', name: 'Launch the research', description: 'A cl
 const task = { id: 'task', project_id: 'project', title: 'Find the sources', instructions: 'Research the source material', assignee_bot_id: 'chief', status: 'planned', revision: 1, depends_on: [], acceptance_criteria: ['Cite evidence'], artifacts: [] };
 let projects = [], tasks = [], routines = [], triggers = [];
 const computer = { project_id: 'project', available: false, control: 'bot', recording: false, steps: [] };
-let conflict = false;
+let conflict = false, chatApproval = false, chatQuestion = false;
 try {
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
   const pageErrors = [];
@@ -34,18 +34,28 @@ try {
     if (path === '/v1/projects' && method === 'POST') { projects = [project]; return json(project, 201); }
     if (path === '/v1/projects') return json({ projects });
     if (path === '/v1/projects/project') return json(project);
-    if (path === '/v1/projects/project/messages' && method === 'POST') return route.fulfill({ contentType: 'text/event-stream', body: 'event: reply\ndata: {"reply":"The research is underway."}\n\n' });
+    if (path === '/v1/projects/project/messages' && method === 'POST') {
+      if (chatQuestion) {
+        tasks[0] = {...tasks[0],status:'blocked',question:'Which account should I use?',manual_step:false};
+        return route.fulfill({contentType:'text/event-stream',body:'event: blocked\ndata: {"task_id":"task","reason":"Which account should I use?"}\n\n'});
+      }
+      if (chatApproval) {
+        tasks[0] = { ...tasks[0], status:'needs_approval', question:'Approve the project action', prompt_id:'opaque-task-approval' };
+        return route.fulfill({ contentType:'text/event-stream', body:'event: needs_confirmation\ndata: {"task_id":"task","prompt_id":"opaque-task-approval","reason":"Approve the project action"}\n\n' });
+      }
+      return route.fulfill({ contentType: 'text/event-stream', body: 'event: reply\ndata: {"reply":"The research is underway."}\n\n' });
+    }
     if (path === '/v1/projects/project/messages') return json({ messages: [] });
     if (path === '/v1/projects/project/tasks' && method === 'POST') { tasks = [{ ...task, ...body }]; return json(tasks[0], 201); }
     if (path === '/v1/projects/project/tasks') return json({ tasks });
     if (path === '/v1/tasks/task' && method === 'PATCH') {
       if (conflict) return json({ error: 'stale task revision' }, 409);
       assert.equal(body.revision, tasks[0].revision);
-      tasks[0] = { ...tasks[0], revision: tasks[0].revision + 1, status: body.action === 'approve' ? 'ready' : 'running' };
+      tasks[0] = { ...tasks[0], revision: tasks[0].revision + 1, acknowledged:body.action==='acknowledge', status: body.action==='acknowledge'?tasks[0].status:body.action === 'approve' ? 'ready' : 'running' };
       return json(tasks[0]);
     }
     if (path === '/v1/tasks/task') return json(tasks[0]);
-    if (path === '/v1/attention') return json({ items: [{ id: 'approval', kind: 'approval', title: 'Review research action', detail: 'Navigate to the research source', task_id: 'task', project_id: 'project' }] });
+    if (path === '/v1/attention') return json({ items: tasks[0]?.acknowledged ? [] : [{ id: 'approval', kind: 'approval', title: 'Review research action', detail: 'Navigate to the research source', task_id: 'task', project_id: 'project' }] });
     if (path === '/v1/computers/project/screenshot') return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV1cAAAAASUVORK5CYII=', 'base64') });
     if (path === '/v1/computers/project') {
       if (method === 'POST') {
@@ -138,7 +148,34 @@ try {
   await page.getByRole('link', { name: 'Review task approval →' }).click();
   await page.getByRole('button', { name: 'Approve this task action' }).click();
   await page.getByText('ready', { exact: true }).waitFor();
+  chatApproval = true;
+  await page.goto(`${base}/projects/project/channel`);
+  await page.getByLabel('Message the project').fill('Please perform this action');
+  await page.getByRole('button', {name:'Send to project'}).click();
+  await page.getByRole('button', {name:'Approve this task action'}).click();
+  await page.getByRole('heading', {name:'Needs your approval'}).waitFor({state:'hidden'});
+  assert.equal(requests.findLast(r=>r.method==='PATCH' && r.path==='/v1/tasks/task').body.action,'approve');
   assert.equal(requests.filter(r => r.path.startsWith('/v1/prompts/')).length, 0);
+  chatQuestion = true;
+  await page.getByLabel('Message the project').fill('Continue the research');
+  await page.getByRole('button', {name:'Send to project'}).click();
+  await page.getByLabel('Reply to the teammate').fill('Use the staging account');
+  await page.getByRole('button', {name:'Answer and resume'}).click();
+  await page.getByRole('heading', {name:'Needs your input'}).waitFor({state:'hidden'});
+  assert.equal(requests.findLast(r=>r.method==='PATCH' && r.path==='/v1/tasks/task').body.answer,'Use the staging account');
+  tasks[0] = { ...tasks[0], status:'blocked', manual_step:false };
+  await page.goto(`${base}/tasks/task`);
+  await page.getByText('blocked', {exact:true}).waitFor();
+  assert.equal(await page.getByRole('button', {name:'I completed this manual browser step'}).count(),0);
+  tasks[0] = { ...tasks[0], manual_step:true };
+  await page.getByRole('button', {name:'Reload latest revision'}).click();
+  await page.getByRole('button', {name:'I completed this manual browser step'}).waitFor();
+  tasks[0] = { ...tasks[0], status:'done', result:'Report delivered' };
+  await page.getByRole('button', {name:'Reload latest revision'}).click();
+  await page.getByRole('button', {name:'Mark reviewed in Attention'}).click();
+  await page.getByRole('button', {name:'Mark reviewed in Attention'}).waitFor({state:'hidden'});
+  await page.goto(`${base}/attention`);
+  await page.getByText("You're all caught up").waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${base}/projects/project/tasks`);
   await page.getByRole('heading', { name: 'Task board' }).waitFor();

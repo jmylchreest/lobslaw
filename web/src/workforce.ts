@@ -9,12 +9,12 @@ export interface ProjectMessage {
   content: string; task_id?: string; created_at: string;
 }
 export type TaskStatus = 'planned' | 'ready' | 'running' | 'blocked' | 'needs_approval' | 'done' | 'failed' | 'cancelled';
-export interface Artifact { id: string; name: string; kind: string; reference: string }
+export interface Artifact { id: string; name: string; kind: string; reference: string; mime_type?: string; size?: number }
 export interface Task {
   id: string; project_id: string; owner: string; title: string; instructions: string;
   assignee_bot_id: string; acceptance_criteria: string[]; depends_on: string[]; status: TaskStatus;
   revision: number; checkpoint?: number; manual_step?: boolean; progress?: string; parent_id?: string; result?: string; error?: string; question?: string;
-  prompt_id?: string; artifacts: Artifact[]; created_at: string; updated_at: string;
+  prompt_id?: string; acknowledged?: boolean; artifacts: Artifact[]; created_at: string; updated_at: string;
 }
 export interface AttentionItem {
   id: string; kind: 'approval' | 'blocked' | 'failed' | 'deliverable' | 'takeover';
@@ -83,5 +83,5 @@ export function artifactURL(task: Task, artifact: Artifact): string | undefined 
   const result = `/v1/tasks/${id(task.id)}/result`;
   if (artifact.reference === result) return result;
   const prefix = `/v1/tasks/${id(task.id)}/artifacts/`;
-  return artifact.reference.startsWith(prefix) && !artifact.reference.includes('..') ? artifact.reference : undefined;
+  return artifact.reference === prefix + id(artifact.id) ? artifact.reference : undefined;
 }

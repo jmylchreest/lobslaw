@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,16 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/workforce"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
+
+func TestProjectQuestionIsNotReportedAsFailedWork(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/projects/project/messages", nil)
+	(&Server{}).streamWorkforceChat(w, r, "user:alice", &workforce.Task{ID: "task", Status: workforce.StatusBlocked, Question: "Which account should I use?"})
+	if !strings.Contains(w.Body.String(), "event: blocked") || !strings.Contains(w.Body.String(), "Which account should I use?") || strings.Contains(w.Body.String(), "event: error") {
+		t.Fatalf("human question lost or misclassified: %s", w.Body.String())
+	}
+}
 
 type workforceRepo struct {
 	mu   sync.Mutex

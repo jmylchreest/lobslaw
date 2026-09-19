@@ -89,7 +89,7 @@ function ProjectChannel({ project }: { project: Project }) {
       controller.current = new AbortController(); setReply(''); setPrompt(null);
       await projectChat(project.id, text, bot || undefined, (event, data) => {
         if (event === 'reply') setReply(String(data.reply ?? data.text ?? ''));
-        if (event === 'needs_confirmation') setPrompt({taskID:String(data.task_id ?? ''),reason:String(data.reason ?? data.confirmation_reason ?? 'Confirmation required')});
+        if (event === 'needs_confirmation' || event === 'blocked') setPrompt({taskID:String(data.task_id ?? ''),reason:String(data.reason ?? data.confirmation_reason ?? 'Your input is needed')});
       }, controller.current.signal);
       setText(''); messages.reload();
     });
@@ -108,14 +108,16 @@ function ProjectChannel({ project }: { project: Project }) {
 
 function TaskApproval({taskID, reason, onAnswered}: {taskID:string; reason:string; onAnswered:()=>void}) {
   const task = useLoad(() => workforce.task(taskID), [taskID]), action = useAction();
+  const [clarification,setClarification] = useState('');
   const answer = (decision:string) => void action.run(async () => {
     if (!task.data) return;
-    await workforce.actTask(task.data, decision);
+    await workforce.actTask(task.data, decision, decision==='answer'?clarification:undefined);
     onAnswered();
   });
-  return <section className="wf-panel"><h3>Needs your approval</h3><Markdown text={reason} />
+  return <section className="wf-panel"><h3>{task.data?.status==='blocked'?'Needs your input':'Needs your approval'}</h3><Markdown text={reason} />
     {task.loading && <Spinner />}{task.error && <Err error={task.error} />}{action.error && <Err error={action.error} />}
     {task.data?.status === 'needs_approval' && <div className="wf-toolbar"><button disabled={action.busy} onClick={()=>answer('approve')}>Approve this task action</button><button disabled={action.busy} onClick={()=>answer('cancel')}>Deny and cancel task</button></div>}
+    {task.data?.status==='blocked' && !task.data.manual_step && <form className="wf-form" onSubmit={e=>{e.preventDefault();answer('answer');}}><Field label="Reply to the teammate"><textarea required value={clarification} onChange={e=>setClarification(e.target.value)} /></Field><button disabled={action.busy}>Answer and resume</button></form>}
     <Link to={`/tasks/${taskID}`}>Review task →</Link>
   </section>;
 }
@@ -156,6 +158,7 @@ export function TaskDetails() {
     <Link className="wf-back" to={`/projects/${t.project_id}/tasks`}>← Project tasks</Link>
     {task.error && <Err error={task.error} />}{action.error && <Err error={action.error} />}
     <div className="wf-toolbar">{t.status === 'planned' && <button disabled={action.busy} onClick={() => act('start')}>Start task</button>}{['failed', 'cancelled'].includes(t.status) && <button disabled={action.busy} onClick={() => act('retry')}>Retry task</button>}{!['done', 'cancelled'].includes(t.status) && <button disabled={action.busy} onClick={() => act('cancel')}>Cancel task</button>}<button onClick={task.reload}>Reload latest revision</button></div>
+    {['done', 'failed'].includes(t.status) && !t.acknowledged && <button disabled={action.busy} onClick={() => act('acknowledge')}>Mark reviewed in Attention</button>}
     <div className="wf-grid"><section className="wf-panel"><h2>Brief</h2><Markdown text={t.instructions} /><h3>Done means</h3><ul>{t.acceptance_criteria?.map((c, i) => <li key={i}>{c}</li>)}</ul><h3>Dependencies</h3>{t.depends_on?.length ? t.depends_on.map(id => <Link className="wf-dependency" key={id} to={`/tasks/${id}`}>{id} →</Link>) : <p>No prerequisites</p>}</section>
       <section className="wf-panel"><h2>Progress</h2><p>Assigned to {t.assignee_bot_id}</p>{t.checkpoint !== undefined && <><h3>Checkpoint</h3><p>Next browser step: {t.checkpoint + 1}</p></>}{t.error && <p className="wf-danger">{t.error}</p>}{t.question && <><h3>Question from the worker</h3><Markdown text={t.question} /></>}
         {t.status === 'blocked' && <form className="wf-form" onSubmit={e => { e.preventDefault(); act('answer'); }}><Field label="Answer / resume instruction"><textarea required value={answer} onChange={e => setAnswer(e.target.value)} /></Field><button disabled={action.busy}>Answer and resume</button><Link to={`/projects/${t.project_id}/computer`}>Open browser workspace →</Link></form>}
