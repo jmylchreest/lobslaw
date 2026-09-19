@@ -1,12 +1,30 @@
 package compute
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
+
+type budgetCtxKey struct{}
+
+// WithBudget attaches a turn budget so a child (ask_bot) can draw on it.
+func WithBudget(ctx context.Context, b *TurnBudget) context.Context {
+	if b == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, budgetCtxKey{}, b)
+}
+
+// BudgetFrom returns the reservation attached to ctx, or nil.
+func BudgetFrom(ctx context.Context) *TurnBudget {
+	b, _ := ctx.Value(budgetCtxKey{}).(*TurnBudget)
+	return b
+}
 
 // TurnBudget tracks per-turn resource consumption against operator-
 // configured caps. The agent loop (Phase 5.4) holds one TurnBudget
@@ -21,6 +39,7 @@ import (
 // agent loop converts Exceeded into a require_confirmation response
 // so the user can approve continuing or terminate the turn.
 type TurnBudget struct {
+	parent *TurnBudget
 	// Caps are the operator-configured limits. Copied in at
 	// construction so a mid-turn config reload doesn't change
 	// budget semantics for in-flight turns.
@@ -33,15 +52,8 @@ type TurnBudget struct {
 	records     []CostRecord
 }
 
-// BudgetCaps mirrors the config.BudgetsConfig shape but with
-// clearer types for in-code use. Zero on any field means "no cap"
-// for that dimension — operators commonly set only spend and leave
-// tool-calls / egress unbounded.
-type BudgetCaps struct {
-	MaxToolCalls   int
-	MaxSpendUSD    float64
-	MaxEgressBytes int64
-}
+// BudgetCaps is the operator-configured per-turn limit set.
+type BudgetCaps = turn.BudgetCaps
 
 // FromConfig builds BudgetCaps from the deprecated [compute.budgets]
 // block. Retained for back-compat; new config should use
@@ -87,14 +99,8 @@ type BudgetDecision struct {
 	Current    BudgetState
 }
 
-// BudgetState is a snapshot of consumed resources. Returned on
-// every decision and on a stand-alone State() call so the agent
-// loop can surface mid-turn totals to the user.
-type BudgetState struct {
-	ToolCalls   int
-	SpendUSD    float64
-	EgressBytes int64
-}
+// BudgetState is a snapshot of consumed resources.
+type BudgetState = turn.BudgetState
 
 // ErrBudgetConfigInvalid fires when NewTurnBudget receives caps
 // with negative values. Positive caps are enforced; zero means
@@ -112,11 +118,27 @@ func NewTurnBudget(caps BudgetCaps) (*TurnBudget, error) {
 	return &TurnBudget{caps: caps}, nil
 }
 
+// Child has its own allowance, while all spending also consumes the parent's
+// remaining budget. Tightening a specialist must never alter its caller's caps.
+func (b *TurnBudget) Child(caps BudgetCaps) (*TurnBudget, error) {
+	child, err := NewTurnBudget(caps)
+	if err != nil {
+		return nil, err
+	}
+	child.parent = b
+	return child, nil
+}
+
 // RecordToolCall increments the tool-call counter and returns a
 // decision. Called by the agent loop BEFORE dispatching a tool
 // invocation; if Exceeded, the loop returns require_confirmation
 // without invoking the tool.
 func (b *TurnBudget) RecordToolCall() BudgetDecision {
+	if b.parent != nil {
+		if d := b.parent.RecordToolCall(); d.Exceeded {
+			return d
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.toolCalls++
@@ -131,10 +153,17 @@ func (b *TurnBudget) RecordToolCall() BudgetDecision {
 // to the audit list so the caller can retrieve the full trail at
 // turn end.
 func (b *TurnBudget) RecordCostUSD(rec CostRecord) BudgetDecision {
+	var parentDecision BudgetDecision
+	if b.parent != nil {
+		parentDecision = b.parent.RecordCostUSD(rec)
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spendUSD += rec.CostUSD
 	b.records = append(b.records, rec)
+	if parentDecision.Exceeded {
+		return parentDecision
+	}
 	if b.caps.MaxSpendUSD > 0 && b.spendUSD > b.caps.MaxSpendUSD {
 		return b.exceededLocked("spend")
 	}
@@ -146,9 +175,16 @@ func (b *TurnBudget) RecordCostUSD(rec CostRecord) BudgetDecision {
 // (network tool output, file uploads). For purely-local tools it's
 // a no-op; callers pass 0 when not applicable.
 func (b *TurnBudget) RecordEgressBytes(n int64) BudgetDecision {
+	var parentDecision BudgetDecision
+	if b.parent != nil {
+		parentDecision = b.parent.RecordEgressBytes(n)
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.egressBytes += n
+	if parentDecision.Exceeded {
+		return parentDecision
+	}
 	if b.caps.MaxEgressBytes > 0 && b.egressBytes > b.caps.MaxEgressBytes {
 		return b.exceededLocked("egress")
 	}
@@ -159,6 +195,11 @@ func (b *TurnBudget) RecordEgressBytes(n int64) BudgetDecision {
 // Agent loop uses this to peek at state mid-turn for the user-
 // facing "you've spent $0.42 of your $1.00 budget" display.
 func (b *TurnBudget) Check() BudgetDecision {
+	if b.parent != nil {
+		if d := b.parent.Check(); d.Exceeded {
+			return d
+		}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.caps.MaxToolCalls > 0 && b.toolCalls > b.caps.MaxToolCalls {
@@ -193,7 +234,35 @@ func (b *TurnBudget) Records() []CostRecord {
 
 // Caps returns the operator-configured caps. Zero fields mean
 // "unlimited on that dimension".
-func (b *TurnBudget) Caps() BudgetCaps { return b.caps }
+func (b *TurnBudget) Caps() BudgetCaps {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.caps
+}
+
+// Tighten narrows this budget's caps, never widens them.
+func (b *TurnBudget) Tighten(caps BudgetCaps) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.caps = mergeCaps(b.caps, caps)
+}
+
+func mergeCaps(base, extra BudgetCaps) BudgetCaps {
+	out := base
+	if extra.MaxToolCalls > 0 && (out.MaxToolCalls == 0 || extra.MaxToolCalls < out.MaxToolCalls) {
+		out.MaxToolCalls = extra.MaxToolCalls
+	}
+	if extra.MaxSpendUSD > 0 && (out.MaxSpendUSD == 0 || extra.MaxSpendUSD < out.MaxSpendUSD) {
+		out.MaxSpendUSD = extra.MaxSpendUSD
+	}
+	if extra.MaxEgressBytes > 0 && (out.MaxEgressBytes == 0 || extra.MaxEgressBytes < out.MaxEgressBytes) {
+		out.MaxEgressBytes = extra.MaxEgressBytes
+	}
+	return out
+}
 
 // Restore replays already-spent budget onto a fresh TurnBudget, for a
 // turn resuming after a confirmation — possibly on a different node

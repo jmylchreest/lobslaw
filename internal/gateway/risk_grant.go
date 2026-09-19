@@ -28,6 +28,15 @@ import (
 // everything I could not read" is not a decision at all. An operator
 // who genuinely wants either writes a policy rule, where it is visible
 // in `lobslaw policy list` and revocable.
+// riskGrantResource is the key a grant covering ONE LABEL is recorded
+// under. Must stay identical to compute.RiskGrantResource.
+func riskGrantResource(label commandrisk.RiskLabel) string {
+	if !label.Valid() || label == commandrisk.LabelUnreadable {
+		return ""
+	}
+	return "(risk=" + string(label) + ")"
+}
+
 var grantableLabels = map[commandrisk.RiskLabel]bool{
 	commandrisk.LabelReads:  true,
 	commandrisk.LabelWrites: true,

@@ -103,40 +103,48 @@ func (a *Adjuster) Soul() Soul {
 	return a.mergedLocked()
 }
 
-// mergedLocked builds the live Soul by overlaying tune on baseline.
-// Caller holds a.mu (read or write).
+// mergedLocked builds the live Soul by overlaying the cached tune on
+// the baseline. Caller holds a.mu (read or write).
 func (a *Adjuster) mergedLocked() Soul {
+	return a.mergeOnBaselineLocked(a.tune)
+}
+
+// mergeOnBaselineLocked overlays an arbitrary tune on the baseline.
+//
+// Split out from mergedLocked so the per-bot path merges through the
+// same clamp without picking up the chief's overlay.
+func (a *Adjuster) mergeOnBaselineLocked(tune *TuneState) Soul {
 	out := *a.baseline
 	out.Config = a.baseline.Config
 	out.Config.Fragments = append([]string(nil), a.baseline.Config.Fragments...)
-	if a.tune == nil {
+	if tune == nil {
 		return out
 	}
-	if a.tune.Name != nil {
-		out.Config.Name = *a.tune.Name
+	if tune.Name != nil {
+		out.Config.Name = *tune.Name
 	}
-	if a.tune.Excitement != nil {
-		out.Config.EmotiveStyle.Excitement = clamp(*a.tune.Excitement, a.baselineEmotive.Excitement)
+	if tune.Excitement != nil {
+		out.Config.EmotiveStyle.Excitement = clamp(*tune.Excitement, a.baselineEmotive.Excitement)
 	}
-	if a.tune.Formality != nil {
-		out.Config.EmotiveStyle.Formality = clamp(*a.tune.Formality, a.baselineEmotive.Formality)
+	if tune.Formality != nil {
+		out.Config.EmotiveStyle.Formality = clamp(*tune.Formality, a.baselineEmotive.Formality)
 	}
-	if a.tune.Directness != nil {
-		out.Config.EmotiveStyle.Directness = clamp(*a.tune.Directness, a.baselineEmotive.Directness)
+	if tune.Directness != nil {
+		out.Config.EmotiveStyle.Directness = clamp(*tune.Directness, a.baselineEmotive.Directness)
 	}
-	if a.tune.Sarcasm != nil {
-		out.Config.EmotiveStyle.Sarcasm = clamp(*a.tune.Sarcasm, a.baselineEmotive.Sarcasm)
+	if tune.Sarcasm != nil {
+		out.Config.EmotiveStyle.Sarcasm = clamp(*tune.Sarcasm, a.baselineEmotive.Sarcasm)
 	}
-	if a.tune.Humor != nil {
-		out.Config.EmotiveStyle.Humor = clamp(*a.tune.Humor, a.baselineEmotive.Humor)
+	if tune.Humor != nil {
+		out.Config.EmotiveStyle.Humor = clamp(*tune.Humor, a.baselineEmotive.Humor)
 	}
-	if a.tune.EmojiUsage != nil {
-		out.Config.EmotiveStyle.EmojiUsage = *a.tune.EmojiUsage
+	if tune.EmojiUsage != nil {
+		out.Config.EmotiveStyle.EmojiUsage = *tune.EmojiUsage
 	}
-	if a.tune.Fragments != nil {
-		out.Config.Fragments = append([]string(nil), (*a.tune.Fragments)...)
+	if tune.Fragments != nil {
+		out.Config.Fragments = append([]string(nil), (*tune.Fragments)...)
 	}
-	out.Overrides = a.tune.Fields()
+	out.Overrides = tune.Fields()
 	return out
 }
 
@@ -362,6 +370,35 @@ func (a *Adjuster) Snapshot(ctx context.Context) (Soul, error) {
 		return Soul{}, err
 	}
 	return a.mergedLocked(), nil
+}
+
+// SnapshotFor is Snapshot for one bot.
+//
+// A bot's overlay is read fresh and merged onto the baseline WITHOUT
+// the chief's overlay underneath it. The chief's tune is the chief's
+// personality — "be less sarcastic with me" said in Telegram is about
+// the agent you said it to, and having it silently re-tune the devops
+// bot is the kind of action-at-a-distance nobody would connect back to
+// the sentence that caused it.
+//
+// A bot with no overlay of its own therefore serves the operator's
+// baseline, which is the right default: the operator's SOUL.md is the
+// house style every bot should share.
+//
+// Falls back to Snapshot when the store has no per-bot path, so a
+// deployment whose store predates bots keeps working unchanged.
+func (a *Adjuster) SnapshotFor(ctx context.Context, botID string) (Soul, error) {
+	botStore, ok := a.store.(BotTuneStore)
+	if !ok || botID == "" {
+		return a.Snapshot(ctx)
+	}
+	tune, err := botStore.GetFor(ctx, botID)
+	if err != nil {
+		return Soul{}, err
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.mergeOnBaselineLocked(tune), nil
 }
 
 func (a *Adjuster) refreshLocked(ctx context.Context) error {

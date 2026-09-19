@@ -45,6 +45,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The console is embedded with go:embed from a gitignored
+      # directory, so a `go build` that has not been preceded by this
+      # produces a binary whose console answers ErrNotBuilt.
+      - name: setup node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: build web console
+        run: make web
+
       - name: build
         run: |
           VERSION="${GITHUB_REF_NAME}-$(git rev-parse --short HEAD)"

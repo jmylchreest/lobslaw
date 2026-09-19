@@ -278,7 +278,13 @@ func archiveImportTargets(source, destination map[archiveRecordKey]proto.Message
 func remapArchiveReferences(msg proto.Message, key archiveRecordKey, targets map[archiveRecordKey]string) error {
 	m := msg.ProtoReflect()
 	fields := m.Descriptor().Fields()
-	if f := fields.ByName("id"); f != nil {
+	if inbox, ok := msg.(*lobslawv1.BotInboxItem); ok {
+		id, matches := strings.CutPrefix(targets[key], inbox.GetRecipient()+":")
+		if !matches || id == "" {
+			return errors.New("inbox destination key disagrees with recipient")
+		}
+		inbox.Id = id
+	} else if f := fields.ByName("id"); f != nil {
 		m.Set(f, protoreflect.ValueOfString(targets[key]))
 	}
 	for _, name := range []protoreflect.Name{"session_id", "parent_id"} {

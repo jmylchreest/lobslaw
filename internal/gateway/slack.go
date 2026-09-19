@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -85,7 +85,10 @@ type SlackConfig struct {
 	// operator bound it to.
 	Identity *identity.Resolver
 
-	DefaultBudget compute.BudgetCaps
+	DefaultBudget turn.BudgetCaps
+
+	// TeamRouter picks the coordinator for this user. Nil leaves BotID empty.
+	TeamRouter TeamRouter
 
 	// Notices, Prompts, Leaser, Sessions, Compactor, Conversation and
 	// the queue/responsiveness fields carry the same meaning as their
@@ -98,7 +101,7 @@ type SlackConfig struct {
 	// Nil leaves every confirmation one-shot. ApprovalRules mints the
 	// permanent rule behind "always"; nil hides that button rather
 	// than offering one that silently does nothing.
-	Approvals     *compute.SessionApprovals
+	Approvals     SessionApprover
 	ApprovalRules *policy.ApprovalRules
 
 	Leaser           SessionLeaser
@@ -161,10 +164,10 @@ type SlackConfig struct {
 // why this channel needs no public ingress and no request signature
 // verification.
 type SlackHandler struct {
-	cfg   SlackConfig
-	agent *compute.Agent
-	log   *slog.Logger
-	api   *slackAPI
+	cfg    SlackConfig
+	runner turn.Runner
+	log    *slog.Logger
+	api    *slackAPI
 
 	// identityMu guards botUserID and teamID. They are rewritten every
 	// time socketLoop re-authenticates, which singleton.Run does on
@@ -235,15 +238,15 @@ func (h *SlackHandler) pongTimeout() time.Duration {
 // NewSlackHandler constructs the handler. Both tokens are required at
 // construction: a Slack channel missing either is not a degraded
 // channel, it is one that silently never receives or never replies.
-func NewSlackHandler(cfg SlackConfig, agent *compute.Agent) (*SlackHandler, error) {
+func NewSlackHandler(cfg SlackConfig, runner turn.Runner) (*SlackHandler, error) {
 	if cfg.BotToken == "" {
 		return nil, errors.New("slack: BotToken required")
 	}
 	if cfg.AppToken == "" {
 		return nil, errors.New("slack: AppToken required for Socket Mode")
 	}
-	if agent == nil {
-		return nil, errors.New("slack: agent required")
+	if runner == nil {
+		return nil, errors.New("slack: runner required")
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -267,10 +270,10 @@ func NewSlackHandler(cfg SlackConfig, agent *compute.Agent) (*SlackHandler, erro
 		logger.Warn("slack: allowed_channels is empty; every conversation will be refused. Set allowed_channels = [\"*\"] to open it.")
 	}
 	h := &SlackHandler{
-		cfg:   cfg,
-		agent: agent,
-		log:   logger,
-		api:   newSlackAPI(cfg.BotToken, cfg.APIBase, client),
+		cfg:    cfg,
+		runner: runner,
+		log:    logger,
+		api:    newSlackAPI(cfg.BotToken, cfg.APIBase, client),
 		gate: NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).
 			WithLeaser(cfg.Leaser, 0).
 			WithJudge(cfg.RelatednessJudge).

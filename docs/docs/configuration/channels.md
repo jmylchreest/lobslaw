@@ -231,12 +231,20 @@ roles        = ["operator"]
 type    = "telegram"
 address = "123456789"
 
+[[user.channels]]
+type    = "rest"
+address = "alice@idp"   # JWT sub; matching display names are not a link
+
 # Roles only reach a channel with no JWT via an alias. The key is the
 # channel-DERIVED id ("tg-<id>", "slack-<team>-<user>"), not the bare
 # address above.
 [identity.aliases]
 "tg-123456789" = "alice"
 ```
+
+REST web login (`POST /v1/session`) uses that `type = "rest"` address. The operator must declare the `[[user]]` first — there is no self-signup, and logging in does not grant `role:operator`.
+
+The browser also accepts a one-time code minted from an authenticated operator conversation on the web-serving node, or by `lobslaw login --config <path>` with an enrolled JWT in `LOBSLAW_LOGIN_TOKEN` (or `--token`). The code expires after five minutes, works once, and redemption is limited to ten attempts per minute per node. Loopback is not an authentication bypass, including when a local reverse proxy forwards remote requests. In split web/compute deployments, obtain the code from the web node; login codes and cookies are node-local.
 
 There is no `scope` key on `[[user]]`; a scope written there is silently ignored. `lobslaw doctor` checks the alias and role wiring and names what is missing.
 

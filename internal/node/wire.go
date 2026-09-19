@@ -68,15 +68,30 @@ func gateRaft(cfg Config) bool { return needsRaft(cfg.Functions) }
 // builtins, tool registry.
 func gateCompute(cfg Config) bool { return slices.Contains(cfg.Functions, types.FunctionCompute) }
 
+// gateComputeTeams selects coordinator, inbox drain and team tools.
+// Ordinary compute does not imply this. Restore mode keeps the drain
+// paused so recovery cannot execute queued work.
+func gateComputeTeams(cfg Config) bool {
+	return !cfg.RestoreMode && slices.Contains(cfg.Functions, types.FunctionComputeTeams)
+}
+
 // gateGateway selects stages that need the gateway. Both the
 // function bit AND the explicit Enabled toggle must be set: an
 // operator running the gateway function for testing might leave it
 // disabled in config to bring up the rest of the cluster first.
 func gateGateway(cfg Config) bool {
-	// One switch, not two. The gateway function normalises to compute
-	// (it cannot run without an agent), so what remains is: does this
-	// node run an agent, and did the operator enable the channels.
-	return !cfg.RestoreMode && slices.Contains(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
+	if cfg.RestoreMode {
+		return false
+	}
+	// ui-web serves the console on the REST listener and does not
+	// rewrite to compute — a web node may have no local agent.
+	if slices.Contains(cfg.Functions, types.FunctionUIWeb) {
+		return true
+	}
+	// The gateway function normalises to compute (it cannot run
+	// without an agent), so what remains is: does this node run an
+	// agent, and did the operator enable the channels.
+	return slices.Contains(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
 }
 
 // gateStorage selects stages that need the storage function. Storage
@@ -150,6 +165,7 @@ func nodeWireStages() []WireStage {
 		{Name: "notices", Gate: gateRaft, Wire: (*Node).wireNotices},
 		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
+		{Name: "bots", Gate: gateRaft, Wire: (*Node).wireBots},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},
 		{Name: "scheduler", Gate: gateScheduler, Wire: (*Node).wireScheduler},
 		{Name: "storage", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireStorageStage},
@@ -161,12 +177,14 @@ func nodeWireStages() []WireStage {
 		{Name: "audit", Wire: (*Node).wireAuditStage},
 		{Name: "soul-fallback", Wire: (*Node).wireSoulFallback},
 		{Name: "compute", Gate: gateCompute, Wire: (*Node).wireComputeStage},
+		{Name: "compute-teams", Gate: gateComputeTeams, Wire: (*Node).wireComputeTeamsStage},
 		{Name: "approval-gates", Gate: gateCompute, Wire: (*Node).wireApprovalGates},
 		// After compute, which builds the RoleMap the fork routes
 		// through; before gateway, which is where turns start arriving.
 		{Name: "review-fork", Gate: gateCompute, Wire: (*Node).wireReviewFork},
 		{Name: "auth", Gate: gateAuth, Wire: (*Node).wireAuthStage},
 		{Name: "gateway", Gate: gateGateway, Wire: (*Node).wireGatewayStage},
+		{Name: "console-backend", Gate: gateCompute, Wire: (*Node).wireConsoleBackend},
 		{Name: "discovery", Wire: (*Node).wireDiscoveryStage},
 		{Name: "broadcast", Gate: gateBroadcast, Wire: (*Node).wireBroadcastStage},
 	}

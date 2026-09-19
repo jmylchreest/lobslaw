@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // tgPromptHarness is a variant of tgServerHarness that captures the
@@ -57,7 +58,7 @@ func newTGPromptHarness(t *testing.T, agent *compute.Agent, cfg TelegramConfig) 
 	cfg.Prompts = h.registry
 	cfg.ConfirmationTTL = time.Minute
 
-	handler, err := NewTelegramHandler(cfg, agent)
+	handler, err := NewTelegramHandler(cfg, compute.Adapt(agent))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +82,10 @@ func TestTelegramSendConfirmationKeyboardRegistersAndPostsKeyboard(t *testing.T)
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
 	h.handler.sendConfirmationKeyboard(
 		555,
-		compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
-		&compute.ProcessMessageResponse{ConfirmationReason: "run this scary thing?"},
+		turn.Request{TurnID: "turn-42"},
+		&turn.Response{ConfirmationReason: "run this scary thing?"},
 		SessionRef{Channel: "telegram", ChannelID: "555"},
 	)
 
@@ -331,14 +331,13 @@ func TestTelegramResumePersistsApprovedHalfOfTurn(t *testing.T) {
 	})
 
 	ref := SessionRef{Channel: "telegram", ChannelID: "555"}
-	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
 
 	// The turn stopped at a confirmation: the user message and the
 	// assistant's tool request were already persisted by dispatch.
-	stopped := []compute.Message{
+	stopped := []turn.Message{
 		{Role: "system", Content: "sys"},
 		{Role: "user", Content: "delete the thing"},
-		{Role: "assistant", ToolCalls: []compute.ToolCall{{ID: "c1", Name: "shell_command"}}},
+		{Role: "assistant", ToolCalls: []turn.ToolCall{{ID: "c1", Name: "shell_command"}}},
 	}
 	h.handler.conv.Append(context.Background(), ref, "turn-42", stopped[1:])
 
@@ -349,7 +348,7 @@ func TestTelegramResumePersistsApprovedHalfOfTurn(t *testing.T) {
 		Channel:   "telegram",
 		ChannelID: "555",
 		Continuation: &Continuation{
-			Request:  compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
+			Request:  turn.Request{TurnID: "turn-42"},
 			Messages: stopped,
 		},
 	})

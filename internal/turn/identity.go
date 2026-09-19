@@ -1,12 +1,15 @@
-// Package turn carries who a turn came from and where it arrived.
+// Package turn carries who a turn came from, where it arrived, and
+// the channel-facing contract for running one.
 //
 // Its own package because it is a FACT ABOUT A CALLER, not any one
-// subsystem's concern.
+// subsystem's concern. Channels depend on Runner rather than
+// internal/compute, so a local agent and a remote backend are two
+// implementations rather than two call shapes.
 //
-// A leaf: pkg/types, internal/identity, and the standard library.
-// Nothing here may import a subsystem — everything that authorises or
-// attributes anything imports this, so a single subsystem dependency
-// here becomes a cycle for all of them.
+// A leaf: pkg/types, internal/identity, internal/commandrisk, and the
+// standard library. Nothing here may import a subsystem — everything
+// that authorises or attributes anything imports this, so a single
+// subsystem dependency here becomes a cycle for all of them.
 package turn
 
 import (
@@ -71,6 +74,12 @@ type Identity struct {
 	// is an input to a rule, and the rule is what allows or denies.
 	Roles []string
 
+	// BotOwner is the human a bot turn serves, when the turn runs as a
+	// bot. A bot reads its own records AND this principal's, so a
+	// specialist can recall what its owner told the assistant. Empty
+	// for a turn that is not a bot's.
+	BotOwner identity.Principal
+
 	// TurnID identifies this turn. Carried so a builtin can bound a
 	// per-turn budget — the pinned-memory tools cap consecutive
 	// failures so a fragile edit cannot loop the turn to exhaustion
@@ -104,6 +113,16 @@ type Identity struct {
 	// a model that picks its own zone moves when a schedule appears to
 	// fire.
 	Timezone string
+
+	// BotID is the named agent running this turn, when one is. Empty
+	// on ordinary compute — the main assistant, as before bots existed.
+	BotID string
+}
+
+// IsBot reports whether this turn is being run by a named agent
+// rather than the main assistant.
+func (t Identity) IsBot() bool {
+	return t.BotID != ""
 }
 
 // SessionKey is the conversation this turn is in, as the session store

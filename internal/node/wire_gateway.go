@@ -3,21 +3,32 @@ package node
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/tools"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 func (n *Node) wireGateway() error {
-	if n.agent == nil {
+	uiWeb := slices.Contains(n.cfg.Functions, types.FunctionUIWeb)
+	runner, err := n.resolveTurnRunner()
+	if err != nil {
+		return err
+	}
+	if runner == nil && !uiWeb {
 		return fmt.Errorf("gateway requires compute function (no agent wired on this node)")
 	}
 
@@ -31,13 +42,21 @@ func (n *Node) wireGateway() error {
 	for i, ch := range n.cfg.Gateway.Channels {
 		switch ch.Type {
 		case "slack":
-			h, err := n.buildSlackHandler(ch)
+			if runner == nil {
+				n.log.Warn("gateway: skipping slack; no turn runner", "index", i)
+				continue
+			}
+			h, err := n.buildSlackHandler(ch, runner)
 			if err != nil {
 				return fmt.Errorf("gateway.channels[%d] (slack): %w", i, err)
 			}
 			sl = h
 		case "telegram":
-			h, err := n.buildTelegramHandler(ch)
+			if runner == nil {
+				n.log.Warn("gateway: skipping telegram; no turn runner", "index", i)
+				continue
+			}
+			h, err := n.buildTelegramHandler(ch, runner)
 			if err != nil {
 				return fmt.Errorf("gateway.channels[%d] (telegram): %w", i, err)
 			}
@@ -48,7 +67,11 @@ func (n *Node) wireGateway() error {
 			// could not be, because the handler did not exist yet.
 			n.attachEnrolmentAsker(h)
 		case "webhook":
-			h, err := n.buildWebhookHandler(ch)
+			if runner == nil {
+				n.log.Warn("gateway: skipping webhook; no turn runner", "index", i)
+				continue
+			}
+			h, err := n.buildWebhookHandler(ch, runner)
 			if err != nil {
 				return fmt.Errorf("gateway.channels[%d] (webhook): %w", i, err)
 			}
@@ -112,6 +135,8 @@ func (n *Node) wireGateway() error {
 		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
 		JWTValidator:     n.jwtValidator,
 		RequireAuth:      n.cfg.Auth.RequireAuth,
+		Identity:         n.identityResolver(),
+		Users:            n.cfg.Users,
 		Telegram:         tg,
 		Slack:            sl,
 		Webhooks:         webhooks,
@@ -122,17 +147,69 @@ func (n *Node) wireGateway() error {
 		Compactor:        n.newSessionCompactor(),
 		Conversation:     n.conversationConfig(),
 		Logger:           n.log,
+		Bots:             n.teamBotsOrNil(),
+		Tools:            n.toolCatalogueOrNil(),
+		Groups:           n.teamGroupsOrNil(),
+		Inbox:            n.teamInboxOrNil(),
+		TeamRouter:       n.teamRouterOrNil(),
+		Config:           n.consoleConfigView(),
+		Transcripts:      n.newSessionBrowser(),
+		Routines:         n.newRoutineLister(),
+		Memory:           n.newMemoryLister(),
 	}
 
-	n.gatewaySrv = gateway.NewServer(cfg, n.agent)
+	if n.remoteTurnConn != nil {
+		cfg.RemoteConsole = lobslawv1.NewConsoleServiceClient(n.remoteTurnConn)
+	}
+	n.gatewaySrv = gateway.NewServer(cfg, runner)
+	if n.server != nil && n.agent != nil {
+		lobslawv1.RegisterConsoleServiceServer(n.server, n.gatewaySrv)
+	}
+	n.mountWebConsole(uiWeb)
+	n.registerConsoleCodeTool(uiWeb)
 	n.log.Info("gateway wired",
 		"http_port", port,
 		"tls", tlsCert != "",
 		"channels", len(n.cfg.Gateway.Channels),
 		"telegram", tg != nil,
 		"require_auth", cfg.RequireAuth,
+		"ui_web", uiWeb,
 	)
 	return nil
+}
+
+// mountWebConsole attaches the embedded SPA when FunctionUIWeb is on.
+// A missing Vite build is a warning, not a boot failure: Telegram and
+// the API still serve.
+func (n *Node) mountWebConsole(enabled bool) {
+	if !enabled || n.gatewaySrv == nil {
+		return
+	}
+	handler, err := ui.Handler()
+	if err != nil {
+		n.log.Warn("gateway: web console enabled but unavailable", "err", err)
+		return
+	}
+	n.gatewaySrv.RegisterConsole(handler)
+	n.log.Info("gateway: web console mounted", "path", "/")
+}
+
+// registerConsoleCodeTool exposes console_code: "give me a code to sign
+// in". Registered after the gateway exists because the code store
+// lives on it, and only when the console is actually on — a node with
+// no console has no code to give. The tool itself refuses anyone
+// without role:operator.
+func (n *Node) registerConsoleCodeTool(uiWeb bool) {
+	if !uiWeb || n.gatewaySrv == nil || n.builtinsRegistry == nil || n.toolRegistry == nil {
+		return
+	}
+	if err := tools.RegisterConsoleCodeBuiltin(n.builtinsRegistry, n.gatewaySrv); err != nil {
+		n.log.Warn("console_code: register failed", "err", err)
+		return
+	}
+	if err := n.toolRegistry.Register(tools.ConsoleCodeToolDef()); err != nil {
+		n.log.Warn("console_code: tool def register failed", "err", err)
+	}
 }
 
 // registerSlackTools exposes slack_read_channel / slack_search.
@@ -213,7 +290,7 @@ func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHan
 // calls, the app token opens Socket Mode. Either missing is fatal at
 // boot rather than at first message — a Slack channel that cannot
 // connect or cannot reply is not a degraded channel, it is a silent one.
-func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.SlackHandler, error) {
+func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig, runner turn.Runner) (*gateway.SlackHandler, error) {
 	botToken, err := n.resolveChannelSecret(ch.BotTokenRef)
 	if err != nil {
 		return nil, fmt.Errorf("bot_token_ref %q: %w", ch.BotTokenRef, err)
@@ -271,14 +348,15 @@ func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.Slack
 		SessionGrants:     n.sessionGrantsView(),
 		Gate:              gate,
 		Logger:            n.log,
-	}, n.agent)
+		TeamRouter:        n.teamRouterOrNil(),
+	}, runner)
 }
 
 // buildTelegramHandler resolves bot token + webhook secret from the
 // channel config's secret refs and constructs the handler. Secrets
 // missing from the environment fail boot loudly — a Telegram channel
 // with an empty token is a silent drop of every update.
-func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.TelegramHandler, error) {
+func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig, runner turn.Runner) (*gateway.TelegramHandler, error) {
 	botToken, err := n.resolveChannelSecret(ch.BotTokenRef)
 	if err != nil {
 		return nil, fmt.Errorf("bot_token_ref %q: %w", ch.BotTokenRef, err)
@@ -360,7 +438,8 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		Sessions:          n.newSessionStore(),
 		Compactor:         n.newSessionCompactor(),
 		Conversation:      n.conversationConfig(),
-	}, n.agent)
+		TeamRouter:        n.teamRouterOrNil(),
+	}, runner)
 }
 
 // soulProvider returns the current SOUL config if one is loaded,
@@ -370,7 +449,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 // buildWebhookHandler resolves the shared-secret ref and constructs
 // a WebhookHandler. Fails on empty name or unresolvable secret;
 // scope defaults to "webhook" at the handler layer.
-func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig) (*gateway.WebhookHandler, error) {
+func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig, runner turn.Runner) (*gateway.WebhookHandler, error) {
 	if ch.Name == "" {
 		return nil, fmt.Errorf("webhook channel: name required (used in mount path and logs)")
 	}
@@ -385,7 +464,27 @@ func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig) (*gateway.Web
 		Scope:         ch.Scope,
 		DefaultBudget: compute.FromComputeConfig(n.cfg.Compute),
 		Logger:        n.log,
-	}, n.agent)
+	}, runner)
+}
+
+// resolveTurnRunner picks the local agent when this node has compute,
+// otherwise a remote adapter against [ui-web].backend. The Backend
+// field is read here so TestEverySettingIsReadBySomething sees it.
+func (n *Node) resolveTurnRunner() (turn.Runner, error) {
+	if n.agent != nil {
+		return compute.Adapt(n.agent), nil
+	}
+	backend := strings.TrimSpace(n.cfg.UIWeb.Backend)
+	if backend == "" {
+		return nil, nil
+	}
+	conn, err := n.dialer()(context.Background(), backend)
+	if err != nil {
+		return nil, fmt.Errorf("ui-web backend %q: %w", backend, err)
+	}
+	n.remoteTurnConn = conn
+	n.log.Info("gateway: remote turn backend", "addr", backend)
+	return compute.NewRemoteRunner(conn), nil
 }
 
 // startMCPFromConfig spawns every [[mcp.servers]] entry, translating

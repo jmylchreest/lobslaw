@@ -64,7 +64,7 @@ func newSlackHarness(t *testing.T, agent *compute.Agent, cfg SlackConfig) *slack
 	cfg.HTTPClient = hh.srv.Client()
 	cfg.Logger = discardLogger()
 
-	h, err := NewSlackHandler(cfg, agent)
+	h, err := NewSlackHandler(cfg, compute.Adapt(agent))
 	if err != nil {
 		t.Fatalf("NewSlackHandler: %v", err)
 	}

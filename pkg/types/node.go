@@ -39,6 +39,13 @@ const (
 	// FunctionStorage serves the object store and its sandboxed
 	// nested filesystem mounts.
 	FunctionStorage NodeFunction = "storage"
+	// FunctionComputeTeams is coordinator selection, specialist
+	// delegation and durable team work queues. Opt-in; not in --all.
+	// Requires compute (normalised in). Does not require ui-web.
+	FunctionComputeTeams NodeFunction = "compute-teams"
+	// FunctionUIWeb is the browser console. Opt-in; not in --all.
+	// Does NOT rewrite to compute — a web node may use remote compute.
+	FunctionUIWeb NodeFunction = "ui-web"
 )
 
 // IsValid reports whether f is a known function, so an unrecognised
@@ -46,7 +53,7 @@ const (
 // node that silently serves nothing.
 func (f NodeFunction) IsValid() bool {
 	switch f {
-	case FunctionMemory, FunctionPolicy, FunctionCompute, FunctionGateway, FunctionStorage:
+	case FunctionMemory, FunctionPolicy, FunctionCompute, FunctionGateway, FunctionStorage, FunctionComputeTeams, FunctionUIWeb:
 		return true
 	}
 	return false
@@ -134,6 +141,12 @@ func NormalizeFunctions(fns []NodeFunction) (out []NodeFunction, rewrote []NodeF
 	if seen[FunctionMemory] || seen[FunctionStorage] {
 		add(FunctionMemory)
 		add(FunctionStorage)
+	}
+	// Teams cannot run without an agent. Unlike gateway, the function
+	// bit is the real switch — [compute-teams].enabled maps onto it —
+	// so we add compute rather than rewriting the name away.
+	if seen[FunctionComputeTeams] {
+		add(FunctionCompute)
 	}
 	return out, rewrote
 }

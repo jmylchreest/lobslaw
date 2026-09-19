@@ -24,7 +24,13 @@ func newRaftSoulTuneStore(svc *memory.SoulTuneService) *raftSoulTuneStore {
 }
 
 func (s *raftSoulTuneStore) Get(ctx context.Context) (*soul.TuneState, error) {
-	rec, err := s.svc.Get(ctx)
+	return s.GetFor(ctx, memory.ChiefBotID)
+}
+
+// GetFor satisfies soul.BotTuneStore: one bot's overlay, which for the
+// chief is the pre-existing soul:tune record.
+func (s *raftSoulTuneStore) GetFor(ctx context.Context, botID string) (*soul.TuneState, error) {
+	rec, err := s.svc.GetFor(ctx, botID)
 	if err != nil {
 		return nil, err
 	}

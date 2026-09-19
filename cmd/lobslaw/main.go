@@ -73,6 +73,8 @@ type flags struct {
 	compute                   bool
 	gateway                   bool
 	storage                   bool
+	computeTeams              bool
+	uiWeb                     bool
 }
 
 func parseFlags(args []string, out *flags) error {
@@ -102,6 +104,8 @@ func parseFlags(args []string, out *flags) error {
 	fs.BoolVar(&out.compute, "compute", false, "enable compute function")
 	fs.BoolVar(&out.gateway, "gateway", false, "enable gateway function")
 	fs.BoolVar(&out.storage, "storage", false, "enable storage function")
+	fs.BoolVar(&out.computeTeams, "compute-teams", false, "enable compute-teams (opt-in; not implied by --all)")
+	fs.BoolVar(&out.uiWeb, "ui-web", false, "enable ui-web (opt-in; not implied by --all)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -159,6 +163,12 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 	if f.storage {
 		explicit = append(explicit, types.FunctionStorage)
 	}
+	if f.computeTeams {
+		explicit = append(explicit, types.FunctionComputeTeams)
+	}
+	if f.uiWeb {
+		explicit = append(explicit, types.FunctionUIWeb)
+	}
 	if len(explicit) > 0 {
 		return explicit
 	}
@@ -178,6 +188,12 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 	}
 	if cfg.Storage.Enabled {
 		fromCfg = append(fromCfg, types.FunctionStorage)
+	}
+	if cfg.ComputeTeams.Enabled {
+		fromCfg = append(fromCfg, types.FunctionComputeTeams)
+	}
+	if cfg.UIWeb.Enabled {
+		fromCfg = append(fromCfg, types.FunctionUIWeb)
 	}
 	if len(fromCfg) > 0 {
 		return fromCfg
@@ -568,6 +584,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		Hooks:               cfg.Hooks,
 		Auth:                cfg.Auth,
 		Gateway:             cfg.Gateway,
+		UIWeb:               cfg.UIWeb,
 		Audit:               cfg.Audit,
 		Storage:             cfg.Storage,
 		Skills:              cfg.Skills,

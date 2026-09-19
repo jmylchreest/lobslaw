@@ -1,5 +1,7 @@
 package memory
 
+import "strings"
+
 // Bucket names inside state.db. Each record type lives in its own
 // top-level bbolt bucket, keyed by record ID.
 const (
@@ -155,11 +157,51 @@ const (
 	// that from "still waiting". It also lets the node that ANSWERS an
 	// enrolment be a different one from the node that received it.
 	BucketEnrolments = "enrolments"
+
+	// BucketBots holds the named agents, keyed by the bot's immutable
+	// slug, which is also its principal's identifier.
+	BucketBots = "bots"
+	// BucketGroups holds teams: one human owner, one coordinator bot.
+	BucketGroups = "groups"
+	// BucketBotInbox holds the durable per-bot work queue, keyed
+	// "<recipient>:<ulid>".
+	BucketBotInbox = "bot_inbox"
 )
 
-// SoulTuneRecordID is the constant key under BucketSoulTune. There
-// is one tune record per cluster — the agent has one identity.
+// ChiefBotID names the bot whose personality overlay is the
+// pre-existing SoulTuneRecordID. A fixed id rather than a lookup,
+// because the key it derives has to be stable across an upgrade on a
+// cluster whose bots bucket is still empty.
+const ChiefBotID = "chief"
+
+// DefaultGroupID is the id of the team a person's bots start in. It is
+// created explicitly, owned by that person, the first time they need a
+// team — it is not a shared fallback that anyone can adopt.
+const DefaultGroupID = "default"
+
+// SoulTuneRecordID is the constant key under BucketSoulTune for the
+// CHIEF's personality overlay.
+//
+// It is spelled out rather than derived because it predates there
+// being more than one bot, and every existing cluster already has a
+// record under exactly these bytes. Keeping it verbatim is what makes
+// the upgrade a no-op: the chief keeps the personality the deployment
+// already had, and only the bots created afterwards get keys of their
+// own. See SoulTuneRecordIDFor.
 const SoulTuneRecordID = "soul:tune"
+
+// SoulTuneRecordIDFor returns the personality-overlay key for one bot.
+//
+// The chief's key is SoulTuneRecordID unchanged, so an upgraded
+// cluster finds the overlay it already had rather than waking up with
+// a default personality. Every other bot gets a suffixed key.
+func SoulTuneRecordIDFor(botID string) string {
+	botID = strings.TrimSpace(botID)
+	if botID == "" || botID == ChiefBotID {
+		return SoulTuneRecordID
+	}
+	return SoulTuneRecordID + ":" + botID
+}
 
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
@@ -192,4 +234,7 @@ var allBuckets = []string{
 	BucketSkillBlobs,
 	BucketSelfTaughtHistory,
 	BucketEnrolments,
+	BucketBots,
+	BucketGroups,
+	BucketBotInbox,
 }

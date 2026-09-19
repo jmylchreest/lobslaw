@@ -3,6 +3,12 @@
 /bin/
 /dist/
 
+# go:embed directory; the .gitkeep beside it is what keeps a clean
+# checkout building without npm.
+internal/gateway/ui/dist/*
+!internal/gateway/ui/dist/.gitkeep
+web/node_modules/
+
 # Coverage and profiling
 *.out
 *.prof

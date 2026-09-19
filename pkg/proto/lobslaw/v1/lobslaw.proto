@@ -1235,6 +1235,125 @@ message EmotiveStyleTune {
   optional string emoji_usage = 6;
 }
 
+// BotRecord is one named agent. It is a principal, not a permission
+// set: it runs as "bot:<id>" and policy decides what that may do.
+// Persona (instructions, overlay) grants no authority.
+//
+// The tools list is a registry filter — what the model is shown —
+// not a second authorisation system. Empty means the node default.
+message BotRecord {
+  // id is an immutable slug — "engineering". It is the principal's
+  // identifier, so renaming one would orphan every record it owns.
+  string id = 1;
+  string display_name = 2;
+  string description = 3;
+  // instructions is the bot's standing brief. Rendered as soul
+  // guidance, which means it is standing configuration and never
+  // the current task.
+  string instructions = 4;
+  // is_coordinator is a convenience flag. The coordinator ROLE lives
+  // on GroupRecord.coordinator_bot_id — this bot is an ordinary bot
+  // that happens to hold that role.
+  bool is_coordinator = 5;
+  repeated string tools = 6;
+  // may_message is the explicit edge list for ask_bot / tell_bot /
+  // inbox_post. Validated as a DAG on write.
+  repeated string may_message = 7;
+  string model_role = 8;
+  BotBudget budget = 9;
+  bool enabled = 10;
+  // revision is FSM-assigned and bumped on every write, making a
+  // read-modify-write safe against a stale reader. Same contract as
+  // SoulTuneRecord.
+  uint64 revision = 11;
+  string claimed_by = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  string created_by = 15;
+  // group_id is the team this bot belongs to. Empty is not a public
+  // default — a bot with no team is not in anyone's team.
+  string group_id = 16;
+  // owner is the human principal this bot belongs to — "user:alice".
+  // Empty means nobody: the record is inaccessible, never public.
+  string owner = 17;
+}
+
+// BotBudget caps one of this bot's turns. Zero on a field takes the
+// node's configured default rather than meaning "unlimited".
+message BotBudget {
+  int32 max_tool_calls = 1;
+  double max_spend_usd = 2;
+  int64 max_egress_bytes = 3;
+}
+
+// GroupRecord is one team: a single human owner, a coordinator bot,
+// and the specialists under it. Empty owner is inaccessible, never
+// public.
+message GroupRecord {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  // coordinator_bot_id is an ordinary bot that answers for this group.
+  string coordinator_bot_id = 4;
+  bool is_default = 5;
+  uint64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  string created_by = 9;
+  string claimed_by = 10;
+  // owner is the human principal this team belongs to — "user:alice".
+  // Empty means nobody: the record is inaccessible, never public.
+  string owner = 11;
+}
+
+// InboxKind is what an item IS.
+enum InboxKind {
+  INBOX_KIND_UNSPECIFIED = 0;
+  INBOX_KIND_TASK = 1;
+  INBOX_KIND_QUESTION = 2;
+  INBOX_KIND_ANSWER = 3;
+  INBOX_KIND_RESULT = 4;
+  INBOX_KIND_FYI = 5;
+}
+
+// InboxStatus is where an item is in its life. FAILED stays visible.
+enum InboxStatus {
+  INBOX_STATUS_UNSPECIFIED = 0;
+  INBOX_STATUS_PENDING = 1;
+  INBOX_STATUS_CLAIMED = 2;
+  INBOX_STATUS_DONE = 3;
+  INBOX_STATUS_FAILED = 4;
+  INBOX_STATUS_CANCELLED = 5;
+}
+
+// BotInboxItem is one unit of a bot's durable work queue.
+// Keyed "<recipient>:<ulid>". Status is not in the key.
+message BotInboxItem {
+  string id = 1;
+  string recipient = 2;
+  string sender = 3;
+  InboxKind kind = 4;
+  string subject = 5;
+  string body = 6;
+  int32 priority = 7;
+  InboxStatus status = 8;
+  string correlation_id = 9;
+  string result = 10;
+  string error = 11;
+  int32 attempts = 12;
+  string claimed_by = 13;
+  google.protobuf.Timestamp claim_expires_at = 14;
+  uint64 revision = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp completed_at = 17;
+  string session_id = 18;
+  repeated string tools_used = 19;
+  uint64 tokens_used = 20;
+  double cost_usd = 21;
+  // requested_by is the person this work traces back to.
+  string requested_by = 22;
+}
+
 // CredentialRecord holds an OAuth (or other-provider) credential
 // the operator has connected to lobslaw. Tokens are encrypted at
 // rest with the cluster MemoryKey — the bytes on the wire and on
@@ -1961,6 +2080,9 @@ message LogEntry {
     EnrolmentRecord enrolment = 35;
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
+    BotRecord bot = 37;
+    BotInboxItem bot_inbox = 38;
+    GroupRecord group = 39;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -2209,6 +2331,8 @@ message Continuation {
   string conversation_summary = 11;
   string recalled_context = 12;
   int64 egress_bytes = 13;
+  string bot_id = 14;
+  string principal = 15;
 }
 
 // PromptRecord is one pending confirmation, in Raft rather than in a
@@ -2256,4 +2380,131 @@ message PromptRecord {
   // for the same reason: the answer has to reach something other than
   // a paused turn.
   string enrolment = 20;
+}
+
+// -----------------------------------------------------------------------------
+// AgentService — run a turn on a compute node for a peer that has none
+// -----------------------------------------------------------------------------
+//
+// A ui-web node authenticates users over HTTP, then asks a compute node
+// to run the turn. Cluster mTLS authenticates the PEER NODE, not the
+// person. The authenticated user travels on the request as Claims and
+// Principal. An empty user is refused: the web node's machine identity
+// must not become the unrestricted audience over every user's data
+// (operator-role-and-cluster-authorization).
+service AgentService {
+  rpc RunTurn(RunTurnRequest) returns (RunTurnResponse);
+  rpc ResumeTurn(ResumeTurnRequest) returns (ResumeTurnResponse);
+  // Ping is the availability probe. Failure is "compute.available =
+  // false", not a deleted capability — sessions and records stay.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {}
+message PingResponse {}
+
+message TurnBudgetCaps {
+  int32 max_tool_calls = 1;
+  double max_spend_usd = 2;
+  int64 max_egress_bytes = 3;
+}
+
+message TurnBudgetState {
+  int32 tool_calls = 1;
+  double spend_usd = 2;
+  int64 egress_bytes = 3;
+}
+
+message TurnAttachment {
+  string kind = 1;
+  string mime_type = 2;
+  int32 size = 3;
+  int32 width = 4;
+  int32 height = 5;
+  int32 duration = 6;
+  string reference = 7;
+  string filename = 8;
+  string local_path = 9;
+}
+
+message TurnToolInvocation {
+  string call_id = 1;
+  string tool_name = 2;
+  string args = 3;
+  string output = 4;
+  int32 exit_code = 5;
+  string error = 6;
+}
+
+message RunTurnRequest {
+  string message = 1;
+  // The authenticated user. Required. Never inferred from the peer
+  // certificate — that is the web node's machine identity.
+  Claims claims = 2;
+  // Cluster-wide principal already resolved on the calling node.
+  // Empty lets the compute node Resolve() from claims.user_id.
+  string principal = 3;
+  string turn_id = 4;
+  string channel = 5;
+  string channel_id = 6;
+  bool shared_conversation = 7;
+  string hint = 8;
+  string user_timezone = 9;
+  string system_prompt = 10;
+  string model = 11;
+  repeated SessionMessage conversation_history = 12;
+  string conversation_summary = 13;
+  string recalled_context = 14;
+  repeated TurnAttachment attachments = 15;
+  TurnBudgetCaps caps = 16;
+  TurnBudgetState spent = 17;
+  string bot_id = 18;
+}
+
+message ResumeTurnRequest {
+  RunTurnRequest request = 1;
+  repeated SessionMessage prior = 2;
+  // Asserted only by authenticated peer nodes after the user has approved.
+  string approval_action = 3;
+  string approval_resource = 4;
+}
+
+message RunTurnResponse {
+  string reply = 1;
+  repeated TurnToolInvocation tool_calls = 2;
+  repeated TurnAttachment attachments = 3;
+  repeated SessionMessage messages = 4;
+  int32 turn_start_index = 5;
+  TurnBudgetState budget = 6;
+  bool needs_confirmation = 7;
+  string confirmation_action = 8;
+  string confirmation_resource = 9;
+  bool confirmation_grantable = 10;
+  repeated string confirmation_labels = 11;
+  string confirmation_reason = 12;
+}
+
+message ResumeTurnResponse {
+  RunTurnResponse response = 1;
+}
+
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+service ConsoleService {
+  rpc ConsoleForward(ConsoleForwardRequest) returns (stream ConsoleForwardResponse);
+}
+
+message ConsoleForwardRequest {
+  string method = 1;
+  string path = 2;
+  bytes body = 3;
+  Claims claims = 4;
+  bool event_stream = 5;
+}
+
+message ConsoleForwardResponse {
+  int32 status = 1;
+  string content_type = 2;
+  bytes data = 3;
 }

@@ -243,6 +243,11 @@ type Config struct {
 	// (otherwise the node skips gateway wiring entirely).
 	Gateway config.GatewayConfig
 
+	// UIWeb is the [ui-web] block. Backend is read here — not only
+	// parsed in pkg/config — so a web node without compute fails at
+	// boot naming the missing address rather than serving 503.
+	UIWeb config.UIWebConfig
+
 	// Audit configures the tamper-evident log. Both sinks can be
 	// disabled (no-op log); enabling both gives defence-in-depth
 	// where tampering one side fails the cross-sink VerifyChain.
@@ -349,6 +354,16 @@ type Node struct {
 	soul         atomic.Pointer[soul.Soul]
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
+	botSvc       *memory.BotService
+	// botOwner is the unique operator unowned bots are adopted onto.
+	// Adoption is an Apply, so it waits for leadership in Start rather
+	// than running at wire time where there is no leader yet.
+	botOwner identity.Principal
+	groupSvc *memory.GroupService
+	inboxSvc *memory.InboxService
+	// inboxAPI is inboxSvc wrapped so a post wakes the drain.
+	inboxAPI     wakingInbox
+	inboxWake    chan struct{}
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -419,10 +434,13 @@ type Node struct {
 	// traces records what each turn did. Nil when tracing is off, and
 	// a nil recorder is usable — so instrumented paths record
 	// unconditionally rather than branching.
-	traces   *trace.Recorder
-	agent    *compute.Agent
-	embedder compute.EmbeddingProvider
-	roleMap  *compute.RoleMap
+	traces *trace.Recorder
+	agent  *compute.Agent
+	// remoteTurnConn is the cluster gRPC client a ui-web node holds
+	// onto a compute backend. Nil when turns run locally.
+	remoteTurnConn *grpc.ClientConn
+	embedder       compute.EmbeddingProvider
+	roleMap        *compute.RoleMap
 
 	// reviewFork decides whether a finished turn taught anything.
 	// Nil when self-learning is off — there is no fork to disable
@@ -708,6 +726,9 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
 	// cancel. Only present on Raft-hosting nodes (the construction
 	// branch in New gated that).
+	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
+		go n.runInboxDrain(ctx)
+	}
 	if n.scheduler != nil {
 		go func() {
 			if err := n.scheduler.Run(ctx); err != nil {
@@ -781,6 +802,11 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 			}
 			if err := n.seedUserPrefsFromConfig(ctx); err != nil {
 				n.log.Warn("user_prefs: seed from config failed", "err", err)
+			}
+			if n.botSvc != nil && !n.botOwner.IsZero() {
+				if err := n.botSvc.AdoptUnowned(ctx, n.botOwner); err != nil {
+					n.log.Warn("bots: adopt unowned failed", "err", err)
+				}
 			}
 		}
 	}
@@ -901,6 +927,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 			n.log.Warn("egress proxy shutdown", "err", err)
 		}
 	}
+	if n.remoteTurnConn != nil {
+		if err := n.remoteTurnConn.Close(); err != nil {
+			n.log.Warn("remote turn conn close", "err", err)
+		}
+	}
 	return nil
 }
 
@@ -1006,6 +1037,9 @@ func (n *Node) closePartial() {
 	if n.listener != nil {
 		_ = n.listener.Close()
 	}
+	if n.remoteTurnConn != nil {
+		_ = n.remoteTurnConn.Close()
+	}
 }
 
 func validateConfig(cfg Config) error {
@@ -1039,7 +1073,28 @@ func validateConfig(cfg Config) error {
 		return errors.New("node.Config: memory-enabled nodes without seeds must configure memory.snapshot.target " +
 			"(a single-node cluster with no off-cluster backup risks total data loss on disk failure)")
 	}
+	if err := validateUIWebBackend(cfg); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ErrUIWebBackendRequired is the boot failure when FunctionUIWeb is
+// on, FunctionCompute is off, and [ui-web].backend is empty. Named so
+// tests and the error string cannot drift.
+var ErrUIWebBackendRequired = errors.New("ui-web without compute requires [ui-web].backend")
+
+func validateUIWebBackend(cfg Config) error {
+	if !slices.Contains(cfg.Functions, types.FunctionUIWeb) {
+		return nil
+	}
+	if slices.Contains(cfg.Functions, types.FunctionCompute) {
+		return nil
+	}
+	if strings.TrimSpace(cfg.UIWeb.Backend) != "" {
+		return nil
+	}
+	return fmt.Errorf("node.Config: %w (cluster gRPC address of a compute node)", ErrUIWebBackendRequired)
 }
 
 func needsRaft(fns []types.NodeFunction) bool {
@@ -1286,6 +1341,17 @@ func (n *Node) soulSnapshot(ctx context.Context) (*soul.Soul, error) {
 		return n.Soul(), nil
 	}
 	snapshot, err := n.soulAdjuster.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func (n *Node) soulSnapshotFor(ctx context.Context, botID string) (*soul.Soul, error) {
+	if n.soulAdjuster == nil {
+		return n.Soul(), nil
+	}
+	snapshot, err := n.soulAdjuster.SnapshotFor(ctx, botID)
 	if err != nil {
 		return nil, err
 	}

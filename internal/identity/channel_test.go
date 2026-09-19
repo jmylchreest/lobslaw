@@ -138,6 +138,45 @@ func TestLookupFailureFallsBackWithoutLosingTheError(t *testing.T) {
 // Claims.UserID is a bare id — policy subjects are written
 // "user:alice" and the engine adds the kind itself, so passing a
 // principal through would produce "user:user:alice" and match nothing.
+// REST JWT subjects bind the same way Telegram numeric ids do: the
+// operator's [[user.channels]] address, not a display name the client
+// chose.
+func TestRESTAddressResolvesToDeclaredUser(t *testing.T) {
+	t.Parallel()
+	r := NewResolver(nil).WithBindings(fakeBindings{
+		byAddress: map[string]string{"rest:alice@idp": "alice"},
+	})
+	got, err := r.ResolveChannel(context.Background(), "rest", "alice@idp", "Alice The Operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != User("alice") {
+		t.Errorf("got %v, want user:alice", got)
+	}
+}
+
+// Matching display names across channels is not linking. Resolution
+// keys on the channel address (or a caller-supplied fallback id),
+// never on the human-readable name.
+func TestMatchingDisplayNamesAreNotALink(t *testing.T) {
+	t.Parallel()
+	r := NewResolver(nil)
+	rest, err := r.ResolveChannel(context.Background(), "rest", "alice@idp", "alice@idp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg, err := r.ResolveChannel(context.Background(), "telegram", "999", "tg-999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rest == tg {
+		t.Fatal("unbound rest and telegram addresses became one principal")
+	}
+	if r.Resolve("Alice") == rest || r.Resolve("Alice") == tg {
+		t.Fatal("a display name resolved to a channel address")
+	}
+}
+
 func TestIDStripsTheKind(t *testing.T) {
 	t.Parallel()
 	for p, want := range map[Principal]string{

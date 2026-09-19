@@ -2,11 +2,12 @@
 
 The gateway is the user-facing edge. It turns inbound REST / Telegram traffic into `compute.ProcessMessageRequest` calls on the agent loop, then turns the agent's response back into a channel-appropriate reply (JSON, or a Telegram message with inline buttons).
 
-Three packages cooperate:
+Four packages cooperate:
 
 - `internal/gateway` — the REST server (`Server`), the Telegram webhook handler (`TelegramHandler`), and the confirmation registry both channels share (`Prompts`, with an in-memory and a raft-backed implementation).
+- `internal/gateway/ui` — the embedded browser console. `go:embed` of a Vite build; `Handler` returns `ErrNotBuilt` when `make web` has not run.
 - `pkg/auth` — JWT validation (`Validator`, `ExtractBearer`) used by the REST server to authenticate inbound requests.
-- `internal/compute` — the agent loop, tool registry, executor, budget, and mock/real LLM providers the channels drive.
+- `internal/compute` — the agent loop, tool registry, executor, budget, and mock/real LLM providers the channels drive. The gateway package does not import it.
 
 The agent loop knows nothing about HTTP or Telegram. Each channel is a thin adapter that translates inbound transport into an internal request.
 
@@ -20,46 +21,61 @@ sequenceDiagram
   participant Client
   participant Server as gateway.Server
   participant Auth as pkg/auth.Validator
-  participant Agent as compute.Agent
+  participant Runner as turn.Runner
   participant Prompts as gateway.PromptRegistry
 
-  Client->>Server: POST /v1/messages<br/>Authorization: Bearer <jwt>
+  Client->>Server: POST /v1/messages<br/>Authorization: Bearer <jwt> or Cookie
   Server->>Server: MaxBytesReader(1MB) + JSON decode
-  Server->>Auth: Validate(token)
-  alt token missing/invalid + RequireAuth
-    Auth-->>Server: error
+  alt cookie login session
+    Server->>Server: lookup opaque session, CSRF Origin check
+  else Bearer JWT
+    Server->>Auth: Validate(token)
+  end
+  alt missing/invalid + RequireAuth
     Server-->>Client: 401
   else ok
-    Auth-->>Server: *types.Claims
-    Server->>Agent: RunToolCallLoop(req with Claims, TurnBudget)
+    Server->>Runner: Run(req with Claims)
     alt resp.NeedsConfirmation && Prompts configured
-      Agent-->>Server: resp
-      Server->>Prompts: Create(turn, reason, "rest", TTL)
+      Runner-->>Server: resp
+      Server->>Prompts: Create(..., RaisedFor=canonical user)
       Prompts-->>Server: Prompt{ID,...}
-      Server-->>Client: 200 {reply, needs_confirmation:true, prompt_id}
+      Server-->>Client: SSE needs_confirmation with prompt_id
+      Client->>Server: POST /v1/prompts/id/resolve
+      Server->>Runner: Resume with one-shot approval
+      Runner-->>Client: final reply
     else plain reply
-      Agent-->>Server: resp
+      Runner-->>Server: resp
       Server-->>Client: 200 {reply, tool_calls, budget}
     end
   end
 ```
 
-Client then polls `GET /v1/prompts/<id>` for state and confirms via `POST /v1/prompts/<id>/resolve` with `{"approve": bool}`.
+Client then polls `GET /v1/prompts/<id>` for state and confirms via `POST /v1/prompts/<id>/resolve` with `{"approve": bool}`. Knowing a prompt id is not access: with `RequireAuth` the caller must be the user the prompt was raised for.
 
 ### Routes
 
+User-data routes (`/v1/*` except login's Bearer exchange) return **401** when `RequireAuth` is set and the caller has no valid JWT or login cookie. `/healthz` and `/readyz` stay public. Telegram and inbound webhooks keep their own secrets.
+
 | Method + Path | Purpose | Status codes |
 |---|---|---|
-| `POST /v1/messages` | Main user entry — sends a message to the agent | 200, 400, 401 (w/ RequireAuth), 500, 503 (no agent) |
+| `POST /v1/messages` | Main user entry — sends a message to the agent | 200, 400, 401, 403 (cookie CSRF), 500, 503 (no agent) |
 | `GET  /healthz` | Liveness — process alive | 200 |
 | `GET  /readyz` | Readiness — server bound + agent configured | 200, 503 |
-| `GET  /v1/prompts/<id>` | Fetch prompt state | 200, 404 |
-| `POST /v1/prompts/<id>/resolve` | Approve/deny a confirmation | 200, 400, 404, 409 (already resolved) |
+| `GET  /v1/prompts/<id>` | Fetch prompt state | 200, 401, 404, 409 (expired) |
+| `POST /v1/prompts/<id>/resolve` | Approve/deny a confirmation | 200, 400, 401, 404, 409 |
+| `GET  /v1/plan` | Upcoming commitments + scheduled tasks | 200, 401, 405, 500 |
+| `GET  /v1/capabilities` | Discovery flags (does not grant access) | 200, 401 |
+| `POST /v1/session` | JWT → opaque login cookie | 200, 401, 403 (not enrolled) |
+| `GET  /v1/session` | Current login identity | 200, 401 |
+| `DELETE /v1/session` | Revoke cookie + cancel tracked streams | 200, 401, 403 |
+| `GET  /` | Embedded SPA when FunctionUIWeb is on and assets were built | 200, 404 |
 | `POST /telegram` | Telegram webhook (if `Telegram` configured on the server) | 200, 401 |
+
+A table-driven test walks every `mux.Handle*` path literal in this package. A new route that is not classified there fails CI.
 
 ### Auth modes
 
-The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes:
+The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes for **Bearer** tokens:
 
 | Validator | RequireAuth | Behaviour |
 |---|---|---|
@@ -69,6 +85,76 @@ The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes:
 | nil | true | **Fail-closed.** Every request 401. Intentional: "I asked for auth but provided no validator" is an operator error that shouldn't silently allow traffic. |
 
 Validated tokens with a missing `scope` claim default to `DefaultScope` rather than an empty string.
+
+Identity is never taken from the JSON body. JWT `sub` is resolved through `identity.Resolver` and `[[user.channels]]` (`type = "rest"`, `address = <jwt sub>`) onto `[[user]].id`. Display-name changes do not change that id.
+
+### Web login sessions
+
+Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (`lobslaw_login`). There is no self-signup: `POST /v1/session` requires the JWT subject to match an operator-declared `[[user]]`. Web login copies `[[user]].roles` onto the session and **does not** grant `role:operator` from the JWT. Cookie-authenticated unsafe methods also check `Origin` against the request host. `DELETE /v1/session` drops the cookie and cancels any in-flight REST streams bound to it. Login sessions are in-memory; a restart means presenting the JWT again.
+
+One-time codes are another enrollment credential. `POST /v1/session/code` requires a valid enrolled Bearer JWT and only mints for that same account. `console_code` can mint for an operator already authenticated through a channel. No HTTP login path trusts `RemoteAddr` as a user identity. Code redemption has a global bounded attempt window, so rotating source addresses or forwarded headers cannot multiply the guessing allowance. Minting replaces the user's previous code and removes expired codes.
+
+Bot data and chat routes check the bot's explicit human owner; listing filters inaccessible records. Transcript reads authorize the stored session participant, or the owning bot for bot-channel sessions. Settings PATCH requires the editor's `revision` and returns 409 on a stale form. Bot chat holds the conversation gate across Load → Run → approval/resume → Append; heartbeat shutdown is joined before the handler returns.
+
+### Capabilities
+
+`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. Bot/group registries require `FunctionComputeTeams` on the serving compute backend (`--compute-teams` or `[compute-teams].enabled`); a web-only node forwards those routes without enabling local teams. Channel handlers set `turn.Request.BotID` via `TeamRouter` and do not import `internal/compute`. `ui-web` is true when the console handler is mounted. The SPA hides team chrome when teams are off rather than inventing a default team.
+
+A ui-web node without local compute forwards the browser channel to `[ui-web].backend` through the peer-only streaming `ConsoleService.ConsoleForward` RPC. Only an allowlisted set of data/chat/approval routes can be forwarded; login, credentials and static assets cannot. The web node authenticates the user and checks cookie CSRF before forwarding claims. The backend independently checks target ownership. Records, conversation gates and pending prompts stay together on the backend, including when the web node has no memory function. Capability discovery reads the backend's teams gate; cached capability presence survives outages with availability false.
+
+`AgentService` remains the remote `turn.Runner` transport. Both RPC services reject operator certificates and unidentified callers: only node peers may assert a user. Remote resume transfers the exact action/resource approval once, consuming the local context grant and reconstructing its one-shot counterpart on the compute node.
+
+### Web console
+
+FunctionUIWeb (`--ui-web` / `[ui-web].enabled`) mounts the SPA on the REST listener via `Server.RegisterConsole`. It does **not** rewrite to compute. A ui-web node without FunctionCompute must set `[ui-web].backend` to a compute node's cluster gRPC address or boot fails. A binary built without `make web` logs a warning and stays up.
+
+A non-loopback bind with the console mounted refuses to start unless `[auth] require_auth = true`. Loopback is exempt so a laptop console can run without a JWT issuer.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Browser
+  participant SPA as embedded SPA
+  participant Server as gateway.Server
+  participant Runner as turn.Runner
+  participant Compute as Backend ConsoleService
+
+  Browser->>Server: GET /
+  alt console mounted
+    Server-->>Browser: index.html (no-cache)
+    Browser->>SPA: boot
+    SPA->>Server: GET /v1/session (cookie)
+    alt 401
+      Browser->>Server: POST /v1/session Authorization Bearer JWT
+      Server-->>Browser: Set-Cookie lobslaw_login
+    end
+    SPA->>Server: GET /v1/capabilities
+    alt compute.available false
+      SPA->>SPA: unavailable, records stay
+    else compute-teams.enabled
+      SPA->>SPA: load teams; empty is empty, 5xx is unavailable
+    else
+      SPA->>SPA: single-assistant chat
+    end
+    SPA->>Server: POST /v1/messages Accept text/event-stream
+    alt runner nil
+      Server-->>SPA: 503
+      SPA->>SPA: unavailable, not deleted
+    else remote backend
+      Server->>Compute: ConsoleForward (verified user claims)
+      Compute->>Compute: Authorize target and acquire conversation gate
+      Compute-->>Server: Stream typing / needs_confirmation / final
+      Server-->>SPA: SSE events
+      SPA->>Server: Approve prompt
+      Server->>Compute: Forward authenticated approval
+    else
+      Server->>Runner: Run
+      Runner-->>SPA: SSE typing / interim / final
+    end
+  else
+    Server-->>Browser: 404
+  end
+```
 
 ---
 
@@ -418,7 +504,7 @@ Caps are lifted for the remainder of the turn via `TurnBudget.Relax()` — seman
 
 ### What the continuation carries
 
-Conversation state: the transcript so far, the user's message, claims, system prompt, model, timezone, summary, recall, and the budget already spent.
+Conversation state: the transcript so far, the user's message, claims, bot ID, canonical principal, system prompt, model, timezone, summary, recall, and the budget already spent. Bot profiles are resolved again on resume so current restrictions still apply.
 
 Two deliberate omissions:
 
@@ -594,7 +680,7 @@ See [MEMORY.md → Sessions](MEMORY.md#sessions) for the storage layout, the tri
 
 Callouts deferred past Phase 6h:
 
-- **`GET /v1/plan` and `GET /v1/health`.** Owned by Phase 7 (scheduler) and Phase 11 (audit) respectively.
+- **`GET /v1/health`.** Owned by Phase 11 (audit). `/v1/plan` is mounted and gated like every other user-data route.
 - **ACME / Let's Encrypt.** TLS certs are passed explicitly; automatic issuance isn't wired.
 - **REST cross-node resume.** REST holds the connection open and resumes in the request that raised the prompt, so it stores no continuation. A REST turn approved elsewhere still records the decision, but the original request has to be re-sent.
 
@@ -773,9 +859,9 @@ Two halves, and only both make it true:
 
 - **Client authentication only.** Nothing can serve with it, so it
   cannot answer connections as a node.
-- **`OU=operator`, refused on the raft transport.** ClientAuth alone
+- **`OU=operator`, refused on peer-only services.** ClientAuth alone
   would not stop it — a peer dials as a client too — so the server
-  refuses that OU on `/RaftTransport/`, on both the unary and the
+  refuses that OU on `/RaftTransport/`, `AgentService` and `ConsoleService`, on both the unary and the
   streaming interceptor. Raft's transport is streaming; a unary-only
   guard would cover nothing that matters.
 

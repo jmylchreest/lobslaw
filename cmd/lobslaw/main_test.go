@@ -40,6 +40,25 @@ func TestResolveFunctionsFromConfig(t *testing.T) {
 	}
 }
 
+func TestResolveFunctionsAllOmitsOptInCapabilities(t *testing.T) {
+	t.Parallel()
+	got := resolveFunctions(flags{all: true}, &config.Config{})
+	for _, f := range got {
+		if f == types.FunctionComputeTeams || f == types.FunctionUIWeb {
+			t.Fatalf("--all included %q; existing deploys must not gain teams or the console", f)
+		}
+	}
+}
+
+func TestResolveFunctionsOptInFlags(t *testing.T) {
+	t.Parallel()
+	got := resolveFunctions(flags{computeTeams: true, uiWeb: true}, &config.Config{})
+	want := []types.NodeFunction{types.FunctionComputeTeams, types.FunctionUIWeb}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("--compute-teams --ui-web → %v, want %v", got, want)
+	}
+}
+
 func TestResolveFunctionsDefault(t *testing.T) {
 	t.Parallel()
 	got := resolveFunctions(flags{}, &config.Config{})

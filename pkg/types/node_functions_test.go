@@ -74,6 +74,21 @@ func TestNormalizeFunctions(t *testing.T) {
 			in:   nil,
 			want: nil,
 		},
+		{
+			name: "compute-teams pulls in compute",
+			in:   []NodeFunction{FunctionComputeTeams},
+			want: []NodeFunction{FunctionComputeTeams, FunctionCompute},
+		},
+		{
+			name: "ui-web does not become compute",
+			in:   []NodeFunction{FunctionUIWeb},
+			want: []NodeFunction{FunctionUIWeb},
+		},
+		{
+			name: "--all set is unchanged by the new functions",
+			in:   []NodeFunction{FunctionMemory, FunctionCompute, FunctionStorage},
+			want: []NodeFunction{FunctionMemory, FunctionCompute, FunctionStorage},
+		},
 	}
 
 	for _, tc := range cases {

@@ -23,6 +23,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute/research"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
@@ -536,6 +537,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Executor:             n.executor,
 		Registry:             n.toolRegistry,
 		SoulSnapshot:         n.soulSnapshot,
+		SoulSnapshotFor:      n.soulSnapshotFor,
 		Soul: func() *types.SoulConfig {
 			s := n.Soul()
 			if s == nil {
@@ -566,12 +568,16 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		TimezoneResolver: n.resolveUserTimezone,
 		BinariesProvider: binariesProvider,
 		ContextBudget:    contextBudgetFromConfig(n.cfg.Compute.Context),
+		Bots:             botResolverOrNil(n.botSvc),
 		Logger:           n.log,
 	})
 	if err != nil {
 		return fmt.Errorf("agent: %w", err)
 	}
 	n.agent = a
+	if n.server != nil {
+		lobslawv1.RegisterAgentServiceServer(n.server, compute.NewTurnServer(a))
+	}
 	return nil
 }
 
@@ -1261,9 +1267,12 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 	if err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
+	claims, botID, principal := schedulerIdentity(task.Owner)
 	req := compute.ProcessMessageRequest{
 		Message:   prompt,
-		Claims:    n.schedulerClaims(task.CreatedBy),
+		Claims:    claims,
+		BotID:     botID,
+		Principal: principal,
 		TurnID:    fmt.Sprintf("task-%s-%d", task.Id, time.Now().UnixNano()),
 		Budget:    budget,
 		Channel:   task.Params["channel"],
@@ -1298,9 +1307,12 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 	if err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
+	claims, botID, principal := schedulerIdentity(c.Owner)
 	req := compute.ProcessMessageRequest{
 		Message:   prompt,
-		Claims:    n.schedulerClaims(c.CreatedFor),
+		Claims:    claims,
+		BotID:     botID,
+		Principal: principal,
 		TurnID:    fmt.Sprintf("commitment-%s-%d", c.Id, time.Now().UnixNano()),
 		Budget:    budget,
 		Channel:   c.Params["channel"],
@@ -1378,15 +1390,32 @@ func serverToolsFromConfig(in []config.ServerToolSpec) []compute.ServerTool {
 	return out
 }
 
-func (n *Node) schedulerClaims(creator string) *types.Claims {
-	if creator == "" {
-		creator = defaultSchedulerCreator
-	}
-	return &types.Claims{
-		UserID: creator,
-		Scope:  "scheduler",
+// schedulerIdentity resolves who a scheduled record runs as.
+//
+// A task or commitment carries its owner, and that owner is the
+// authority the work was created under: a routine a bot created must
+// run AS that bot (its brief, its tools, its memory), and one a person
+// created must run as that person. Previously only CreatedBy was read,
+// which nothing sets, so every routine ran as a generic scheduler turn
+// with no bot profile and no owner.
+func schedulerIdentity(owner string) (*types.Claims, string, identity.Principal) {
+	owner = strings.TrimSpace(owner)
+	switch {
+	case strings.HasPrefix(owner, identity.KindBot+":"):
+		id := strings.TrimPrefix(owner, identity.KindBot+":")
+		principal := identity.Bot(id)
+		return &types.Claims{UserID: principal.String(), Scope: schedulerScope}, id, principal
+	case owner != "":
+		return &types.Claims{
+			UserID: strings.TrimPrefix(owner, identity.KindUser+":"),
+			Scope:  schedulerScope,
+		}, "", ""
+	default:
+		return &types.Claims{UserID: defaultSchedulerCreator, Scope: schedulerScope}, "", ""
 	}
 }
+
+const schedulerScope = "scheduler"
 
 // wireGateway builds the REST server + any channel handlers listed
 // in cfg.Gateway.Channels. The channel list is the extension point:

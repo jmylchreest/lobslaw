@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -46,7 +46,7 @@ type WebhookConfig struct {
 	Scope string
 
 	// DefaultBudget applies per request. Same shape as other channels.
-	DefaultBudget compute.BudgetCaps
+	DefaultBudget turn.BudgetCaps
 
 	// Logger — nil → slog.Default().
 	Logger *slog.Logger
@@ -55,16 +55,16 @@ type WebhookConfig struct {
 // WebhookHandler is an http.Handler serving one webhook channel.
 // Stateless across requests.
 type WebhookHandler struct {
-	cfg   WebhookConfig
-	agent *compute.Agent
-	log   *slog.Logger
+	cfg    WebhookConfig
+	runner turn.Runner
+	log    *slog.Logger
 }
 
 // NewWebhookHandler wires a channel + agent. Refuses empty shared
 // secrets — operators who genuinely want an unauthenticated webhook
 // must surface that decision elsewhere (e.g. by front-ending with
 // nginx auth).
-func NewWebhookHandler(cfg WebhookConfig, agent *compute.Agent) (*WebhookHandler, error) {
+func NewWebhookHandler(cfg WebhookConfig, runner turn.Runner) (*WebhookHandler, error) {
 	if cfg.SharedSecret == "" {
 		return nil, errWebhookNoSecret
 	}
@@ -75,7 +75,7 @@ func NewWebhookHandler(cfg WebhookConfig, agent *compute.Agent) (*WebhookHandler
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &WebhookHandler{cfg: cfg, agent: agent, log: logger}, nil
+	return &WebhookHandler{cfg: cfg, runner: runner, log: logger}, nil
 }
 
 // PathPrefix returns the mount path the operator requested (or the
@@ -129,10 +129,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	budget, err := compute.NewTurnBudget(h.cfg.DefaultBudget)
-	if err != nil {
-		h.log.Error("webhook: budget init failed", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if h.runner == nil {
+		http.Error(w, "agent not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -142,11 +140,11 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	turnID := "webhook-" + time.Now().UTC().Format("20060102T150405.000")
 
-	resp, err := h.agent.RunToolCallLoop(r.Context(), compute.ProcessMessageRequest{
+	resp, err := h.runner.Run(r.Context(), turn.Request{
 		Message: prompt,
 		Claims:  claims,
 		TurnID:  turnID,
-		Budget:  budget,
+		Caps:    h.cfg.DefaultBudget,
 	})
 	if err != nil {
 		h.log.Error("webhook: agent error", "turn_id", turnID, "err", err)

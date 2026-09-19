@@ -4,7 +4,7 @@ Reviewed 2026-09-07 alongside the soul wiring repair. This document distinguishe
 
 ## Current model
 
-The operator's `SOUL.md` supplies a node-local baseline: optional YAML frontmatter followed by Markdown. The agent's bounded edits live in one Raft-replicated overlay for the cluster. Explicit overlay fields override the baseline; absent fields inherit it. There is no per-user soul selection in the current node wiring.
+The operator's `SOUL.md` supplies a node-local baseline: optional YAML frontmatter followed by Markdown. The agent's bounded edits live in Raft-replicated overlays. The chief overlay is keyed `soul:tune` — those exact bytes predate bots and must not change. Other bots get a suffixed key and merge onto the operator baseline **without** the chief overlay. Explicit overlay fields override the baseline; absent fields inherit it. See [BOTS.md](BOTS.md).
 
 The adjuster owns the effective snapshot. File reload replaces its baseline; tools persist overlay edits; remote nodes refresh at turn/tool boundaries. A new turn takes one snapshot. Its structured identity/style, Markdown guidance, and anecdotal fragments are rendered into the system prompt. A resumed turn retains the original prompt.
 
@@ -16,7 +16,8 @@ Sources: `internal/soul/loader.go`, `adjuster.go`, `mutate.go`, `store.go`; `int
 flowchart LR
     File[Operator SOUL.md] --> Loader[Validated baseline loader]
     Loader --> Adjuster[Effective soul adjuster]
-    Overlay[Raft overlay] --> Adjuster
+    Overlay[Chief overlay soul:tune] --> Adjuster
+    BotOverlay[Per-bot overlay soul:tune:id] --> Adjuster
     Adjuster --> Snapshot[New-turn snapshot]
     Snapshot --> TurnConfig[Turn-local style and language]
     User --> Detection[Optional bounded language detection]

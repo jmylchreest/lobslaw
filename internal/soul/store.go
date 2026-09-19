@@ -89,6 +89,19 @@ type TuneStore interface {
 	Rollback(ctx context.Context, steps int) (*TuneState, error)
 }
 
+// BotTuneStore is the optional per-bot half of a TuneStore.
+//
+// A separate interface rather than more methods on TuneStore because
+// MemoryTuneStore and the compute-node's remote store both satisfy
+// TuneStore today, and widening it would make every implementation
+// carry a per-bot path whether or not its deployment has bots. A store
+// that does not implement this serves the chief's overlay to every
+// bot, which is the behaviour a single-assistant deployment already
+// has.
+type BotTuneStore interface {
+	GetFor(ctx context.Context, botID string) (*TuneState, error)
+}
+
 // MemoryTuneStore is the in-process implementation used by tests. Keeps a ring of past versions so
 // HistoryRollback works without external state.
 type MemoryTuneStore struct {

@@ -207,7 +207,7 @@ Three RPCs:
 
 ### REST surface
 
-`GET /v1/plan` wraps `GetPlan`. `?window=<duration>` accepts Go-duration syntax (`24h`, `30m`, `1h30m`); invalid values silently fall through to the default. JSON shape kept narrow (`planResponseJSON`) so adding new proto fields doesn't leak into client expectations.
+`GET /v1/plan` wraps `GetPlan`. `?window=<duration>` accepts Go-duration syntax (`24h`, `30m`, `1h30m`); invalid values silently fall through to the default. JSON shape kept narrow (`planResponseJSON`) so adding new proto fields doesn't leak into client expectations. With `RequireAuth` the route is 401 without a valid JWT or login cookie — it is a user-data surface, not a health probe.
 
 Not mounted when `RESTConfig.Plan` is nil — minimal deployments don't serve the endpoint.
 

@@ -16,7 +16,6 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/policy"
@@ -87,6 +86,9 @@ type TelegramConfig struct {
 	// the handler says so rather than dropping them silently.
 	ArtifactOpener ArtifactOpener
 
+	// TeamRouter picks the coordinator for this user. Nil leaves BotID empty.
+	TeamRouter TeamRouter
+
 	// Mode picks between webhook (inbound, default) and poll
 	// (outbound). Empty → webhook for back-compat with Phase 6e
 	// deployments.
@@ -129,7 +131,7 @@ type TelegramConfig struct {
 
 	// DefaultBudget applies per message. Same field shape as the
 	// REST channel.
-	DefaultBudget compute.BudgetCaps
+	DefaultBudget turn.BudgetCaps
 
 	// TypingInterval refreshes the typing indicator (Telegram
 	// clears it at ~5s). 0 disables. Default 4s applied by
@@ -208,7 +210,7 @@ type TelegramConfig struct {
 	// The executor consults the same instance, so a grant recorded
 	// here suppresses the next prompt for that operation. Nil leaves
 	// every confirmation one-shot.
-	Approvals *compute.SessionApprovals
+	Approvals SessionApprover
 
 	// ApprovalRules mints the permanent rule behind "always". Nil
 	// hides the button rather than showing one that does nothing —
@@ -271,7 +273,7 @@ type ChannelStateStore interface {
 // per request except for the HTTP client (connection pool).
 type TelegramHandler struct {
 	cfg    TelegramConfig
-	agent  *compute.Agent
+	runner turn.Runner
 	log    *slog.Logger
 	client *http.Client
 	// pollTimeout is how long Telegram holds getUpdates open, and
@@ -401,7 +403,7 @@ type tgCallbackQuery struct {
 // Fails at construction when BotToken or WebhookSecret is missing —
 // neither is optional, and a misconfigured handler would either
 // accept anyone's traffic or fail silently to reply.
-func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHandler, error) {
+func NewTelegramHandler(cfg TelegramConfig, runner turn.Runner) (*TelegramHandler, error) {
 	if cfg.BotToken == "" {
 		return nil, errors.New("telegram: BotToken required")
 	}
@@ -415,8 +417,8 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		return nil, fmt.Errorf("telegram: unknown mode %q; want %q or %q",
 			cfg.Mode, TelegramModeWebhook, TelegramModePoll)
 	}
-	if agent == nil {
-		return nil, errors.New("telegram: agent required")
+	if runner == nil {
+		return nil, errors.New("telegram: runner required")
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -439,7 +441,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	}
 	h := &TelegramHandler{
 		cfg:          cfg,
-		agent:        agent,
+		runner:       runner,
 		log:          logger,
 		client:       client,
 		pollTimeout:  pollLongTimeout,
@@ -506,12 +508,6 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 			"username", usernameOf(msg.From))
 		// No reply — silent drop for unmapped users. Operators who
 		// want a rejection message wire a narrow-scope bot.
-		return
-	}
-
-	budget, err := compute.NewTurnBudget(h.cfg.DefaultBudget)
-	if err != nil {
-		h.log.Error("telegram: budget init failed", "err", err)
 		return
 	}
 
@@ -600,17 +596,20 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		body = "(no caption — please inspect the attached media and respond)"
 	}
 
-	agentReq := compute.ProcessMessageRequest{
+	userID := claims.UserID
+	channelID := strconv.FormatInt(msg.Chat.ID, 10)
+	agentReq := turn.Request{
 		Message:             body,
 		Attachments:         im.Attachments,
 		Claims:              claims,
 		TurnID:              turnID,
-		Budget:              budget,
+		Caps:                h.cfg.DefaultBudget,
 		ConversationHistory: prior.Messages,
 		ConversationSummary: prior.Summary,
 		Channel:             "telegram",
-		ChannelID:           strconv.FormatInt(msg.Chat.ID, 10),
+		ChannelID:           channelID,
 		SharedConversation:  isSharedChat(msg.Chat),
+		BotID:               resolveTeamBot(ctx, h.cfg.TeamRouter, "telegram", channelID, userID),
 	}
 
 	// Wrap the agent call with the responsiveness guards: typing
@@ -621,7 +620,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	turnCtx, cleanup := h.startResponsivenessGuards(ctx, msg.Chat.ID)
 	defer cleanup()
 
-	resp, err := h.agent.RunToolCallLoop(turnCtx, agentReq)
+	resp, err := h.runner.Run(turnCtx, agentReq)
 	if err != nil {
 		h.log.Error("telegram: agent error",
 			"turn_id", turnID, "err", err)
@@ -704,7 +703,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 // {"inline_keyboard": [[{text, callback_data}, ...]]}. Callback
 // data is prefixed "prompt:approve:<id>" / "prompt:deny:<id>" so
 // the handler can parse the verb + id without a separate mapping.
-func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse, session SessionRef) {
+func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req turn.Request, resp *turn.Response, session SessionRef) {
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
@@ -722,7 +721,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 		TTL:          ttl,
 		Action:       resp.ConfirmationAction,
 		Resource:     resp.ConfirmationResource,
-		Continuation: &Continuation{Request: req, Messages: resp.Messages},
+		Continuation: &Continuation{Request: continuationRequest(req, resp), Messages: resp.Messages},
 		// Who may answer. Captured here rather than read off the tap,
 		// for the same reason the "always" subject is: a callback is
 		// attacker-shaped input and the turn that raised the question
@@ -1018,13 +1017,12 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, p *Prompt) {
 	cont.Request.Channel = "telegram"
 	cont.Request.ChannelID = p.ChannelID
 
-	cont.Request.Budget.Relax()
 	// The policy equivalent of Relax: carry the answer into the resumed
 	// turn. Taken from the prompt record rather than the callback, which
 	// is attacker-shaped input. Without it an "Approve" resumes into the
-	// same rule and asks again.
-	ctx = compute.WithTurnApproval(ctx, p.Action, p.Resource)
-	resp, err := h.agent.ResumeFromConfirmation(ctx, cont.Request, cont.Messages)
+	// same rule and asks again. Budget caps are lifted inside Runner.Resume.
+	ctx = turn.WithTurnApproval(ctx, p.Action, p.Resource)
+	resp, err := h.runner.Resume(ctx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("telegram: resume failed",
 			"turn_id", cont.Request.TurnID, "err", err)
@@ -1811,7 +1809,7 @@ func (h *TelegramHandler) grantForRisk(ctx context.Context, promptID string, q *
 	// without anybody having granted that exact pair.
 	keys := make([]string, 0, len(op.labels))
 	for _, l := range op.labels {
-		key := compute.RiskGrantResource(l)
+		key := riskGrantResource(l)
 		if key == "" {
 			return ""
 		}

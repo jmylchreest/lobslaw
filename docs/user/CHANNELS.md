@@ -1,15 +1,19 @@
 # Channels
 
-lobslaw exposes the agent loop to users through **channels**. Today there are two: the REST API and Telegram. Channels are configured under `[[gateway.channels]]` in `config.toml`; you can mix and match.
+lobslaw exposes the agent loop to users through **channels**. Today there are REST, an optional browser console, and Telegram. Channels are configured under `[[gateway.channels]]` in `config.toml`; you can mix and match.
 
 ## REST
 
 Default. Mounts on the gateway HTTP port (8443 by default) at:
 
 - `POST /v1/messages` — send a message, get a reply
-- `GET /v1/plan` — see what's scheduled and in-flight
-- `POST /v1/prompts/{id}/{approve|deny}` — answer a confirmation prompt
-- `GET /healthz`, `GET /readyz` — health probes
+- `GET /v1/plan` — see what's scheduled and in-flight (401 when `require_auth` is on and you are not signed in)
+- `GET /v1/prompts/{id}` / `POST /v1/prompts/{id}/resolve` — inspect or answer a confirmation
+- `GET /v1/capabilities` — which surfaces this node has (does not grant access)
+- `POST /v1/session` — exchange a JWT for a login cookie; `DELETE /v1/session` revokes it
+- `GET /healthz`, `GET /readyz` — health probes (ungated)
+
+A body field named `user_id` is ignored. Who you are comes from the Bearer token or the login cookie, resolved to `[[user]].id`. To enrol a browser user, declare them under `[[user]]` with `[[user.channels]] type = "rest"` and `address` equal to their JWT `sub`. Logging in does not make them an operator.
 
 ### Conversations over REST
 
@@ -30,6 +34,28 @@ curl -X POST https://localhost:8443/v1/messages \
 Pick the id yourself — anything stable and unique per conversation, containing no `:` or `/` (both are rejected with a 400). Reusing an id resumes that conversation; a fresh id starts a new one.
 
 Session ids are scoped to the authenticated caller, so two users who both pick `default` get two separate conversations and neither can read the other's. On a node with `require_auth = false` every caller is the same anonymous identity, and so shares one namespace — if REST is reachable by more than one person, authenticate it.
+
+## Browser console
+
+Off by default. `--all` does not turn it on. Enable it with `--ui-web` or:
+
+```toml
+[ui-web]
+enabled = true
+# Required when this node does not run compute: cluster gRPC of a compute node.
+# backend = "compute-1:7443"
+
+[auth]
+require_auth = true
+```
+
+Then open the gateway HTTP port in a browser (8443 by default). Sign in with an enrolled JWT, or ask the assistant for a console sign-in code from an authenticated operator conversation. To obtain a code from the CLI, set `LOBSLAW_LOGIN_TOKEN` to your enrolled JWT and run `lobslaw login --config <path>` (or supply `--token`). Type the six-digit code in the browser. Codes expire after five minutes and work once; guessing is limited to ten attempts per minute per web node. There is no self-signup: the person must already be in `[[user]]`.
+
+Loopback connections do not bypass authentication: a reverse proxy can make a remote browser appear to connect from localhost. The old **Continue on this computer** shortcut is no longer offered.
+
+If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
+
+When compute-teams is off (the default), you get a single-assistant chat. Both chat views display approval buttons when an operation requires confirmation. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
 
 ## Telegram
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // --- REST long-poll resume ---------------------------------------
@@ -201,12 +202,8 @@ func TestTelegramCallbackApproveWithoutContinuation(t *testing.T) {
 
 // pausedPrompt registers a confirmation carrying a paused turn, the
 // way sendConfirmationKeyboard does.
-func pausedPrompt(t *testing.T, h *tgPromptHarness, turnID string, msgs []compute.Message) *Prompt {
+func pausedPrompt(t *testing.T, h *tgPromptHarness, turnID string, msgs []turn.Message) *Prompt {
 	t.Helper()
-	budget, err := compute.NewTurnBudget(compute.BudgetCaps{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	p, err := h.registry.Create(NewPrompt{
 		TurnID:    turnID,
 		Reason:    "reason",
@@ -215,7 +212,7 @@ func pausedPrompt(t *testing.T, h *tgPromptHarness, turnID string, msgs []comput
 		TTL:       time.Minute,
 		RaisedFor: "tg-@u",
 		Continuation: &Continuation{
-			Request:  compute.ProcessMessageRequest{TurnID: turnID, Budget: budget},
+			Request:  turn.Request{TurnID: turnID},
 			Messages: msgs,
 		},
 	})

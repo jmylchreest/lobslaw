@@ -3,6 +3,8 @@ package compute
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // LLMProvider is the minimal contract the agent loop needs from an
@@ -62,26 +64,12 @@ type ChatRequest struct {
 	ToolChoice string
 }
 
-// Message is one turn in the conversation. Role + content match
-// OpenAI's shape; ToolCalls / ToolCallID are populated for the
-// tool-calling round-trip.
-type Message struct {
-	// Role is one of "system" | "user" | "assistant" | "tool".
-	Role string
+// Message is the conversation turn type. Defined in internal/turn so
+// channels can persist transcripts without importing this package.
+type Message = turn.Message
 
-	// Content is the text of the message. For role="tool" this is
-	// the tool's output, typically wrapped in untrusted delimiters
-	// before being placed here.
-	Content string
-
-	// ToolCalls is populated on assistant messages that requested
-	// one or more tool invocations.
-	ToolCalls []ToolCall
-
-	// ToolCallID is populated on tool-result messages (role="tool")
-	// and correlates to the originating assistant ToolCall.ID.
-	ToolCallID string
-}
+// ToolCall is the model's request to invoke a tool.
+type ToolCall = turn.ToolCall
 
 // Tool describes a callable tool for the LLM's tool-calling
 // machinery. Parameters is a JSON schema blob — the model uses it
@@ -103,15 +91,6 @@ type Tool struct {
 type ServerTool struct {
 	Type       string
 	Parameters map[string]any
-}
-
-// ToolCall is the model's request to invoke a tool. ID is the
-// round-trip correlation identifier (assistant says "call X with
-// args"; the subsequent tool-role message carries ID matching).
-type ToolCall struct {
-	ID        string
-	Name      string
-	Arguments string // JSON-encoded arguments
 }
 
 // ChatResponse is the outputs of one LLM call.

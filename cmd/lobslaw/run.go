@@ -104,6 +104,7 @@ var commandSummaries = map[string]string{
 	"memory":       "browse, search and forget records",
 	"session":      "stored conversations",
 	"init":         "write a starting config",
+	"login":        "print a one-time code for the web console",
 	"enrol":        "ask a cluster for an operator credential",
 	"nodeid":       "print this machine's node id",
 	"context":      "named clusters this CLI can reach",

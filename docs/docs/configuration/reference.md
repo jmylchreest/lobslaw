@@ -707,6 +707,10 @@ roles        = ["operator"]
 [[user.channels]]
 type    = "telegram"
 address = "123456789"
+
+[[user.channels]]
+type    = "rest"
+address = "alice@idp"
 ```
 
 `id` is the canonical principal id — the same value `[identity.aliases]`
@@ -795,6 +799,18 @@ The last one is Go 1.27's leak profile: goroutines blocked on a primitive that
 can no longer be unblocked, found by the garbage collector's reachability
 analysis. Nothing registers it here — `pprof.Index` looks profiles up when the
 request arrives, so profiles a newer Go adds appear on their own.
+
+## `[ui-web]`
+
+Off by default. `--all` does not enable it. Enabling it does not imply local compute.
+
+```toml
+[ui-web]
+enabled = true
+backend  = "compute-1:7443"   # cluster gRPC of a compute node; required when compute is off
+```
+
+`backend` is the cluster gRPC `host:port` serving `AgentService` and `ConsoleService`. A ui-web node without FunctionCompute fails at boot if this is empty. The browser's data routes, chat streams and approvals are forwarded to the backend; its `compute-teams` gate controls the remote team console. The web node needs neither local compute nor a local team registry.
 
 ## Other sections
 
