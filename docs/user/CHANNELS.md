@@ -49,11 +49,13 @@ enabled = true
 require_auth = true
 ```
 
-Then open the gateway HTTP port in a browser (8443 by default). On the same computer, click **Continue on this computer**. From a phone, run `lobslaw login --config <path>` on the node and type the six-digit code. There is no password and no self-signup: the person must already be in `[[user]]`.
+Then open the gateway HTTP port in a browser (8443 by default). Sign in with an enrolled JWT, or ask the assistant for a console sign-in code from an authenticated operator conversation. To obtain a code from the CLI, set `LOBSLAW_LOGIN_TOKEN` to your enrolled JWT and run `lobslaw login --config <path>` (or supply `--token`). Type the six-digit code in the browser. Codes expire after five minutes and work once; guessing is limited to ten attempts per minute per web node. There is no self-signup: the person must already be in `[[user]]`.
+
+Loopback connections do not bypass authentication: a reverse proxy can make a remote browser appear to connect from localhost. The old **Continue on this computer** shortcut is no longer offered.
 
 If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
 
-When compute-teams is off (the default), you get a single-assistant chat. The console will not invent a team. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address; when that backend is unreachable, chat shows unavailable rather than an empty history.
+When compute-teams is off (the default), you get a single-assistant chat. Both chat views display approval buttons when an operation requires confirmation. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
 
 ## Telegram
 

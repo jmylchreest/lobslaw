@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -24,15 +24,24 @@ func (s *Server) handleSessionCode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !requestIsLoopback(r) {
-		s.jsonErr(w, http.StatusForbidden, "sign-in codes can only be minted from this machine")
+	token := auth.ExtractBearer(r.Header.Get("Authorization"))
+	if token == "" || s.cfg.JWTValidator == nil {
+		s.jsonErr(w, http.StatusUnauthorized, "a Bearer JWT is required to mint a sign-in code")
+		return
+	}
+	claims, err := s.cfg.JWTValidator.Validate(token)
+	if err != nil {
+		s.jsonErr(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
 	var body struct {
 		User string `json:"user"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
-	user, ok := s.loginUser(body.User)
+	user, ok := s.enrolledUser(r.Context(), claims.UserID)
+	if body.User != "" && body.User != user.ID {
+		ok = false
+	}
 	if !ok {
 		s.jsonErr(w, http.StatusForbidden, "no enrolled user to issue a code for")
 		return
@@ -88,6 +97,9 @@ func (s *Server) MintLoginCode(ctx context.Context, principal string) (string, s
 		}
 	}
 	id := strings.TrimPrefix(p, identity.KindUser+":")
+	if id == "" {
+		return "", "", 0, errors.New("an enrolled human principal is required")
+	}
 	user, ok := s.loginUser(id)
 	if !ok {
 		return "", "", 0, errors.New("no enrolled user matches this account")
@@ -100,6 +112,10 @@ func (s *Server) MintLoginCode(ctx context.Context, principal string) (string, s
 }
 
 func (s *Server) loginWithCode(w http.ResponseWriter, r *http.Request, code string) {
+	if !s.logins.allowCodeAttempt(time.Now()) {
+		s.jsonErr(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
+		return
+	}
 	userID, roles, scope, ok := s.logins.consumeCode(code)
 	if !ok {
 		s.log.Warn("rest: sign-in code rejected", "remote", r.RemoteAddr, "digits", len(code))
@@ -110,18 +126,22 @@ func (s *Server) loginWithCode(w http.ResponseWriter, r *http.Request, code stri
 	s.issueLoginCookie(w, r, config.UserConfig{ID: userID, Roles: roles}, scope)
 }
 
-func (s *Server) loginFromLoopback(w http.ResponseWriter, r *http.Request) {
-	if !requestIsLoopback(r) {
-		s.log.Warn("rest: loopback sign-in refused", "remote", r.RemoteAddr)
-		s.jsonErr(w, http.StatusForbidden, "this sign-in only works from the computer running the node")
-		return
+const loginCodeAttemptLimit int = 10
+const loginCodeAttemptWindow time.Duration = time.Minute
+
+// Global and bounded: neither spoofed forwarding headers nor rotating source
+// addresses can multiply the online guessing budget.
+func (s *loginStore) allowCodeAttempt(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !now.Before(s.codeWindow.Add(loginCodeAttemptWindow)) {
+		s.codeWindow, s.codeAttempts = now, 0
 	}
-	user, ok := s.loginUser("")
-	if !ok {
-		s.jsonErr(w, http.StatusForbidden, "no enrolled [[user]] to sign in as")
-		return
+	if s.codeAttempts >= loginCodeAttemptLimit {
+		return false
 	}
-	s.issueLoginCookie(w, r, user, s.cfg.DefaultScope)
+	s.codeAttempts++
+	return true
 }
 
 func (s *Server) issueLoginCookie(w http.ResponseWriter, r *http.Request, user config.UserConfig, scope string) {
@@ -177,6 +197,14 @@ func (s *loginStore) issueCode(user config.UserConfig, scope string, ttl time.Du
 	code := fmt.Sprintf("%0*d", LoginCodeDigits, n)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for key, rec := range s.codes {
+		if rec.UserID == user.ID || !time.Now().Before(rec.ExpiresAt) {
+			delete(s.codes, key)
+		}
+	}
+	if _, exists := s.codes[code]; exists {
+		return "", errors.New("sign-in code collision; request another code")
+	}
 	s.codes[code] = loginCode{
 		UserID:    user.ID,
 		Roles:     append([]string(nil), user.Roles...),
@@ -208,15 +236,6 @@ func (s *loginStore) consumeCode(got string) (userID string, roles []string, sco
 		return rec.UserID, rec.Roles, rec.Scope, true
 	}
 	return "", nil, "", false
-}
-
-func requestIsLoopback(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func digitsOnly(s string) string {

@@ -3827,3 +3827,114 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "lobslaw/v1/lobslaw.proto",
 }
+
+const (
+	ConsoleService_ConsoleForward_FullMethodName = "/lobslaw.v1.ConsoleService/ConsoleForward"
+)
+
+// ConsoleServiceClient is the client API for ConsoleService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+type ConsoleServiceClient interface {
+	ConsoleForward(ctx context.Context, in *ConsoleForwardRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConsoleForwardResponse], error)
+}
+
+type consoleServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewConsoleServiceClient(cc grpc.ClientConnInterface) ConsoleServiceClient {
+	return &consoleServiceClient{cc}
+}
+
+func (c *consoleServiceClient) ConsoleForward(ctx context.Context, in *ConsoleForwardRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConsoleForwardResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ConsoleService_ServiceDesc.Streams[0], ConsoleService_ConsoleForward_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ConsoleForwardRequest, ConsoleForwardResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConsoleService_ConsoleForwardClient = grpc.ServerStreamingClient[ConsoleForwardResponse]
+
+// ConsoleServiceServer is the server API for ConsoleService service.
+// All implementations should embed UnimplementedConsoleServiceServer
+// for forward compatibility.
+//
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+type ConsoleServiceServer interface {
+	ConsoleForward(*ConsoleForwardRequest, grpc.ServerStreamingServer[ConsoleForwardResponse]) error
+}
+
+// UnimplementedConsoleServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedConsoleServiceServer struct{}
+
+func (UnimplementedConsoleServiceServer) ConsoleForward(*ConsoleForwardRequest, grpc.ServerStreamingServer[ConsoleForwardResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ConsoleForward not implemented")
+}
+func (UnimplementedConsoleServiceServer) testEmbeddedByValue() {}
+
+// UnsafeConsoleServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ConsoleServiceServer will
+// result in compilation errors.
+type UnsafeConsoleServiceServer interface {
+	mustEmbedUnimplementedConsoleServiceServer()
+}
+
+func RegisterConsoleServiceServer(s grpc.ServiceRegistrar, srv ConsoleServiceServer) {
+	// If the following call pancis, it indicates UnimplementedConsoleServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ConsoleService_ServiceDesc, srv)
+}
+
+func _ConsoleService_ConsoleForward_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ConsoleForwardRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ConsoleServiceServer).ConsoleForward(m, &grpc.GenericServerStream[ConsoleForwardRequest, ConsoleForwardResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConsoleService_ConsoleForwardServer = grpc.ServerStreamingServer[ConsoleForwardResponse]
+
+// ConsoleService_ServiceDesc is the grpc.ServiceDesc for ConsoleService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ConsoleService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.ConsoleService",
+	HandlerType: (*ConsoleServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ConsoleForward",
+			Handler:       _ConsoleService_ConsoleForward_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}

@@ -23,6 +23,7 @@ type requestAuth struct {
 	Claims     *types.Claims
 	LoginID    string
 	FromCookie bool
+	FromPeer   bool
 }
 
 type loginSession struct {
@@ -34,10 +35,12 @@ type loginSession struct {
 }
 
 type loginStore struct {
-	mu       sync.Mutex
-	sessions map[string]*loginSession
-	streams  map[string][]context.CancelFunc
-	codes    map[string]loginCode
+	mu           sync.Mutex
+	sessions     map[string]*loginSession
+	streams      map[string][]context.CancelFunc
+	codes        map[string]loginCode
+	codeAttempts int
+	codeWindow   time.Time
 }
 
 type loginCode struct {
@@ -149,7 +152,7 @@ func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Loopback {
-		s.loginFromLoopback(w, r)
+		s.jsonErr(w, http.StatusUnauthorized, "use a sign-in code or Bearer JWT; loopback is not an identity")
 		return
 	}
 	s.jsonErr(w, http.StatusUnauthorized, "enter the code from `lobslaw login`, or a Bearer JWT")
@@ -247,6 +250,9 @@ func (s *Server) resolveRESTPrincipal(ctx context.Context, jwtSub string) identi
 }
 
 func (s *Server) authenticateRequest(r *http.Request) (requestAuth, error) {
+	if claims, ok := r.Context().Value(forwardedConsoleIdentity{}).(*types.Claims); ok && claims != nil && claims.UserID != "" {
+		return requestAuth{Claims: claims, FromPeer: true}, nil
+	}
 	if c, err := r.Cookie(LoginCookieName); err == nil && c.Value != "" {
 		if sess := s.logins.get(c.Value); sess != nil {
 			authn := requestAuth{

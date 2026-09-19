@@ -32,11 +32,6 @@ export function LoginGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-function onLoopback(): boolean {
-  const h = window.location.hostname;
-  return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
-}
-
 function SignIn({ onIn, error, onClearError }: {
   onIn: () => void;
   error: Error | null;
@@ -47,7 +42,6 @@ function SignIn({ onIn, error, onClearError }: {
   const [formError, setFormError] = useState<Error | null>(null);
   const [showJwt, setShowJwt] = useState(false);
   const [jwt, setJwt] = useState("");
-  const local = onLoopback();
   const shown = formError || error;
 
   async function run(fn: () => Promise<unknown>) {
@@ -68,16 +62,6 @@ function SignIn({ onIn, error, onClearError }: {
           </div>
         </div>
 
-        {local && (
-          <button
-            className="btn primary login-wide"
-            disabled={busy}
-            onClick={() => void run(() => api.loginLoopback())}
-          >
-            Continue on this computer
-          </button>
-        )}
-
         <div className="field">
           <label htmlFor="code">One-time code</label>
           <input
@@ -85,16 +69,16 @@ function SignIn({ onIn, error, onClearError }: {
             className="in login-code"
             inputMode="numeric"
             autoComplete="one-time-code"
-            autoFocus={!local}
+            autoFocus
             placeholder="000 000"
             value={code}
             onChange={(e) => setCode(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void run(() => api.loginCode(code)); }}
           />
           <div className="hint">
-            On the machine that runs this node, in a terminal:
+            Ask your assistant for a console sign-in code, or use your enrolled JWT:
             <pre className="login-cmd">lobslaw login --config /path/to/config.toml</pre>
-            Type the six-digit code it prints. It works once and lasts a few minutes.
+            Set LOBSLAW_LOGIN_TOKEN before running this command. Type the six-digit code it prints; it works once.
           </div>
         </div>
         <button

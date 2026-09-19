@@ -862,8 +862,11 @@ func joinBotGuidance(body, guidance string) string {
 }
 
 func (a *Agent) resolveBot(ctx context.Context, req *ProcessMessageRequest) error {
-	if req.Bot != nil || req.BotID == "" || a.cfg.Bots == nil {
+	if req.Bot != nil || req.BotID == "" {
 		return nil
+	}
+	if a.cfg.Bots == nil {
+		return errors.New("cannot resolve named bot on this compute node")
 	}
 	profile, err := a.cfg.Bots.ResolveBot(ctx, req.BotID)
 	if err != nil {
@@ -1011,6 +1014,13 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	}
 
 	for loop := range a.cfg.MaxToolLoops {
+		if dec := req.Budget.Check(); dec.Exceeded {
+			resp.NeedsConfirmation = true
+			resp.ConfirmationReason = fmt.Sprintf("budget exceeded on %s", dec.ExceededOn)
+			resp.BudgetState = req.Budget.State()
+			resp.Messages = messages
+			return resp, nil
+		}
 		a.cfg.Logger.Debug("agent: LLM round-trip",
 			"turn_id", req.TurnID, "loop", loop, "messages", len(messages))
 
@@ -1783,6 +1793,9 @@ func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	// its own bot takes the bot principal.
 	if req.BotID != "" && req.Claims != nil && req.Claims.UserID == identity.Bot(req.BotID).String() {
 		t.Principal = identity.Bot(req.BotID)
+		if req.Bot != nil {
+			t.BotOwner = identity.Principal(strings.TrimSpace(req.Bot.Owner))
+		}
 		return t
 	}
 	if req.Principal != "" {
@@ -1870,6 +1883,13 @@ func (a *Agent) logToolFailure(req ProcessMessageRequest, tool, reason string, e
 }
 
 func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, *pendingConfirmation, error) {
+	if dec := req.Budget.Check(); dec.Exceeded {
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: "budget exceeded"},
+			&pendingConfirmation{Reason: fmt.Sprintf("budget exceeded on %s", dec.ExceededOn)}, nil
+	}
+	if req.Bot != nil && len(req.Bot.FilterTools([]Tool{{Name: tc.Name}})) == 0 {
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: "tool is excluded by bot tool restrictions"}, nil, nil
+	}
 	budgetDec := req.Budget.RecordToolCall()
 	if budgetDec.Exceeded {
 		return ToolInvocation{

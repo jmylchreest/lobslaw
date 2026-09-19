@@ -30,6 +30,7 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	RemoteConsole lobslawv1.ConsoleServiceClient
 	// Notices appends operator notices to outbound replies. Nil
 	// disables them entirely, which is what a deployment that never
 	// opted this channel in gets.
@@ -210,11 +211,12 @@ type Server struct {
 	conv   *conversationLog
 	logins *loginStore
 
-	mu       sync.Mutex
-	httpSrv  *http.Server
-	listener net.Listener
-	ready    bool // flipped to true when Start() completes bind; checked by /readyz
-	console  http.Handler
+	mu         sync.Mutex
+	httpSrv    *http.Server
+	listener   net.Listener
+	ready      bool // flipped to true when Start() completes bind; checked by /readyz
+	console    http.Handler
+	remoteCaps *capabilitiesResponse
 }
 
 // NewServer constructs the REST server with explicit dependencies.
@@ -252,18 +254,18 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 // triggers a graceful shutdown with a bounded timeout.
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/messages", s.handleMessages)
+	mux.HandleFunc("/v1/messages", s.consoleRoute(s.handleMessages))
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/v1/session", s.handleSession)
 	mux.HandleFunc("/v1/session/code", s.handleSessionCode)
-	mux.HandleFunc("/v1/tools", s.handleTools)
+	mux.HandleFunc("/v1/tools", s.consoleRoute(s.handleTools))
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	// General to the gateway rather than gated on compute-teams: a
 	// node with no bots still has a configuration worth reading and a
 	// transcript store worth browsing. Both say 503 when unwired.
 	mux.HandleFunc("/v1/config", s.handleConfig)
-	mux.HandleFunc("/v1/sessions/", s.handleSessionTranscript)
+	mux.HandleFunc("/v1/sessions/", s.consoleRoute(s.handleSessionTranscript))
 	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
 		mux.Handle("/telegram", s.cfg.Telegram)
 	}
@@ -272,11 +274,11 @@ func (s *Server) Start(ctx context.Context) error {
 		s.log.Info("gateway: webhook mounted",
 			"name", wh.Name(), "path", wh.PathPrefix())
 	}
-	if s.cfg.Prompts != nil {
-		mux.HandleFunc("/v1/prompts/", s.handlePrompt)
+	if s.cfg.Prompts != nil || s.cfg.RemoteConsole != nil {
+		mux.HandleFunc("/v1/prompts/", s.consoleRoute(s.handlePrompt))
 	}
-	if s.cfg.Plan != nil {
-		mux.HandleFunc("/v1/plan", s.handlePlan)
+	if s.cfg.Plan != nil || s.cfg.RemoteConsole != nil {
+		mux.HandleFunc("/v1/plan", s.consoleRoute(s.handlePlan))
 	}
 	s.registerTeamRoutes(mux)
 	s.mountConsole(mux)
@@ -648,6 +650,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		lastPromptID = p.ID
+		if err := responder.event("needs_confirmation", map[string]any{
+			"prompt_id": p.ID, "reason": resp.ConfirmationReason,
+			"action": resp.ConfirmationAction, "resource": resp.ConfirmationResource,
+		}); err != nil {
+			s.log.Warn("rest: send confirmation", "err", err)
+			break
+		}
 
 		decision, werr := s.cfg.Prompts.Wait(turnCtx, p.ID)
 		if werr != nil {
@@ -967,7 +976,7 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) promptVisible(p *Prompt, authn requestAuth) bool {
-	if !s.cfg.RequireAuth {
+	if !s.cfg.RequireAuth && !authn.FromPeer {
 		return true
 	}
 	if p.RaisedFor == "" || authn.Claims == nil {
@@ -990,6 +999,10 @@ func (s *Server) promptExpired(p *Prompt) bool {
 // ?window=<duration> query param (Go-duration syntax: "24h", "30m",
 // "1h30m"); empty or invalid falls back to the service default.
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Plan == nil {
+		s.jsonErr(w, http.StatusServiceUnavailable, "plan service unavailable")
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

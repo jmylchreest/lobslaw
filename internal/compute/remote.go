@@ -38,6 +38,7 @@ func (r *RemoteRunner) Run(ctx context.Context, req turn.Request) (*turn.Respons
 
 func (r *RemoteRunner) Resume(ctx context.Context, req turn.Request, prior []turn.Message) (*turn.Response, error) {
 	in := &lobslawv1.ResumeTurnRequest{Request: requestToProto(req)}
+	in.ApprovalAction, in.ApprovalResource = turn.TakeApproval(ctx)
 	for _, m := range prior {
 		in.Prior = append(in.Prior, messageToProto(m))
 	}

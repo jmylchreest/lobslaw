@@ -5,7 +5,7 @@ import { LoginGate } from "./components/LoginGate";
 import { Markdown } from "./components/Markdown";
 import { Mascot } from "./components/Mascot";
 import { Empty, Err, Spinner, useLoad, when } from "./components/ui";
-import { BotRoom } from "./routes/BotRoom";
+import { Approval, BotRoom } from "./routes/BotRoom";
 import { setRoster } from "./theme";
 import { Company } from "./routes/Company";
 import { Config } from "./routes/Config";
@@ -25,7 +25,7 @@ export function App() {
 function Console() {
   const caps = useLoad(() => api.capabilities());
   if (caps.loading) return <div className="center"><Spinner /></div>;
-  if (caps.error) return <DiscoveryError error={caps.error} />;
+  if (caps.error) return <><DiscoveryError error={caps.error} /><button className="btn" onClick={caps.reload}>Retry discovery</button></>;
   if (!caps.data) return null;
 
   if (!caps.data["compute-teams"].enabled) {
@@ -178,7 +178,7 @@ function Shell() {
           <Route path="/" element={<Company group={current} onRenamed={reloadGroups} />} />
           <Route path="/coordinator" element={<Landing bots={bots} />} />
           <Route path="/config" element={<Config />} />
-          <Route path="/bots/new" element={<NewBot onCreated={refresh} />} />
+          <Route path="/bots/new" element={<NewBot group={current} onCreated={refresh} />} />
           <Route path="/bots/:botId" element={<BotRoom onChanged={refresh} />} />
           <Route path="*" element={<div className="empty"><b>Nothing here</b><span>That page does not exist.</span></div>} />
         </Routes>
@@ -364,6 +364,7 @@ interface ChatLine {
  * /v1/messages endpoint Telegram and Slack use.
  */
 function SingleChat({ computeOn }: { computeOn: boolean }) {
+  const [ask, setAsk] = useState<{ id: string; reason: string; action?: string; resource?: string } | null>(null);
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -386,6 +387,10 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
     let reply = "";
     try {
       await streamChat(text, (event, data) => {
+        if (event === "needs_confirmation") {
+          setAsk({ id: String(data.prompt_id ?? ""), reason: String(data.reason ?? ""),
+            action: String(data.action ?? ""), resource: String(data.resource ?? "") });
+        }
         if (event === "typing") setNotice("Working");
         if (event === "interim" && typeof data.text === "string") setNotice(data.text);
         if (event === "final") {
@@ -400,6 +405,7 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
     } catch (e) {
       setError(e as Error);
     } finally {
+      setAsk(null);
       setBusy(false);
       setNotice("");
     }
@@ -420,6 +426,7 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
           </div>
         ))}
         {busy && <div className="msg" aria-live="polite">{notice || "Working"}</div>}
+        {ask && <Approval ask={ask} onAnswered={() => setAsk(null)} />}
         <div ref={bottom} />
       </div>
       <div className="sr-only" role="status" aria-live="polite">{notice}</div>

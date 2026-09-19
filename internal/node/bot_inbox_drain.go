@@ -25,6 +25,8 @@ import (
 // enough that an idle cluster does almost nothing.
 const inboxIdleTick = 30 * time.Second
 
+const inboxExecutionTimeout time.Duration = memory.InboxClaimTTL / 2
+
 // inboxTerminalRetention is how long a finished item stays readable.
 //
 // Long enough that "what did the devops bot do last week" is a
@@ -43,7 +45,7 @@ const inboxTerminalRetention = 30 * 24 * time.Hour
 // which for "ask engineering and wait" is the difference between a
 // queue and a delay.
 func (n *Node) runInboxDrain(ctx context.Context) {
-	if n.inboxSvc == nil || n.agent == nil {
+	if n.inboxSvc == nil || n.agent == nil || n.cfg.RestoreMode {
 		return
 	}
 	n.log.Info("bots: inbox drain running")
@@ -146,24 +148,37 @@ func (n *Node) drainOneInboxItem(ctx context.Context, recipient string) error {
 		"kind", memory.InboxKindName(item.GetKind()),
 		"attempt", item.GetAttempts())
 
-	resp, runErr := n.agent.Run(ctx, turn.Request{
-		BotID:     recipient,
+	claims, botID, principal := schedulerIdentity("bot:" + recipient)
+	workCtx, cancel := context.WithTimeout(ctx, inboxExecutionTimeout)
+	defer cancel()
+	resp, runErr := n.agent.Run(workCtx, turn.Request{
+		BotID:     botID,
+		Claims:    claims,
+		Principal: principal,
 		Message:   inboxPrompt(item),
 		Channel:   "",
 		ChannelID: recipient + ".inbox." + item.GetId(),
 	})
+	needsApproval := runErr == nil && resp.NeedsConfirmation
+	if needsApproval {
+		runErr = errors.New("inbox task requires confirmation; ask the bot directly to approve the operation")
+	}
+	interrupted := workCtx.Err() != nil
+	if interrupted {
+		runErr = fmt.Errorf("inbox execution interrupted: %w", workCtx.Err())
+	}
 
 	// A disabled or deleted bot will never succeed, so retrying it
 	// burns a provider call per pass forever against a queue nobody is
 	// coming back to. Fail it now, visibly, with the reason on the
 	// record.
 	maxAttempts := memory.DefaultInboxMaxAttempts
-	if errors.Is(runErr, compute.ErrBotDisabled) || errors.Is(runErr, memory.ErrBotNotFound) {
+	if interrupted || needsApproval || errors.Is(runErr, compute.ErrBotDisabled) || errors.Is(runErr, memory.ErrBotNotFound) {
 		maxAttempts = 0
 	}
 
-	outcome := memory.InboxOutcome{Err: runErr, MaxAttempts: maxAttempts}
-	if runErr == nil {
+	outcome := memory.InboxOutcome{Err: runErr, MaxAttempts: maxAttempts, ClaimRevision: item.GetRevision(), Claimer: item.GetClaimedBy()}
+	if resp != nil {
 		outcome.Result = inboxResultFromTurn(resp)
 		outcome.CostUSD = resp.BudgetState.SpendUSD
 	}

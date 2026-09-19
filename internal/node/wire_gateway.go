@@ -18,6 +18,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -157,7 +158,13 @@ func (n *Node) wireGateway() error {
 		Memory:           n.newMemoryLister(),
 	}
 
+	if n.remoteTurnConn != nil {
+		cfg.RemoteConsole = lobslawv1.NewConsoleServiceClient(n.remoteTurnConn)
+	}
 	n.gatewaySrv = gateway.NewServer(cfg, runner)
+	if n.server != nil && n.agent != nil {
+		lobslawv1.RegisterConsoleServiceServer(n.server, n.gatewaySrv)
+	}
 	n.mountWebConsole(uiWeb)
 	n.registerConsoleCodeTool(uiWeb)
 	n.log.Info("gateway wired",

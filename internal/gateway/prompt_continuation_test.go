@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/raft"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -62,6 +63,8 @@ func twoNodes(t *testing.T, caps compute.BudgetCaps) (asker, answerer *RaftPromp
 func pausedTurn() *Continuation {
 	return &Continuation{
 		Request: turn.Request{
+			BotID:               "worker",
+			Principal:           identity.Bot("worker"),
 			Message:             "tidy my notes",
 			Claims:              &types.Claims{UserID: "tg-@alice", Roles: []string{"ops"}, Scope: "private"},
 			UserTimezone:        "Europe/London",
@@ -132,6 +135,9 @@ func TestPausedTurnSurvivesTheProcessThatPausedIt(t *testing.T) {
 	}
 
 	r := c.Request
+	if r.BotID != "worker" || r.Principal != identity.Bot("worker") {
+		t.Fatal("bot execution identity was lost")
+	}
 	if r.Message != "tidy my notes" {
 		t.Errorf("user message lost: %q", r.Message)
 	}

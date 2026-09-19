@@ -2331,6 +2331,8 @@ message Continuation {
   string conversation_summary = 11;
   string recalled_context = 12;
   int64 egress_bytes = 13;
+  string bot_id = 14;
+  string principal = 15;
 }
 
 // PromptRecord is one pending confirmation, in Raft rather than in a
@@ -2462,6 +2464,9 @@ message RunTurnRequest {
 message ResumeTurnRequest {
   RunTurnRequest request = 1;
   repeated SessionMessage prior = 2;
+  // Asserted only by authenticated peer nodes after the user has approved.
+  string approval_action = 3;
+  string approval_resource = 4;
 }
 
 message RunTurnResponse {
@@ -2481,4 +2486,25 @@ message RunTurnResponse {
 
 message ResumeTurnResponse {
   RunTurnResponse response = 1;
+}
+
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+service ConsoleService {
+  rpc ConsoleForward(ConsoleForwardRequest) returns (stream ConsoleForwardResponse);
+}
+
+message ConsoleForwardRequest {
+  string method = 1;
+  string path = 2;
+  bytes body = 3;
+  Claims claims = 4;
+  bool event_stream = 5;
+}
+
+message ConsoleForwardResponse {
+  int32 status = 1;
+  string content_type = 2;
+  bytes data = 3;
 }

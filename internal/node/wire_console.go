@@ -8,12 +8,41 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
+
+// A compute backend serves the browser channel over cluster mTLS even when its
+// public HTTP channels are disabled. It neither binds a listener nor starts
+// Telegram/Slack; the web node owns those transport and login concerns.
+func (n *Node) wireConsoleBackend() error {
+	if n.cfg.RestoreMode || n.gatewaySrv != nil || n.agent == nil || n.server == nil {
+		return nil
+	}
+	if err := n.wirePrompts(); err != nil {
+		return err
+	}
+	server := gateway.NewServer(gateway.RESTConfig{
+		RequireAuth: true, Identity: n.identityResolver(), Logger: n.log,
+		DefaultScope:  n.cfg.Gateway.UnknownUserScope,
+		DefaultBudget: compute.FromComputeConfig(n.cfg.Compute),
+		QueueMode:     gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
+		QueueDebounce: n.cfg.Gateway.QueueDebounce, Leaser: n.newSessionLeaser(),
+		TypingInterval: n.cfg.Gateway.TypingInterval, HardTimeout: n.cfg.Gateway.HardTimeout,
+		Prompts: n.promptRegistry, ConfirmationTTL: n.cfg.Gateway.ConfirmationTimeout,
+		Bots: n.teamBotsOrNil(), Groups: n.teamGroupsOrNil(), Inbox: n.teamInboxOrNil(),
+		TeamRouter: n.teamRouterOrNil(), Tools: n.toolCatalogueOrNil(),
+		Sessions: n.newSessionStore(), Compactor: n.newSessionCompactor(), Conversation: n.conversationConfig(),
+		Transcripts: n.newSessionBrowser(), Routines: n.newRoutineLister(), Memory: n.newMemoryLister(),
+		Plan: planServiceOrNil(n.planSvc),
+	}, compute.Adapt(n.agent))
+	lobslawv1.RegisterConsoleServiceServer(n.server, server)
+	return nil
+}
 
 // Console wiring for the full web console's read-only views.
 //
@@ -25,7 +54,8 @@ import (
 // consoleSessionBrowser exposes the read side of the session service
 // to /v1/bots/{id}/sessions and /v1/sessions/{id}. Distinct from
 // sessionBrowserAdapter, which serves the agent's session_search tools
-// with a visibility predicate this read-only view does not need.
+// with a visibility predicate. The gateway authorizes the session metadata
+// before calling this adapter's transcript reader.
 type consoleSessionBrowser struct {
 	inner *memory.SessionService
 }

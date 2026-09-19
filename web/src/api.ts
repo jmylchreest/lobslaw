@@ -162,6 +162,7 @@ export const consoleSessionID = "console";
 
 const httpUnavailable = 503;
 const httpNotFound = 404;
+const httpAccepted = 202;
 
 export function isUnavailable(err: unknown): boolean {
   if (err instanceof TypeError) return true;
@@ -224,12 +225,6 @@ export const api = {
     request<SessionInfo>("/v1/session", {
       method: "POST",
       body: JSON.stringify({ code }),
-    }),
-
-  loginLoopback: () =>
-    request<SessionInfo>("/v1/session", {
-      method: "POST",
-      body: JSON.stringify({ loopback: true }),
     }),
 
   logout: () => request<{ status: string }>("/v1/session", { method: "DELETE" }),
@@ -376,10 +371,12 @@ export async function streamBotChat(
   botId: string,
   message: string,
   onEvent: (event: string, data: Record<string, unknown>) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   let res: Response;
   try {
     res = await fetch(`/v1/bots/${encodeURIComponent(botId)}/messages`, {
+      signal,
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -387,6 +384,11 @@ export async function streamBotChat(
     });
   } catch (err) {
     throw err instanceof Error ? err : new TypeError("network error");
+  }
+  if (res.status === httpAccepted) {
+    const result = await res.json() as { error?: string };
+    onEvent("accepted", { message: result.error ?? "Message accepted by the active turn." });
+    return;
   }
   await readSSE(res, onEvent);
 }

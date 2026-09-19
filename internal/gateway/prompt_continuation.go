@@ -3,6 +3,7 @@ package gateway
 import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -42,6 +43,8 @@ func continuationToProto(c *Continuation) *lobslawv1.Continuation {
 		ConversationSummary: c.Request.ConversationSummary,
 		RecalledContext:     c.Request.RecalledContext,
 		Claims:              claimsToProto(c.Request.Claims),
+		BotId:               c.Request.BotID,
+		Principal:           c.Request.Principal.String(),
 	}
 	out.SpentUsd = c.Request.Spent.SpendUSD
 	out.ToolCalls = int32(c.Request.Spent.ToolCalls)
@@ -68,6 +71,8 @@ func continuationFromProto(p *lobslawv1.Continuation, caps turn.BudgetCaps) (*Co
 		Request: turn.Request{
 			Message:             p.UserMessage,
 			Claims:              claimsFromProto(p.Claims),
+			BotID:               p.BotId,
+			Principal:           identity.Principal(p.Principal),
 			UserTimezone:        p.UserTimezone,
 			Model:               p.Model,
 			SystemPrompt:        p.SystemPrompt,

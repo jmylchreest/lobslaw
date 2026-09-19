@@ -28,6 +28,8 @@ import (
 //
 // The turn goes through turn.Runner, never a concrete agent: the
 // gateway is the transport and must not depend on internal/compute.
+const botChatHeartbeat time.Duration = 10 * time.Second
+
 func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID string) {
 	// Authenticate before the 200 and the SSE headers go out, so an
 	// unauthenticated caller gets a 401 rather than a streamed error
@@ -63,6 +65,28 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		s.jsonErr(w, http.StatusBadRequest, "message is required")
 		return
 	}
+	turnID := ids.New()
+	claims := authn.Claims
+	userID := ""
+	if claims != nil {
+		userID = claims.UserID
+	}
+	sessionRef := SessionRef{Channel: botChannel, ChannelID: botID, UserID: userID}
+	ctx, stopStream := s.bindStream(r.Context(), authn.LoginID)
+	defer stopStream()
+	lease, disposition := s.gate.Acquire(ctx, cacheKey(sessionRef), turnID, body.Message)
+	if disposition == Folded {
+		s.jsonErr(w, http.StatusAccepted, "message folded into an in-flight turn; its reply covers this message")
+		return
+	}
+	if disposition == Dropped {
+		s.jsonErr(w, http.StatusConflict, "a turn is already running for this bot")
+		return
+	}
+	defer lease.Release()
+	if len(lease.Batch) > 1 {
+		body.Message = strings.Join(lease.Batch, "\n")
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		// Without flushing, SSE is just a slow JSON response that
@@ -89,8 +113,6 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	turnID := ids.New()
-
 	// Three goroutines can write to this stream: the heartbeat ticker,
 	// and this handler. An http.ResponseWriter is not safe for
 	// concurrent use, so one guarded emitter rather than a mutex the
@@ -108,12 +130,17 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	// "working", and it also keeps an idle-timeout proxy from closing a
 	// connection that is legitimately quiet for ninety seconds.
 	done := make(chan struct{})
+	exited := make(chan struct{})
+	defer func() { close(done); <-exited }()
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		defer close(exited)
+		ticker := time.NewTicker(botChatHeartbeat)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-done:
+				return
+			case <-ctx.Done():
 				return
 			case <-ticker.C:
 				emit("working", map[string]any{"turn_id": turnID})
@@ -121,14 +148,8 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		}
 	}()
 
-	claims := authn.Claims
-	userID := ""
-	if claims != nil {
-		userID = claims.UserID
-	}
 	// The bot's conversations live on their own synthetic channel, so
 	// its working transcripts never appear in somebody's chat history.
-	sessionRef := SessionRef{Channel: botChannel, ChannelID: botID, UserID: userID}
 	prior := s.conv.Load(r.Context(), sessionRef)
 
 	req := turn.Request{
@@ -147,11 +168,7 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		ConversationSummary: prior.Summary,
 	}
 
-	ctx, stopStream := s.bindStream(r.Context(), authn.LoginID)
-	defer stopStream()
-
 	resp, err := s.runner.Run(ctx, req)
-	close(done)
 	if err != nil {
 		// The error goes down the STREAM, not as a status: the 200 and
 		// the headers are already on the wire.

@@ -121,7 +121,7 @@ func (w *wrappedStream) Context() context.Context { return w.ctx }
 // RaftTransport carries replication: append-entries, votes, snapshot
 // installs. A caller reaching it is participating in consensus, not
 // administering the cluster.
-var PeerOnlyPrefixes = []string{"/RaftTransport/"}
+var PeerOnlyPrefixes = []string{"/RaftTransport/", "/lobslaw.v1.AgentService/", "/lobslaw.v1.ConsoleService/"}
 
 // ErrOperatorNotAPeer is returned when a person's credential is used
 // on a peer-only service.

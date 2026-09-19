@@ -162,6 +162,17 @@ func TestAnOperatorIsRefusedOnTheRaftTransport(t *testing.T) {
 	}
 }
 
+func TestOperatorCannotAssertTurnIdentity(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"/lobslaw.v1.AgentService/RunTurn", "/lobslaw.v1.AgentService/ResumeTurn", "/lobslaw.v1.ConsoleService/ConsoleForward"} {
+		called := false
+		_, err := OperatorNotAPeer()(ctxWithCert(certWithOU(t, mtls.OperatorOU)), nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+		if status.Code(err) != codes.PermissionDenied || called {
+			t.Fatalf("%s accepted operator assertion", method)
+		}
+	}
+}
+
 // Raft's transport is STREAMING. Without this half the guard covers
 // nothing that matters.
 func TestAnOperatorIsRefusedOnTheRaftStream(t *testing.T) {

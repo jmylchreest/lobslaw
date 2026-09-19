@@ -154,12 +154,24 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the bot registry")
 		return
 	}
-	if _, err := s.authenticateRequest(r); err != nil {
+	authn, err := s.authenticateRequest(r)
+	if err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
 		return
 	}
 
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/bots"), "/")
+	if rest != "" {
+		botID, _, _ := strings.Cut(rest, "/")
+		if !s.mayModifyBot(r, botID) {
+			s.jsonErr(w, http.StatusForbidden, "that bot is not owned by this account")
+			return
+		}
+	}
 	switch {
 	case rest == "":
 		s.handleBotCollection(w, r)
@@ -197,7 +209,9 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 		}
 		out := make([]botJSON, 0, len(records))
 		for _, rec := range records {
-			out = append(out, botToJSON(rec))
+			if memory.MayModify(rec, s.principalOf(r)) {
+				out = append(out, botToJSON(rec))
+			}
 		}
 		respondJSON(w, http.StatusOK, map[string]any{"bots": out})
 	case http.MethodPost:
@@ -315,33 +329,22 @@ func (s *Server) mayUseGroup(r *http.Request, groupID string) bool {
 	return groupMayModify(group, s.principalOf(r))
 }
 
-// mayModifyBot reports whether the caller may change this bot.
-//
-// Authority comes from the bot's TEAM, not from the bot. Teams gained
-// owners in this work and bots did not, which left the team check
-// bypassable one route over: a bot you could not move between teams
-// you could still re-brief, re-tool, or delete — including the
-// coordinator, which decides who answers on Telegram for that team.
-//
-// A node with no group registry falls back to "anyone signed in",
-// which is the behaviour before teams existed.
+// Bot ownership is authoritative even when the group record is unavailable.
+// Group membership must never make an unowned bot public.
 func (s *Server) mayModifyBot(r *http.Request, botID string) bool {
-	if s.cfg.Groups == nil || s.cfg.Bots == nil {
+	if s.cfg.Bots == nil {
 		return false
 	}
 	rec, err := s.cfg.Bots.Get(r.Context(), botID)
 	if err != nil {
 		return false
 	}
-	group, err := s.cfg.Groups.Get(r.Context(), groupOfBot(rec))
-	if err != nil {
-		return false
-	}
-	return groupMayModify(group, s.principalOf(r))
+	return memory.MayModify(rec, s.principalOf(r))
 }
 
 func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 	var body struct {
+		Revision     *uint64   `json:"revision"`
 		DisplayName  *string   `json:"display_name"`
 		Description  *string   `json:"description"`
 		Instructions *string   `json:"instructions"`
@@ -361,6 +364,10 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	if !s.mayModifyBot(r, id) {
 		s.jsonErr(w, http.StatusForbidden, "that bot belongs to somebody else's team")
+		return
+	}
+	if body.Revision == nil || *body.Revision != current.GetRevision() {
+		s.jsonErr(w, http.StatusConflict, "bot changed; reload before saving")
 		return
 	}
 	if body.DisplayName != nil {
@@ -402,7 +409,7 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		current.GroupId = *body.GroupID
 	}
-	updated, err := s.cfg.Bots.Put(r.Context(), current, current.GetRevision())
+	updated, err := s.cfg.Bots.Put(r.Context(), current, *body.Revision)
 	if err != nil {
 		s.jsonErr(w, botStatusFor(err), err.Error())
 		return
@@ -506,6 +513,15 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusBadRequest, "want /v1/inbox/{bot}/{item}")
 		return
 	}
+	if !s.mayModifyBot(r, botID) {
+		s.jsonErr(w, http.StatusForbidden, "that bot is not owned by this account")
+		return
+	}
+	authn, _ := s.authenticateRequest(r)
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -579,6 +595,9 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]inboxItemJSON, 0, limit)
 	for _, recipient := range recipients {
+		if !s.mayModifyBot(r, recipient) {
+			continue
+		}
 		items, err := s.cfg.Inbox.List(r.Context(), recipient, memory.InboxFilter{Limit: limit})
 		if err != nil {
 			s.jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -672,15 +691,15 @@ func parseRESTInboxKind(s string) (lobslawv1.InboxKind, bool) {
 }
 
 func (s *Server) registerTeamRoutes(mux *http.ServeMux) {
-	if s.cfg.Bots != nil {
-		mux.HandleFunc("/v1/bots", s.handleBots)
-		mux.HandleFunc("/v1/bots/", s.handleBots)
-		mux.HandleFunc("/v1/inbox/", s.handleInboxItem)
-		mux.HandleFunc("/v1/activity", s.handleActivity)
+	if s.cfg.Bots != nil || s.cfg.RemoteConsole != nil {
+		mux.HandleFunc("/v1/bots", s.consoleRoute(s.handleBots))
+		mux.HandleFunc("/v1/bots/", s.consoleRoute(s.handleBots))
+		mux.HandleFunc("/v1/inbox/", s.consoleRoute(s.handleInboxItem))
+		mux.HandleFunc("/v1/activity", s.consoleRoute(s.handleActivity))
 	}
-	if s.cfg.Groups != nil {
-		mux.HandleFunc("/v1/groups", s.handleGroups)
-		mux.HandleFunc("/v1/groups/", s.handleGroups)
+	if s.cfg.Groups != nil || s.cfg.RemoteConsole != nil {
+		mux.HandleFunc("/v1/groups", s.consoleRoute(s.handleGroups))
+		mux.HandleFunc("/v1/groups/", s.consoleRoute(s.handleGroups))
 	}
 }
 

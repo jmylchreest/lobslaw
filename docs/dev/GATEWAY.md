@@ -39,7 +39,10 @@ sequenceDiagram
       Runner-->>Server: resp
       Server->>Prompts: Create(..., RaisedFor=canonical user)
       Prompts-->>Server: Prompt{ID,...}
-      Server-->>Client: 200 {reply, needs_confirmation:true, prompt_id}
+      Server-->>Client: SSE needs_confirmation with prompt_id
+      Client->>Server: POST /v1/prompts/id/resolve
+      Server->>Runner: Resume with one-shot approval
+      Runner-->>Client: final reply
     else plain reply
       Runner-->>Server: resp
       Server-->>Client: 200 {reply, tool_calls, budget}
@@ -89,11 +92,17 @@ Identity is never taken from the JSON body. JWT `sub` is resolved through `ident
 
 Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (`lobslaw_login`). There is no self-signup: `POST /v1/session` requires the JWT subject to match an operator-declared `[[user]]`. Web login copies `[[user]].roles` onto the session and **does not** grant `role:operator` from the JWT. Cookie-authenticated unsafe methods also check `Origin` against the request host. `DELETE /v1/session` drops the cookie and cancels any in-flight REST streams bound to it. Login sessions are in-memory; a restart means presenting the JWT again.
 
+One-time codes are another enrollment credential. `POST /v1/session/code` requires a valid enrolled Bearer JWT and only mints for that same account. `console_code` can mint for an operator already authenticated through a channel. No HTTP login path trusts `RemoteAddr` as a user identity. Code redemption has a global bounded attempt window, so rotating source addresses or forwarded headers cannot multiply the guessing allowance. Minting replaces the user's previous code and removes expired codes.
+
+Bot data and chat routes check the bot's explicit human owner; listing filters inaccessible records. Transcript reads authorize the stored session participant, or the owning bot for bot-channel sessions. Settings PATCH requires the editor's `revision` and returns 409 on a stale form. Bot chat holds the conversation gate across Load → Run → approval/resume → Append; heartbeat shutdown is joined before the handler returns.
+
 ### Capabilities
 
-`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. `compute-teams` is enabled only when `FunctionComputeTeams` is on (`--compute-teams` or `[compute-teams].enabled`). `/v1/bots` and `/v1/groups` mount only then. Channel handlers set `turn.Request.BotID` via `TeamRouter` and do not import `internal/compute`. `ui-web` is true when the console handler is mounted. The SPA hides team chrome when teams are off rather than inventing a default team.
+`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. Bot/group registries require `FunctionComputeTeams` on the serving compute backend (`--compute-teams` or `[compute-teams].enabled`); a web-only node forwards those routes without enabling local teams. Channel handlers set `turn.Request.BotID` via `TeamRouter` and do not import `internal/compute`. `ui-web` is true when the console handler is mounted. The SPA hides team chrome when teams are off rather than inventing a default team.
 
-A ui-web node without local compute runs turns on `[ui-web].backend` over cluster mTLS gRPC (`AgentService`). The request carries the authenticated user's Claims and Principal — the web node's machine certificate is never the user. If the backend is unreachable, `compute.available` is false; sessions and records are not treated as deleted.
+A ui-web node without local compute forwards the browser channel to `[ui-web].backend` through the peer-only streaming `ConsoleService.ConsoleForward` RPC. Only an allowlisted set of data/chat/approval routes can be forwarded; login, credentials and static assets cannot. The web node authenticates the user and checks cookie CSRF before forwarding claims. The backend independently checks target ownership. Records, conversation gates and pending prompts stay together on the backend, including when the web node has no memory function. Capability discovery reads the backend's teams gate; cached capability presence survives outages with availability false.
+
+`AgentService` remains the remote `turn.Runner` transport. Both RPC services reject operator certificates and unidentified callers: only node peers may assert a user. Remote resume transfers the exact action/resource approval once, consuming the local context grant and reconstructing its one-shot counterpart on the compute node.
 
 ### Web console
 
@@ -108,7 +117,7 @@ sequenceDiagram
   participant SPA as embedded SPA
   participant Server as gateway.Server
   participant Runner as turn.Runner
-  participant Compute as AgentService
+  participant Compute as Backend ConsoleService
 
   Browser->>Server: GET /
   alt console mounted
@@ -132,10 +141,12 @@ sequenceDiagram
       Server-->>SPA: 503
       SPA->>SPA: unavailable, not deleted
     else remote backend
-      Server->>Runner: Run (Claims + Principal)
-      Runner->>Compute: RunTurn
-      Compute-->>Runner: RunTurnResponse
-      Runner-->>SPA: SSE typing / interim / final
+      Server->>Compute: ConsoleForward (verified user claims)
+      Compute->>Compute: Authorize target and acquire conversation gate
+      Compute-->>Server: Stream typing / needs_confirmation / final
+      Server-->>SPA: SSE events
+      SPA->>Server: Approve prompt
+      Server->>Compute: Forward authenticated approval
     else
       Server->>Runner: Run
       Runner-->>SPA: SSE typing / interim / final
@@ -493,7 +504,7 @@ Caps are lifted for the remainder of the turn via `TurnBudget.Relax()` — seman
 
 ### What the continuation carries
 
-Conversation state: the transcript so far, the user's message, claims, system prompt, model, timezone, summary, recall, and the budget already spent.
+Conversation state: the transcript so far, the user's message, claims, bot ID, canonical principal, system prompt, model, timezone, summary, recall, and the budget already spent. Bot profiles are resolved again on resume so current restrictions still apply.
 
 Two deliberate omissions:
 
@@ -848,9 +859,9 @@ Two halves, and only both make it true:
 
 - **Client authentication only.** Nothing can serve with it, so it
   cannot answer connections as a node.
-- **`OU=operator`, refused on the raft transport.** ClientAuth alone
+- **`OU=operator`, refused on peer-only services.** ClientAuth alone
   would not stop it — a peer dials as a client too — so the server
-  refuses that OU on `/RaftTransport/`, on both the unary and the
+  refuses that OU on `/RaftTransport/`, `AgentService` and `ConsoleService`, on both the unary and the
   streaming interceptor. Raft's transport is streaming; a unary-only
   guard would cover nothing that matters.
 

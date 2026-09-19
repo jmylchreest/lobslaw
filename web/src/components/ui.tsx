@@ -90,6 +90,7 @@ export function when(ts?: string): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 0) return d.toLocaleString();
   if (s < 10) return "just now";
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;

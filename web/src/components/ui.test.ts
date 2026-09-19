@@ -10,6 +10,11 @@ function at(now: string) {
 }
 
 describe("when", () => {
+  it("does not label a future routine as just now", () => {
+    at("2026-09-17T12:00:00Z");
+    expect(when("2026-09-18T12:00:00Z")).not.toBe("just now");
+    expect(when("2026-09-18T12:00:00Z")).not.toContain("ago");
+  });
   it("answers the question a queue actually asks", () => {
     at("2026-09-17T12:00:00Z");
     expect(when("2026-09-17T11:59:57Z")).toBe("just now");

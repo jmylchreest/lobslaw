@@ -175,7 +175,11 @@ func newBotListHandler(reg BotRegistry) compute.BuiltinFunc {
 			return nil, 1, fmt.Errorf("bot_list: %w", err)
 		}
 		out := make([]map[string]any, 0, len(records))
+		owner, _ := callerScope(ctx, reg)
 		for _, rec := range records {
+			if !memory.MayModify(rec, owner) {
+				continue
+			}
 			entry := map[string]any{
 				"id":             rec.GetId(),
 				"display_name":   rec.GetDisplayName(),
@@ -209,6 +213,9 @@ func newBotCreateHandler(reg BotRegistry) compute.BuiltinFunc {
 			return nil, 2, errors.New("bot_create: instructions are required; a bot with no brief is the assistant with a different name")
 		}
 		owner, group := callerScope(ctx, reg)
+		if owner == "" {
+			return nil, 1, errors.New("bot_create: an owned caller is required")
+		}
 		rec := &lobslawv1.BotRecord{
 			Id:           id,
 			DisplayName:  strings.TrimSpace(args["display_name"]),
@@ -248,6 +255,10 @@ func newBotUpdateHandler(reg BotRegistry) compute.BuiltinFunc {
 		current, err := reg.Get(ctx, id)
 		if err != nil {
 			return nil, 1, fmt.Errorf("bot_update: %w", err)
+		}
+		owner, _ := callerScope(ctx, reg)
+		if !memory.MayModify(current, owner) {
+			return nil, 1, errors.New("bot_update: that bot is not owned by the caller")
 		}
 		// Read-modify-write on the record we just read, so an omitted
 		// field is left alone rather than cleared. The revision check
@@ -343,6 +354,10 @@ func newAskBotHandler(runner AskRunner, bots compute.BotResolver, inbox InboxSer
 
 		child, cancel := context.WithTimeout(ctx, askBotTimeout)
 		defer cancel()
+		childBudget, err := budget.Child(profile.Caps)
+		if err != nil {
+			return nil, 1, fmt.Errorf("ask_bot budget: %w", err)
+		}
 		// The child carries the CALLER's claims, so its tool calls are
 		// evaluated with the authority of whoever asked. Without them
 		// every child turn evaluated as "no claims" and its tools were
@@ -350,7 +365,7 @@ func newAskBotHandler(runner AskRunner, bots compute.BotResolver, inbox InboxSer
 		resp, err := runner.RunToolCallLoop(child, compute.ProcessMessageRequest{
 			Bot:       profile.Without("ask_bot"),
 			BotID:     target,
-			Budget:    budget,
+			Budget:    childBudget,
 			Claims:    claimsFromTurn(identity),
 			Principal: botPrincipal(target),
 			TurnID:    identity.TurnID,
@@ -362,6 +377,9 @@ func newAskBotHandler(runner AskRunner, bots compute.BotResolver, inbox InboxSer
 		})
 		if err != nil {
 			return nil, 1, fmt.Errorf("ask_bot: %q could not answer: %w", target, err)
+		}
+		if resp.NeedsConfirmation {
+			return nil, 1, fmt.Errorf("ask_bot: %q is blocked awaiting confirmation; ask it directly to approve the operation", target)
 		}
 
 		// Never hand back an empty answer. A caller cannot tell "" from
@@ -394,32 +412,23 @@ func journalAsk(ctx context.Context, inbox InboxService, from, to, question, ans
 	if inbox == nil {
 		return
 	}
-	asked, err := inbox.Post(ctx, &lobslawv1.BotInboxItem{
+	asked, err := inbox.Journal(ctx, &lobslawv1.BotInboxItem{
 		Recipient: to,
 		Sender:    "bot:" + from,
 		Kind:      lobslawv1.InboxKind_INBOX_KIND_QUESTION,
 		Body:      question,
+		Result:    answer,
 	})
 	if err != nil {
 		return
 	}
-	_, _ = inbox.Resolve(ctx, to, asked.GetId(), memory.InboxOutcome{
-		Result: answer, MaxAttempts: 1,
-	})
-	answered, err := inbox.Post(ctx, &lobslawv1.BotInboxItem{
+	_, _ = inbox.Journal(ctx, &lobslawv1.BotInboxItem{
 		Recipient:     from,
 		Sender:        "bot:" + to,
 		Kind:          lobslawv1.InboxKind_INBOX_KIND_ANSWER,
 		Body:          answer,
+		Result:        "delivered inline as the answer to ask_bot",
 		CorrelationId: asked.GetId(),
-	})
-	if err != nil {
-		return
-	}
-	// Already answered — the caller has it. Resolved immediately so the
-	// drain does not run a turn telling the bot something it just read.
-	_, _ = inbox.Resolve(ctx, from, answered.GetId(), memory.InboxOutcome{
-		Result: "delivered inline as the answer to ask_bot", MaxAttempts: 1,
 	})
 }
 

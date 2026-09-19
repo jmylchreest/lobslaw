@@ -130,6 +130,29 @@ func (s *InboxService) Post(ctx context.Context, item *lobslawv1.BotInboxItem) (
 	return item, nil
 }
 
+// Journal records an already delivered exchange in one Raft write. It never
+// exposes an intermediate PENDING state to the work drain.
+func (s *InboxService) Journal(ctx context.Context, item *lobslawv1.BotInboxItem) (*lobslawv1.BotInboxItem, error) {
+	if item == nil || s.raft == nil {
+		return nil, errors.New("inbox: item and raft required")
+	}
+	item = proto.Clone(item).(*lobslawv1.BotInboxItem)
+	if err := validateInboxItem(item); err != nil {
+		return nil, err
+	}
+	item.Id = ids.New()
+	item.Status = lobslawv1.InboxStatus_INBOX_STATUS_DONE
+	item.CreatedAt = timestamppb.Now()
+	item.CompletedAt = item.CreatedAt
+	item.Revision = 1
+	item.ClaimedBy, item.ClaimExpiresAt, item.Attempts = "", nil, 0
+	item.Result = truncate(item.Result, MaxInboxResult)
+	if err := s.apply(ctx, lobslawv1.LogOp_LOG_OP_PUT, item, nil, ""); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
 // Get returns one item by recipient and id.
 func (s *InboxService) Get(_ context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error) {
 	if s.store == nil {
@@ -267,6 +290,13 @@ func (s *InboxService) Resolve(ctx context.Context, recipient, id string, outcom
 	if err != nil {
 		return nil, err
 	}
+	if outcome.ClaimRevision != 0 {
+		if item.GetRevision() != outcome.ClaimRevision || item.GetClaimedBy() != outcome.Claimer || item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED {
+			return nil, ErrClaimConflict
+		}
+	} else if item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_PENDING {
+		return nil, ErrClaimConflict
+	}
 	next := proto.Clone(item).(*lobslawv1.BotInboxItem)
 	next.Result = truncate(outcome.Result, MaxInboxResult)
 	next.SessionId = outcome.SessionID
@@ -301,8 +331,10 @@ func (s *InboxService) Resolve(ctx context.Context, recipient, id string, outcom
 
 // InboxOutcome is what happened when an item was worked.
 type InboxOutcome struct {
-	Result    string
-	SessionID string
+	ClaimRevision uint64
+	Claimer       string
+	Result        string
+	SessionID     string
 	// ToolsUsed is the distinct tools the turn invoked. Recorded
 	// because Result is the bot's account of its work and this is the
 	// record of it — the two are not always the same, and only one of

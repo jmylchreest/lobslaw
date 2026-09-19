@@ -57,8 +57,13 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the group registry")
 		return
 	}
-	if _, err := s.authenticateRequest(r); err != nil {
+	authn, err := s.authenticateRequest(r)
+	if err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
 		return
 	}
 	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v1/groups"), "/")
@@ -112,7 +117,9 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]groupJSON, 0, len(groups))
 	for _, g := range groups {
-		out = append(out, groupToJSON(g, counts[g.GetId()], s.principalOf(r)))
+		if groupMayModify(g, s.principalOf(r)) {
+			out = append(out, groupToJSON(g, counts[g.GetId()], s.principalOf(r)))
+		}
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"groups": out})
 }
@@ -121,6 +128,10 @@ func (s *Server) getGroup(w http.ResponseWriter, r *http.Request, id string) {
 	rec, err := s.cfg.Groups.Get(r.Context(), id)
 	if err != nil {
 		s.groupErr(w, err)
+		return
+	}
+	if !groupMayModify(rec, s.principalOf(r)) {
+		s.jsonErr(w, http.StatusForbidden, "that team belongs to somebody else")
 		return
 	}
 	respondJSON(w, http.StatusOK, groupToJSON(rec, 0, s.principalOf(r)))

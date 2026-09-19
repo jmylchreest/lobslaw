@@ -121,6 +121,28 @@ func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	records, err := s.cfg.Transcripts.ListFiltered(r.Context(), "", "")
+	if err != nil {
+		s.jsonErr(w, http.StatusInternalServerError, "cannot authorize transcript")
+		return
+	}
+	allowed := false
+	for _, rec := range records {
+		if rec.GetId() != id {
+			continue
+		}
+		owner := canonicalUserPrincipal(rec.GetUserId())
+		allowed = owner != "" && owner == s.principalOf(r)
+		if rec.GetChannel() == botChannel {
+			botID, _, _ := strings.Cut(rec.GetChannelId(), ".")
+			allowed = s.mayModifyBot(r, botID)
+		}
+		break
+	}
+	if !allowed {
+		s.jsonErr(w, http.StatusForbidden, "that transcript is not owned by this account")
+		return
+	}
 	messages, err := s.cfg.Transcripts.LoadMessages(r.Context(), id)
 	if err != nil {
 		s.jsonErr(w, http.StatusNotFound, err.Error())

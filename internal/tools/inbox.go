@@ -18,6 +18,7 @@ import (
 // InboxService is the slice of memory.InboxService the builtins use.
 // An interface so tests substitute a recorder without raft.
 type InboxService interface {
+	Journal(ctx context.Context, item *lobslawv1.BotInboxItem) (*lobslawv1.BotInboxItem, error)
 	Post(ctx context.Context, item *lobslawv1.BotInboxItem) (*lobslawv1.BotInboxItem, error)
 	Get(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
 	List(ctx context.Context, recipient string, f memory.InboxFilter) ([]*lobslawv1.BotInboxItem, error)
@@ -305,8 +306,12 @@ func checkMayMessage(ctx context.Context, bots compute.BotResolver, me, target s
 	if !profile.MayMessageBot(target) {
 		return fmt.Errorf("%q is not in your may_message list, so you cannot reach it; ask the coordinator to grant the edge", target)
 	}
-	if _, err := bots.ResolveBot(ctx, target); err != nil {
+	recipient, err := bots.ResolveBot(ctx, target)
+	if err != nil {
 		return fmt.Errorf("resolve %q: %w", target, err)
+	}
+	if profile.Owner == "" || profile.Owner != recipient.Owner {
+		return errors.New("inter-bot messaging requires the same human owner")
 	}
 	return nil
 }

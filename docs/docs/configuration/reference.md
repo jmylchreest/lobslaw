@@ -810,7 +810,7 @@ enabled = true
 backend  = "compute-1:7443"   # cluster gRPC of a compute node; required when compute is off
 ```
 
-`backend` is the `host:port` peers dial for `AgentService`. A ui-web node without FunctionCompute fails at boot if this is empty.
+`backend` is the cluster gRPC `host:port` serving `AgentService` and `ConsoleService`. A ui-web node without FunctionCompute fails at boot if this is empty. The browser's data routes, chat streams and approvals are forwarded to the backend; its `compute-teams` gate controls the remote team console. The web node needs neither local compute nor a local team registry.
 
 ## Other sections
 

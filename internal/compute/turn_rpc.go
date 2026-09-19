@@ -63,6 +63,7 @@ func (s *TurnServer) ResumeTurn(ctx context.Context, req *lobslawv1.ResumeTurnRe
 	for _, m := range req.Prior {
 		prior = append(prior, messageFromProto(m))
 	}
+	ctx = turn.WithTurnApproval(ctx, req.ApprovalAction, req.ApprovalResource)
 	resp, err := runner.Resume(ctx, turnReq, prior)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "resume turn: %v", err)

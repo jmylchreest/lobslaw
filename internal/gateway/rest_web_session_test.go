@@ -223,16 +223,16 @@ func jwtlibRoles(roles ...string) jwtlib.MapClaims {
 	return jwtlib.MapClaims{"roles": roles}
 }
 
-func TestLoopbackLoginSetsCookie(t *testing.T) {
+func TestLoopbackLoginRequiresCredentials(t *testing.T) {
 	t.Parallel()
 	srv := startWebREST(t, &captureRunner{}, nil)
 	resp := doJSON(t, http.MethodPost, webBaseURL(srv)+"/v1/session", `{"loopback":true}`, nil)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusUnauthorized {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("loopback login %d body=%s", resp.StatusCode, body)
 	}
-	if loginCookie(resp) == nil {
-		t.Fatal("loopback login did not Set-Cookie")
+	if loginCookie(resp) != nil {
+		t.Fatal("loopback login issued a cookie without credentials")
 	}
 }
 
@@ -241,7 +241,7 @@ func TestSignInCodeRoundTrip(t *testing.T) {
 	srv := startWebREST(t, &captureRunner{}, nil)
 	base := webBaseURL(srv)
 
-	mint := doJSON(t, http.MethodPost, base+"/v1/session/code", `{}`, nil)
+	mint := doJSON(t, http.MethodPost, base+"/v1/session/code", `{}`, http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}})
 	if mint.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(mint.Body)
 		t.Fatalf("mint code %d body=%s", mint.StatusCode, body)

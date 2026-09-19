@@ -51,7 +51,9 @@ flowchart TB
   Channel[Telegram / Slack / REST] -->|BotID on turn.Request| Agent
   Channel -->|binding or this user's coordinator| Groups
   Tools --> Inbox
-  Drain --> Agent
+  Drain -->|mint recipient principal and scheduler claims| Agent
+  Agent -->|original claim revision and holder| Completion[Raft completion]
+  Completion -->|one transaction| Receipt[terminal result in sender inbox]
   Agent -->|WrapContext untrusted| Peer[peer bot text]
 ```
 
@@ -59,14 +61,9 @@ Empty group owner is nobody, never public. Channel routing uses an
 explicit binding or **that user's** coordinator. A missing binding
 does not fall into another person's team.
 
-`ask_bot` draws on the caller's budget, strips itself from the child
-registry (`Without("ask_bot")` — empty allowlist does not re-grant
-it), and fails closed if the child would need confirmation. Peer text
-is wrapped with `promptgen.WrapContext`. `TurnBudget.Tighten` runs on
-both `Run` and `Resume`.
+`ask_bot` requires both a declared edge and the same nonempty human owner at the recipient. It creates a child-local budget that also charges every expense to the parent, without changing the parent's caps. `Without("ask_bot")` is enforced at invocation as well as advertisement; an empty allowlist does not re-grant it. A child requiring confirmation returns a blocked-operation error and is not journalled as completed. Peer text is wrapped with `promptgen.WrapContext`. `TurnBudget.Tighten` runs on both `Run` and `Resume`.
 
-`bot_*` / `ask_bot` / `tell_bot` / `inbox_*` join `noSeedTools`
-(default-deny like `soul_*`). Restore mode pauses the drain.
+Team tools receive the curated builtin default grants; operators can narrow them with policy. Their handlers independently enforce record ownership. Restore mode pauses the drain. Inbox execution is bounded below the claim lease, and completion must supply the original claim revision and holder. A stale worker cannot overwrite a successor. Terminal completion and the correlated sender receipt commit atomically; read results with `inbox_list` status `all`. Synchronous exchange journals are inserted directly as terminal records, never runnable intermediate work.
 
 ---
 
@@ -91,12 +88,11 @@ flowchart LR
   Owner -->|"MayModify"| Human["user:alice"]
   Brief --> Prompt[system prompt]
   Tools -->|"registry filter"| Model[tools the model sees]
+  Tools -->|"invocation check"| Dispatch[tool dispatcher]
   BotP --> Policy[policy engine]
 ```
 
-The tools list is a **registry filter**: an absent tool is unexpressible
-rather than merely denied. Policy is still the thing that says no.
-Empty tools means the node default set, not "no tools".
+The tools list filters the advertised registry and is checked again before builtin or skill invocation, including pending calls on resume. Policy remains an additional authorization gate. Empty tools means the node default set, not "no tools". A named bot without a configured resolver fails closed instead of running as a generic agent.
 
 ---
 
@@ -173,7 +169,7 @@ never creates a bot is unchanged.
 Writes go through Raft (`LOG_OP_CLAIM`) with the same revision CAS as
 soul tune. `BucketBots`, `BucketGroups` and `BucketBotInbox` are in
 `archiveKinds`; credentials and browser sessions are not. Restore mode
-pauses the inbox drain.
+pauses the inbox drain. Inbox archive identities include both recipient and item ID. Imported pending/claimed inbox work is cancelled with an import-pause reason and requires an explicit retry; old leases are never resumed automatically.
 
 Deleting a bot does not cascade the records it owned. Recreating the
 same id restores the principal.

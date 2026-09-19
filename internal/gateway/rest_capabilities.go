@@ -24,7 +24,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, err := s.authenticateRequest(r); err != nil {
+	authn, err := s.authenticateRequest(r)
+	if err != nil {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -32,6 +33,30 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	computeOn := s.runner != nil
 	teamsOn := s.cfg.Bots != nil
 	uiOn := s.consoleEnabled()
+	if s.cfg.RemoteConsole != nil {
+		out, err := s.remoteCapabilities(r.Context(), authn.Claims)
+		s.mu.Lock()
+		if err != nil {
+			if s.remoteCaps == nil {
+				s.mu.Unlock()
+				s.jsonErr(w, http.StatusServiceUnavailable, "console backend unavailable; capability discovery has not completed")
+				return
+			}
+			if s.remoteCaps != nil {
+				out = *s.remoteCaps
+			}
+			out.Compute.Enabled, out.Compute.Configured = true, true
+			out.Compute.Available, out.ComputeTeams.Available = false, false
+		} else {
+			cached := out
+			s.remoteCaps = &cached
+		}
+		s.mu.Unlock()
+		out.UIWeb = capabilityFlags{Enabled: uiOn, Authorised: uiOn, Configured: uiOn, Available: uiOn}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+		return
+	}
 	out := capabilitiesResponse{
 		Compute: capabilityFlags{
 			Enabled:    computeOn,

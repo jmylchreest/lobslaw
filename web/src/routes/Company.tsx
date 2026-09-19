@@ -26,7 +26,9 @@ export function Company({ group, onRenamed }: { group?: Group; onRenamed: () => 
   if (loading && !bots) return <Spinner />;
   if (!bots) return null;
 
-  const items = feed ?? [];
+  const mine = group ? bots.filter((b) => b.group_id === group.id) : bots;
+  const memberIds = new Set(mine.map((b) => b.id));
+  const items = (feed ?? []).filter((item) => memberIds.has(item.recipient));
   const byBot = new Map<string, InboxItem[]>();
   for (const i of items) byBot.set(i.recipient, [...(byBot.get(i.recipient) ?? []), i]);
 
@@ -37,7 +39,6 @@ export function Company({ group, onRenamed }: { group?: Group; onRenamed: () => 
   // Only this team. A bot belongs to exactly one, and the desk is a
   // view of one team at a time — showing every bot would put the
   // switcher's whole purpose back in the bin.
-  const mine = group ? bots.filter((b) => b.group_id === group.id) : bots;
   const lead = mine.find((b) => b.is_coordinator);
   const staff = mine.filter((b) => !b.is_coordinator);
 

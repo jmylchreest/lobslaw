@@ -18,7 +18,8 @@ import (
 )
 
 type recordingRunner struct {
-	last turn.Request
+	last     turn.Request
+	approved bool
 }
 
 func (r *recordingRunner) Run(_ context.Context, req turn.Request) (*turn.Response, error) {
@@ -26,9 +27,30 @@ func (r *recordingRunner) Run(_ context.Context, req turn.Request) (*turn.Respon
 	return &turn.Response{Reply: "hello " + req.Claims.UserID}, nil
 }
 
-func (r *recordingRunner) Resume(_ context.Context, req turn.Request, _ []turn.Message) (*turn.Response, error) {
+func (r *recordingRunner) Resume(ctx context.Context, req turn.Request, _ []turn.Message) (*turn.Response, error) {
 	r.last = req
+	r.approved = turn.Approved(ctx, "tool:exec", "read_file") && !turn.Approved(ctx, "tool:exec", "read_file")
 	return &turn.Response{Reply: "resumed " + req.Claims.UserID}, nil
+}
+
+func TestRemoteResumeTransfersApprovalOnce(t *testing.T) {
+	t.Parallel()
+	rec := &recordingRunner{}
+	remote := &RemoteRunner{client: startTurnRPC(t, rec)}
+	ctx := turn.WithTurnApproval(context.Background(), "tool:exec", "read_file")
+	req := turn.Request{Claims: &types.Claims{UserID: "alice"}}
+	if _, err := remote.Resume(ctx, req, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.approved || turn.ApprovalPending(ctx) {
+		t.Fatal("approval was not transferred exactly once")
+	}
+	if _, err := remote.Resume(ctx, req, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rec.approved {
+		t.Fatal("approval replayed across RPCs")
+	}
 }
 
 func startTurnRPC(t *testing.T, runner turn.Runner) lobslawv1.AgentServiceClient {

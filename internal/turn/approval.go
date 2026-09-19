@@ -63,6 +63,16 @@ func ApprovalPending(ctx context.Context) bool {
 	return ok && a.action != "" && !a.used.Load()
 }
 
+// TakeApproval transfers an unspent approval to an authenticated remote runner.
+// Consuming here prevents a second RPC from reusing the same context grant.
+func TakeApproval(ctx context.Context) (action, resource string) {
+	a, ok := ctx.Value(turnApprovalKey{}).(*turnApproval)
+	if !ok || a.action == "" || !a.used.CompareAndSwap(false, true) {
+		return "", ""
+	}
+	return a.action, a.resource
+}
+
 // Approved reports whether this turn already answered for exactly
 // this operation. The match is one-shot: a second call sharing this
 // resource is asked about rather than waved through.

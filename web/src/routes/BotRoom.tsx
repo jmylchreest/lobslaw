@@ -75,6 +75,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   const [ask, setAsk] = useState<{ id: string; reason: string; action?: string; resource?: string } | null>(null);
   const [settings, setSettings] = useState(false);
   const end = useRef<HTMLDivElement>(null);
+  const activeStream = useRef<AbortController | null>(null);
 
   // A new bot is a new room. Carrying the spoken lines across would
   // show a conversation the bot you just opened has never had.
@@ -85,13 +86,14 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   // been thrown away.
   useEffect(() => {
     setSaid([]); setSendErr(null); setSettings(false); setPartial(""); setAsk(null);
+    setBusy(false); setWorking(false);
     let live = true;
     // The console files a bot's own conversation under bot:<id>, the
     // same address the turn runner writes to.
     const id = `bot:${botId}`;
     Promise.all([api.transcript(id), api.botSessions(botId)])
       .then(([msgs, sessions]) => {
-        if (!live) return;
+        if (!live || activeStream.current) return;
         // Stored messages carry a sequence number and no timestamp, so
         // they cannot be placed on the same clock as queue items
         // without one. Anchoring to when the session was last written
@@ -109,7 +111,11 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
       // A bot nobody has spoken to yet has no transcript, and a 404
       // here is that — not a failure worth showing.
       .catch(() => {});
-    return () => { live = false; };
+    return () => {
+      live = false;
+      activeStream.current?.abort();
+      activeStream.current = null;
+    };
   }, [botId]);
 
   // The queue moves without you. Polling keeps the thread honest
@@ -132,7 +138,9 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
 
   async function send() {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || busy || activeStream.current) return;
+    const controller = new AbortController();
+    activeStream.current = controller;
     setNotice("");
     setSaid((p) => [...p, { kind: "said", from: "me", text, at: Date.now() }]);
     setDraft("");
@@ -144,6 +152,8 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
     setBusy(true); setWorking(true); setSendErr(null);
     try {
       await streamBotChat(botId, text, (event, data) => {
+        if (activeStream.current !== controller) return;
+        if (event === "accepted") setNotice(String(data.message ?? "Message accepted by the active turn."));
         if (event === "working") setWorking(true);
         if (event === "delta") {
           setWorking(false);
@@ -174,10 +184,16 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           setNotice("The turn failed.");
           setSendErr(new Error(String(data.message ?? "the turn failed")));
         }
-      });
-      reloadWork();
-    } catch (e) { setSendErr(e as Error); }
-    finally { setBusy(false); setWorking(false); setPartial(""); }
+      }, controller.signal);
+      if (activeStream.current === controller) reloadWork();
+    } catch (e) {
+      if (activeStream.current === controller && !controller.signal.aborted) setSendErr(e as Error);
+    } finally {
+      if (activeStream.current === controller) {
+        activeStream.current = null;
+        setBusy(false); setWorking(false); setPartial(""); setAsk(null);
+      }
+    }
   }
 
   if (error) return <div className="wrap"><Err error={error} /></div>;
@@ -303,7 +319,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
  * can now: the turn is held open on the stream while you decide, so
  * answering here is what releases it.
  */
-function Approval({ ask, onAnswered }: {
+export function Approval({ ask, onAnswered }: {
   ask: { id: string; reason: string; action?: string; resource?: string };
   onAnswered: () => void;
 }) {
@@ -509,15 +525,19 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  async function toggle() {
-    const next = !open; setOpen(next);
-    if (next && !full) {
-      try { setFull(await api.readItem(botId, item.id)); } catch (e) { setError(e as Error); }
-    }
-  }
+  useEffect(() => {
+    let live = true;
+    setFull(null);
+    if (open) api.readItem(botId, item.id).then((value) => {
+      if (live) setFull(value);
+    }).catch((e) => { if (live) setError(e as Error); });
+    return () => { live = false; };
+  }, [open, botId, item.id, item.status, item.attempts, item.completed_at]);
+
+  function toggle() { setOpen((value) => !value); }
   async function act(action: "retry" | "cancel") {
     setBusy(true); setError(null);
-    try { await api.actOnItem(botId, item.id, action); onChanged(); }
+    try { setFull(await api.actOnItem(botId, item.id, action)); onChanged(); }
     catch (e) { setError(e as Error); } finally { setBusy(false); }
   }
 
@@ -737,10 +757,10 @@ function Settings({ bot, onSaved }: { bot: Bot; onSaved: () => void }) {
   async function save(patch?: Partial<Bot>) {
     setBusy(true); setError(null);
     try {
-      await api.updateBot(bot.id, patch ?? {
+      await api.updateBot(bot.id, { revision: bot.revision, ...(patch ?? {
         display_name: f.display_name, description: f.description, instructions: f.instructions,
         tools, may_message: edges,
-      });
+      }) });
       onSaved();
     } catch (e) { setError(e as Error); } finally { setBusy(false); }
   }

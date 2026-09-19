@@ -1,7 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, isUnavailable } from "./api";
+import { ApiError, api, isUnavailable, streamBotChat } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("bot streams", () => {
+  it("reports folded acceptance rather than a failed turn", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "covered by active turn" }), { status: 202 })));
+    const event = vi.fn();
+    await streamBotChat("worker", "second message", event);
+    expect(event).toHaveBeenCalledWith("accepted", { message: "covered by active turn" });
+  });
+
+  it("passes navigation cancellation to the outstanding request", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn().mockResolvedValue(new Response('event: reply\ndata: {"text":"done"}\n\n'));
+    vi.stubGlobal("fetch", fetch);
+    const event = vi.fn();
+    await streamBotChat("worker", "hello", event, controller.signal);
+    expect(fetch).toHaveBeenCalledWith("/v1/bots/worker/messages", expect.objectContaining({ signal: controller.signal }));
+    expect(event).toHaveBeenCalledWith("reply", { text: "done" });
+  });
+});
 
 function respond(status: number, body: string, ok = status < 400) {
   vi.stubGlobal(

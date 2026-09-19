@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../api";
+import { api, type Group } from "../api";
 import { Page } from "../App";
 import { Err } from "../components/ui";
 import { Mascot } from "../components/Mascot";
 import { botVars } from "../theme";
 
-export function NewBot({ onCreated }: { onCreated: () => void }) {
+export function NewBot({ group, onCreated }: { group?: Group; onCreated: () => void }) {
   const nav = useNavigate();
   const [f, setF] = useState({ id: "", display_name: "", description: "", instructions: "" });
   const [busy, setBusy] = useState(false);
@@ -16,6 +16,7 @@ export function NewBot({ onCreated }: { onCreated: () => void }) {
     setBusy(true); setError(null);
     try {
       const bot = await api.createBot({
+        group_id: group?.id,
         id: f.id.trim(), display_name: f.display_name.trim() || f.id.trim(),
         description: f.description.trim(), instructions: f.instructions.trim(),
       });
@@ -25,7 +26,7 @@ export function NewBot({ onCreated }: { onCreated: () => void }) {
   }
 
   return (
-    <Page title="New bot" sub="A specialist with its own memory, tools and queue.">
+    <Page title="New bot" sub={group ? `A specialist for ${group.name}.` : "A specialist with its own memory, tools and queue."}>
       <div className="card pad col gap-lg" style={{ maxWidth: 620, ...botVars(f.id || "new") }}>
         {/* The avatar updates as they type. It is the fastest way to
             convey that a bot is an identity rather than a row. */}

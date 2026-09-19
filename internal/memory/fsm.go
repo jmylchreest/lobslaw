@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/hashicorp/raft"
+	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -584,7 +586,53 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("marshal %s payload: %w", bucket, err)
 	}
+	if item, ok := newPayload.(*lobslawv1.BotInboxItem); ok &&
+		(item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_DONE || item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_FAILED) &&
+		item.GetKind() != lobslawv1.InboxKind_INBOX_KIND_ANSWER && strings.HasPrefix(item.GetSender(), "bot:") {
+		return f.putInboxResult(entry.Id, bytes, item)
+	}
 	return f.store.Put(bucket, entry.Id, bytes)
+}
+
+// Completion and its return receipt share the original claim's Raft transaction.
+// The receipt is terminal: delivering a result must not start another task loop.
+func (f *FSM) putInboxResult(key string, raw []byte, item *lobslawv1.BotInboxItem) error {
+	body := item.GetResult()
+	if body == "" {
+		body = item.GetError()
+	}
+	if body == "" {
+		body = "completed without a reply"
+	}
+	result := &lobslawv1.BotInboxItem{
+		Id: item.GetId() + "-result", Recipient: strings.TrimPrefix(item.GetSender(), "bot:"),
+		Sender: "bot:" + item.GetRecipient(), Kind: lobslawv1.InboxKind_INBOX_KIND_ANSWER,
+		Subject: item.GetSubject(), Body: body, Result: body, Error: item.GetError(),
+		CorrelationId: item.GetId(), Status: item.GetStatus(),
+		CreatedAt: item.GetCompletedAt(), CompletedAt: item.GetCompletedAt(), Revision: 1,
+	}
+	resultRaw, err := proto.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal inbox result: %w", err)
+	}
+	sealed, err := f.store.cipher.Seal(raw)
+	if err != nil {
+		return fmt.Errorf("seal inbox completion: %w", err)
+	}
+	resultSealed, err := f.store.cipher.Seal(resultRaw)
+	if err != nil {
+		return fmt.Errorf("seal inbox result: %w", err)
+	}
+	return f.store.loadDB().Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(BucketBotInbox))
+		if bucket == nil {
+			return errors.New("inbox bucket missing")
+		}
+		if err := bucket.Put([]byte(key), sealed); err != nil {
+			return err
+		}
+		return bucket.Put([]byte(inboxKey(result.GetRecipient(), result.GetId())), resultSealed)
+	})
 }
 
 // claimable is the shape shared by the records that support CLAIM.

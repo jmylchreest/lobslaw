@@ -208,6 +208,7 @@ func TestFailingItemEndsVisiblyFailed(t *testing.T) {
 			break
 		}
 		if _, err := svc.Resolve(ctx, "engineering", item.GetId(), InboxOutcome{
+			ClaimRevision: claimed.Revision, Claimer: claimed.ClaimedBy,
 			Err:         errors.New("the cluster is on fire"),
 			MaxAttempts: maxAttempts,
 		}); err != nil {
@@ -250,10 +251,12 @@ func TestTransientFailureReturnsToPending(t *testing.T) {
 	ctx := context.Background()
 	item := post(t, svc, "engineering", "flaky", 0)
 
-	if _, err := svc.Claim(ctx, "engineering", "node-1"); err != nil {
+	claimed, err := svc.Claim(ctx, "engineering", "node-1")
+	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	next, err := svc.Resolve(ctx, "engineering", item.GetId(), InboxOutcome{
+		ClaimRevision: claimed.Revision, Claimer: claimed.ClaimedBy,
 		Err: errors.New("provider blip"), MaxAttempts: 3,
 	})
 	if err != nil {
@@ -277,10 +280,12 @@ func TestSuccessRecordsTheResult(t *testing.T) {
 	ctx := context.Background()
 	item := post(t, svc, "engineering", "deploy", 0)
 
-	if _, err := svc.Claim(ctx, "engineering", "node-1"); err != nil {
+	claimed, err := svc.Claim(ctx, "engineering", "node-1")
+	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	done, err := svc.Resolve(ctx, "engineering", item.GetId(), InboxOutcome{
+		ClaimRevision: claimed.Revision, Claimer: claimed.ClaimedBy,
 		Result: "deployed at 14:02", SessionID: "sess-1", MaxAttempts: 3,
 	})
 	if err != nil {
@@ -297,6 +302,10 @@ func TestSuccessRecordsTheResult(t *testing.T) {
 	}
 	if done.GetCompletedAt() == nil {
 		t.Error("completed_at was not stamped")
+	}
+	results, err := svc.List(ctx, "coordinator", InboxFilter{})
+	if err != nil || len(results) != 1 || results[0].GetCorrelationId() != item.Id || results[0].GetResult() != done.GetResult() {
+		t.Fatalf("sender did not receive correlated result: %v %v", results, err)
 	}
 }
 
@@ -337,10 +346,11 @@ func TestTerminalItemsDoNotBlockTheQueue(t *testing.T) {
 	ctx := context.Background()
 	first := post(t, svc, "engineering", "one", 0)
 
-	if _, err := svc.Claim(ctx, "engineering", "node-1"); err != nil {
+	claimed, err := svc.Claim(ctx, "engineering", "node-1")
+	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	if _, err := svc.Resolve(ctx, "engineering", first.GetId(), InboxOutcome{Result: "ok", MaxAttempts: 3}); err != nil {
+	if _, err := svc.Resolve(ctx, "engineering", first.GetId(), InboxOutcome{Result: "ok", MaxAttempts: 3, ClaimRevision: claimed.Revision, Claimer: claimed.ClaimedBy}); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	for i := range 2 {
@@ -434,10 +444,11 @@ func TestPruneRemovesFinishedItemsAndNothingElse(t *testing.T) {
 
 	done := post(t, svc, "engineering", "finished", 0)
 	pending := post(t, svc, "engineering", "still waiting", 0)
-	if _, err := svc.Claim(ctx, "engineering", "node-1"); err != nil {
+	claimed, err := svc.Claim(ctx, "engineering", "node-1")
+	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	if _, err := svc.Resolve(ctx, "engineering", done.GetId(), InboxOutcome{Result: "ok", MaxAttempts: 3}); err != nil {
+	if _, err := svc.Resolve(ctx, "engineering", done.GetId(), InboxOutcome{Result: "ok", MaxAttempts: 3, ClaimRevision: claimed.Revision, Claimer: claimed.ClaimedBy}); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 
@@ -446,8 +457,8 @@ func TestPruneRemovesFinishedItemsAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PruneTerminal: %v", err)
 	}
-	if pruned != 1 {
-		t.Errorf("pruned %d, want 1", pruned)
+	if pruned != 2 {
+		t.Errorf("pruned %d, want completion and sender receipt", pruned)
 	}
 	if _, err := svc.Get(ctx, "engineering", pending.GetId()); err != nil {
 		t.Errorf("an unworked item was pruned: %v", err)

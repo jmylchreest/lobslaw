@@ -1307,7 +1307,7 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 	if err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
-	claims, botID, principal := schedulerIdentity(c.CreatedFor)
+	claims, botID, principal := schedulerIdentity(c.Owner)
 	req := compute.ProcessMessageRequest{
 		Message:   prompt,
 		Claims:    claims,

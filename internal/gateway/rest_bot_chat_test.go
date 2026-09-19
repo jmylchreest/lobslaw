@@ -18,7 +18,7 @@ func TestBotChatStreamsAReplyForTheRequestedBot(t *testing.T) {
 	t.Parallel()
 	runner := &captureRunner{}
 	srv := startWebREST(t, runner, func(c *RESTConfig) {
-		c.Bots = stubBots{rec: &lobslawv1.BotRecord{Id: "coordinator", Enabled: true}}
+		c.Bots = stubBots{rec: &lobslawv1.BotRecord{Id: "coordinator", Owner: "user:alice", Enabled: true}}
 	})
 	tok := mintJWTWith(t, "alice@idp", nil)
 
@@ -55,7 +55,7 @@ func TestBotChatStreamsAReplyForTheRequestedBot(t *testing.T) {
 func TestConsoleConfigAndBotInsights(t *testing.T) {
 	t.Parallel()
 	srv := startWebREST(t, &captureRunner{}, func(c *RESTConfig) {
-		c.Bots = stubBots{rec: &lobslawv1.BotRecord{Id: "coordinator", Enabled: true}}
+		c.Bots = stubBots{rec: &lobslawv1.BotRecord{Id: "coordinator", Owner: "user:alice", Enabled: true}}
 		c.Config = &ConfigView{NodeID: "node-1", Functions: []string{"compute"}}
 		c.Routines = fakeRoutines{}
 		c.Memory = fakeMemory{}
@@ -93,7 +93,7 @@ func (fakeMemory) RecordsForOwner(_ context.Context, _ string, _ int) ([]MemoryR
 type fakeTranscripts struct{}
 
 func (fakeTranscripts) ListFiltered(_ context.Context, _, _ string) ([]*lobslawv1.SessionRecord, error) {
-	return nil, nil
+	return []*lobslawv1.SessionRecord{{Id: "bot:coordinator", Channel: "bot", ChannelId: "coordinator", UserId: "alice"}}, nil
 }
 
 func (fakeTranscripts) LoadMessages(_ context.Context, _ string) ([]*lobslawv1.SessionMessage, error) {

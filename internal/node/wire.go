@@ -184,6 +184,7 @@ func nodeWireStages() []WireStage {
 		{Name: "review-fork", Gate: gateCompute, Wire: (*Node).wireReviewFork},
 		{Name: "auth", Gate: gateAuth, Wire: (*Node).wireAuthStage},
 		{Name: "gateway", Gate: gateGateway, Wire: (*Node).wireGatewayStage},
+		{Name: "console-backend", Gate: gateCompute, Wire: (*Node).wireConsoleBackend},
 		{Name: "discovery", Wire: (*Node).wireDiscoveryStage},
 		{Name: "broadcast", Gate: gateBroadcast, Wire: (*Node).wireBroadcastStage},
 	}
