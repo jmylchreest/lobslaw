@@ -171,7 +171,9 @@ Constructing a provider is not enough to know it works — a missing binary, a l
 
 ## Caching
 
-A resolved value is reused for `secrets.cache_ttl` (default 5 minutes). One boot resolves the same reference several times — the chat driver, the capability probe and doctor all read the same provider key — and on a CLI-backed vault each of those would otherwise be a separate process.
+A resolved value is reused for up to `secrets.cache_ttl` (default 5 minutes). One boot resolves the same reference several times — the chat driver, the capability probe and doctor all read the same provider key — and on a CLI-backed vault each of those would otherwise be a separate process.
+
+The cache holds at most 1,024 references. Expired entries are removed on lookup and by a cleanup timer that runs every minute (or every TTL when shorter), including while idle. At capacity, expired entries are removed first, then the entry nearest expiry is evicted if needed; a later request fetches it again. Cleanup stops scheduling once the cache is empty. This bounds entry count, not total bytes, and releases cached references without guaranteeing erasure of Go strings or copies already held by callers.
 
 ## What this is not
 
