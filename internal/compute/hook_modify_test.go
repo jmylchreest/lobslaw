@@ -24,7 +24,9 @@ func TestHookModificationReachesSubprocess(t *testing.T) {
 	if err := env.reg.Register(&types.ToolDef{Name: "echo", Path: tool, ArgvTemplate: []string{"{text}"}}); err != nil {
 		t.Fatal(err)
 	}
-	env.executor.hooks = hooks.NewDispatcher(map[types.HookEvent][]types.HookConfig{types.HookPreToolUse: {{Command: hook}}}, nil)
+	postPath := filepath.Join(dir, "post.json")
+	post := writeScript(t, dir, "post.sh", `cat > "`+postPath+`"`)
+	env.executor.hooks = hooks.NewDispatcher(map[types.HookEvent][]types.HookConfig{types.HookPreToolUse: {{Command: hook}}, types.HookPostToolUse: {{Command: post}}}, nil)
 	params := map[string]string{"text": "original"}
 	result, err := env.executor.Invoke(context.Background(), InvokeRequest{ToolName: "echo", Params: params, Claims: &types.Claims{Scope: "owner"}})
 	if err != nil {
@@ -36,6 +38,20 @@ func TestHookModificationReachesSubprocess(t *testing.T) {
 	if params["text"] != "original" {
 		t.Fatal("caller arguments changed")
 	}
+	raw, err := os.ReadFile(postPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var postInput struct {
+		Input map[string]string `json:"tool_input"`
+	}
+	if err := json.Unmarshal(raw, &postInput); err != nil {
+		t.Fatal(err)
+	}
+	if postInput.Input["text"] != "rewritten" {
+		t.Fatalf("post hook input: %v", postInput.Input)
+	}
+
 }
 
 func TestHookRewriteCannotBypassHardline(t *testing.T) {
@@ -253,5 +269,81 @@ func TestDeniedOriginalInputDoesNotRunHooks(t *testing.T) {
 				t.Fatalf("hook ran before denial: %v", err)
 			}
 		})
+	}
+}
+
+func TestEmptyHooksEvaluatePolicyOnce(t *testing.T) {
+	env := newTestEnv(t)
+	env.executor.hooks = hooks.NewDispatcher(nil, nil)
+	env.executor.policy = nil
+	calls := 0
+	env.executor.cfg.PolicyFallback = func(context.Context, *types.Claims, string, string) (policy.Decision, error) {
+		calls++
+		return policy.Decision{Effect: types.EffectAllow}, nil
+	}
+	if err := env.reg.Register(&types.ToolDef{Name: "echo", Path: BuiltinScheme + "echo"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = env.executor.Invoke(context.Background(), InvokeRequest{ToolName: "echo"})
+	if calls != 1 {
+		t.Fatalf("policy calls = %d", calls)
+	}
+}
+
+func TestPolicyApprovalDoesNotApproveSensitivePath(t *testing.T) {
+	env := newTestEnv(t)
+	if err := env.reg.Register(&types.ToolDef{Name: "echo", Path: BuiltinScheme + "echo"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := env.executor.Invoke(WithTurnApproval(context.Background(), "tool:exec", "echo"), InvokeRequest{ToolName: "echo", Params: map[string]string{"path": "/home/u/.ssh/config"}, Claims: &types.Claims{Scope: "owner"}})
+	var cr *ConfirmationRequest
+	if !errors.As(err, &cr) || cr.Action == "tool:exec" || cr.Grantable {
+		t.Fatalf("distinct one-shot path confirmation missing: %v", err)
+	}
+}
+
+func TestSensitivePathApprovalSurvivesAnotherGate(t *testing.T) {
+	a, e, _ := gatedAgent(t, &lobslawv1.PolicyRule{Id: "confirm-tool", Subject: "*", Action: "tool:exec", Resource: "memory_write", Effect: "require_confirmation", Priority: 20})
+	req, tc := confirmRequest(t), writeCall()
+	tc.Arguments = `{"path":"/home/u/.ssh/config","event":"test"}`
+	inv, first, err := a.runToolCall(context.Background(), req, tc)
+	if err != nil || first == nil {
+		t.Fatalf("policy: %v %v", first, err)
+	}
+	inv, second, err := a.runToolCallWithPrepared(WithTurnApproval(context.Background(), first.Action, first.Resource), req, tc, inv.prepared)
+	if err != nil || second == nil || second.Action != sensitivePathAction {
+		t.Fatalf("path: %v %v", second, err)
+	}
+	inv, third, err := a.runToolCallWithPrepared(WithTurnApproval(context.Background(), second.Action, second.Resource), req, tc, inv.prepared)
+	if err != nil || third == nil || third.Action != MemoryWriteAction {
+		t.Fatalf("write: %v %v", third, err)
+	}
+	ran := false
+	b := newTestDispatcher()
+	if err := b.Register("memory_write", func(context.Context, map[string]string) ([]byte, int, error) { ran = true; return nil, 0, nil }); err != nil {
+		t.Fatal(err)
+	}
+	e.SetBuiltins(b)
+	_, again, err := a.runToolCallWithPrepared(WithTurnApproval(context.Background(), third.Action, third.Resource), req, tc, inv.prepared)
+	if err != nil || again != nil || !ran {
+		t.Fatalf("resume: ran=%v pending=%v err=%v", ran, again, err)
+	}
+}
+
+func TestEmptyHooksPreserveLegacyApproval(t *testing.T) {
+	a, e, _ := gatedAgent(t)
+	a.cfg.Provider = NewMockProvider(MockResponse{Content: "done"})
+	e.hooks = hooks.NewDispatcher(nil, nil)
+	b := newTestDispatcher()
+	ran := false
+	if err := b.Register("memory_write", func(context.Context, map[string]string) ([]byte, int, error) { ran = true; return nil, 0, nil }); err != nil {
+		t.Fatal(err)
+	}
+	e.SetBuiltins(b)
+	req, tc := confirmRequest(t), writeCall()
+	msgs := []Message{{Role: "assistant", ToolCalls: []ToolCall{tc}}, {Role: "tool", ToolCallID: tc.ID, Content: ErrRequireConfirm.Error()}}
+	res, err := a.ResumeFromConfirmation(WithTurnApproval(context.Background(), MemoryWriteAction, "episodic"), req, msgs)
+	if err != nil || res.NeedsConfirmation || !ran {
+		t.Fatalf("legacy approval reset: ran=%v result=%+v err=%v", ran, res, err)
 	}
 }

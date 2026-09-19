@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"maps"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -47,6 +48,21 @@ func continuationToProto(c *Continuation) *lobslawv1.Continuation {
 	for _, m := range c.Messages {
 		out.Messages = append(out.Messages, messageToProto(m))
 	}
+
+	// Older readers ignore prepared metadata, so persist the effective arguments
+	// in the existing tool-call field too. New readers recover the original binding.
+	for _, m := range c.Messages {
+		if p := m.PreparedToolCall; p != nil {
+			raw, _ := json.Marshal(p.Params) // map[string]string is always JSON encodable.
+			for _, wire := range out.Messages {
+				for _, tc := range wire.ToolCalls {
+					if tc.Id == p.CallID && tc.Name == p.ToolName && tc.Arguments == p.OriginalArguments {
+						tc.Arguments = string(raw)
+					}
+				}
+			}
+		}
+	}
 	return out
 }
 
@@ -86,6 +102,20 @@ func continuationFromProto(p *lobslawv1.Continuation, caps compute.BudgetCaps) (
 	}
 	for _, m := range p.Messages {
 		out.Messages = append(out.Messages, messageFromProto(m))
+	}
+
+	for _, m := range out.Messages {
+		if p := m.PreparedToolCall; p != nil {
+			raw, _ := json.Marshal(p.Params)
+			for i := range out.Messages {
+				for j := range out.Messages[i].ToolCalls {
+					tc := &out.Messages[i].ToolCalls[j]
+					if tc.ID == p.CallID && tc.Name == p.ToolName && tc.Arguments == string(raw) {
+						tc.Arguments = p.OriginalArguments
+					}
+				}
+			}
+		}
 	}
 	return out, nil
 }

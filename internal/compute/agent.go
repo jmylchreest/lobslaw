@@ -875,7 +875,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			resumeCtx := ctx
 			// Old continuations have no prepared input. When hooks are configured,
 			// prepare afresh and ask again rather than apply an old answer to a rewrite.
-			if messages[idx].PreparedToolCall == nil && a.cfg.Executor != nil && a.cfg.Executor.hooks != nil && (a.cfg.Skills == nil || !a.cfg.Skills.Has(tc.Name)) {
+			if messages[idx].PreparedToolCall == nil && a.cfg.Executor != nil && a.cfg.Executor.hasPreHooks(tc.Name, req.TurnID, req.Claims) && (a.cfg.Skills == nil || !a.cfg.Skills.Has(tc.Name)) {
 				resumeCtx = context.WithValue(ctx, turnApprovalKey{}, &turnApproval{})
 			}
 			inv, confirmation, err := a.runToolCallWithPrepared(resumeCtx, req, tc, messages[idx].PreparedToolCall)

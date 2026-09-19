@@ -59,6 +59,11 @@ func NewDispatcher(hooks map[types.HookEvent][]types.HookConfig, logger *slog.Lo
 	return &Dispatcher{hooks: hooks, logger: logger}
 }
 
+// HasMatching reports whether this invocation has a configured hook.
+func (d *Dispatcher) HasMatching(event types.HookEvent, payload Payload) bool {
+	return d != nil && len(d.matchingHooks(event, payload)) != 0
+}
+
 // Dispatch runs every hook registered for event whose Match predicate
 // applies to payload. Hooks run sequentially in config order.
 //
@@ -90,6 +95,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event types.HookEvent, payloa
 				"event", event, "command", cfg.Command, "index", i, "err", err)
 			return nil, err
 		}
+		if resp != nil {
+			if err := normalizeResponse(event, resp); err != nil {
+				return nil, fmt.Errorf("hook %q response: %w", cfg.Command, err)
+			}
+		}
 		if resp != nil && resp.Decision == types.HookBlock {
 			d.logger.Info("hook blocked",
 				"event", event, "command", cfg.Command, "reason", resp.Reason)
@@ -101,6 +111,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event types.HookEvent, payloa
 				return nil, fmt.Errorf("hook %q response: %w", cfg.Command, err)
 			}
 			if input != nil {
+				d.logger.Debug("hook rewrote tool input", "event", event, "tool_name", payload["tool_name"], "index", i)
 				updated = input
 				payload["tool_input"] = input
 			}
@@ -212,4 +223,41 @@ func (d *Dispatcher) runHook(ctx context.Context, cfg types.HookConfig, payload 
 		return nil, errors.New("args_override is unsupported; use decision=modify with hookSpecificOutput.updatedInput")
 	}
 	return &resp, nil
+}
+
+// Normalize the standard permission envelope without allowing a hook to waive
+// policy. Unsupported permissions fail closed rather than silently executing.
+func normalizeResponse(event types.HookEvent, resp *Response) error {
+	for key, value := range resp.HookSpecificOutput {
+		switch key {
+		case "updatedInput":
+		case "hookEventName":
+			if value != string(event) {
+				return errors.New("hookEventName does not match dispatched event")
+			}
+		case "permissionDecision", "permissionDecisionReason":
+			if event != types.HookPreToolUse {
+				return errors.New("permissionDecision is only supported for PreToolUse")
+			}
+		default:
+			return fmt.Errorf("unsupported hookSpecificOutput key %q", key)
+		}
+	}
+	if value, ok := resp.HookSpecificOutput["permissionDecision"]; ok {
+		switch value {
+		case "allow": // Normal policy and confirmation gates still apply.
+		case "deny":
+			resp.Decision = types.HookBlock
+		default:
+			return fmt.Errorf("unsupported permissionDecision %q", value)
+		}
+	}
+	if reason, ok := resp.HookSpecificOutput["permissionDecisionReason"]; ok {
+		text, ok := reason.(string)
+		if !ok {
+			return errors.New("permissionDecisionReason must be a string")
+		}
+		resp.Reason = text
+	}
+	return nil
 }

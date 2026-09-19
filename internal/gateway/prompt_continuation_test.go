@@ -362,3 +362,28 @@ func TestPreparedInputSurvivesDurableContinuation(t *testing.T) {
 		t.Fatal("continuation aliases input")
 	}
 }
+
+func TestLegacyContinuationSeesEffectiveArguments(t *testing.T) {
+	cont := pausedTurn()
+	original := cont.Messages[1].ToolCalls[0].Arguments
+	cont.Messages[2].PreparedToolCall = &compute.PreparedToolCall{CallID: "c1", ToolName: "write_file", OriginalArguments: original, Params: map[string]string{"path": "rewritten"}}
+	wire := continuationToProto(cont)
+	if wire.Messages[1].ToolCalls[0].Arguments != `{"path":"rewritten"}` {
+		t.Fatalf("old reader sees %s", wire.Messages[1].ToolCalls[0].Arguments)
+	}
+	restored, err := continuationFromProto(wire, compute.BudgetCaps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Messages[1].ToolCalls[0].Arguments != original {
+		t.Fatal("new reader lost original binding")
+	}
+	wire.Messages[2].PreparedToolCall = nil
+	legacy, err := continuationFromProto(wire, compute.BudgetCaps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Messages[1].ToolCalls[0].Arguments != `{"path":"rewritten"}` {
+		t.Fatal("legacy resume lost effective input")
+	}
+}

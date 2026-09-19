@@ -14,10 +14,9 @@ import (
 func applyModification(event types.HookEvent, payload Payload, resp *Response) (map[string]string, error) {
 	switch resp.Decision {
 	case "", types.HookApprove:
-		if _, ok := resp.HookSpecificOutput["updatedInput"]; ok {
-			return nil, errors.New("updatedInput requires decision=modify")
+		if _, ok := resp.HookSpecificOutput["updatedInput"]; !ok {
+			return nil, nil
 		}
-		return nil, nil
 	case types.HookModify:
 	default:
 		return nil, fmt.Errorf("unsupported decision %q (use approve, block or modify)", resp.Decision)
@@ -26,14 +25,19 @@ func applyModification(event types.HookEvent, payload Payload, resp *Response) (
 		return nil, errors.New("decision=modify is only supported for PreToolUse")
 	}
 	patch, ok := resp.HookSpecificOutput["updatedInput"].(map[string]any)
-	if !ok || len(resp.HookSpecificOutput) != 1 {
-		return nil, errors.New("modify requires hookSpecificOutput containing only an updatedInput object")
+	if !ok {
+		return nil, errors.New("updatedInput must be an object")
 	}
 	input, ok := payload["tool_input"].(map[string]string)
 	if !ok {
 		return nil, errors.New("modify requires string-valued tool_input")
 	}
-	next := maps.Clone(input)
+	next := map[string]string{}
+	// The explicit Lobslaw extension remains a patch; standard updatedInput
+	// replaces the complete input, including deletion of omitted keys.
+	if resp.Decision == types.HookModify {
+		next = maps.Clone(input)
+	}
 	if next == nil {
 		next = map[string]string{}
 	}

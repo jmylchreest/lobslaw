@@ -53,7 +53,6 @@ func TestModifyRejectsInvalidResponses(t *testing.T) {
 		`{"decision":"modify","hookSpecificOutput":{"updatedInput":{"value":null}}}`,
 		`{"decision":"modify","hookSpecificOutput":{"updatedInput":{"__user_id":"root"}}}`,
 		`{"decision":"modify","hookSpecificOutput":{"updatedInput":{},"tool_name":"other"}}`,
-		`{"decision":"approve","hookSpecificOutput":{"updatedInput":{"value":"ignored"}}}`,
 		`{"decision":"allow","args_override":{"value":"ignored"}}`,
 		`{"decision":"deny"}`,
 	}
@@ -98,5 +97,17 @@ func TestModifyOtherEventIsRejected(t *testing.T) {
 	d := NewDispatcher(map[types.HookEvent][]types.HookConfig{types.HookPostToolUse: {{Command: hook}}}, nil)
 	if _, err := d.Dispatch(context.Background(), types.HookPostToolUse, Payload{}); err == nil {
 		t.Fatal("unsupported modification acknowledged")
+	}
+}
+
+func TestStandardUpdatedInputReplacesArguments(t *testing.T) {
+	hook := writeHookScript(t, t.TempDir(), "hook.sh", `echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"new"}}}'`)
+	d := NewDispatcher(map[types.HookEvent][]types.HookConfig{types.HookPreToolUse: {{Command: hook}}}, nil)
+	resp, err := d.Dispatch(context.Background(), types.HookPreToolUse, Payload{"tool_input": map[string]string{"command": "old", "removed": "yes"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.UpdatedInput) != 1 || resp.UpdatedInput["command"] != "new" {
+		t.Fatalf("replacement: %+v", resp)
 	}
 }

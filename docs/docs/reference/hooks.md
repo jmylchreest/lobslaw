@@ -41,7 +41,7 @@ A `PreToolUse` subprocess receives:
 
 ## Decisions and argument rewrites
 
-Use `approve`, `block`, or `modify`. Empty stdout or an empty decision means no opinion. Exit code 2 blocks with stderr as its reason; other nonzero exits and invalid responses fail the pre-hook chain.
+Use `approve`, `block`, or the Lobslaw `modify` extension. Empty stdout or an empty decision means no opinion. Exit code 2 blocks with stderr as its reason; other nonzero exits and invalid responses fail the pre-hook chain.
 
 ```json
 {
@@ -54,7 +54,13 @@ Use `approve`, `block`, or `modify`. Empty stdout or an empty decision means no 
 
 `updatedInput` is a patch: supplied keys replace or add values, omitted keys remain unchanged. Values must be strings; encode structured tool arguments as JSON strings if that tool expects them. Numbers, booleans, objects, arrays and null values are rejected. Empty and `__`-prefixed keys are reserved. There is no deletion operation; an empty string is a value, not deletion.
 
-A modification must contain exactly `hookSpecificOutput.updatedInput`. It cannot change the tool name, caller claims, working directory or process environment. `updatedInput` without `decision: "modify"` is an error. The formerly documented `args_override` spelling and `allow`/`deny` decisions are unsupported and now fail explicitly instead of silently doing nothing.
+The standard Claude Code form is also accepted:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"rtk git status"}}}
+```
+
+Without `decision: "modify"`, `updatedInput` **replaces** the complete input object: omitted keys are removed. The same string-value and reserved-key restrictions apply. `permissionDecision: "deny"` blocks; `allow` never bypasses local policy. `permissionDecisionReason` supplies the reason. Interactive `ask` is currently unsupported and fails explicitly; use Lobslaw's policy confirmation gates. A rewrite cannot change the tool name, caller claims, working directory or process environment. The formerly documented `args_override` spelling and `allow`/`deny` decisions are unsupported and now fail explicitly instead of silently doing nothing.
 
 Hooks run in configuration order. Each hook sees the effective input produced by earlier hooks. Later patches win for overlapping keys; an approval or empty response preserves accumulated changes. A block stops the chain and the tool does not execute:
 
@@ -62,7 +68,7 @@ Hooks run in configuration order. Each hook sees the effective input produced by
 {"decision": "block", "reason": "command rejected by local policy"}
 ```
 
-Only `PreToolUse` supports modification. `PostToolUse` is advisory: its errors cannot undo an already executed tool, and its output is not applied to tool results.
+Only `PreToolUse` supports modification. `PostToolUse` receives the executed `tool_input` and is advisory: its errors cannot undo an already executed tool, and its output is not applied to tool results.
 
 ## Safety and confirmation
 
@@ -72,7 +78,7 @@ Confirmation prompts describe the effective operation. The prepared arguments ar
 
 If another gate asks a second question, the first answer remains valid only for that prepared call. Subsequent calls need their own approvals unless an existing conversation grant or policy rule permits them.
 
-Old continuations without prepared input remain readable. If pre-hooks are configured, they are prepared again and any required confirmation is asked again; an old answer is not applied to newly rewritten arguments. During a rolling upgrade, resume these new continuations on upgraded nodes: older binaries do not understand prepared-call metadata.
+Old continuations without prepared input remain readable. If pre-hooks are configured, they are prepared again and any required confirmation is asked again; an old answer is not applied to newly rewritten arguments. The existing tool-call arguments also carry the effective input, so older readers cannot fall back to the original operation. Upgrade all compute nodes before enabling rewriting: older binaries still lack hook preparation and approval tracking.
 
 ## Examples
 
@@ -102,6 +108,6 @@ logger -t lobslaw "$(printf '%s' "$input" | jq -c '{hook_event_name, tool_name, 
 ## Reference
 
 - `internal/hooks/dispatcher.go` — matching, subprocess execution and ordered chaining
-- `internal/hooks/modify.go` — argument patch validation
+- `internal/hooks/modify.go` — argument replacement and patch validation
 - `internal/compute/executor.go` — safety checks, gates and dispatch
 - `pkg/types/hook.go` — event and response types

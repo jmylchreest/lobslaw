@@ -189,7 +189,7 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *Invok
 
 	// Refuse policy denials before running operator hooks, without consuming
 	// one-shot approvals. Confirmation checks run only on the effective input.
-	if e.hooks != nil && !req.prepared {
+	if e.hasPreHooks(req.ToolName, req.TurnID, req.Claims) && !req.prepared {
 		dec, err := e.policyDecision(ctx, req.Claims, "tool:exec", tool.Name)
 		if err != nil {
 			return nil, err
@@ -246,8 +246,8 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *Invok
 	// re-execution would drive indefinitely. PathDenied is a different
 	// verdict on a different path and is not reachable from here.
 	if err := hardlineConfirm(req.Params); err != nil {
-		if !turnApproved(ctx, "tool:exec", tool.Name) {
-			return nil, err
+		if !turnApproved(ctx, sensitivePathAction, tool.Name) {
+			return nil, &ConfirmationRequest{inner: err, Action: sensitivePathAction, Resource: tool.Name}
 		}
 	}
 	// The per-tool gate — the memory write staging, the per-command
@@ -292,6 +292,7 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *Invok
 		_, _ = e.hooks.Dispatch(ctx, types.HookPostToolUse, hooks.Payload{ //nolint:errcheck // best-effort
 			"session_id":  req.TurnID,
 			"tool_name":   tool.Name,
+			"tool_input":  maps.Clone(req.Params),
 			"exit_code":   result.ExitCode,
 			"stdout":      string(capBytes(result.Stdout, hookOutputCap)),
 			"stderr":      string(capBytes(result.Stderr, hookOutputCap)),
@@ -605,4 +606,8 @@ func scopeOf(c *types.Claims) string {
 		return ""
 	}
 	return c.Scope
+}
+
+func (e *Executor) hasPreHooks(tool, turn string, claims *types.Claims) bool {
+	return e.hooks.HasMatching(types.HookPreToolUse, hooks.Payload{"tool_name": tool, "session_id": turn, "cwd": e.cfg.WorkDir, "actor_scope": scopeOf(claims)})
 }
