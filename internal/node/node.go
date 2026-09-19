@@ -355,6 +355,10 @@ type Node struct {
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
 	botSvc       *memory.BotService
+	// botOwner is the unique operator unowned bots are adopted onto.
+	// Adoption is an Apply, so it waits for leadership in Start rather
+	// than running at wire time where there is no leader yet.
+	botOwner     identity.Principal
 	groupSvc     *memory.GroupService
 	inboxSvc     *memory.InboxService
 	inboxWake    chan struct{}
@@ -795,6 +799,11 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 			}
 			if err := n.seedUserPrefsFromConfig(ctx); err != nil {
 				n.log.Warn("user_prefs: seed from config failed", "err", err)
+			}
+			if n.botSvc != nil && !n.botOwner.IsZero() {
+				if err := n.botSvc.AdoptUnowned(ctx, n.botOwner); err != nil {
+					n.log.Warn("bots: adopt unowned failed", "err", err)
+				}
 			}
 		}
 	}

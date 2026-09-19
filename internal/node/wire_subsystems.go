@@ -172,9 +172,10 @@ func (n *Node) wireBots() error {
 		}
 		return nil
 	}
-	if err := n.botSvc.AdoptUnowned(context.Background(), owner); err != nil {
-		return fmt.Errorf("adopt unowned bots: %w", err)
-	}
+	// Adoption applies through raft, so it runs after leadership in
+	// Start. Doing it here failed the whole boot with "no leader
+	// elected" whenever the store held an unowned record.
+	n.botOwner = owner
 	return nil
 }
 

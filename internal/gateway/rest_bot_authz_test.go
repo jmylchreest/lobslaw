@@ -78,15 +78,50 @@ func (m *memGroups) Get(_ context.Context, id string) (*lobslawv1.GroupRecord, e
 }
 func (m *memGroups) Put(_ context.Context, rec *lobslawv1.GroupRecord, _ uint64) (*lobslawv1.GroupRecord, error) {
 	rec.Revision = 1
+	for i, r := range m.recs {
+		if r.GetId() == rec.GetId() {
+			m.recs[i] = rec
+			return rec, nil
+		}
+	}
 	m.recs = append(m.recs, rec)
 	return rec, nil
 }
 func (m *memGroups) Delete(context.Context, string) error { return nil }
 
+// memBots is the bot-registry counterpart to memGroups.
+type memBots struct {
+	recs map[string]*lobslawv1.BotRecord
+}
+
+func (m *memBots) List(context.Context) ([]*lobslawv1.BotRecord, error) {
+	out := make([]*lobslawv1.BotRecord, 0, len(m.recs))
+	for _, r := range m.recs {
+		out = append(out, r)
+	}
+	return out, nil
+}
+func (m *memBots) Get(_ context.Context, id string) (*lobslawv1.BotRecord, error) {
+	if r, ok := m.recs[id]; ok {
+		return r, nil
+	}
+	return nil, errGroupMissing
+}
+func (m *memBots) Put(_ context.Context, rec *lobslawv1.BotRecord, _ uint64) (*lobslawv1.BotRecord, error) {
+	if m.recs == nil {
+		m.recs = map[string]*lobslawv1.BotRecord{}
+	}
+	rec.Revision = 1
+	m.recs[rec.GetId()] = rec
+	return rec, nil
+}
+func (m *memBots) Delete(context.Context, string) error { return nil }
+
 func TestEnsureOwnersTeamCreatesOnceAndReuses(t *testing.T) {
 	t.Parallel()
 	groups := &memGroups{}
-	srv := &Server{cfg: RESTConfig{Groups: groups}}
+	bots := &memBots{}
+	srv := &Server{cfg: RESTConfig{Groups: groups, Bots: bots}}
 
 	first, err := srv.ensureOwnersTeam(context.Background(), "user:chief")
 	if err != nil {
@@ -98,13 +133,21 @@ func TestEnsureOwnersTeamCreatesOnceAndReuses(t *testing.T) {
 	if len(groups.recs) != 1 || groups.recs[0].GetOwner() != "user:chief" || !groups.recs[0].GetIsDefault() {
 		t.Fatalf("created team is not owned by the caller: %+v", groups.recs)
 	}
+	// A team without a coordinator has nobody to answer for it.
+	if groups.recs[0].GetCoordinatorBotId() != "chief" {
+		t.Fatalf("team coordinator = %q, want chief", groups.recs[0].GetCoordinatorBotId())
+	}
+	if rec := bots.recs["chief"]; rec == nil || rec.GetOwner() != "user:chief" || !rec.GetIsCoordinator() {
+		t.Fatalf("chief coordinator not created as the caller's: %+v", bots.recs["chief"])
+	}
 
 	again, err := srv.ensureOwnersTeam(context.Background(), "user:chief")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again != first || len(groups.recs) != 1 {
-		t.Fatalf("second call made another team: id=%q recs=%d", again, len(groups.recs))
+	if again != first || len(groups.recs) != 1 || len(bots.recs) != 1 {
+		t.Fatalf("second call made another team/bot: id=%q teams=%d bots=%d",
+			again, len(groups.recs), len(bots.recs))
 	}
 
 	if _, err := srv.ensureOwnersTeam(context.Background(), ""); err == nil {

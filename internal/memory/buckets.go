@@ -174,6 +174,11 @@ const (
 // cluster whose bots bucket is still empty.
 const ChiefBotID = "chief"
 
+// DefaultGroupID is the id of the team a person's bots start in. It is
+// created explicitly, owned by that person, the first time they need a
+// team — it is not a shared fallback that anyone can adopt.
+const DefaultGroupID = "default"
+
 // SoulTuneRecordID is the constant key under BucketSoulTune for the
 // CHIEF's personality overlay.
 //

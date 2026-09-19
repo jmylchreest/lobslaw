@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -213,10 +214,8 @@ func groupOfBot(rec *lobslawv1.BotRecord) string {
 	return strings.TrimSpace(rec.GetGroupId())
 }
 
-// defaultGroupID mirrors memory.DefaultGroupID. Duplicated rather than
-// imported because the gateway does not depend on the memory package
-// for constants; the pair is asserted by a test.
-const defaultGroupID = "default"
+// defaultGroupID is the id of the caller's own starting team.
+const defaultGroupID = memory.DefaultGroupID
 
 func (s *Server) groupErr(w http.ResponseWriter, err error) {
 	switch {
@@ -248,7 +247,22 @@ func (s *Server) principalOf(r *http.Request) string {
 	if err != nil || authn.Claims == nil {
 		return ""
 	}
-	return authn.Claims.UserID
+	return canonicalUserPrincipal(authn.Claims.UserID)
+}
+
+// canonicalUserPrincipal spells a channel's user id as the ownership
+// principal "user:<id>". REST sessions carry the bare id while bot and
+// team owners must be full principals, so comparing them without this
+// made a person fail to own the records they had just created.
+func canonicalUserPrincipal(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	if strings.HasPrefix(id, identity.KindUser+":") {
+		return id
+	}
+	return identity.User(id).String()
 }
 
 // ensureOwnersTeam returns the caller's own team, creating it on first
@@ -271,19 +285,77 @@ func (s *Server) ensureOwnersTeam(ctx context.Context, principal string) (string
 	if err != nil {
 		return "", err
 	}
+	var team *lobslawv1.GroupRecord
 	for _, g := range groups {
 		if strings.TrimSpace(g.GetOwner()) == principal {
-			return g.GetId(), nil
+			team = g
+			break
 		}
 	}
-	rec, err := s.cfg.Groups.Put(ctx, &lobslawv1.GroupRecord{
-		Id:        defaultGroupID,
-		Name:      "Your team",
-		IsDefault: true,
-		Owner:     principal,
-	}, 0)
-	if err != nil {
+	if team == nil {
+		team, err = s.cfg.Groups.Put(ctx, &lobslawv1.GroupRecord{
+			Id:        defaultGroupID,
+			Name:      "Your team",
+			IsDefault: true,
+			Owner:     principal,
+			CreatedBy: principal,
+		}, 0)
+		if err != nil {
+			return "", err
+		}
+	}
+	if err := s.ensureTeamCoordinator(ctx, principal, team); err != nil {
 		return "", err
 	}
-	return rec.GetId(), nil
+	return team.GetId(), nil
+}
+
+// ensureTeamCoordinator gives a team the bot that answers for it.
+//
+// Every team has a coordinator — the bot a channel reaches — and a
+// team without one is one nobody can message. The chief is that bot
+// for the operator who already had the assistant; a team that cannot
+// take the chief gets its own, named from the team.
+func (s *Server) ensureTeamCoordinator(ctx context.Context, principal string, team *lobslawv1.GroupRecord) error {
+	if team == nil || strings.TrimSpace(team.GetCoordinatorBotId()) != "" {
+		return nil
+	}
+	if s.cfg.Bots == nil {
+		return errors.New("this node does not host the bot registry")
+	}
+	coordID := memory.ChiefBotID
+	rec, err := s.cfg.Bots.Get(ctx, coordID)
+	if err == nil && rec != nil {
+		owner := strings.TrimSpace(rec.GetOwner())
+		if owner != "" && owner != principal {
+			// The chief is somebody else's. This team needs its own
+			// coordinator rather than borrowing another person's bot.
+			coordID = team.GetId() + "-lead"
+			rec = nil
+		} else if strings.TrimSpace(rec.GetGroupId()) != team.GetId() && strings.TrimSpace(rec.GetGroupId()) != "" {
+			coordID = team.GetId() + "-lead"
+			rec = nil
+		}
+	} else {
+		rec = nil
+	}
+	if rec == nil {
+		rec, err = s.cfg.Bots.Put(ctx, &lobslawv1.BotRecord{
+			Id:            coordID,
+			DisplayName:   "Chief",
+			Description:   "The coordinator: answers when you message.",
+			Instructions:  "You are the coordinator. Answer directly when you can, and hand specialist work to the right bot.",
+			IsCoordinator: true,
+			Enabled:       true,
+			GroupId:       team.GetId(),
+			Owner:         principal,
+			CreatedBy:     principal,
+		}, 0)
+		if err != nil {
+			return err
+		}
+	}
+	team.CoordinatorBotId = rec.GetId()
+	_, err = s.cfg.Groups.Put(ctx, team, team.GetRevision())
+	return err
 }

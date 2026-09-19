@@ -181,6 +181,15 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		// The console reads the roster first and expects a coordinator
+		// to exist. Repair the caller's own team on that read: it is
+		// idempotent, scoped to them, and creates nothing for a node
+		// that does not host teams.
+		if s.cfg.Groups != nil {
+			if _, err := s.ensureOwnersTeam(r.Context(), s.principalOf(r)); err != nil {
+				s.log.Warn("rest: ensure owner team", "err", err)
+			}
+		}
 		records, err := s.cfg.Bots.List(r.Context())
 		if err != nil {
 			s.jsonErr(w, http.StatusInternalServerError, err.Error())
@@ -227,10 +236,14 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 			MayMessage:   body.MayMessage,
 			Enabled:      true,
 			GroupId:      groupID,
+			// Explicit ownership. A bot with no owner is inaccessible,
+			// so a bot created through the console must record who it
+			// belongs to or the creator cannot manage it afterwards.
+			Owner: principal,
 			// The real principal, not a placeholder. The session knows
 			// who is asking; recording "operator" threw that away at
 			// the one point where it is worth keeping.
-			CreatedBy: s.principalOf(r),
+			CreatedBy: principal,
 		}, 0)
 		if err != nil {
 			s.jsonErr(w, botStatusFor(err), err.Error())
