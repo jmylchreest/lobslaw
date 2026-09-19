@@ -161,6 +161,8 @@ const (
 	// BucketBots holds the named agents, keyed by the bot's immutable
 	// slug, which is also its principal's identifier.
 	BucketBots = "bots"
+	// Project aggregates atomically bind task transitions to event receipts.
+	BucketWorkforce = "workforce"
 	// BucketGroups holds teams: one human owner, one coordinator bot.
 	BucketGroups = "groups"
 	// BucketBotInbox holds the durable per-bot work queue, keyed
@@ -235,6 +237,7 @@ var allBuckets = []string{
 	BucketSelfTaughtHistory,
 	BucketEnrolments,
 	BucketBots,
+	BucketWorkforce,
 	BucketGroups,
 	BucketBotInbox,
 }

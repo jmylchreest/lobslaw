@@ -2083,6 +2083,7 @@ message LogEntry {
     BotRecord bot = 37;
     BotInboxItem bot_inbox = 38;
     GroupRecord group = 39;
+    WorkforceRecord workforce = 40;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -2507,4 +2508,16 @@ message ConsoleForwardResponse {
   int32 status = 1;
   string content_type = 2;
   bytes data = 3;
+  string content_disposition = 4;
+  int64 content_length = 5;
+}
+
+message WorkforceRecord {
+  string id = 1;
+  string owner = 2;
+  uint64 revision = 3;
+  string claimed_by = 4;
+  // Bounded versioned aggregate; task creation and event receipts share one CAS.
+  bytes state_json = 5;
+  uint32 schema_version = 6;
 }

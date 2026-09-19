@@ -183,6 +183,7 @@ func nodeWireStages() []WireStage {
 		// through; before gateway, which is where turns start arriving.
 		{Name: "review-fork", Gate: gateCompute, Wire: (*Node).wireReviewFork},
 		{Name: "auth", Gate: gateAuth, Wire: (*Node).wireAuthStage},
+		{Name: "workforce", Gate: gateComputeTeams, Wire: (*Node).wireWorkforce},
 		{Name: "gateway", Gate: gateGateway, Wire: (*Node).wireGatewayStage},
 		{Name: "console-backend", Gate: gateCompute, Wire: (*Node).wireConsoleBackend},
 		{Name: "discovery", Wire: (*Node).wireDiscoveryStage},

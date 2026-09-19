@@ -15,6 +15,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/internal/tools"
+	"github.com/jmylchreest/lobslaw/internal/workforce"
 
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/grpc"
@@ -22,6 +23,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/audit"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/computer"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
@@ -52,6 +54,7 @@ import (
 // Callers (typically cmd/lobslaw/main.go) assemble this from flags +
 // config.toml + resolved secrets.
 type Config struct {
+	Computer  config.ComputerConfig
 	NodeID    string
 	Functions []types.NodeFunction
 
@@ -313,8 +316,9 @@ type Config struct {
 // New, started via Start, stopped via Shutdown. Shutdown is safe to
 // call multiple times.
 type Node struct {
-	cfg Config
-	log *slog.Logger
+	computer *computer.Service
+	cfg      Config
+	log      *slog.Logger
 
 	listener net.Listener
 	server   *grpc.Server
@@ -358,9 +362,10 @@ type Node struct {
 	// botOwner is the unique operator unowned bots are adopted onto.
 	// Adoption is an Apply, so it waits for leadership in Start rather
 	// than running at wire time where there is no leader yet.
-	botOwner identity.Principal
-	groupSvc *memory.GroupService
-	inboxSvc *memory.InboxService
+	botOwner  identity.Principal
+	groupSvc  *memory.GroupService
+	workforce *workforce.Service
+	inboxSvc  *memory.InboxService
 	// inboxAPI is inboxSvc wrapped so a post wakes the drain.
 	inboxAPI     wakingInbox
 	inboxWake    chan struct{}
@@ -728,6 +733,9 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
 		go n.runInboxDrain(ctx)
 	}
+	if n.workforce != nil && !n.cfg.RestoreMode {
+		go n.workforce.Run(ctx)
+	}
 	if n.scheduler != nil {
 		go func() {
 			if err := n.scheduler.Run(ctx); err != nil {
@@ -880,6 +888,9 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	default:
 	}
 	close(n.shutdownOnce)
+	if n.computer != nil {
+		_ = n.computer.Close()
+	}
 
 	// Drained first, before the gRPC stop. A shutdown that discards the
 	// buffer loses precisely the spans from the turn that was in flight
@@ -1029,6 +1040,9 @@ func (n *Node) dialer() discovery.Dialer {
 // resources but hit an error. Best-effort cleanup; errors swallowed
 // because we're already returning a failure.
 func (n *Node) closePartial() {
+	if n.computer != nil {
+		_ = n.computer.Close()
+	}
 	n.stopTracing()
 	if n.store != nil {
 		_ = n.store.Close()

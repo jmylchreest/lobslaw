@@ -10,6 +10,7 @@ import { setRoster } from "./theme";
 import { Company } from "./routes/Company";
 import { Config } from "./routes/Config";
 import { NewBot } from "./routes/NewBot";
+import { Projects, ProjectRoom, TaskDetails, Attention } from "./routes/Workforce";
 
 export function App() {
   return <LoginGate><Console /></LoginGate>;
@@ -114,6 +115,10 @@ function Shell() {
           <span className="deskicon">◆</span>
           <div className="txt"><div className="nm">Overview</div></div>
         </NavLink>
+        <nav className="nav" aria-label="Workforce">
+          <NavLink to="/projects">Projects</NavLink>
+          <NavLink to="/attention">Attention</NavLink>
+        </nav>
 
         {groups && groups.length > 0 && (
           <GroupPicker
@@ -178,6 +183,10 @@ function Shell() {
           <Route path="/" element={<Company group={current} onRenamed={reloadGroups} />} />
           <Route path="/coordinator" element={<Landing bots={bots} />} />
           <Route path="/config" element={<Config />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/projects/:projectId/:tab?" element={<ProjectRoom />} />
+          <Route path="/tasks/:taskId" element={<TaskDetails />} />
+          <Route path="/attention" element={<Attention />} />
           <Route path="/bots/new" element={<NewBot group={current} onCreated={refresh} />} />
           <Route path="/bots/:botId" element={<BotRoom onChanged={refresh} />} />
           <Route path="*" element={<div className="empty"><b>Nothing here</b><span>That page does not exist.</span></div>} />

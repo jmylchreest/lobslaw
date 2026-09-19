@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,12 +67,16 @@ func (s *Server) ConsoleForward(in *lobslawv1.ConsoleForwardRequest, stream grpc
 
 func (s *Server) backendConsoleHandler(path string) http.HandlerFunc {
 	switch {
+	case path == "/v1/projects" || strings.HasPrefix(path, "/v1/projects/") || strings.HasPrefix(path, "/v1/tasks/") || strings.HasPrefix(path, "/v1/routines/") || strings.HasPrefix(path, "/v1/triggers/") || path == "/v1/attention":
+		return s.handleWorkforce
 	case path == "/v1/messages":
 		return s.handleMessages
 	case path == "/v1/capabilities":
 		return s.handleCapabilities
 	case path == "/v1/tools":
 		return s.handleTools
+	case strings.HasPrefix(path, "/v1/computers/"):
+		return s.handleComputer
 	case path == "/v1/plan":
 		return s.handlePlan
 	case path == "/v1/bots" || strings.HasPrefix(path, "/v1/bots/"):
@@ -142,6 +147,11 @@ func (s *Server) forwardConsole(w http.ResponseWriter, r *http.Request) {
 		if !started {
 			w.Header().Set("Content-Type", part.ContentType)
 			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			if part.ContentDisposition != "" {
+				w.Header().Set("Content-Disposition", part.ContentDisposition)
+				w.Header().Set("Content-Length", strconv.FormatInt(part.ContentLength, 10))
+			}
 			w.Header().Set("X-Accel-Buffering", "no")
 			if part.ContentType == "text/event-stream" {
 				_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
@@ -226,6 +236,7 @@ func (w *consoleStreamWriter) send(p []byte) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	w.err = w.stream.Send(&lobslawv1.ConsoleForwardResponse{Status: int32(w.status), ContentType: w.header.Get("Content-Type"), Data: p})
+	length, _ := strconv.ParseInt(w.header.Get("Content-Length"), 10, 64)
+	w.err = w.stream.Send(&lobslawv1.ConsoleForwardResponse{Status: int32(w.status), ContentType: w.header.Get("Content-Type"), Data: p, ContentDisposition: w.header.Get("Content-Disposition"), ContentLength: length})
 	w.sent = true
 }

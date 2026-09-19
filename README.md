@@ -29,5 +29,7 @@ Proposed next work — designed but not built — lives in [ROADMAP.md](ROADMAP.
 
 - **[docs/user/](docs/user/)** — installation, configuration, channel setup, skills, troubleshooting. Assumes no knowledge of the internals.
 - **[docs/dev/](docs/dev/)** — architecture, subsystem design, decisions, diagrams, contribution guide. Assumes you're working on lobslaw itself.
+- **[Projects and autonomous work](docs/user/WORKFORCE.md)** — opt-in owned projects, durable tasks, Attention, approved routines and deduplicated event triggers.
+- **[Project browser setup](docs/user/COMPUTER.md)** — configure the optional browser runtime and use project tasks, takeover and demonstrated routines.
 
 Both are maintained in sync with code per aide decisions [`lobslaw-documentation-audiences`](.aide/) and [`lobslaw-documentation-diagrams`](.aide/) — diagrams update in the same commit that changes the underlying flow.

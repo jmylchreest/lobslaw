@@ -27,6 +27,7 @@ func (n *Node) wireConsoleBackend() error {
 		return err
 	}
 	server := gateway.NewServer(gateway.RESTConfig{
+		Computer:    n.computer,
 		RequireAuth: true, Identity: n.identityResolver(), Logger: n.log,
 		DefaultScope:  n.cfg.Gateway.UnknownUserScope,
 		DefaultBudget: compute.FromComputeConfig(n.cfg.Compute),
@@ -38,7 +39,8 @@ func (n *Node) wireConsoleBackend() error {
 		TeamRouter: n.teamRouterOrNil(), Tools: n.toolCatalogueOrNil(),
 		Sessions: n.newSessionStore(), Compactor: n.newSessionCompactor(), Conversation: n.conversationConfig(),
 		Transcripts: n.newSessionBrowser(), Routines: n.newRoutineLister(), Memory: n.newMemoryLister(),
-		Plan: planServiceOrNil(n.planSvc),
+		Workforce: n.workforce,
+		Plan:      planServiceOrNil(n.planSvc),
 	}, compute.Adapt(n.agent))
 	lobslawv1.RegisterConsoleServiceServer(n.server, server)
 	return nil

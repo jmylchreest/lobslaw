@@ -340,6 +340,8 @@ func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
 // interface because protoc-gen-go emits getters but no setters.
 func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
+	case *lobslawv1.WorkforceRecord:
+		return p.GetRevision(), true
 	case *lobslawv1.SoulTuneRecord:
 		return p.Revision, true
 	case *lobslawv1.ScheduledTaskRecord:
@@ -373,6 +375,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
+	case *lobslawv1.WorkforceRecord:
+		p.Revision = rev
 	case *lobslawv1.SoulTuneRecord:
 		p.Revision = rev
 	case *lobslawv1.ScheduledTaskRecord:
@@ -653,8 +657,14 @@ type claimable interface {
 // "an expired claim counts as unclaimed" belongs at the scheduler
 // scan layer. A node taking over a dead holder's claim passes that
 // holder's id as expected_claimer.
-func decodeClaimable(bucket string, raw []byte) (claimable, error) {
+func decodeClaimable(bucket string, raw []byte) (claimable, error) { //nolint:gocyclo // exhaustive record registry; each case has identical unmarshal semantics
 	switch bucket {
+	case BucketWorkforce:
+		var r lobslawv1.WorkforceRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	case BucketSoulTune:
 		var r lobslawv1.SoulTuneRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -753,7 +763,7 @@ func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
-		BucketBots, BucketGroups, BucketBotInbox:
+		BucketBots, BucketGroups, BucketBotInbox, BucketWorkforce:
 		return true
 	default:
 		return false
@@ -772,7 +782,7 @@ func BucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 // bucketAndPayload maps a LogEntry's payload oneof to its bucket name
 // and the concrete proto.Message. Adding a new record type requires
 // wiring it both here and in buckets.go.
-func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) {
+func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) { //nolint:gocyclo // exhaustive protobuf payload-to-bucket registry
 	switch p := entry.Payload.(type) {
 	case *lobslawv1.LogEntry_PolicyRule:
 		return BucketPolicyRules, p.PolicyRule, nil
@@ -794,6 +804,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSoulTune, p.SoulTune, nil
 	case *lobslawv1.LogEntry_Bot:
 		return BucketBots, p.Bot, nil
+	case *lobslawv1.LogEntry_Workforce:
+		return BucketWorkforce, p.Workforce, nil
 	case *lobslawv1.LogEntry_Group:
 		return BucketGroups, p.Group, nil
 	case *lobslawv1.LogEntry_BotInbox:

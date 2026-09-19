@@ -54,6 +54,30 @@ func InstallAndExec(p *Policy, path string, argv, env []string) error {
 	// NoNewPrivs and filesystem restrictions apply to an OS thread. Keep
 	// that thread through exec, and never return it to the pool on failure.
 	runtime.LockOSThread()
+	if len(p.HideDirs) > 0 {
+		if err := p.Validate(); err != nil {
+			return fmt.Errorf("hidden paths policy: %w", err)
+		}
+		if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+			return fmt.Errorf("private mount propagation: %w", err)
+		}
+		for _, path := range p.HideDirs {
+			if err := unix.Mount("tmpfs", path, "tmpfs", unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+				return fmt.Errorf("mask host socket directory: %w", err)
+			}
+		}
+	}
+	if p.PrivateProc {
+		if err := p.Validate(); err != nil {
+			return fmt.Errorf("private proc policy: %w", err)
+		}
+		if err := unix.Mount("", "/", "", unix.MS_REC|unix.MS_PRIVATE, ""); err != nil {
+			return fmt.Errorf("private mount propagation: %w", err)
+		}
+		if err := unix.Mount("proc", "/proc", "proc", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
+			return fmt.Errorf("private proc mount: %w", err)
+		}
+	}
 
 	if p.NoNewPrivs {
 		if err := setNoNewPrivs(); err != nil {
@@ -109,6 +133,9 @@ func setNoNewPrivs() error {
 //
 // No-op when both Mounts and AllowedPaths are empty.
 func installLandlock(p *Policy) error {
+	if p.RequireLandlock && landlockABIVersion() == 0 {
+		return fmt.Errorf("landlock is required but unavailable")
+	}
 	if len(p.AllowedPaths) == 0 && len(p.Mounts) == 0 {
 		return nil
 	}

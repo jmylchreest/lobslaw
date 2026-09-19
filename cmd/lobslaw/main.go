@@ -585,6 +585,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		Auth:                cfg.Auth,
 		Gateway:             cfg.Gateway,
 		UIWeb:               cfg.UIWeb,
+		Computer:            cfg.Computer,
 		Audit:               cfg.Audit,
 		Storage:             cfg.Storage,
 		Skills:              cfg.Skills,

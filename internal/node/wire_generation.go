@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -425,14 +424,14 @@ func (n *Node) artifactOpener() gateway.ArtifactOpener {
 		if !ok {
 			return nil, fmt.Errorf("artifact: unknown or unwritable mount %q", mount)
 		}
-		full := filepath.Join(root, filepath.Clean("/"+rel))
-		// Belt and braces against a reference that traverses: Join +
-		// Clean already contain it, and this catches a symlinked mount
-		// root or a future caller that skips the Clean.
-		if !strings.HasPrefix(full, filepath.Clean(root)+string(filepath.Separator)) {
-			return nil, fmt.Errorf("artifact: reference %q escapes mount %q", reference, mount)
+		// Root.Open confines symlink traversal at open time as well as lexical
+		// paths; checking a joined pathname alone does not provide that boundary.
+		dir, err := os.OpenRoot(root)
+		if err != nil {
+			return nil, fmt.Errorf("artifact: open mount: %w", err)
 		}
-		f, err := os.Open(full) //nolint:gosec // contained above
+		defer func() { _ = dir.Close() }()
+		f, err := dir.Open(rel)
 		if err != nil {
 			return nil, fmt.Errorf("artifact: open: %w", err)
 		}

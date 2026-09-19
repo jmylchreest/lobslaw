@@ -737,7 +737,9 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 	if a.cfg.ContextEngine != nil {
 		assembly := a.cfg.ContextEngine.Assemble(ctx, req.Message)
 		if rendered := assembly.Rendered(); rendered != "" {
-			req.RecalledContext = rendered
+			// Caller-pinned task/project context is a separate source of data.
+			// Recall augments it; it must not erase the execution brief.
+			req.RecalledContext = strings.TrimSpace(req.RecalledContext + "\n\n" + rendered)
 			a.cfg.Logger.Debug("agent: context-engine recall injected",
 				"turn_id", req.TurnID,
 				"recall_count", len(assembly.RecallIDs))

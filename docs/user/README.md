@@ -16,11 +16,14 @@ User docs are stubs until the project reaches running-end-to-end state (Phase 5 
 | `CLUSTER.md` | Running as a cluster — seed nodes, mTLS bootstrap, adding members |
 | `SKILLS.md` | Installing and authoring skills; `policy.d/` for operator overrides |
 | [`CHANNELS.md`](./CHANNELS.md) | REST / Telegram channel setup and message flow |
+| [`WORKFORCE.md`](./WORKFORCE.md) | Owned projects, background tasks, Attention, routines and event triggers |
 | `BACKUP.md` | Snapshotting, restoring, migrating between nodes |
 | `TROUBLESHOOTING.md` | Common failure modes and resolutions |
 | `FAQ.md` | Recurring questions |
 
 ## If you're looking for something now
+
+- **Project browsers and demonstrated routines** — [COMPUTER.md](COMPUTER.md) covers setup, takeover, private profiles and the workforce console.
 
 - **What is lobslaw?** — [../../README.md](../../README.md) at repo root has the entry-point.
 - **How do the internals work?** — [`../dev/`](../dev/) has subsystem docs.
