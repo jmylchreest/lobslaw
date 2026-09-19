@@ -72,6 +72,8 @@ func (s *Server) backendConsoleHandler(path string) http.HandlerFunc {
 		return s.handleCapabilities
 	case path == "/v1/tools":
 		return s.handleTools
+	case strings.HasPrefix(path, "/v1/computers/"):
+		return s.handleComputer
 	case path == "/v1/plan":
 		return s.handlePlan
 	case path == "/v1/bots" || strings.HasPrefix(path, "/v1/bots/"):

@@ -22,6 +22,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/audit"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/computer"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
@@ -52,6 +53,7 @@ import (
 // Callers (typically cmd/lobslaw/main.go) assemble this from flags +
 // config.toml + resolved secrets.
 type Config struct {
+	Computer  config.ComputerConfig
 	NodeID    string
 	Functions []types.NodeFunction
 
@@ -313,8 +315,9 @@ type Config struct {
 // New, started via Start, stopped via Shutdown. Shutdown is safe to
 // call multiple times.
 type Node struct {
-	cfg Config
-	log *slog.Logger
+	computer *computer.Service
+	cfg      Config
+	log      *slog.Logger
 
 	listener net.Listener
 	server   *grpc.Server
@@ -880,6 +883,9 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	default:
 	}
 	close(n.shutdownOnce)
+	if n.computer != nil {
+		_ = n.computer.Close()
+	}
 
 	// Drained first, before the gRPC stop. A shutdown that discards the
 	// buffer loses precisely the spans from the turn that was in flight
@@ -1029,6 +1035,9 @@ func (n *Node) dialer() discovery.Dialer {
 // resources but hit an error. Best-effort cleanup; errors swallowed
 // because we're already returning a failure.
 func (n *Node) closePartial() {
+	if n.computer != nil {
+		_ = n.computer.Close()
+	}
 	n.stopTracing()
 	if n.store != nil {
 		_ = n.store.Close()

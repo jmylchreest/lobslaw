@@ -85,7 +85,7 @@ func needsReexec(p *Policy) bool {
 	if p == nil {
 		return false
 	}
-	return p.NoNewPrivs || len(p.AllowedPaths) > 0 || p.Seccomp.HasRules()
+	return p.RequireLandlock || p.PrivateProc || p.NoNewPrivs || len(p.AllowedPaths) > 0 || p.Seccomp.HasRules()
 }
 
 // rewriteForHelperReexec mutates cmd so it invokes the running

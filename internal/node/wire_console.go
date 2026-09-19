@@ -27,6 +27,7 @@ func (n *Node) wireConsoleBackend() error {
 		return err
 	}
 	server := gateway.NewServer(gateway.RESTConfig{
+		Computer:    n.computer,
 		RequireAuth: true, Identity: n.identityResolver(), Logger: n.log,
 		DefaultScope:  n.cfg.Gateway.UnknownUserScope,
 		DefaultBudget: compute.FromComputeConfig(n.cfg.Compute),
