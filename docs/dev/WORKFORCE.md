@@ -48,6 +48,16 @@ large-project throughput for one atomic transaction covering receipt + task and
 dependency/claim transitions. Raft snapshots include the bucket. Logical portable
 archives do not currently export workforce projects.
 
+Successful conversation tasks roll out of this hot aggregate after their full
+transcript has been saved through the session service. Retention keeps the most
+recent 32 eligible chat tasks and 64 display messages, plus active conversation
+messages. Receipt targets, predecessors/parents of nonterminal tasks, and tasks
+without a saved transcript are protected. Active, blocked, failed, approval and
+non-chat work is not silently discarded. Retention and each triggering mutation
+share the project CAS; it neither deletes session transcripts nor evicts delivery
+receipts. This prevents ordinary conversation from exhausting the aggregate's
+task/message count while retaining the existing safety cap for unfinished work.
+
 Projects have their own editable revision; each task, routine and trigger also
 has an item revision. Internal aggregate revisions fence concurrent workers
 without making every task update invalidate an otherwise unchanged project form.
@@ -106,6 +116,61 @@ conversation tasks and load the previous assistant task's full transcript.
 `ProjectMessage` is the display view, not a replacement for the tool transcript.
 Project context is delimited as untrusted context.
 
+Dispatch also includes bounded actual dependency results and artifact references,
+not just dependency IDs. Results have a 4 KiB per-predecessor / 32 KiB combined
+preview budget; truncation is explicit and the agent can fetch the full task
+result with `workforce_task_get`. The complete context is capped at 128 KiB.
+Project/task IDs, roster, acceptance criteria and persisted progress accompany
+those results in JSON under `untrusted:workforce-context`. Actual authority comes
+from execution metadata, never from that JSON. ContextEngine recall augments the
+caller-pinned context instead of replacing it, and the user question remains last.
+
+## Agent-facing project work
+
+`internal/tools/workforce.go` registers six tools through the ordinary tool
+registry/executor and policy path:
+
+- `workforce_project_get`: current project context and roster.
+- `workforce_task_list`: bounded recent task summaries in this project.
+- `workforce_task_get`: full same-project task result and artifact references.
+- `workforce_task_create`: delegate durable work with existing dependencies.
+- `workforce_task_checkpoint`: persist verified progress for the current task.
+- `workforce_task_block`: ask the human a question and stop the current attempt.
+
+There are no agent approval or force-completion tools. A task becomes done only
+through its claim-fenced worker completion. Blocking persists the question before
+cancelling the attempt; the worker records `blocked`, not success, even if an
+agent's closing response arrives afterwards. A human answer starts a new bounded
+attempt with the checkpoint and available prior conversation.
+
+Each tool requires the worker's private original-claim capability as well as
+`turn.Identity` with channel `workforce`, matching project/channel ID, task/turn
+ID, bot principal and human `BotOwner`. Mutations recheck that capability against
+the current Raft aggregate. A nested bot turn, stale worker, ordinary chat or
+caller-supplied project/owner cannot gain access by choosing matching strings.
+Children inherit the exact persisted parent claims; they do not acquire claims
+or roles from a machine identity or from their bot owner. Delegation is bounded
+to eight children per task and four levels, in addition to project capacity.
+Explicit bot tool allowlists and policy still apply.
+
+```mermaid
+sequenceDiagram
+  participant Human
+  participant Coordinator as Real Agent / coordinator
+  participant Tools as Policy-checked workforce tools
+  participant Raft
+  participant Worker
+  Human->>Coordinator: Plan and delegate in project conversation
+  Coordinator->>Tools: task_create A, then B depends_on A
+  Tools->>Raft: Verify original claim; persist children with inherited claims
+  Worker->>Coordinator: Run A with project context + memory recall
+  Coordinator-->>Worker: Actual result and tool transcript
+  Worker->>Raft: Complete A with original token
+  Worker->>Coordinator: Run B with A's result/artifact references + pinned context
+  Coordinator-->>Worker: Evidence-based successor result
+  Worker->>Raft: Complete B
+```
+
 ## Approval and routine execution
 
 A routine is created as a draft. Approval records the human owner and a digest
@@ -152,8 +217,14 @@ sequenceDiagram
   Worker->>Raft: Done only after all steps succeed
 ```
 
-All recorded fills are manual sensitive steps. Sensitive steps cannot carry
-selector, URL or value fields. Automated navigation rejects URL userinfo,
+Recorded fills are manual sensitive steps by default. A sensitive fill can retain
+only a value-free structural `tag:nth-of-type(n)` selector chain; no sensitive
+step can carry a URL, value or input mode. The owner can explicitly edit a
+non-sensitive fill to include a selector, value and
+`input_mode: "reviewed_literal"`, then approve the changed definition. The exact
+mode, selector and value are digest-bound. The browser runtime must independently
+refuse credential/password/login targets; a reviewed literal is not a credential
+grant. Automated navigation rejects URL userinfo,
 queries and fragments, which may contain credentials; those navigations are
 manual steps instead. Browser availability never falls back to a permissive
 tool. A missing executor is an explicit failed task.
@@ -212,5 +283,9 @@ dedupe; cross-owner reads/mutations; dependency resolution; real
 `compute.Agent` dispatch through `turn.Runner`; cancellation fencing; manual
 checkpoints; definition revocation; browser policy and bot filters; secret-free
 routine definitions; actual scheduler dispatch; and remote ConsoleService SSE.
+Real-Agent tests also execute workforce tools through policy to create dependent
+work, prove that a successor sees its predecessor's evidence with recall enabled,
+and exercise checkpoint/block/answer continuation. Retention tests run more than
+256 conversation turns while preserving independent receipt/dependency targets.
 Race tests cover workforce, gateway, node and memory packages. No new external
 dependencies were added.

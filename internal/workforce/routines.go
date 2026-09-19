@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
+
+const ReviewedLiteralInput = "reviewed_literal"
+
+var routineStructuralSelector = regexp.MustCompile(`^[a-z][a-z0-9-]*:nth-of-type\([1-9][0-9]*\)( > [a-z][a-z0-9-]*:nth-of-type\([1-9][0-9]*\))*$`)
 
 func digest(r *Routine) string {
 	raw, _ := json.Marshal(struct {
@@ -35,19 +40,39 @@ func validRoutine(r *Routine) error {
 		return ErrInvalid
 	}
 	for _, step := range r.Steps {
-		switch step.Action {
-		case "navigate", "click", "fill", "press", "wait", "capture":
-		default:
-			return ErrInvalid
+		if e := validRoutineStep(step); e != nil {
+			return e
 		}
-		if !validText(step.Value+step.Selector+step.URL+step.Description) || step.Sensitive && (step.Value != "" || step.Selector != "" || step.URL != "") || step.Action == "fill" && !step.Sensitive {
-			return fmt.Errorf("%w: sensitive steps must not contain literal input", ErrInvalid)
+	}
+	return nil
+}
+
+func validRoutineStep(step RoutineStep) error {
+	switch step.Action {
+	case "navigate", "click", "fill", "press", "wait", "capture":
+	default:
+		return ErrInvalid
+	}
+	if !validText(step.Value + step.Selector + step.URL + step.Description) {
+		return ErrInvalid
+	}
+	if step.Sensitive {
+		if step.Value != "" || step.URL != "" || step.InputMode != "" || step.Selector != "" && (step.Action != "fill" || !routineStructuralSelector.MatchString(step.Selector)) {
+			return fmt.Errorf("%w: sensitive steps cannot store input", ErrInvalid)
 		}
-		if step.Action == "navigate" && !step.Sensitive {
-			parsed, e := url.Parse(step.URL)
-			if e != nil || parsed.Host == "" || parsed.Scheme != "https" && parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-				return fmt.Errorf("%w: credential-bearing navigation must be a manual step", ErrInvalid)
-			}
+		return nil
+	}
+	if step.Action == "fill" {
+		if step.InputMode != ReviewedLiteralInput || strings.TrimSpace(step.Selector) == "" || step.Value == "" {
+			return fmt.Errorf("%w: automated fill requires an explicitly reviewed literal and selector", ErrInvalid)
+		}
+	} else if step.InputMode != "" {
+		return ErrInvalid
+	}
+	if step.Action == "navigate" {
+		parsed, e := url.Parse(step.URL)
+		if e != nil || parsed.Host == "" || parsed.Scheme != "https" && parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("%w: credential-bearing navigation must be a manual step", ErrInvalid)
 		}
 	}
 	return nil
