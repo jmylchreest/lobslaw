@@ -6,6 +6,22 @@ sidebar_position: 1
 
 A **skill** is a sandboxed subprocess that exposes a set of tools to the agent. Skills are the standard extension point — anything you'd want a third-party app to do (read your gmail, post to slack, query a database) is a skill.
 
+## Review proposed skills in Telegram
+
+Use **Review pending skills** on a pending-skill notice, or send `/learned` in a private chat. The queue includes new proposals and amendments to approved skills. `/learned show <id>` opens a specific item.
+
+Each review contains the full instructions, bundled text files, and source turn. Amendments show both the current and proposed content and the rationale. Long reviews arrive as `skill-review.txt`; approval buttons are offered only after the complete review has been delivered.
+
+- **Approve** records your decision for exactly the reviewed content. The result distinguishes a recorded approval from a skill successfully installed on the responding node.
+- **Deny** archives a new proposal. For an amendment to an active skill, it discards the amendment and keeps the approved version.
+- **Later** closes that review message and leaves the proposal pending. Reopen `/learned` whenever you are ready.
+
+Review buttons expire after 30 minutes and survive node restarts when durable prompts are configured. A changed proposal needs a fresh review. Repeated decisions cannot approve it twice. If applying a decision fails, reopen the queue to check the current state and retry from a fresh review.
+
+This is a human command, not an agent tool: the model cannot approve its own proposals. The node must host the self-learning store and a prompt registry. Policy must explicitly allow `command:exec` on resource `learned` for the user, and they can review only records they own. Group chats and unowned records are refused. Notice allowlists only control who receives reminders; they do not grant approval permission.
+
+Other channels and operators can continue using `lobslaw learned pending --all`, `show`, `approve`, `accept`, `reject`, and `archive` against a running node.
+
 ## Anatomy
 
 A skill is:
