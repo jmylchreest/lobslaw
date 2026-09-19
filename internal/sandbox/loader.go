@@ -111,17 +111,26 @@ type LoadResult struct {
 //   - Policies map: a later tool policy for the same name overwrites
 //     the earlier one. If you want "operator overrides user-global,"
 //     put operator's dir later in the list.
-//   - Preset registrations: later RegisterPreset calls shadow earlier
-//     ones (same as single-dir mode, just repeated). OverriddenBuiltins
-//     in the final result lists every such shadow across all dirs.
+//   - Presets start from built-ins on every load; later directories shadow
+//     earlier ones within this load, without changing the global registry.
+//     OverriddenBuiltins lists every such shadow across all dirs.
 //   - PresetsLoaded / Rejected: unioned (operators get a full
 //     accounting of what happened).
 //
 // Missing directories are no-ops, consistent with LoadPolicyDir.
 func LoadPolicyDirs(dirs []string, opts LoadOptions) (*LoadResult, error) {
+	// Operator reloads start from built-ins, never from registrations left by
+	// an earlier load or an unrelated skill. Carry this set across directories
+	// to preserve the existing later-directory precedence.
+	presets := make(map[string]Preset, len(BuiltinPresets))
+	for _, p := range BuiltinPresets {
+		presets[p.Name] = p
+	}
+	lookup := func(name string) (Preset, bool) { p, ok := presets[name]; return p, ok }
+	register := func(p Preset) { presets[p.Name] = p }
 	merged := &LoadResult{Policies: map[string]*Policy{}}
 	for _, dir := range dirs {
-		r, err := LoadPolicyDir(dir, opts)
+		r, err := loadPolicyDir(dir, opts, lookup, register)
 		if err != nil {
 			return merged, fmt.Errorf("load policy dir %q: %w", dir, err)
 		}
@@ -153,6 +162,10 @@ func LoadPolicyDirs(dirs []string, opts LoadOptions) (*LoadResult, error) {
 // visible warning log (not silent) so operators see tampering
 // attempts. See LoadOptions for the knobs.
 func LoadPolicyDir(dir string, opts LoadOptions) (*LoadResult, error) {
+	return loadPolicyDir(dir, opts, LookupPreset, RegisterPreset)
+}
+
+func loadPolicyDir(dir string, opts LoadOptions, lookup func(string) (Preset, bool), register func(Preset)) (*LoadResult, error) {
 	opts = opts.withDefaults()
 
 	if dir == "" {
@@ -173,7 +186,7 @@ func LoadPolicyDir(dir string, opts LoadOptions) (*LoadResult, error) {
 
 	presetsDir := filepath.Join(dir, PresetSubdir)
 	if _, err := os.Stat(presetsDir); err == nil {
-		if err := loadPresetsFromDir(presetsDir, result, opts); err != nil {
+		if err := loadPresetsFromDir(presetsDir, result, opts, lookup, register); err != nil {
 			return nil, err
 		}
 	}
@@ -193,7 +206,7 @@ func LoadPolicyDir(dir string, opts LoadOptions) (*LoadResult, error) {
 		}
 		path := filepath.Join(dir, entry.Name())
 		name := strings.TrimSuffix(entry.Name(), ".toml")
-		policy, err := loadToolPolicyFile(path, name, opts)
+		policy, err := loadToolPolicyFile(path, name, opts, lookup)
 		if err != nil {
 			// ONE BAD FILE MUST NOT DISCARD THE DIRECTORY.
 			//
@@ -226,7 +239,7 @@ func LoadPolicyDir(dir string, opts LoadOptions) (*LoadResult, error) {
 // registers each one. Collisions with built-ins are recorded in the
 // result so callers can log them — shadowing is allowed but should
 // be visible.
-func loadPresetsFromDir(dir string, result *LoadResult, opts LoadOptions) error {
+func loadPresetsFromDir(dir string, result *LoadResult, opts LoadOptions, lookup func(string) (Preset, bool), register func(Preset)) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read presets dir %q: %w", dir, err)
@@ -245,7 +258,7 @@ func loadPresetsFromDir(dir string, result *LoadResult, opts LoadOptions) error 
 			result.Rejected = append(result.Rejected, "_presets/"+name)
 			continue
 		}
-		if _, wasBuiltin := LookupPreset(spec.Name); wasBuiltin {
+		if _, wasBuiltin := lookup(spec.Name); wasBuiltin {
 			// Shadowing a built-in — operators should know.
 			result.OverriddenBuiltins = append(result.OverriddenBuiltins, spec.Name)
 		}
@@ -253,7 +266,7 @@ func loadPresetsFromDir(dir string, result *LoadResult, opts LoadOptions) error 
 		if err != nil {
 			return err
 		}
-		RegisterPreset(preset)
+		register(preset)
 		result.PresetsLoaded = append(result.PresetsLoaded, spec.Name)
 	}
 	return nil
@@ -285,7 +298,7 @@ func verifyAndLog(path string, opts LoadOptions) bool {
 // filename (without .toml) is the canonical tool name; if the file's
 // `name` field is set, it must match. Returns (nil, nil) when the
 // perm check rejects the file — caller skips rather than errors.
-func loadToolPolicyFile(path, expectName string, opts LoadOptions) (*Policy, error) {
+func loadToolPolicyFile(path, expectName string, opts LoadOptions, lookup func(string) (Preset, bool)) (*Policy, error) {
 	if !verifyAndLog(path, opts) {
 		return nil, nil
 	}
@@ -302,7 +315,7 @@ func loadToolPolicyFile(path, expectName string, opts LoadOptions) (*Policy, err
 	} else if spec.Name != expectName {
 		return nil, fmt.Errorf("policy file %q: name %q doesn't match filename", path, spec.Name)
 	}
-	p, err := spec.ToPolicy()
+	p, err := spec.toPolicy(lookup)
 	if err != nil {
 		return nil, err
 	}
