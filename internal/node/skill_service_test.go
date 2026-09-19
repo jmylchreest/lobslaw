@@ -55,7 +55,7 @@ func skillSvc(t *testing.T, policy skills.SigningPolicy, verifier *skills.Verifi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &skillService{store: skillStore, policy: policy, verifier: verifier}
+	return &skillService{store: skillStore, policy: policy, verifier: verifier, sharing: memory.NewSharingStore(node, store)}
 }
 
 func bundleRequest(manifest, handler string) *lobslawv1.ImportSkillRequest {

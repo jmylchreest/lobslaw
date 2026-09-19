@@ -34,6 +34,11 @@ lobslaw skills             # skills held in the cluster store
   skills list              # what is installed
   skills import <path>     # add one
   skills remove <name>     # take one out
+  skills publish --dir <path> --to file:<path> # create a portable release
+  skills inspect file:<path> # inspect without connecting to a node
+  skills sign file:<path> --key <key> --publisher <name> --to file:<path>
+  skills install file:<path> --owner user:<id> # preview staged installation
+  skills activate-install <id> --owner user:<id> # preview activation
 lobslaw learned            # what the agent taught itself
   learned list             # artefacts it wrote for itself
   learned pending          # refinements awaiting a decision

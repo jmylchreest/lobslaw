@@ -383,6 +383,9 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	SkillService_ExportShare_FullMethodName   = "/lobslaw.v1.SkillService/ExportShare"
+	SkillService_InstallShare_FullMethodName  = "/lobslaw.v1.SkillService/InstallShare"
+	SkillService_ActivateShare_FullMethodName = "/lobslaw.v1.SkillService/ActivateShare"
 	SkillService_ImportSkill_FullMethodName   = "/lobslaw.v1.SkillService/ImportSkill"
 	SkillService_ExportSkill_FullMethodName   = "/lobslaw.v1.SkillService/ExportSkill"
 	SkillService_ListSkills_FullMethodName    = "/lobslaw.v1.SkillService/ListSkills"
@@ -402,6 +405,9 @@ const (
 // somebody's laptop and the cluster is elsewhere, so a service taking a
 // directory would be reading one that does not exist on the node.
 type SkillServiceClient interface {
+	ExportShare(ctx context.Context, in *ExportShareRequest, opts ...grpc.CallOption) (*ExportShareResponse, error)
+	InstallShare(ctx context.Context, in *InstallShareRequest, opts ...grpc.CallOption) (*InstallShareResponse, error)
+	ActivateShare(ctx context.Context, in *ActivateShareRequest, opts ...grpc.CallOption) (*ActivateShareResponse, error)
 	ImportSkill(ctx context.Context, in *ImportSkillRequest, opts ...grpc.CallOption) (*ImportSkillResponse, error)
 	ExportSkill(ctx context.Context, in *ExportSkillRequest, opts ...grpc.CallOption) (*ExportSkillResponse, error)
 	ListSkills(ctx context.Context, in *ListSkillsRequest, opts ...grpc.CallOption) (*ListSkillsResponse, error)
@@ -418,6 +424,36 @@ type skillServiceClient struct {
 
 func NewSkillServiceClient(cc grpc.ClientConnInterface) SkillServiceClient {
 	return &skillServiceClient{cc}
+}
+
+func (c *skillServiceClient) ExportShare(ctx context.Context, in *ExportShareRequest, opts ...grpc.CallOption) (*ExportShareResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportShareResponse)
+	err := c.cc.Invoke(ctx, SkillService_ExportShare_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skillServiceClient) InstallShare(ctx context.Context, in *InstallShareRequest, opts ...grpc.CallOption) (*InstallShareResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallShareResponse)
+	err := c.cc.Invoke(ctx, SkillService_InstallShare_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skillServiceClient) ActivateShare(ctx context.Context, in *ActivateShareRequest, opts ...grpc.CallOption) (*ActivateShareResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActivateShareResponse)
+	err := c.cc.Invoke(ctx, SkillService_ActivateShare_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *skillServiceClient) ImportSkill(ctx context.Context, in *ImportSkillRequest, opts ...grpc.CallOption) (*ImportSkillResponse, error) {
@@ -482,6 +518,9 @@ func (c *skillServiceClient) ActivateSkill(ctx context.Context, in *ActivateSkil
 // somebody's laptop and the cluster is elsewhere, so a service taking a
 // directory would be reading one that does not exist on the node.
 type SkillServiceServer interface {
+	ExportShare(context.Context, *ExportShareRequest) (*ExportShareResponse, error)
+	InstallShare(context.Context, *InstallShareRequest) (*InstallShareResponse, error)
+	ActivateShare(context.Context, *ActivateShareRequest) (*ActivateShareResponse, error)
 	ImportSkill(context.Context, *ImportSkillRequest) (*ImportSkillResponse, error)
 	ExportSkill(context.Context, *ExportSkillRequest) (*ExportSkillResponse, error)
 	ListSkills(context.Context, *ListSkillsRequest) (*ListSkillsResponse, error)
@@ -499,6 +538,15 @@ type SkillServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedSkillServiceServer struct{}
 
+func (UnimplementedSkillServiceServer) ExportShare(context.Context, *ExportShareRequest) (*ExportShareResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExportShare not implemented")
+}
+func (UnimplementedSkillServiceServer) InstallShare(context.Context, *InstallShareRequest) (*InstallShareResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InstallShare not implemented")
+}
+func (UnimplementedSkillServiceServer) ActivateShare(context.Context, *ActivateShareRequest) (*ActivateShareResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ActivateShare not implemented")
+}
 func (UnimplementedSkillServiceServer) ImportSkill(context.Context, *ImportSkillRequest) (*ImportSkillResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ImportSkill not implemented")
 }
@@ -532,6 +580,60 @@ func RegisterSkillServiceServer(s grpc.ServiceRegistrar, srv SkillServiceServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&SkillService_ServiceDesc, srv)
+}
+
+func _SkillService_ExportShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportShareRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ExportShare(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ExportShare_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ExportShare(ctx, req.(*ExportShareRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkillService_InstallShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallShareRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).InstallShare(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_InstallShare_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).InstallShare(ctx, req.(*InstallShareRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkillService_ActivateShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateShareRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ActivateShare(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ActivateShare_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ActivateShare(ctx, req.(*ActivateShareRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _SkillService_ImportSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -631,6 +733,18 @@ var SkillService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "lobslaw.v1.SkillService",
 	HandlerType: (*SkillServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ExportShare",
+			Handler:    _SkillService_ExportShare_Handler,
+		},
+		{
+			MethodName: "InstallShare",
+			Handler:    _SkillService_InstallShare_Handler,
+		},
+		{
+			MethodName: "ActivateShare",
+			Handler:    _SkillService_ActivateShare_Handler,
+		},
 		{
 			MethodName: "ImportSkill",
 			Handler:    _SkillService_ImportSkill_Handler,

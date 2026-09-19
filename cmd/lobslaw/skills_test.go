@@ -219,6 +219,7 @@ func TestTheUsageAdvertisesNothingUnwired(t *testing.T) {
 	dispatched := map[string]bool{
 		"list": true, "import": true, "export": true,
 		"remove": true, "rollback": true,
+		"publish": true, "inspect": true, "sign": true, "install": true, "activate-install": true,
 	}
 	for line := range strings.SplitSeq(skillsUsage, "\n") {
 		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
