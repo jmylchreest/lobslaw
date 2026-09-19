@@ -71,8 +71,12 @@ func TestSandboxExecWithoutNoNewPrivsLeavesProcStatusClear(t *testing.T) {
 	bin := buildHelperBinary(t)
 
 	cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "/bin/cat", "/proc/self/status")
-	// No LOBSLAW_SANDBOX_POLICY env — helper defaults to zero Policy.
-	cmd.Env = os.Environ()
+	// Dispatch-only mode requires an explicitly supplied zero policy.
+	encoded, err := sandbox.EncodePolicy(&sandbox.Policy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = append(os.Environ(), sandbox.PolicyEnvVar+"="+encoded)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -299,6 +303,11 @@ func TestSandboxExecRejectsBadTarget(t *testing.T) {
 	bin := buildHelperBinary(t)
 
 	cmd := exec.Command(bin, sandbox.HelperSubcommand, "--", "relative/path")
+	encoded, encodeErr := sandbox.EncodePolicy(&sandbox.Policy{})
+	if encodeErr != nil {
+		t.Fatal(encodeErr)
+	}
+	cmd.Env = append(os.Environ(), sandbox.PolicyEnvVar+"="+encoded)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	err := cmd.Run()
