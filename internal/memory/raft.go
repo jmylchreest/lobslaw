@@ -304,6 +304,11 @@ func (n *RaftNode) startStateWatch() {
 				select {
 				case <-n.stopWatch:
 					return
+				case <-n.fsm.Failed():
+					n.log.Error("stopping raft after unsupported committed entry", "err", n.fsm.Failure())
+					// Never wait for shutdown from a watcher of the FSM callback.
+					n.Raft.Shutdown()
+					return
 				case <-n.fsm.store.Failed():
 					n.log.Error("stopping raft after unrecoverable snapshot restore", "err", n.fsm.store.Failure())
 					// Shutdown is asynchronous: waiting here would deadlock if

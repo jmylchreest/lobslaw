@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/protobuf/proto"
@@ -23,8 +24,10 @@ var ErrClaimConflict = errors.New("fsm: claim conflict")
 // unmarshals each log entry as a LogEntry proto and dispatches
 // to the appropriate bucket by payload type.
 type FSM struct {
-	mu    sync.RWMutex
-	store *Store
+	mu      sync.RWMutex
+	store   *Store
+	failed  chan struct{}
+	failure atomic.Pointer[fsmFailure]
 
 	// lastApplied* caches the highest raft index applied, so the
 	// already-applied check in Apply is not a bbolt read per entry.
@@ -88,7 +91,7 @@ type FSM struct {
 
 // NewFSM wraps a Store as a Raft FSM.
 func NewFSM(store *Store) *FSM {
-	return &FSM{store: store}
+	return &FSM{store: store, failed: make(chan struct{})}
 }
 
 // SetSchedulerChangeCallback registers a callback that fires after
@@ -152,6 +155,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if err := f.Failure(); err != nil {
+		return err
+	}
+
 	// Already-applied entries are skipped, because THIS FSM'S STATE IS
 	// DURABLE and hashicorp/raft does not assume that.
 	//
@@ -190,13 +197,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 
 	var entry lobslawv1.LogEntry
 	if err := proto.Unmarshal(l.Data, &entry); err != nil {
-		// Still advance: a malformed entry will be malformed on every
-		// replay, and refusing to record it means re-deciding that
-		// forever.
-		if l.Index != 0 {
-			f.setLastApplied(l.Index)
-		}
-		return fmt.Errorf("unmarshal log entry: %w", err)
+		return f.halt(l.Index, fmt.Errorf("unmarshal log entry: %w", err))
+	}
+	if err := validateLogEntrySupport(&entry); err != nil {
+		return f.halt(l.Index, err)
 	}
 	// Advanced even when the apply below returns an error. A CAS that
 	// legitimately loses is a decided outcome, not a retryable one:
@@ -770,7 +774,10 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return &snapshot{store: f.store}, nil
+	if err := f.Failure(); err != nil {
+		return nil, err
+	}
+	return &snapshot{store: f.store, fsm: f}, nil
 }
 
 // Restore replaces state.db's contents with the bbolt dump read from
@@ -783,6 +790,9 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	defer f.mu.Unlock()
 	defer func() { _ = rc.Close() }()
 
+	if err := f.Failure(); err != nil {
+		return err
+	}
 	if err := f.store.RestoreFromSnapshot(rc); err != nil {
 		return err
 	}
@@ -836,6 +846,7 @@ func (f *FSM) setLastApplied(idx uint64) {
 // snapshot is the per-Snapshot() state captured for raft's async
 // Persist call.
 type snapshot struct {
+	fsm   *FSM
 	store *Store
 }
 
@@ -843,9 +854,26 @@ type snapshot struct {
 // own goroutine; the underlying store must remain safe to read from
 // concurrent Apply calls (bbolt handles this via Tx read isolation).
 func (s *snapshot) Persist(sink raft.SnapshotSink) error {
+	if s.fsm != nil {
+		if err := s.fsm.Failure(); err != nil {
+			_ = sink.Cancel()
+			return err
+		}
+	}
+
 	if err := s.store.WriteSnapshot(sink); err != nil {
 		_ = sink.Cancel()
 		return err
+	}
+	// Serialize publication with the failure latch, without blocking Apply
+	// during the potentially long snapshot copy.
+	if s.fsm != nil {
+		s.fsm.mu.RLock()
+		defer s.fsm.mu.RUnlock()
+		if err := s.fsm.Failure(); err != nil {
+			_ = sink.Cancel()
+			return err
+		}
 	}
 	return sink.Close()
 }
