@@ -162,7 +162,9 @@ message ExportShareRequest {
   repeated string inputs = 4;
   string source_timezone = 5;
 }
-message ExportShareResponse { bytes artifact = 1; }
+message ExportShareResponse {
+  bytes artifact = 1;
+}
 message InstallShareRequest {
   bytes artifact = 1;
   string owner = 2;
@@ -176,8 +178,12 @@ message ActivateShareRequest {
   bool apply = 3;
   string expected_plan = 4;
 }
-message InstallShareResponse { bytes plan_json = 1; }
-message ActivateShareResponse { bytes plan_json = 1; }
+message InstallShareResponse {
+  bytes plan_json = 1;
+}
+message ActivateShareResponse {
+  bytes plan_json = 1;
+}
 
 // An installation records destination bindings, never publisher-granted authority.
 message ShareInstallation {
