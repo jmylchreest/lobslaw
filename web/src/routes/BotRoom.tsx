@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, streamBotChat, type Bot, type InboxItem, type TranscriptMessage } from "../api";
 import { Markdown } from "../components/Markdown";
 import { Mascot } from "../components/Mascot";
+import { MultiSelect } from "../components/MultiSelect";
 import { Err, Spinner, useLoad, when } from "../components/ui";
 import { botVars } from "../theme";
 
@@ -724,19 +725,21 @@ function Transcript({ sessionId }: { sessionId: string }) {
 function Settings({ bot, onSaved }: { bot: Bot; onSaved: () => void }) {
   const [f, setF] = useState({
     display_name: bot.display_name, description: bot.description,
-    instructions: bot.instructions, tools: bot.tools.join(", "),
-    may_message: bot.may_message.join(", "),
+    instructions: bot.instructions,
   });
+  const [tools, setTools] = useState<string[]>(bot.tools);
+  const [edges, setEdges] = useState<string[]>(bot.may_message);
+  const catalogue = useLoad(() => api.tools());
+  const roster = useLoad(() => api.listBots());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
   async function save(patch?: Partial<Bot>) {
     setBusy(true); setError(null);
     try {
       await api.updateBot(bot.id, patch ?? {
         display_name: f.display_name, description: f.description, instructions: f.instructions,
-        tools: list(f.tools), may_message: list(f.may_message),
+        tools, may_message: edges,
       });
       onSaved();
     } catch (e) { setError(e as Error); } finally { setBusy(false); }
@@ -758,21 +761,33 @@ function Settings({ bot, onSaved }: { bot: Bot; onSaved: () => void }) {
           onChange={(e) => setF({ ...f, instructions: e.target.value })} />
         <div className="hint">Rides on every turn this bot takes. The role, not a task.</div>
       </div>
-      <div className="field">
-        <label>Tools</label>
-        <input className="in mono" value={f.tools} placeholder="web_search, fetch_url, memory_search"
-          onChange={(e) => setF({ ...f, tools: e.target.value })} />
-        <div className="hint">
-          Empty means every tool this node has. A tool left out is one this bot is never even
-          shown — that is how you limit what it can do.
+      <MultiSelect
+        label="Tools"
+        options={(catalogue.data ?? []).map((t) => ({ value: t.name, hint: t.description }))}
+        value={tools}
+        onChange={setTools}
+        placeholder="Search tools…"
+        hint="Empty means every tool this node has. A tool left out is one this bot is never even shown — that is how you limit what it can do."
+      />
+      {bot.is_coordinator ? (
+        <div className="field">
+          <label>Can message</label>
+          <div className="hint">
+            The coordinator reaches every bot in its team automatically; the list is kept up to
+            date as bots are added.
+          </div>
         </div>
-      </div>
-      <div className="field">
-        <label>Can message</label>
-        <input className="in mono" value={f.may_message} placeholder="engineering, devops"
-          onChange={(e) => setF({ ...f, may_message: e.target.value })} />
-        <div className="hint">Loops are refused — the error names the path.</div>
-      </div>
+      ) : (
+        <MultiSelect
+          label="Can message"
+          options={(roster.data ?? []).map((b) => ({ value: b.id, hint: b.display_name }))}
+          value={edges}
+          onChange={setEdges}
+          placeholder="Search bots…"
+          exclude={[bot.id]}
+          hint="Who this bot may hand work to. Loops are refused — the error names the path."
+        />
+      )}
       {error && <Err error={error} />}
       <div className="row gap-sm">
         <button className="btn primary" onClick={() => save()} disabled={busy}>Save</button>

@@ -86,6 +86,12 @@ export interface SessionInfo {
   user_id: string;
 }
 
+/** One selectable tool in the console's picker. */
+export interface ToolInfo {
+  name: string;
+  description?: string;
+}
+
 export interface CapabilityFlags {
   enabled: boolean;
   authorised: boolean;
@@ -229,6 +235,8 @@ export const api = {
   logout: () => request<{ status: string }>("/v1/session", { method: "DELETE" }),
 
   capabilities: () => request<Capabilities>("/v1/capabilities"),
+
+  tools: () => request<{ tools: ToolInfo[] }>("/v1/tools").then((r) => r.tools ?? []),
 
   listBots: () => request<{ bots: Bot[] }>("/v1/bots").then((r) => r.bots ?? []),
 

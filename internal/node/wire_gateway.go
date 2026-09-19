@@ -147,6 +147,7 @@ func (n *Node) wireGateway() error {
 		Conversation:     n.conversationConfig(),
 		Logger:           n.log,
 		Bots:             n.teamBotsOrNil(),
+		Tools:            n.toolCatalogueOrNil(),
 		Groups:           n.teamGroupsOrNil(),
 		Inbox:            n.teamInboxOrNil(),
 		TeamRouter:       n.teamRouterOrNil(),

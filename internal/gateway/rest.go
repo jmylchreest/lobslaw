@@ -171,6 +171,11 @@ type RESTConfig struct {
 	// leaves BotID empty.
 	TeamRouter TeamRouter
 
+	// Tools lists what a bot may be granted, for the console's tool
+	// picker. Nil returns 503 rather than an empty list, so a console
+	// can tell "nothing registered" from "this node does not say".
+	Tools ToolCatalogue
+
 	// Config is the allowlisted node configuration /v1/config
 	// publishes. Nil returns 503 rather than a 404, so a console can
 	// tell "this node does not say" from "wrong path".
@@ -252,6 +257,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/v1/session", s.handleSession)
 	mux.HandleFunc("/v1/session/code", s.handleSessionCode)
+	mux.HandleFunc("/v1/tools", s.handleTools)
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	// General to the gateway rather than gated on compute-teams: a
 	// node with no bots still has a configuration worth reading and a

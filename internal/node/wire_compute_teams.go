@@ -3,6 +3,7 @@ package node
 import (
 	"fmt"
 
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/tools"
 )
@@ -18,6 +19,27 @@ func (n *Node) wireComputeTeamsStage() error {
 		n.inboxWake = make(chan struct{}, 1)
 	}
 	return n.wireTeamTools()
+}
+
+// toolCatalogueOrNil exposes the registered tools to the gateway's
+// picker. Nil on a node with no registry, which the endpoint reports as
+// 503 rather than an empty list.
+func (n *Node) toolCatalogueOrNil() gateway.ToolCatalogue {
+	if n.toolRegistry == nil {
+		return nil
+	}
+	return toolCatalogueAdapter{reg: n.toolRegistry}
+}
+
+type toolCatalogueAdapter struct{ reg *tools.Registry }
+
+func (a toolCatalogueAdapter) List() []gateway.ToolInfo {
+	defs := a.reg.List()
+	out := make([]gateway.ToolInfo, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, gateway.ToolInfo{Name: d.Name, Description: d.Description})
+	}
+	return out
 }
 
 func (n *Node) wireTeamTools() error {
