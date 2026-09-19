@@ -6,6 +6,7 @@ lobslaw exposes the agent loop to users through **channels**. Today there are tw
 
 Default. Mounts on the gateway HTTP port (8443 by default) at:
 
+- `POST /v1/uploads` — upload image/audio bytes with a valid JWT; return an upload ID
 - `POST /v1/messages` — send a message, get a reply
 - `GET /v1/plan` — see what's scheduled and in-flight
 - `POST /v1/prompts/{id}/{approve|deny}` — answer a confirmation prompt
@@ -139,3 +140,10 @@ Telegram's Bot API does **not** give us:
 - **Email address** — never.
 
 That's why `user_scopes` keys on `user_id`: it's the only identifier that's both stable and present on every message.
+
+
+REST images and audio use a two-step flow: send raw bytes to `/v1/uploads`
+with a supported media `Content-Type`, then include `upload_ids: ["upload-…"]`
+in `/v1/messages`. Both requests require a valid JWT for the same user and must
+reach the same gateway process. Upload IDs expire after one hour and do not
+survive restart. See [upload examples and limits](../docs/configuration/channels.md).

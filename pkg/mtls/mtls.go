@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"google.golang.org/grpc/credentials"
@@ -16,41 +17,27 @@ import (
 // mTLS: this node's cert+key (presented to peers) and the cluster
 // CA pool (used to verify peers). The CA private key is NEVER here.
 //
-// The active certificate is held behind atomic.Pointer so Reload
-// can atomically swap it during cert rotation. Existing in-flight
-// handshakes complete with the previous cert; new handshakes after
-// the swap pick up the rotated material via the GetCertificate
-// callback. Goroutine-safe by construction.
+// Certificate and trust pools are published together behind atomic.Pointer
+// so Reload cannot expose a partially updated credential generation. In-flight
+// handshakes retain their generation; new handshakes capture the current one.
 type NodeCreds struct {
 	caCertPath   string
 	nodeCertPath string
 	nodeKeyPath  string
 
-	active atomic.Pointer[tls.Certificate]
-	pool   *x509.CertPool
+	// Writers serialize to preserve the operator anchor across reloads.
+	mu      sync.Mutex
+	current atomic.Pointer[credentialState]
+}
 
-	// clientAuthPool is what CLIENT certificates are verified against:
-	// the cluster CA, plus the operator CA when one is trusted.
-	//
-	// Deliberately not the same pool as RootCAs. This node dialling a
-	// peer must accept only the cluster CA, so an operator credential
-	// can never be presented BY a server — which is the property that
-	// keeps an online operator-signing key from being able to
-	// manufacture a peer.
-	// Held atomically and read at HANDSHAKE time, not when ServerCreds
-	// is called. The gRPC server is constructed during node startup,
-	// before the wire stage that trusts the operator CA — so a pool
-	// captured at construction would never learn about it, and every
-	// enrolled operator would be told "certificate required" by a node
-	// that had been configured to accept them.
-	clientAuthPool atomic.Pointer[x509.CertPool]
-	// operatorCA is retained so callers can ask which root actually
-	// signed a client cert, rather than trusting an OU string.
-	operatorCA *x509.Certificate
-
-	// NodeID is the CommonName from the node cert at last load. Read
-	// without locking — only updated by Reload, which is single-writer.
-	NodeID string
+// credentialState is immutable after publication. A handshake captures one
+// generation so its certificate and trust roots cannot straddle a reload.
+type credentialState struct {
+	certificate     *tls.Certificate
+	clusterRoots    *x509.CertPool
+	clientAuthRoots *x509.CertPool
+	operatorCA      *x509.Certificate
+	nodeID          string
 }
 
 // LoadNodeCreds reads the CA public cert and this node's cert+key,
@@ -82,6 +69,8 @@ func LoadNodeCreds(caCertPath, nodeCertPath, nodeKeyPath string) (*NodeCreds, er
 // fails — partial swap is forbidden (would leave the node serving
 // with a cert it can't verify against its own CA pool).
 func (n *NodeCreds) Reload() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	if _, err := os.Stat(n.nodeCertPath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("node cert %q does not exist — run `lobslaw cluster sign-node` first (typically as a k8s initContainer)", n.nodeCertPath)
@@ -116,13 +105,12 @@ func (n *NodeCreds) Reload() error {
 	}
 
 	nodeCert.Leaf = leaf
-	n.active.Store(&nodeCert)
-	n.pool = pool
-	n.NodeID = leaf.Subject.CommonName
-	// Rebuilt from the freshly-read cluster CA so a Reload cannot
-	// silently drop the operator anchor — a rotation that logged
-	// every operator out would be a confusing way to find out.
-	n.rebuildClientAuthPool()
+	next := &credentialState{certificate: &nodeCert, clusterRoots: pool, nodeID: leaf.Subject.CommonName}
+	if previous := n.current.Load(); previous != nil {
+		next.operatorCA = previous.operatorCA
+	}
+	next.clientAuthRoots = clientAuthRoots(pool, next.operatorCA)
+	n.current.Store(next)
 	return nil
 }
 
@@ -133,6 +121,8 @@ func (n *NodeCreds) Reload() error {
 // ClientAuth-only in any case, but keeping the pools apart means the
 // guarantee does not rest on that alone.
 func (n *NodeCreds) TrustOperatorCA(caPEM []byte) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	block, _ := pem.Decode(caPEM)
 	if block == nil {
 		return errors.New("operator CA PEM is invalid or empty")
@@ -144,63 +134,33 @@ func (n *NodeCreds) TrustOperatorCA(caPEM []byte) error {
 	if !cert.IsCA {
 		return errors.New("operator CA certificate is not a CA")
 	}
-	n.operatorCA = cert
-	n.rebuildClientAuthPool()
+	next := *n.state()
+	next.operatorCA = cert
+	next.clientAuthRoots = clientAuthRoots(next.clusterRoots, cert)
+	n.current.Store(&next)
 	return nil
 }
 
-// OperatorCA returns the trusted operator root, or nil.
-func (n *NodeCreds) OperatorCA() *x509.Certificate { return n.operatorCA }
+// OperatorCA returns the trusted operator root, or nil. Treat it as read-only.
+func (n *NodeCreds) OperatorCA() *x509.Certificate { return n.state().operatorCA }
 
-func (n *NodeCreds) rebuildClientAuthPool() {
-	if n.operatorCA == nil {
-		n.clientAuthPool.Store(n.pool)
-		return
-	}
-	// A fresh pool rather than AppendCertsFromPEM onto n.pool: mutating
-	// the cluster pool in place would put the operator root into
-	// RootCAs too, and that is exactly the mixing this design exists to
-	// prevent.
-	merged := x509.NewCertPool()
-	for _, c := range n.poolCerts() {
-		merged.AddCert(c)
-	}
-	merged.AddCert(n.operatorCA)
-	n.clientAuthPool.Store(merged)
-}
+// NodeID returns the identity from the currently active certificate.
+func (n *NodeCreds) NodeID() string { return n.state().nodeID }
 
-// poolCerts re-reads the cluster CA file so the merged pool can be
-// built from certificates rather than from an opaque pool.
-//
-// x509.CertPool exposes no way to enumerate what is in it, so the
-// alternative would be keeping a parallel slice in step with it by
-// hand — one more thing to forget during a rotation.
-func (n *NodeCreds) poolCerts() []*x509.Certificate {
-	raw, err := os.ReadFile(n.caCertPath)
-	if err != nil {
-		return nil
+func clientAuthRoots(cluster *x509.CertPool, operator *x509.Certificate) *x509.CertPool {
+	if operator == nil {
+		return cluster
 	}
-	var out []*x509.Certificate
-	for {
-		var block *pem.Block
-		block, raw = pem.Decode(raw)
-		if block == nil {
-			return out
-		}
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		if c, perr := x509.ParseCertificate(block.Bytes); perr == nil {
-			out = append(out, c)
-		}
-	}
+	merged := cluster.Clone()
+	merged.AddCert(operator)
+	return merged
 }
 
 // CAPool returns the cluster CA pool used to verify peers. Snapshot
 // at last Reload — callers building their own tls.Config outside
-// the gRPC path use this. Production paths should prefer ServerCreds
+// the gRPC path use this. The returned pool is read-only. Production paths should prefer ServerCreds
 // / ClientCreds which capture both cert and pool together.
-func (n *NodeCreds) CAPool() *x509.CertPool { return n.pool }
+func (n *NodeCreds) CAPool() *x509.CertPool { return n.state().clusterRoots }
 
 // Certificate returns a snapshot of the currently-active cert.
 // Test/debug accessor — callers building their own tls.Config
@@ -214,18 +174,20 @@ func (n *NodeCreds) Certificate() tls.Certificate {
 // activeCert returns the currently-loaded cert, panicking if Reload
 // has never succeeded — callers always go through LoadNodeCreds
 // which Reloads at construction, so this should be unreachable.
-func (n *NodeCreds) activeCert() *tls.Certificate {
-	c := n.active.Load()
-	if c == nil {
+func (n *NodeCreds) activeCert() *tls.Certificate { return n.state().certificate }
+
+func (n *NodeCreds) state() *credentialState {
+	state := n.current.Load()
+	if state == nil {
 		panic("mtls: NodeCreds used before initial Reload (programmer error)")
 	}
-	return c
+	return state
 }
 
 // ServerCreds returns gRPC TransportCredentials for an mTLS server.
 // Clients must present a cert signed by the same cluster CA.
 //
-// Uses GetCertificate so a Reload mid-process picks up new material
+// Uses GetConfigForClient so a Reload mid-process picks up new material
 // on the next handshake without bouncing the gRPC server.
 func (n *NodeCreds) ServerCreds() credentials.TransportCredentials {
 	return credentials.NewTLS(&tls.Config{
@@ -235,13 +197,12 @@ func (n *NodeCreds) ServerCreds() credentials.TransportCredentials {
 		// Resolved per handshake so a later TrustOperatorCA or Reload
 		// takes effect on the running server.
 		GetConfigForClient: func(_ *tls.ClientHelloInfo) (*tls.Config, error) {
+			state := n.state()
 			return &tls.Config{
-				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
-					return n.activeCert(), nil
-				},
-				ClientCAs:  n.clientAuthPool.Load(),
-				ClientAuth: tls.RequireAndVerifyClientCert,
-				MinVersion: tls.VersionTLS13,
+				Certificates: []tls.Certificate{*state.certificate},
+				ClientCAs:    state.clientAuthRoots,
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				MinVersion:   tls.VersionTLS13,
 			}, nil
 		},
 		ClientAuth: tls.RequireAndVerifyClientCert,
@@ -269,16 +230,10 @@ func (n *NodeCreds) EnrolmentServerConfig() *tls.Config {
 // ClientCreds returns gRPC TransportCredentials for an mTLS client.
 // Verifies that the server presents a cert signed by the cluster CA.
 //
-// Uses GetClientCertificate for the same hot-reload reason as
-// ServerCreds.
+// Loads one certificate/trust generation at each handshake, including when
+// Raft retains this credential for the lifetime of the process.
 func (n *NodeCreds) ClientCreds() credentials.TransportCredentials {
-	return credentials.NewTLS(&tls.Config{
-		GetClientCertificate: func(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			return n.activeCert(), nil
-		},
-		RootCAs:    n.pool,
-		MinVersion: tls.VersionTLS13,
-	})
+	return &clientCredentials{node: n}
 }
 
 // LoadClientCreds loads a credential for something that only ever

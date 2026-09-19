@@ -369,7 +369,8 @@ type Node struct {
 	// materialiser writes ACTIVE self-taught artefacts into this
 	// node's disposable skill cache. Nil when self-learning is off,
 	// for the same absence-not-a-flag reason the store is.
-	materialiser *skills.Materialiser
+	materialiser  *skills.Materialiser
+	materialiseMu sync.Mutex
 	// materialiseWake carries a coalesced request for a materialisation
 	// pass, sent from the FSM's self-taught change callback.
 	materialiseWake chan struct{}
@@ -838,6 +839,8 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	select {
 	case err := <-errCh:
 		return err
+	case <-n.store.Failed():
+		return errors.Join(n.store.Failure(), n.Shutdown(context.Background()))
 	case <-ctx.Done():
 		n.log.Info("shutdown signal received")
 		return n.Shutdown(context.Background())
@@ -1017,8 +1020,8 @@ func validateConfig(cfg Config) error {
 	if cfg.Creds == nil {
 		return errors.New("node.Config: Creds required (run `lobslaw cluster sign-node` first)")
 	}
-	if cfg.Creds.NodeID != cfg.NodeID {
-		return fmt.Errorf("node.Config: cert was signed for %q but this host resolves as %q — re-run `lobslaw cluster sign-node` on this host (or set LOBSLAW_NODE_ID to override)", cfg.Creds.NodeID, cfg.NodeID)
+	if cfg.Creds.NodeID() != cfg.NodeID {
+		return fmt.Errorf("node.Config: cert was signed for %q but this host resolves as %q — re-run `lobslaw cluster sign-node` on this host (or set LOBSLAW_NODE_ID to override)", cfg.Creds.NodeID(), cfg.NodeID)
 	}
 	if needsRaft(cfg.Functions) {
 		if cfg.DataDir == "" {

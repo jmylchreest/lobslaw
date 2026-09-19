@@ -257,6 +257,13 @@ func turnApprovalPending(ctx context.Context) bool {
 // turnApproved reports whether this turn already answered for exactly
 // this operation.
 func turnApproved(ctx context.Context, action, resource string) bool {
+	if invocation, ok := ctx.Value(invocationApprovalKey{}).(*invocationApprovals); ok {
+		return invocation.approved(ctx, action, resource)
+	}
+	return consumeTurnApproval(ctx, action, resource)
+}
+
+func consumeTurnApproval(ctx context.Context, action, resource string) bool {
 	a, ok := ctx.Value(turnApprovalKey{}).(*turnApproval)
 	if !ok || a.action == "" {
 		return false

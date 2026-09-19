@@ -385,7 +385,7 @@ func main() {
 					logger.Error("SIGHUP: cert reload failed", "error", err)
 					continue
 				}
-				logger.Info("SIGHUP: mTLS certs reloaded", "node_id", nodeCfg.Creds.NodeID)
+				logger.Info("SIGHUP: mTLS certs reloaded", "node_id", nodeCfg.Creds.NodeID())
 			}
 		}
 	}()

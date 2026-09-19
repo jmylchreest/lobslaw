@@ -81,6 +81,9 @@ type Message struct {
 	// ToolCallID is populated on tool-result messages (role="tool")
 	// and correlates to the originating assistant ToolCall.ID.
 	ToolCallID string
+	// PreparedToolCall belongs only to a pending confirmation's tool result.
+	// Provider adapters must not send it to the model or populate it from output.
+	PreparedToolCall *PreparedToolCall `json:"-"`
 }
 
 // Tool describes a callable tool for the LLM's tool-calling
