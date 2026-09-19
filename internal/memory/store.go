@@ -2,11 +2,11 @@ package memory
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,14 +20,18 @@ import (
 // at-rest encryption via nacl/secretbox. Values are encrypted before
 // they hit disk; callers see plaintext.
 //
-// The underlying *bolt.DB is held behind atomic.Pointer so a raft
-// snapshot restore (which closes + reopens the file) can swap the
-// handle without invalidating outside references. Without this, the
-// FSM's RestoreFromSnapshot call closed the DB and every other
-// component (policy engine, scheduler, services) was left holding
-// a Store whose db field pointed at a closed handle — producing
-// "database not open" on every subsequent operation.
+// The underlying *bolt.DB is held behind atomic.Pointer so snapshot restore
+// can publish a prepared replacement without invalidating outside Store references.
+// A lifecycle mutex serializes restore and close; the canonical path is separate
+// because bbolt retains the staging filename after the replacement is renamed.
 type Store struct {
+	lifecycle sync.Mutex
+	path      string
+	closed    bool
+	readOnly  bool
+	failed    chan struct{}
+	failure   atomic.Pointer[restoreFailure]
+
 	db     atomic.Pointer[bolt.DB]
 	key    crypto.Key
 	cipher *crypto.Cipher
@@ -37,30 +41,48 @@ type Store struct {
 // Every configured bucket is ensured on open. The key is used to
 // encrypt/decrypt every value.
 func OpenStore(path string, key crypto.Key) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create state.db parent dir: %w", err)
+	return openStore(path, key, false)
+}
+
+// OpenStoreReadOnly opens an existing image for offline recovery inspection.
+// It bypasses recovery markers but cannot mutate buckets or restore snapshots.
+// Stop the node and retain all recovery files before inspecting either image.
+func OpenStoreReadOnly(path string, key crypto.Key) (*Store, error) {
+	return openStore(path, key, true)
+}
+
+func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
+	if !readOnly {
+		if err := checkRestoreRecovery(path); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("create state.db parent dir: %w", err)
+		}
 	}
-	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
+	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: readOnly, Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("open state.db %q: %w", path, err)
 	}
-	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, name := range allBuckets {
-			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
-				return fmt.Errorf("create bucket %q: %w", name, err)
+	if !readOnly {
+		if err := db.Update(func(tx *bolt.Tx) error {
+			for _, name := range allBuckets {
+				if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+					return fmt.Errorf("create bucket %q: %w", name, err)
+				}
 			}
+			return nil
+		}); err != nil {
+			_ = db.Close()
+			return nil, err
 		}
-		return nil
-	}); err != nil {
-		_ = db.Close()
-		return nil, err
 	}
 	c, err := crypto.NewCipher(key)
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("prepare cipher: %w", err)
 	}
-	s := &Store{key: key, cipher: c}
+	s := &Store{key: key, cipher: c, path: path, readOnly: readOnly, failed: make(chan struct{})}
 	s.db.Store(db)
 	return s, nil
 }
@@ -74,6 +96,12 @@ func (s *Store) loadDB() *bolt.DB {
 
 // Close closes the underlying bbolt database.
 func (s *Store) Close() error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	db := s.loadDB()
 	if db == nil {
 		return nil
@@ -239,66 +267,4 @@ func (s *Store) WriteSnapshot(w io.Writer) error {
 		_, err := tx.WriteTo(w)
 		return err
 	})
-}
-
-// RestoreFromSnapshot replaces the underlying state.db with the
-// bbolt dump in r and atomically swaps the live DB pointer. Outside
-// references to *Store remain valid — only the inner *bolt.DB
-// rotates. Returns nil on success.
-//
-// In-flight transactions on the old DB complete normally because
-// they hold their own *bolt.DB reference for the duration. New
-// transactions started after the swap see the restored content.
-//
-// Concurrent operations on this Store are safe except for the
-// narrow window between Close(old) and Store(new) — a transaction
-// started in that window would see the old (now-closed) handle.
-// Raft serialises FSM.Restore calls so this can only race against
-// non-FSM readers; the worst case is a transient ErrDatabaseNotOpen
-// on those readers, which is far better than the pre-fix permanent
-// failure across every component holding a stale Store pointer.
-func (s *Store) RestoreFromSnapshot(r io.Reader) error {
-	old := s.loadDB()
-	if old == nil {
-		return errors.New("store already closed")
-	}
-	path := old.Path()
-	if err := old.Close(); err != nil {
-		return fmt.Errorf("close state.db: %w", err)
-	}
-	tmp := path + ".restore.tmp"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return fmt.Errorf("create tmp snapshot file: %w", err)
-	}
-	if _, err := io.Copy(f, r); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write snapshot: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close tmp snapshot: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename snapshot into place: %w", err)
-	}
-	fresh, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
-	if err != nil {
-		return fmt.Errorf("reopen state.db: %w", err)
-	}
-	if err := fresh.Update(func(tx *bolt.Tx) error {
-		for _, name := range allBuckets {
-			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
-				return fmt.Errorf("ensure bucket %q: %w", name, err)
-			}
-		}
-		return nil
-	}); err != nil {
-		_ = fresh.Close()
-		return err
-	}
-	s.db.Store(fresh)
-	return nil
 }

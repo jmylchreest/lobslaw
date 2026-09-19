@@ -839,6 +839,8 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	select {
 	case err := <-errCh:
 		return err
+	case <-n.store.Failed():
+		return errors.Join(n.store.Failure(), n.Shutdown(context.Background()))
 	case <-ctx.Done():
 		n.log.Info("shutdown signal received")
 		return n.Shutdown(context.Background())
