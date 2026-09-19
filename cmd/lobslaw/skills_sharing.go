@@ -179,42 +179,60 @@ func (v *shareInputs) Set(raw string) error {
 	return nil
 }
 
+type shareInstallOptions struct {
+	node     liveNode
+	owner    string
+	apply    bool
+	expected string
+	inputs   shareInputs
+}
+
+func (o *shareInstallOptions) bind(fs *flag.FlagSet) {
+	o.node.bind(fs)
+	fs.StringVar(&o.owner, "owner", "", "destination user:<id>")
+	fs.BoolVar(&o.apply, "apply", false, "apply the reviewed staging plan")
+	fs.StringVar(&o.expected, "expected-plan", "", "digest from preview")
+	fs.Var(&o.inputs, "input", "prompt binding key=value (repeatable)")
+}
+
 func skillsInstall(args []string) error {
 	fs := newFlagSet("skills install", flag.ContinueOnError)
-	var node liveNode
-	node.bind(fs)
-	owner := fs.String("owner", "", "destination user:<id>")
-	apply := fs.Bool("apply", false, "apply the reviewed plan")
-	expected := fs.String("expected-plan", "", "digest from preview")
-	var inputs shareInputs
-	fs.Var(&inputs, "input", "prompt binding key=value (repeatable)")
+	var opts shareInstallOptions
+	opts.bind(fs)
 	rest, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {
 		return err
 	}
-	if len(rest) != 1 || *owner == "" {
-		return errors.New("supply --owner user:<id> and file:<package> or clawhub:<slug>")
+	if len(rest) != 1 {
+		return errors.New("supply file:<package> or clawhub:<slug>")
 	}
-	source, err := skillShareSource(&node, rest[0])
+	return opts.run(rest[0])
+}
+
+func (o *shareInstallOptions) run(ref string) error {
+	if o.owner == "" {
+		return errors.New("supply --owner user:<id>; installation previews and activation require a destination owner")
+	}
+	source, err := skillShareSource(&o.node, ref)
 	if err != nil {
 		return err
 	}
-	fetchCtx, fetchCancel := node.ctx()
+	fetchCtx, fetchCancel := o.node.ctx()
 	defer fetchCancel()
-	a, err := source.Fetch(fetchCtx, rest[0])
+	a, err := source.Fetch(fetchCtx, ref)
 	if err != nil {
 		return err
 	}
-	client, closeConn, err := skillClient(&node)
+	client, closeConn, err := skillClient(&o.node)
 	if err != nil {
 		return err
 	}
 	defer closeConn()
-	ctx, cancel := node.ctx()
+	ctx, cancel := o.node.ctx()
 	defer cancel()
-	resp, err := client.InstallShare(ctx, &lobslawv1.InstallShareRequest{Artifact: a.Bytes(), Owner: *owner, Inputs: inputs, Apply: *apply, ExpectedPlan: *expected})
+	resp, err := client.InstallShare(ctx, &lobslawv1.InstallShareRequest{Artifact: a.Bytes(), Owner: o.owner, Inputs: o.inputs, Apply: o.apply, ExpectedPlan: o.expected})
 	if err != nil {
-		return explainUnimplemented(err, node.addr)
+		return explainUnimplemented(err, o.node.addr)
 	}
 	return printSharePlan(resp.PlanJson)
 }

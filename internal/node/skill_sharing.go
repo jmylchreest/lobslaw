@@ -103,10 +103,7 @@ func (s *skillService) InstallShare(ctx context.Context, req *lobslawv1.InstallS
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if err := s.validateShare(a); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	p, err := s.sharing.PlanInstall(a, req.GetOwner(), req.GetInputs())
+	p, err := s.prepareShareInstall(a, req.GetOwner(), req.GetInputs())
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
@@ -166,4 +163,15 @@ func (s *skillService) shareResult(ctx context.Context, p *memory.SharePlan, a s
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return raw, nil
+}
+
+// Both operator installation and agent proposals validate and stage identical bytes.
+func (s *skillService) prepareShareInstall(a sharing.Artifact, owner string, inputs map[string]string) (*memory.SharePlan, error) {
+	if s.sharing == nil {
+		return nil, s.errNoStore()
+	}
+	if err := s.validateShare(a); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	return s.sharing.PlanInstall(a, owner, inputs)
 }

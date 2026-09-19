@@ -267,17 +267,16 @@ on production.
 ## `lobslaw plugin install <bundle>`
 
 ```bash
-# from clawhub
-lobslaw plugin install clawhub:gws-workspace@1.0.0
+# ClawHub: same reviewed cluster staging as skills install.
+lobslaw plugin install clawhub:gws-workspace@1.0.0 --context home --owner user:alice
 
-# from local directory
-lobslaw plugin install file:///path/to/manifest-dir/
-
-# from a git repo (planned)
-lobslaw plugin install git://github.com/owner/skill@v1.0.0
+# Local plugin directory (separate local-plugin flow).
+lobslaw plugin install /path/to/plugin-dir/
 ```
 
-Honours `[security] clawhub_signing_policy`.
+For ClawHub, preview first and repeat with `--apply --expected-plan <digest>`.
+Activation is separate via `skills activate-install`. The old ClawHub `--root`
+and `--yes` options are rejected. See [ClawHub](../features/clawhub.md).
 
 ## `lobslaw audit`
 

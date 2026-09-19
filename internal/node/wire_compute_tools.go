@@ -541,20 +541,13 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 	captureHelp(true)
 }
 
-// wireClawhubTools registers the clawhub install builtin. Only
-// registered when the operator configured a clawhub base URL (i.e.
-// wireClawhub built an installer). Default-deny — owner-only via the
-// noSeed list.
+// wireClawhubTools exposes only proposal staging, with no activation capability.
 func (n *Node) wireClawhubTools(builtins *tools.Builtins) error {
-	if n.clawhubInstaller == nil {
+	if n.clawhubSource == nil {
 		return nil
 	}
 	if err := tools.RegisterClawhubBuiltin(builtins, tools.ClawhubConfig{
-		Installer:            n.clawhubInstaller,
-		DefaultMount:         n.cfg.Security.ClawhubInstallMount,
-		AutoEmitInstallRules: n.cfg.Security.ClawhubAutoEmitInstallRules,
-		PolicyAdder:          n.policySvc,
-		Logger:               n.log,
+		Propose: n.proposeClawhubShare,
 	}); err != nil {
 		return fmt.Errorf("register clawhub builtin: %w", err)
 	}

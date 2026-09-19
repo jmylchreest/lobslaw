@@ -53,9 +53,9 @@ catalogue signature against locally configured trusted publisher keys. Slug
 downloads have no advertised digest in the existing API; their downloaded bytes
 are fingerprinted for review. Neither path installs host binaries, runs setup
 scripts, changes a live skill mount or grants permissions during retrieval.
-Required binaries must already be available on execution nodes. The legacy
-`plugin install clawhub:...` and agent `clawhub_install` entry points retain their
-existing behavior; the reviewed flow is exposed through `skills install`.
+Required binaries must already be available on execution nodes. `plugin install clawhub:...` is a compatibility wrapper around this same flow.
+The agent `clawhub_install` tool stages a proposal for human activation; see
+[ClawHub](./clawhub.md) for migration and proposal policy requirements.
 
 ## Publish and inspect
 
