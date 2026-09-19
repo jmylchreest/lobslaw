@@ -16,6 +16,7 @@ User docs are stubs until the project reaches running-end-to-end state (Phase 5 
 | `CLUSTER.md` | Running as a cluster — seed nodes, mTLS bootstrap, adding members |
 | `SKILLS.md` | Installing and authoring skills; `policy.d/` for operator overrides |
 | [`CHANNELS.md`](./CHANNELS.md) | REST / Telegram channel setup and message flow |
+| [`WORKFORCE.md`](./WORKFORCE.md) | Owned projects, background tasks, Attention, routines and event triggers |
 | `BACKUP.md` | Snapshotting, restoring, migrating between nodes |
 | `TROUBLESHOOTING.md` | Common failure modes and resolutions |
 | `FAQ.md` | Recurring questions |
