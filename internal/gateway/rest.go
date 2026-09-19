@@ -445,7 +445,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(req.UploadIDs) > restMessageMaxUploads {
-		s.jsonErr(w, http.StatusBadRequest, "at most 16 uploads per message")
+		s.jsonErr(w, http.StatusBadRequest, fmt.Sprintf("at most %d uploads per message", restMessageMaxUploads))
 		return
 	}
 	if strings.TrimSpace(req.Message) == "" && len(req.UploadIDs) == 0 {
@@ -469,7 +469,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, authErr := s.authenticate(r)
+	claims, authErr := s.authenticate(r, s.cfg.RequireAuth || len(req.UploadIDs) > 0)
 	if authErr != nil {
 		s.jsonErr(w, http.StatusUnauthorized, authErr.Error())
 		return
@@ -743,28 +743,26 @@ func (s *Server) jsonErr(w http.ResponseWriter, status int, reason string) {
 
 // authenticate extracts + validates the Authorization: Bearer JWT,
 // if one is present, and returns a *types.Claims. Behaviour when
-// no token or an invalid token is presented depends on RequireAuth:
+// no token or an invalid token is presented depends on required. Uploads and
+// media messages always require authentication; text messages use RequireAuth:
 //
 //   - RequireAuth=false + no/invalid token → synthetic "anon" claims
 //     with DefaultScope. Good for localhost / behind reverse proxy.
 //   - RequireAuth=true  + no/invalid token → 401 error returned to
 //     the caller via jsonErr. Good for internet-reachable deployments.
 //
-// When the validator itself is nil, RequireAuth is ignored (no way
-// to validate) and anonymous is assumed. Operators who set
-// RequireAuth without configuring a validator get a boot-time
-// warning via Start's logs (Phase 6d.2 — JWKS wiring).
-func (s *Server) authenticate(r *http.Request) (*types.Claims, error) {
+// A required request without a configured validator is refused.
+func (s *Server) authenticate(r *http.Request, required bool) (*types.Claims, error) {
 	token := auth.ExtractBearer(r.Header.Get("Authorization"))
 
 	if s.cfg.JWTValidator == nil {
-		if s.cfg.RequireAuth {
+		if required {
 			return nil, fmt.Errorf("auth required but no validator configured")
 		}
 		return anonClaims(s.cfg.DefaultScope), nil
 	}
 	if token == "" {
-		if s.cfg.RequireAuth {
+		if required {
 			return nil, fmt.Errorf("missing bearer token")
 		}
 		return anonClaims(s.cfg.DefaultScope), nil
@@ -772,7 +770,7 @@ func (s *Server) authenticate(r *http.Request) (*types.Claims, error) {
 
 	claims, err := s.cfg.JWTValidator.Validate(token)
 	if err != nil {
-		if s.cfg.RequireAuth {
+		if required {
 			return nil, fmt.Errorf("token validation failed: %w", err)
 		}
 		s.log.Warn("jwt validation failed; falling back to anon",

@@ -90,11 +90,11 @@ Lobslaw could expose an `install_mcp` builtin that lets the agent install an MCP
 
 ---
 
-### REST + webhook attachment passthrough
+### Webhook attachments and provider-native vision
 
-Telegram channel populates `IncomingMessage.Attachments`; REST + webhook channels skip the abstraction and go straight to `compute.ProcessMessageRequest{Message: text}`. Provider-native vision passthrough (multimodal main model rather than via `read_image` tool hop) is also not done.
+Telegram and REST support attachments (REST uses owner-bound `/v1/uploads` staging). Webhook channels still send text only. Provider-native vision passthrough (multimodal main model rather than via `read_image` tool hop) is also not done.
 
-**Trigger to revisit:** When the user wants attachments on REST/webhook, OR wants to swap to a vision-capable main model and bypass the read_image hop.
+**Trigger to revisit:** When the user wants attachments on webhook, OR wants to swap to a vision-capable main model and bypass the read_image hop.
 
 ---
 

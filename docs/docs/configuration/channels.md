@@ -209,14 +209,17 @@ or validate the recording's codec.
 
 - Maximum file size: **32 MiB**, checked while reading, including chunked uploads.
 - Maximum staging capacity: **256 MiB and 128 files per gateway process**.
+  Each owner is limited to **64 MiB and 32 files**.
   In-progress uploads reserve 32 MiB each; capacity exhaustion returns HTTP 429.
 - Up to **16 upload IDs per message**. Unknown, expired, duplicate or another
   user's IDs return HTTP 404. Oversized uploads return 413; unsupported types 415.
 - Uploads expire after **one hour**. Files in use by a queued or active turn are
   retained until that request finishes, including its confirmation wait.
-- IDs are bound to the authenticated user. With authentication disabled, callers
-  share the existing anonymous identity; that mode provides no user isolation.
+- Uploading and redeeming IDs require a valid JWT with a nonempty user ID,
+  including when `require_auth = false` permits anonymous text chat.
 - Files live in a private temporary subdirectory of `[gateway].incoming_dir`.
+  Provision at least the process staging budget plus headroom for other channels
+  and abandoned directories; quotas apply separately to each gateway process.
   They are removed on expiry or graceful shutdown. After an abrupt process kill,
   an operator may remove abandoned `rest-uploads-*` directories once the owning
   process has stopped. Never remove directories used by a running gateway.

@@ -64,3 +64,15 @@ func TestMediaNotAbsorbedByIdleFoldWindow(t *testing.T) {
 		}
 	})
 }
+
+func TestReleaseFoldsTextPrefixBeforeMedia(t *testing.T) {
+	g := NewTurnGate(QueueDebounce, time.Second, nil)
+	text := &waiter{batch: []string{"a"}, ready: make(chan Disposition, 1)}
+	next := &waiter{batch: []string{"b"}, ready: make(chan Disposition, 1)}
+	media := &waiter{noFold: true, batch: []string{"media"}, ready: make(chan Disposition, 1)}
+	g.sessions["session"] = &gateState{running: true, waiters: []*waiter{text, next, media}}
+	g.release("session")
+	if len(text.batch) != 2 || len(g.sessions["session"].waiters) != 1 {
+		t.Fatalf("text prefix not folded: %v", text.batch)
+	}
+}

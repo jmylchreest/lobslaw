@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -235,11 +236,13 @@ func TestRESTUploadConcurrentReservations(t *testing.T) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	admitted := 0
-	for range 32 {
+	var owners []string
+	for i := range 32 {
 		wg.Go(func() {
-			if _, err := u.reserve(); err == nil {
+			if _, err := u.reserve(fmt.Sprint(i)); err == nil {
 				mu.Lock()
 				admitted++
+				owners = append(owners, fmt.Sprint(i))
 				mu.Unlock()
 			} else if !errors.Is(err, errUploadCapacity) {
 				t.Error(err)
@@ -250,8 +253,8 @@ func TestRESTUploadConcurrentReservations(t *testing.T) {
 	if admitted != 8 || u.used != restUploadTotalBytes {
 		t.Fatalf("admitted %d used %d", admitted, u.used)
 	}
-	for range admitted {
-		if err := u.finish("", nil, ""); err != nil {
+	for _, owner := range owners {
+		if err := u.finish(owner, "", nil, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -329,5 +332,67 @@ func TestRESTUploadRouteAndShutdown(t *testing.T) {
 	stop()
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("shutdown retained file", err)
+	}
+}
+
+func TestRESTUploadsRequireIdentityInAnonymousMode(t *testing.T) {
+	s, _ := mediaServer(t)
+	s.cfg.RequireAuth = false
+	w := uploadRequest(t, s, "", "image/png", strings.NewReader("media"))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous upload: %d", w.Code)
+	}
+	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"upload_ids":["missing"]}`))
+	w = httptest.NewRecorder()
+	s.handleMessages(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous redemption: %d", w.Code)
+	}
+}
+
+func TestRESTUploadOwnerCapacity(t *testing.T) {
+	s, _ := mediaServer(t)
+	// Two full uploads occupy one owner's 64 MiB allowance.
+	for range 2 {
+		uploadID(t, uploadRequest(t, s, "alice", "image/png", &uploadReader{remaining: restUploadMaxBytes, err: io.EOF}))
+	}
+	if w := uploadRequest(t, s, "alice", "image/png", strings.NewReader("more")); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("owner quota: %d", w.Code)
+	}
+	uploadID(t, uploadRequest(t, s, "bob", "image/png", strings.NewReader("still available")))
+}
+
+func TestRESTUploadOwnerReservationsAndFileCount(t *testing.T) {
+	u := newRESTUploads(t.TempDir())
+	defer u.close()
+	limit := int(restUploadOwnerBytes / restUploadMaxBytes)
+	for range limit {
+		if _, err := u.reserve("alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := u.reserve("alice"); !errors.Is(err, errUploadCapacity) {
+		t.Fatalf("pending owner cap: %v", err)
+	}
+	if _, err := u.reserve("bob"); err != nil {
+		t.Fatal(err)
+	}
+	for range limit {
+		if err := u.finish("alice", "", nil, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := u.finish("bob", "", nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(u.pendingOwners) != 0 || u.used != 0 {
+		t.Fatal("owner reservation leaked")
+	}
+	s, _ := mediaServer(t)
+	for range restUploadOwnerFiles {
+		uploadID(t, uploadRequest(t, s, "alice", "image/png", strings.NewReader("x")))
+	}
+	if w := uploadRequest(t, s, "alice", "image/png", strings.NewReader("x")); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("file count cap: %d", w.Code)
 	}
 }

@@ -590,7 +590,7 @@ func (g *TurnGate) release(key string) {
 	// they arrived while it was blocked, which is exactly the burst
 	// the mode folds.
 	if g.mode == QueueDebounce && !next.noFold {
-		for canFoldWaiters(st.waiters) {
+		for len(st.waiters) > 0 && !st.waiters[0].noFold {
 			w := st.waiters[0]
 			st.waiters = st.waiters[1:]
 			next.batch = append(next.batch, w.batch...)
