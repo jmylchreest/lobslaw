@@ -335,6 +335,7 @@ func (s *Server) streamWorkforceChat(w http.ResponseWriter, r *http.Request, own
 				writeSSE(w, "error", map[string]string{"message": e.Error()})
 				return
 			}
+			writeSSE(w, "working", map[string]string{"task_id": task.ID, "status": task.Status})
 		}
 	}
 }

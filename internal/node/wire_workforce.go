@@ -29,6 +29,9 @@ func (n *Node) wireWorkforce() error {
 	if err := n.registerWorkforceTools(); err != nil {
 		return err
 	}
+	if err := n.wireWorkforceComputer(); err != nil {
+		return err
+	}
 	if n.scheduler != nil && !n.cfg.RestoreMode {
 		return n.scheduler.Handlers().RegisterTask(workforceHandler, n.runWorkforceSchedule)
 	}

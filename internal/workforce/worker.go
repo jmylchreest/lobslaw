@@ -243,7 +243,7 @@ func (s *Service) executeSteps(ctx context.Context, p Project, t *Task, x *Execu
 			return ErrForbidden
 		}
 		if step.Sensitive {
-			return fmt.Errorf("%w: complete sensitive step manually", ErrBlocked)
+			return fmt.Errorf("%w: complete sensitive step manually", ErrManualStep)
 		}
 		bot, e := s.cfg.Bots.Get(ctx, t.AssigneeBotID)
 		if e != nil {
@@ -321,6 +321,11 @@ func (s *Service) finish(ctx context.Context, project, id, token string, resp *t
 			t.Error = boundedText(runErr.Error())
 			if errors.Is(runErr, ErrBlocked) {
 				t.Status = StatusBlocked
+				t.Question = boundedText(runErr.Error())
+			}
+			if errors.Is(runErr, ErrManualStep) {
+				t.Status = StatusBlocked
+				t.ManualStep = true
 				t.Question = boundedText(runErr.Error())
 			}
 		case resp == nil:

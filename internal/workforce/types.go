@@ -54,6 +54,7 @@ var (
 	ErrUnavailable = errors.New("workforce: infrastructure unavailable")
 	ErrInvalid     = errors.New("workforce: invalid request")
 	ErrBlocked     = errors.New("workforce: human intervention required")
+	ErrManualStep  = errors.New("workforce: complete this browser step manually")
 )
 
 type ApprovalRequired struct{ Action, Resource, Reason string }
@@ -95,6 +96,7 @@ type Task struct {
 	Status             string     `json:"status"`
 	Revision           uint64     `json:"revision"`
 	Checkpoint         int        `json:"checkpoint,omitempty"`
+	ManualStep         bool       `json:"manual_step,omitempty"`
 	Result             string     `json:"result,omitempty"`
 	Error              string     `json:"error,omitempty"`
 	Question           string     `json:"question,omitempty"`

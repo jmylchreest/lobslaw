@@ -80,7 +80,7 @@ function ProjectBrief({ project, changed }: { project: Project; changed: () => v
 
 function ProjectChannel({ project }: { project: Project }) {
   const messages = useWork(() => workforce.messages(project.id), [project.id]), bots = useLoad(api.listBots);
-  const action = useAction(), [text, setText] = useState(''), [bot, setBot] = useState(''), [reply, setReply] = useState(''), [prompt, setPrompt] = useState<{id:string;reason:string;action?:string;resource?:string} | null>(null);
+  const action = useAction(), [text, setText] = useState(''), [bot, setBot] = useState(''), [reply, setReply] = useState(''), [prompt, setPrompt] = useState<{taskID:string;reason:string} | null>(null);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   function send(e: FormEvent) {
@@ -89,7 +89,7 @@ function ProjectChannel({ project }: { project: Project }) {
       controller.current = new AbortController(); setReply(''); setPrompt(null);
       await projectChat(project.id, text, bot || undefined, (event, data) => {
         if (event === 'reply') setReply(String(data.reply ?? data.text ?? ''));
-        if (event === 'needs_confirmation') setPrompt({id:String(data.prompt_id ?? ''),reason:String(data.reason ?? data.confirmation_reason ?? 'Confirmation required'),action:typeof data.action==='string'?data.action:undefined,resource:typeof data.resource==='string'?data.resource:undefined});
+        if (event === 'needs_confirmation') setPrompt({taskID:String(data.task_id ?? ''),reason:String(data.reason ?? data.confirmation_reason ?? 'Confirmation required')});
       }, controller.current.signal);
       setText(''); messages.reload();
     });
@@ -100,10 +100,24 @@ function ProjectChannel({ project }: { project: Project }) {
     {messages.data?.length === 0 && <Empty title="Give the team its first brief" hint="Discuss the goal here, then create trackable work in Tasks." />}
     <div className="wf-thread">{messages.data?.map(m => <article className={`wf-message ${m.role}`} key={m.id}><header><b>{m.speaker_name || m.speaker_id || m.role}</b><time>{when(m.created_at)}</time></header><Markdown text={m.content} />{m.task_id && <Link to={`/tasks/${m.task_id}`}>View task →</Link>}</article>)}</div>
     {reply && <div className="wf-panel"><Markdown text={reply} /></div>}
-    {prompt?.id && <PromptApproval ask={prompt} onAnswered={() => { setPrompt(null); messages.reload(); }} />}
+    {prompt?.taskID && <TaskApproval taskID={prompt.taskID} reason={prompt.reason} onAnswered={() => { setPrompt(null); messages.reload(); }} />}
     {action.error && <Err error={action.error} />}
     <form className="wf-panel wf-form" onSubmit={send}><Field label="Responding teammate"><BotSelect bots={(bots.data ?? []).filter(b => project.bot_ids?.includes(b.id))} value={bot} change={setBot} optional /></Field><Field label="Message the project"><textarea required value={text} onChange={e => setText(e.target.value)} placeholder="What should the team work towards?" /></Field><div className="wf-toolbar"><button disabled={action.busy}>{action.busy ? 'Working…' : 'Send to project'}</button>{action.busy && <button type="button" onClick={() => controller.current?.abort()}>Stop waiting</button>}</div></form>
   </div>;
+}
+
+function TaskApproval({taskID, reason, onAnswered}: {taskID:string; reason:string; onAnswered:()=>void}) {
+  const task = useLoad(() => workforce.task(taskID), [taskID]), action = useAction();
+  const answer = (decision:string) => void action.run(async () => {
+    if (!task.data) return;
+    await workforce.actTask(task.data, decision);
+    onAnswered();
+  });
+  return <section className="wf-panel"><h3>Needs your approval</h3><Markdown text={reason} />
+    {task.loading && <Spinner />}{task.error && <Err error={task.error} />}{action.error && <Err error={action.error} />}
+    {task.data?.status === 'needs_approval' && <div className="wf-toolbar"><button disabled={action.busy} onClick={()=>answer('approve')}>Approve this task action</button><button disabled={action.busy} onClick={()=>answer('cancel')}>Deny and cancel task</button></div>}
+    <Link to={`/tasks/${taskID}`}>Review task →</Link>
+  </section>;
 }
 
 const columns: { title: string; statuses: TaskStatus[] }[] = [
@@ -127,7 +141,7 @@ function TaskBoard({ project }: { project: Project }) {
       {action.error && <Err error={action.error} />}<button disabled={action.busy}>Create task</button>
     </form>}
     {!tasks.data && tasks.loading && <Spinner />}
-    {tasks.data?.length === 0 && <Empty title="No delegated work yet" hint="Create a task with an assignee, outcome, and optional dependencies. Start it from its details." />}
+    {tasks.data?.length === 0 && <Empty title="No delegated work yet" hint="Give a teammate an outcome and optional dependencies. Work starts automatically when its prerequisites are ready." />}
     <div className="wf-board">{columns.map(column => <section key={column.title} className="wf-column"><h3>{column.title}<span>{tasks.data?.filter(t => column.statuses.includes(t.status)).length ?? 0}</span></h3>{tasks.data?.filter(t => column.statuses.includes(t.status)).map(t => <Link className="wf-task" to={`/tasks/${t.id}`} key={t.id}><span className={`wf-status ${t.status}`}>{t.status.replace('_', ' ')}</span><h4>{t.title}</h4><p>{bots.data?.find(b => b.id === t.assignee_bot_id)?.display_name || t.assignee_bot_id}</p>{!!t.depends_on?.length && <small>↳ {t.depends_on.length} dependencies</small>}{t.question && <p>{t.question}</p>}</Link>)}</section>)}</div>
   </>;
 }
@@ -141,11 +155,13 @@ export function TaskDetails() {
   return <WorkPage title={t.title} sub={<><span className={`wf-status ${t.status}`}>{t.status.replace('_', ' ')}</span> · Updated {when(t.updated_at)}</>}>
     <Link className="wf-back" to={`/projects/${t.project_id}/tasks`}>← Project tasks</Link>
     {task.error && <Err error={task.error} />}{action.error && <Err error={action.error} />}
-    <div className="wf-toolbar">{['planned', 'ready'].includes(t.status) && <button disabled={action.busy} onClick={() => act('start')}>Start task</button>}{['failed', 'cancelled'].includes(t.status) && <button disabled={action.busy} onClick={() => act('retry')}>Retry task</button>}{!['done', 'cancelled'].includes(t.status) && <button disabled={action.busy} onClick={() => act('cancel')}>Cancel task</button>}<button onClick={task.reload}>Reload latest revision</button></div>
+    <div className="wf-toolbar">{t.status === 'planned' && <button disabled={action.busy} onClick={() => act('start')}>Start task</button>}{['failed', 'cancelled'].includes(t.status) && <button disabled={action.busy} onClick={() => act('retry')}>Retry task</button>}{!['done', 'cancelled'].includes(t.status) && <button disabled={action.busy} onClick={() => act('cancel')}>Cancel task</button>}<button onClick={task.reload}>Reload latest revision</button></div>
     <div className="wf-grid"><section className="wf-panel"><h2>Brief</h2><Markdown text={t.instructions} /><h3>Done means</h3><ul>{t.acceptance_criteria?.map((c, i) => <li key={i}>{c}</li>)}</ul><h3>Dependencies</h3>{t.depends_on?.length ? t.depends_on.map(id => <Link className="wf-dependency" key={id} to={`/tasks/${id}`}>{id} →</Link>) : <p>No prerequisites</p>}</section>
       <section className="wf-panel"><h2>Progress</h2><p>Assigned to {t.assignee_bot_id}</p>{t.checkpoint !== undefined && <><h3>Checkpoint</h3><p>Next browser step: {t.checkpoint + 1}</p></>}{t.error && <p className="wf-danger">{t.error}</p>}{t.question && <><h3>Question from the worker</h3><Markdown text={t.question} /></>}
         {t.status === 'blocked' && <form className="wf-form" onSubmit={e => { e.preventDefault(); act('answer'); }}><Field label="Answer / resume instruction"><textarea required value={answer} onChange={e => setAnswer(e.target.value)} /></Field><button disabled={action.busy}>Answer and resume</button><Link to={`/projects/${t.project_id}/computer`}>Open browser workspace →</Link></form>}
-        {t.status === 'blocked' && <button disabled={action.busy} onClick={() => act('complete_step')}>I completed this manual browser step</button>}
+        {t.progress && <Markdown text={t.progress} />}
+        {t.parent_id && <Link to={`/tasks/${t.parent_id}`}>Delegated by parent task →</Link>}
+        {t.status === 'blocked' && t.manual_step && <button disabled={action.busy} onClick={() => act('complete_step')}>I completed this manual browser step</button>}
         {t.status === 'needs_approval' && <div className="wf-form"><p>{t.question || 'Review the task instructions and requested browser action before continuing.'}</p><button disabled={action.busy} onClick={() => act('approve')}>Approve this task action</button><button disabled={action.busy} onClick={() => act('cancel')}>Deny and cancel task</button></div>}
       </section></div>
     <section className="wf-panel"><h2>Deliverables</h2>{t.result ? <Markdown text={t.result} /> : <p>No result yet. Completed work appears here.</p>}{t.artifacts?.map(a => <div className="wf-artifact" key={a.id}><b>{a.name}</b><span>{a.kind}</span>{artifactURL(t, a) ? <a href={artifactURL(t, a)}>Open deliverable →</a> : <code>{a.reference}</code>}</div>)}</section>

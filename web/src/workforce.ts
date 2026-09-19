@@ -13,7 +13,7 @@ export interface Artifact { id: string; name: string; kind: string; reference: s
 export interface Task {
   id: string; project_id: string; owner: string; title: string; instructions: string;
   assignee_bot_id: string; acceptance_criteria: string[]; depends_on: string[]; status: TaskStatus;
-  revision: number; checkpoint?: number; result?: string; error?: string; question?: string;
+  revision: number; checkpoint?: number; manual_step?: boolean; progress?: string; parent_id?: string; result?: string; error?: string; question?: string;
   prompt_id?: string; artifacts: Artifact[]; created_at: string; updated_at: string;
 }
 export interface AttentionItem {

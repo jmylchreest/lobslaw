@@ -305,8 +305,9 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 			}
 			t.Status = StatusCancelled
 			x.Claim = ""
+			x.Approved = false
 		case "start", "retry", "answer":
-			if t.Status != StatusPlanned && t.Status != StatusBlocked && t.Status != StatusFailed {
+			if t.Status != StatusPlanned && t.Status != StatusBlocked && t.Status != StatusFailed && !(action == "retry" && t.Status == StatusCancelled) {
 				return ErrInvalid
 			}
 			if !validText(answer) {
@@ -318,6 +319,7 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 			t.Status = StatusReady
 			t.Error = ""
 			t.Question = ""
+			t.ManualStep = false
 			x.Claim = ""
 			x.BlockedQuestion = ""
 			if claims != nil {
@@ -336,10 +338,11 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 			x.Approved = true
 			t.Status = StatusReady
 		case "complete_step":
-			if t.Status != StatusBlocked || x.Routine == nil || t.Checkpoint >= len(x.Routine.Steps) || !x.Routine.Steps[t.Checkpoint].Sensitive {
+			if t.Status != StatusBlocked || !t.ManualStep || x.Routine == nil || t.Checkpoint >= len(x.Routine.Steps) {
 				return ErrInvalid
 			}
 			t.Checkpoint++
+			t.ManualStep = false
 			t.Status = StatusReady
 			t.Question = ""
 		default:

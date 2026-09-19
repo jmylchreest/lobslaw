@@ -26,6 +26,50 @@ func TestRoutineDefinitionsDoNotStoreBrowserCredentials(t *testing.T) {
 
 type restrictedBots struct{}
 
+func TestRuntimeManualStepCanBeCompletedWithoutReplayingEarlierActions(t *testing.T) {
+	t.Parallel()
+	s, _, _, p := fixture(t)
+	ctx := context.Background()
+	executed := []string{}
+	s.cfg.AuthorizeStep = func(context.Context, *types.Claims, string, string) error { return nil }
+	s.SetStepExecutor(func(_ context.Context, _, _ string, step RoutineStep) error {
+		executed = append(executed, step.Action)
+		if step.Action == "fill" {
+			return ErrManualStep
+		}
+		return nil
+	})
+	r, err := s.CreateRoutine(ctx, p.Owner, p.ID, Routine{Name: "runtime detection", Steps: []RoutineStep{
+		{Action: "navigate", URL: "https://example.test/"},
+		{Action: "fill", Selector: "#field", Value: "reviewed", InputMode: ReviewedLiteralInput},
+		{Action: "capture"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.ActRoutine(ctx, p.Owner, r.ID, r.Revision, "approve", Routine{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := s.RunRoutine(ctx, p.Owner, r.ID, &types.Claims{UserID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.WorkOnce(ctx)
+	task, err = s.GetTask(ctx, p.Owner, task.ID)
+	if err != nil || task.Status != StatusBlocked || !task.ManualStep || task.Checkpoint != 1 {
+		t.Fatalf("manual checkpoint missing: %+v %v", task, err)
+	}
+	if _, err = s.ActTask(ctx, p.Owner, task.ID, task.Revision, "complete_step", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	s.WorkOnce(ctx)
+	task, _ = s.GetTask(ctx, p.Owner, task.ID)
+	if task.Status != StatusDone || len(executed) != 3 || executed[2] != "capture" {
+		t.Fatalf("replayed steps or lost completion: %+v %v", task, executed)
+	}
+}
+
 func TestReviewedRoutineInputsAreDigestBound(t *testing.T) {
 	t.Parallel()
 	s, _, _, p := fixture(t)
