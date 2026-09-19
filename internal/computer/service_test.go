@@ -5,6 +5,7 @@ package computer
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -187,5 +188,65 @@ func TestOnlyOneControllerMayOwnPrivateRoot(t *testing.T) {
 	_ = first.Close()
 	if _, err := second.State(t.Context(), "user:alice", "project"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReviewedReplayNeverOptsAutomaticRecordingIntoValues(t *testing.T) {
+	t.Parallel()
+	step := RoutineStep{Action: "fill", Selector: "html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(1)", Value: "private-value", InputMode: InputReviewedLiteral}
+	recorded := recordable(step)
+	if recorded.Selector != step.Selector || !recorded.Sensitive || recorded.Value != "" || recorded.InputMode != "" {
+		t.Fatalf("automatic recording retained an input: %+v", recorded)
+	}
+	for _, action := range []string{"click", "wait", "navigate"} {
+		filtered := recordable(RoutineStep{Action: action, Selector: "body:nth-of-type(1)", URL: "https://example.com/", Value: "unused-secret", InputMode: InputReviewedLiteral})
+		if filtered.Value != "" || filtered.InputMode != "" {
+			t.Fatalf("irrelevant fields recorded: %+v", filtered)
+		}
+	}
+	s, b := testService(t, t.TempDir())
+	for _, mode := range []string{"", "unreviewed"} {
+		step.InputMode = mode
+		if err := s.ExecuteStep(t.Context(), "user:alice", "project", step); !errors.Is(err, ErrManual) {
+			t.Fatalf("unreviewed replay accepted: %v", err)
+		}
+	}
+	if b.calls != 0 {
+		t.Fatal("unreviewed fill reached browser")
+	}
+	step.InputMode = InputReviewedLiteral
+	if err := s.ExecuteStep(t.Context(), "user:alice", "project", step); err != nil {
+		t.Fatal(err)
+	}
+	if b.calls != 1 {
+		t.Fatal("reviewed fill did not reach runtime's field-classification gate")
+	}
+}
+
+func TestLegacyProfileMovesWithoutMovingHostControl(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "profile"), privateDirMode); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"control.json": `{"control":"human"}`, "profile/cookies": "private profile marker", "location": "https://example.com"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(value), privateFileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir, err := executionDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "control.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("control metadata moved into browser grant")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "profile", "cookies"))
+	if err != nil || string(data) != "private profile marker" {
+		t.Fatal("profile lost during isolation")
+	}
+	data, err = os.ReadFile(filepath.Join(root, "control.json"))
+	if err != nil || string(data) != `{"control":"human"}` {
+		t.Fatal("takeover metadata lost during isolation")
 	}
 }

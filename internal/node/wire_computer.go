@@ -10,9 +10,11 @@ func (n *Node) wireComputer(authorizer computer.ProjectAuthorizer) {
 	}
 	cfg := n.cfg.Computer
 	var socket string
+	var address string
 	if n.egressProvider != nil {
 		socket = n.egressProvider.UDSPath()
+		address = n.egressProvider.ProxyURL().Host
 	}
 	n.computer = computer.New(computer.Config{Root: cfg.Root, Node: cfg.Node, Chromium: cfg.Chromium,
-		Playwright: cfg.Playwright, IP: cfg.IP, ReadPaths: cfg.ReadPaths, ProxySocket: socket}, authorizer)
+		Playwright: cfg.Playwright, IP: cfg.IP, ReadPaths: cfg.ReadPaths, ProxySocket: socket, ProxyAddress: address}, authorizer)
 }

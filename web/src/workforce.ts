@@ -23,6 +23,7 @@ export interface AttentionItem {
 export interface RoutineStep {
   action: 'navigate' | 'click' | 'fill' | 'press' | 'wait' | 'capture';
   selector?: string; value?: string; url?: string; description?: string; sensitive?: boolean;
+  input_mode?: 'reviewed_literal';
 }
 export interface Workflow {
   id: string; project_id: string; name: string; description: string; instructions: string;

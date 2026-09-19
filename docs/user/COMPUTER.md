@@ -19,6 +19,9 @@ Requirements:
   and fonts. The ordinary lobslaw binary does not bundle these executables.
 - A dedicated, mode-0700 local directory owned by the lobslaw service account.
 - The existing egress proxy's Unix socket and an explicit browser hostname list.
+  Put the shared socket in a dedicated, stable directory outside the browser root
+  and runtime installation; the sandbox masks that directory. The example below
+  uses `/run/lobslaw/`.
 
 The validated runtime is Node **24.13.1**, Playwright
 **1.59.0-alpha-1771104257000**, and Playwright Chromium build **1228**. Pin the
@@ -75,12 +78,17 @@ to the selected project profile, a private temporary directory and required devi
 provider and asset hostnames your workflow needs. Private-address sites also need
 the existing explicit `security.egress_allow_ranges` setting; listing a hostname
 does not silently open a private network. Requests, redirects and subresources all
-use the same proxy. A network namespace has no external interface, so disabling
-browser proxy settings cannot create a direct connection.
+use the same proxy. The browser sees only a dedicated broker socket; the broker
+runs outside its sandbox and fixes every request to the `computer` role. The
+shared egress socket directory is hidden inside the sandbox, so a compromised
+browser cannot forge a more permissive role or connect directly to that socket.
+A network namespace has no external interface, so disabling browser proxy
+settings cannot create a direct connection.
 
 For containers, install the same runtime in your image and give the service a
 private persistent volume for `computer.root`. The container's kernel/security
-profile must permit the required namespace creation, private procfs mount and
+profile must permit the required namespace creation, private procfs and empty
+read-only socket-directory mounts, and
 Landlock calls. A runtime that blocks them produces an unavailable error; the
 browser does not retry without containment. Limit container memory/CPU at the
 deployment level. This feature does not create cgroups itself.
@@ -104,6 +112,14 @@ allowlist and normal `tool:exec` policy still apply to automated browser actions
 `browser_wait`, `browser_capture`). Routine approval does not grant tool access.
 An action requiring confirmation remains a pending task approval until you review
 and approve that exact task action.
+
+Browser tools are available only in an authorized workforce turn. They receive
+the project from the trusted worker context, not a model-supplied project ID.
+The worker claim, current task, bot roster, owner and tool allowlist are checked;
+a nested bot cannot borrow its parent's browser authority. Bots receive bounded,
+redacted page text and structural selectors so they can choose real actions.
+These observations are untrusted tool data and can appear in the normal task
+transcript. They do not include cookies, browser storage, input values or images.
 
 ## Take control and sign in
 
@@ -133,15 +149,23 @@ The console does not record video or offer file upload/download management.
 1. Take control in **Computer** and choose **Start new recording**.
 2. Demonstrate navigation, clicks and key presses. Clicks are recorded as structural
    selectors, without field values or page text.
-3. Every text entry becomes a **manual checkpoint**, including ordinary text
-   fields. URLs containing query strings or fragments also become manual
-   checkpoints. This avoids guessing which values are credentials.
+3. Every text entry becomes a **manual checkpoint by default**, including ordinary
+   text fields. Only its value-free structural selector is retained. URLs containing
+   query strings or fragments also become manual checkpoints.
 4. Name the routine and choose **Save routine draft**. Review it in **Routines**.
-5. Review the exact instructions and steps, check the review acknowledgement,
+5. For a harmless search/form value you want replayed automatically, choose
+   **Edit definition** → **Reviewed non-sensitive replay input**, select the fill
+   step, enter the value explicitly, and acknowledge that it is not a credential
+   or secret. Choose **Use reviewed input in draft**, then save the definition.
+   Nothing copies the value you typed during the demonstration. The resulting
+   step has `input_mode: "reviewed_literal"`; its selector and literal are shown
+   during review. Password/login/token fields and credential forms remain manual
+   at runtime even if someone marks their value as reviewed.
+6. Review the exact instructions and steps, check the review acknowledgement,
    then choose **Approve definition**. Only approved routines can run as tasks.
-6. **Edit definition** can change instructions, browser steps and an optional cron
+7. **Edit definition** can change instructions, browser steps and an optional cron
    schedule. Saving an edit invalidates approval and returns it to draft.
-7. Use **Run as task**, or create a trigger referencing the approved routine. An
+8. Use **Run as task**, or create a trigger referencing the approved routine. An
    event delivery uses an `event_id`; retrying that same ID opens the existing task.
 
 Review structural selectors against the target site's stability. Site layout
@@ -157,6 +181,13 @@ Browser profiles, cookies, local storage and local restore metadata stay beneath
 LLM transcripts. Keep this directory out of agent-visible mounts and general
 backup jobs that should not contain login sessions. Deleting a profile requires
 signing in again; closing/reopening a browser preserves it.
+
+Each browser can write only its own `browser/` execution subtree. Takeover and
+recording control records stay outside that subtree and cannot be rewritten by
+the browser. Existing pre-isolation profiles are moved into the new subtree before
+launch, without moving control metadata or overwriting an existing destination.
+Explicitly reviewed non-sensitive routine literals are ordinary routine definition
+data and are persisted with the reviewed definition.
 
 | Symptom | Action |
 |---|---|

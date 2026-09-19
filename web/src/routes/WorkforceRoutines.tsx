@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Err, Empty, when } from '../components/ui';
-import { workforce, type Project, type Workflow } from '../workforce';
+import { workforce, type Project, type Workflow, type RoutineStep } from '../workforce';
 import { Field, useAction, useWork } from './Workforce';
 
 export function Workflows({ project }: { project: Project }) {
@@ -38,9 +38,29 @@ function RoutineCard({ routine, changed }: { routine: Workflow; changed: () => v
     {editing ? <form className="wf-form" onSubmit={e => { e.preventDefault(); void action.run(async () => {
       const parsed: unknown = JSON.parse(steps); if (!Array.isArray(parsed)) throw new Error('Steps must be an array.');
       await workforce.editRoutine({...routine,revision:editRevision}, 'edit', { instructions, steps: parsed, schedule });setEditing(false); changed();
-    }); }}><Field label="Routine instructions"><textarea required value={instructions} onChange={e => setInstructions(e.target.value)} /></Field><Field label="Browser steps (JSON; no credentials)"><textarea rows={8} value={steps} onChange={e => setSteps(e.target.value)} /></Field><Field label="Schedule (cron, optional)"><input value={schedule} onChange={e=>setSchedule(e.target.value)} placeholder="0 9 * * 1-5" /></Field><p>Saving changes returns this routine to draft and invalidates its old approval.</p><button disabled={action.busy}>Save changes as draft</button></form> : <><p>{routine.instructions}</p><p>Schedule: {routine.schedule || 'Run on demand'}</p><ol className="wf-steps">{routine.steps?.map((step, i) => <li key={i}><b>{step.action}</b> {step.sensitive ? 'Manual checkpoint' : step.url || step.selector || step.value}<small>{step.description}</small></li>)}</ol></>}
+    }); }}><Field label="Routine instructions"><textarea required value={instructions} onChange={e => setInstructions(e.target.value)} /></Field><ReviewedFillEditor steps={steps} onChange={setSteps} /><Field label="Browser steps (JSON; no credentials)"><textarea rows={8} value={steps} onChange={e => setSteps(e.target.value)} /></Field><Field label="Schedule (cron, optional)"><input value={schedule} onChange={e=>setSchedule(e.target.value)} placeholder="0 9 * * 1-5" /></Field><p>Saving changes returns this routine to draft and invalidates its old approval.</p><button disabled={action.busy}>Save changes as draft</button></form> : <><p>{routine.instructions}</p><p>Schedule: {routine.schedule || 'Run on demand'}</p><ol className="wf-steps">{routine.steps?.map((step, i) => <li key={i}><b>{step.action}</b> {step.sensitive ? 'Manual checkpoint' : step.input_mode === 'reviewed_literal' ? `${step.selector} ← ${step.value} (reviewed non-sensitive input)` : step.url || step.selector || step.value}<small>{step.description}</small></li>)}</ol></>}
     {action.error && <Err error={action.error} />}
     {routine.status !== 'approved' && !editing && <label className="wf-check"><input type="checkbox" checked={reviewed} onChange={e => setReviewed(e.target.checked)} />I reviewed this exact definition and its browser actions.</label>}
     <div className="wf-toolbar"><button disabled={action.busy} onClick={toggleEdit}>{editing ? 'Cancel edit' : 'Edit definition'}</button>{routine.status === 'approved' ? <><button disabled={action.busy || editing} onClick={() => void action.run(async () => { const task = await workforce.runRoutine(routine.id); navigate(`/tasks/${task.id}`); })}>Run as task</button><button disabled={action.busy} onClick={() => void action.run(async () => { await workforce.editRoutine(routine, 'disable'); changed(); })}>Disable</button></> : <button disabled={!reviewed || action.busy || editing} onClick={() => void action.run(async () => { await workforce.editRoutine(routine, 'approve'); changed(); })}>Approve definition</button>}</div>
   </article>;
+}
+
+function ReviewedFillEditor({steps,onChange}:{steps:string;onChange:(steps:string)=>void}) {
+  const [index,setIndex]=useState(-1),[selector,setSelector]=useState(''),[value,setValue]=useState(''),[reviewed,setReviewed]=useState(false);
+  let parsed:RoutineStep[]=[];
+  try {const candidate:unknown=JSON.parse(steps);if(Array.isArray(candidate))parsed=candidate;}catch{/* The JSON editor shows parse errors when saving. */}
+  const fills=parsed.map((step,index)=>({step,index})).filter(item=>item.step?.action==='fill');
+  if(!fills.length)return null;
+  return <fieldset className="wf-form"><legend>Reviewed non-sensitive replay input</legend>
+    <p>Recordings never copy typed text. Explicitly enter a harmless value, such as a search query, to make a form step autonomous. Password, login, token and payment fields remain manual at runtime.</p>
+    <Field label="Fill step"><select value={index} onChange={e=>{const next=Number(e.target.value);setIndex(next);setSelector(typeof parsed[next]?.selector==='string'?parsed[next].selector!:'');setValue('');setReviewed(false);}}><option value={-1}>Select a recorded fill</option>{fills.map(({index})=><option key={index} value={index}>Step {index+1}</option>)}</select></Field>
+    <Field label="Replay target selector"><input value={selector} onChange={e=>{setSelector(e.target.value);setReviewed(false);}} /></Field>
+    <Field label="Non-sensitive replay value"><input autoComplete="off" value={value} onChange={e=>{setValue(e.target.value);setReviewed(false);}} /></Field>
+    <label className="wf-check"><input type="checkbox" checked={reviewed} onChange={e=>setReviewed(e.target.checked)} />This value is not a password, login credential, token, or other secret.</label>
+    <button type="button" disabled={!reviewed||index<0||!selector||!value} onClick={()=>{
+      if(parsed[index]?.action!=='fill')return;
+      const replacement:RoutineStep={action:'fill',selector,value,input_mode:'reviewed_literal',sensitive:false,description:'Owner-reviewed non-sensitive replay input'};
+      onChange(JSON.stringify(parsed.map((step,i)=>i===index?replacement:step),null,2));setReviewed(false);setValue('');
+    }}>Use reviewed input in draft</button>
+  </fieldset>;
 }
