@@ -68,7 +68,12 @@ export async function projectChat(project: string, message: string, bot_id: stri
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
-  await readSSE(res, onEvent);
+  let failure: Error | undefined;
+  await readSSE(res, (event,data)=>{
+    if(event==='error') failure=new Error(String(data.error??data.message??'Project turn failed'));
+    else onEvent(event,data);
+  });
+  if(failure) throw failure;
 }
 
 // Deliverable references must stay on an authenticated API surface. A model's

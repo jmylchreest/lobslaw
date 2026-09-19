@@ -115,7 +115,10 @@ function Shell() {
           <span className="deskicon">◆</span>
           <div className="txt"><div className="nm">Overview</div></div>
         </NavLink>
-		<nav className="nav" aria-label="Workforce"><NavLink to="/projects">Projects</NavLink><NavLink to="/attention">Attention</NavLink></nav>
+        <nav className="nav" aria-label="Workforce">
+          <NavLink to="/projects">Projects</NavLink>
+          <NavLink to="/attention">Attention</NavLink>
+        </nav>
 
         {groups && groups.length > 0 && (
           <GroupPicker

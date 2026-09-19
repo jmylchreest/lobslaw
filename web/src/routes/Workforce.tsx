@@ -90,7 +90,6 @@ function ProjectChannel({ project }: { project: Project }) {
       await projectChat(project.id, text, bot || undefined, (event, data) => {
         if (event === 'reply') setReply(String(data.reply ?? data.text ?? ''));
         if (event === 'needs_confirmation') setPrompt({id:String(data.prompt_id ?? ''),reason:String(data.reason ?? data.confirmation_reason ?? 'Confirmation required'),action:typeof data.action==='string'?data.action:undefined,resource:typeof data.resource==='string'?data.resource:undefined});
-        if (event === 'error') throw new Error(String(data.error ?? data.message ?? 'Project turn failed'));
       }, controller.current.signal);
       setText(''); messages.reload();
     });

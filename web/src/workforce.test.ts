@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { workforce, artifactURL, type Task } from './workforce';
+import { workforce, projectChat, artifactURL, type Task } from './workforce';
 
 afterEach(() => vi.unstubAllGlobals());
 describe('workforce request boundaries', () => {
+  it('surfaces project SSE errors instead of treating a failed turn as success', async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('event: error\ndata: {"error":"Provider unavailable"}\n\n')));
+    await expect(projectChat('project','hello',undefined,()=>{})).rejects.toThrow('Provider unavailable');
+  });
   it('sends revision-fenced task approval, never a generic prompt approval', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: 'task', revision: 5 })));
     vi.stubGlobal('fetch', fetch);
