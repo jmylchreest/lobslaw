@@ -43,7 +43,7 @@ func dispatchPlugin(args []string) bool {
 	case "help", "-h", "--help":
 		pluginUsage()
 	default:
-		fmt.Fprintf(os.Stderr, "lobslaw plugin: unknown subcommand %q\n", sub[0])
+		diagnosticf("lobslaw plugin: unknown subcommand %q\n", sub[0])
 		pluginUsage()
 		os.Exit(2)
 	}
@@ -81,7 +81,7 @@ func defaultSkillsRoot() (string, error) {
 }
 
 func pluginInstall(args []string) {
-	fs := flag.NewFlagSet("plugin install", flag.ExitOnError)
+	fs := newFlagSet("plugin install", flag.ExitOnError)
 	root := fs.String("root", "", "skills root (default: $LOBSLAW_SKILLS_ROOT or ~/.local/share/lobslaw/plugins)")
 	yes := fs.Bool("yes", false, "skip the approval prompt (CI / scripted use)")
 	positional, err := parseFlagsAndPositionals(fs, args)
@@ -272,7 +272,7 @@ func pluginDisable(args []string) {
 // plugin.json conversion path is deferred but the CLI surface is
 // reserved so operators can script around it now.
 func pluginImport(args []string) {
-	fs := flag.NewFlagSet("plugin import", flag.ExitOnError)
+	fs := newFlagSet("plugin import", flag.ExitOnError)
 	yes := fs.Bool("yes", false, "skip the approval prompt")
 	positional, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {

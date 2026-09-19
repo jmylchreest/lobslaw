@@ -76,7 +76,7 @@ type flags struct {
 }
 
 func parseFlags(args []string, out *flags) error {
-	fs := flag.NewFlagSet("lobslaw", flag.ContinueOnError)
+	fs := newFlagSet("lobslaw", flag.ContinueOnError)
 	fs.BoolVar(&out.showVersion, "version", false, "print version and exit")
 	fs.StringVar(&out.configPath, "config", "", "path to config.toml (overrides default lookup)")
 	fs.StringVar(&out.envPath, "env", "", "path to .env file (overrides default lookup: $LOBSLAW_ENV, ./.env, $XDG_CONFIG_HOME/lobslaw/.env, ~/.config/lobslaw/.env)")
@@ -218,9 +218,10 @@ func applyLogFilters(cfgFilters []config.LogFilterConfig, logger *slog.Logger) {
 }
 
 func main() {
+	slog.SetDefault(logging.New(os.Stderr, slog.LevelInfo, logging.FormatAuto))
 	// Hidden reexec subcommand: when the parent agent spawns a sandboxed
 	// tool, it invokes /proc/self/exe with "sandbox-exec" as the first
-	// arg. Dispatched before any config / logging / node setup so the
+	// arg. Dispatched before config or node setup so the
 	// helper child stays small and deterministic.
 	if dispatchSandboxExec(os.Args[1:]) {
 		return
@@ -254,7 +255,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
 		}
-		fmt.Fprintln(os.Stderr, "lobslaw:", err)
+		diagnosticln("lobslaw:", err)
 		os.Exit(2)
 	}
 

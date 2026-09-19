@@ -15,7 +15,7 @@ func TestPermissiveRoleActuallyAllowsAHost(t *testing.T) {
 	if !rules.Permissive["fetch_url"] {
 		t.Fatal("fetch_url is not permissive by default")
 	}
-	acl := buildSmokescreenACL(rules)
+	acl := buildSmokescreenACL(rules, nil)
 	rule, ok := acl.Rules["fetch_url"]
 	if !ok {
 		t.Fatal("no fetch_url rule in the ACL")
@@ -40,7 +40,7 @@ func TestAnExplicitAllowlistStillRestricts(t *testing.T) {
 	if rules.Permissive["fetch_url"] {
 		t.Fatal("an explicit allowlist left the role permissive")
 	}
-	acl := buildSmokescreenACL(rules)
+	acl := buildSmokescreenACL(rules, nil)
 	allowed, err := acl.Decide("fetch_url", "api.example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestPermissiveDoesNotMeanPrivateAddresses(t *testing.T) {
 	// The ACL allows by name; the private-IP refusal happens at
 	// connect time in smokescreen's own resolver, which this test
 	// documents rather than re-implements.
-	if got := buildSmokescreenACL(rules).Rules["fetch_url"].Policy; got != smokeacl.Open {
+	if got := buildSmokescreenACL(rules, nil).Rules["fetch_url"].Policy; got != smokeacl.Open {
 		t.Errorf("policy = %v, want Open", got)
 	}
 }

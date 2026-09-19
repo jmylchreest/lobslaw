@@ -6,8 +6,11 @@ import (
 	"io"
 	stdlog "log"
 	"log/slog"
+	"strings"
 
 	"github.com/hashicorp/go-hclog"
+
+	"github.com/jmylchreest/lobslaw/internal/logging"
 )
 
 // hclogToSlog adapts an *slog.Logger to hashicorp/go-hclog's Logger
@@ -22,9 +25,7 @@ type hclogToSlog struct {
 }
 
 func newHCLogAdapter(base *slog.Logger, name string) hclog.Logger {
-	if base == nil {
-		base = slog.Default()
-	}
+	base = logging.OrDefault(base)
 	return &hclogToSlog{base: base.With(slog.String("subsystem", name)), name: name}
 }
 
@@ -114,11 +115,52 @@ func (h *hclogToSlog) GetLevel() hclog.Level {
 	}
 }
 
-func (h *hclogToSlog) StandardLogger(*hclog.StandardLoggerOptions) *stdlog.Logger {
-	return stdlog.New(h.StandardWriter(nil), "", 0)
+func (h *hclogToSlog) StandardLogger(opts *hclog.StandardLoggerOptions) *stdlog.Logger {
+	return stdlog.New(h.StandardWriter(opts), "", 0)
 }
-func (h *hclogToSlog) StandardWriter(*hclog.StandardLoggerOptions) io.Writer {
-	return io.Discard
+func (h *hclogToSlog) StandardWriter(opts *hclog.StandardLoggerOptions) io.Writer {
+	var options hclog.StandardLoggerOptions
+	if opts != nil {
+		options = *opts
+	}
+	return raftStandardWriter{logger: h, options: options}
+}
+
+type raftStandardWriter struct {
+	logger  *hclogToSlog
+	options hclog.StandardLoggerOptions
+}
+
+func (w raftStandardWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), " \t\n")
+	level := hclog.Info
+	if w.options.InferLevels || w.options.ForceLevel != hclog.NoLevel {
+		if w.options.InferLevels && w.options.InferLevelsWithTimestamp && w.options.ForceLevel == hclog.NoLevel {
+			msg = strings.TrimLeft(msg, "0123456789 \t\n:/.-+TZ")
+		}
+		if prefix, rest, ok := strings.Cut(msg, "]"); ok {
+			switch prefix {
+			case "[TRACE":
+				level = hclog.Trace
+			case "[DEBUG":
+				level = hclog.Debug
+			case "[INFO":
+				level = hclog.Info
+			case "[WARN":
+				level = hclog.Warn
+			case "[ERR", "[ERROR":
+				level = hclog.Error
+			default:
+				rest = msg
+			}
+			msg = strings.TrimSpace(rest)
+		}
+		if w.options.ForceLevel != hclog.NoLevel {
+			level = w.options.ForceLevel
+		}
+	}
+	w.logger.Log(level, logging.SanitizeText(msg))
+	return len(p), nil
 }
 
 func toSlogLevel(l hclog.Level) slog.Level {

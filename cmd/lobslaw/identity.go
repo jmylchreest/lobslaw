@@ -70,18 +70,18 @@ func dispatchIdentity(args []string) bool {
 	rest, offline := takeOffline(sub[1:])
 	run := identityRoute(sub[0], offline)
 	if run == nil {
-		fmt.Fprintf(os.Stderr, "unknown identity subcommand %q\n\n%s\n", sub[0], identityUsage)
+		diagnosticf("unknown identity subcommand %q\n\n%s\n", sub[0], identityUsage)
 		os.Exit(2)
 	}
 	if err := run(rest); err != nil {
-		fmt.Fprintf(os.Stderr, "identity %s: %v\n", sub[0], err)
+		diagnosticf("identity %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
 	return true
 }
 
 func identityRebind(args []string) error {
-	fs := flag.NewFlagSet("identity rebind", flag.ExitOnError)
+	fs := newFlagSet("identity rebind", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually rewrite (default is a dry run)")

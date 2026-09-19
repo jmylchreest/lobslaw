@@ -26,7 +26,7 @@ func dispatchBackup(args []string) bool {
 		return false
 	}
 	if err := runBackup(args[i+1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "backup: %v\n", err)
+		diagnosticf("backup: %v\n", err)
 		os.Exit(1)
 	}
 	return true
@@ -50,7 +50,7 @@ func runBackup(args []string) error {
 
 func backupCreate(args []string) error {
 	args, offline := takeOffline(args)
-	fs := flag.NewFlagSet("backup create", flag.ContinueOnError)
+	fs := newFlagSet("backup create", flag.ContinueOnError)
 	var local offlineStore
 	var node liveNode
 	if offline {
@@ -115,7 +115,7 @@ func backupCreate(args []string) error {
 }
 
 func backupRestore(args []string) error {
-	fs := flag.NewFlagSet("backup restore", flag.ContinueOnError)
+	fs := newFlagSet("backup restore", flag.ContinueOnError)
 	var node liveNode
 	node.bind(fs)
 	node.timeout = 30 * time.Minute
@@ -148,7 +148,7 @@ func backupRestore(args []string) error {
 }
 
 func backupManage(command string, args []string) error {
-	fs := flag.NewFlagSet("backup "+command, flag.ContinueOnError)
+	fs := newFlagSet("backup "+command, flag.ContinueOnError)
 	path := fs.String("repository", "", "local backup repository directory")
 	keepLast := fs.Int("keep-last", 0, "retain at least this many newest generations")
 	keepWithin := fs.String("keep-within", "", "retain generations within this age, e.g. 30d")

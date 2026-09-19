@@ -163,11 +163,11 @@ func dispatchContext(args []string) bool {
 	}
 	sub := args[idx+1:]
 	if len(sub) > 0 && sub[0] != "list" {
-		fmt.Fprintf(os.Stderr, "unknown context subcommand %q\n\n%s\n", sub[0], contextUsage)
+		diagnosticf("unknown context subcommand %q\n\n%s\n", sub[0], contextUsage)
 		os.Exit(2)
 	}
 	if err := contextList(os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "context list: %v\n", err)
+		diagnosticf("context list: %v\n", err)
 		os.Exit(1)
 	}
 	return true

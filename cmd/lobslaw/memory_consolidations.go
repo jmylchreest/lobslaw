@@ -17,7 +17,7 @@ import (
 // notes" and "what has it been doing" both had no answer.
 
 func memoryConsolidations(args []string) error {
-	fs := flag.NewFlagSet("memory consolidations", flag.ExitOnError)
+	fs := newFlagSet("memory consolidations", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	owner := fs.String("owner", "", "restrict to one principal (e.g. user:alice)")

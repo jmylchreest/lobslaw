@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/jmylchreest/lobslaw/internal/logging"
+
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -63,7 +65,8 @@ func (h *TelegramHandler) SendAttachments(chatID int64, atts []types.Attachment,
 	}
 }
 
-func (h *TelegramHandler) sendAttachment(chatID int64, a types.Attachment, open ArtifactOpener) error {
+func (h *TelegramHandler) sendAttachment(chatID int64, a types.Attachment, open ArtifactOpener) (retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	method, field := telegramMethodFor(a.Kind)
 
 	rc, err := open(a.Reference)

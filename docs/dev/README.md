@@ -104,3 +104,5 @@ read that diff. Everything else in a commit, you wrote and reviewed.
 *(TODO — this section lands with Phase 12 polish. For now: create a feature branch, keep commits small and topical, respect the conventions above.)*
 
 - [Soul implementation and format review](SOUL.md) — effective state, prompt separation, field audit, and proposed extensions.
+
+- [Logging and secret redaction](LOGGING.md) — shared filtering pipeline, dependency adapters, and safe errors.

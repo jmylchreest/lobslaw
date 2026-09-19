@@ -94,11 +94,11 @@ func dispatchEnrol(args []string) bool {
 	}
 	run, ok := enrolForms[sub[0]]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown enrol subcommand %q\n\n%s\n", sub[0], enrolUsage)
+		diagnosticf("unknown enrol subcommand %q\n\n%s\n", sub[0], enrolUsage)
 		os.Exit(2)
 	}
 	if err := run(sub[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "enrol %s: %v\n", sub[0], err)
+		diagnosticf("enrol %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
 	return true
@@ -107,7 +107,7 @@ func dispatchEnrol(args []string) bool {
 // --- the laptop side ---------------------------------------------------
 
 func enrolRequest(args []string) error {
-	fs := flag.NewFlagSet("enrol request", flag.ExitOnError)
+	fs := newFlagSet("enrol request", flag.ExitOnError)
 	addr := fs.String("addr", envOr("LOBSLAW_ENROL_ADDR", ""), "host:port of a node's enrolment listener")
 	name := fs.String("name", "", "the name to be known by; the approver may change it")
 	caFile := fs.String("ca-cert", "", "cluster CA used to verify the node")
@@ -283,7 +283,7 @@ func enrolClient(addr, caFile string) (lobslawv1.EnrolmentServiceClient, func(),
 }
 
 func enrolStatus(args []string) error {
-	fs := flag.NewFlagSet("enrol status", flag.ExitOnError)
+	fs := newFlagSet("enrol status", flag.ExitOnError)
 	addr := fs.String("addr", envOr("LOBSLAW_ENROL_ADDR", ""), "host:port of a node's enrolment listener")
 	caFile := fs.String("ca-cert", "", "cluster CA used to verify the node")
 	id := fs.String("id", "", "the request id printed by `enrol request`")
@@ -394,7 +394,7 @@ func writeIssuedCredential(dir string, res *lobslawv1.PollEnrolmentResponse) err
 // --- the operator side -------------------------------------------------
 
 func enrolList(args []string) error {
-	fs := flag.NewFlagSet("enrol list", flag.ExitOnError)
+	fs := newFlagSet("enrol list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	all := fs.Bool("all", false, "include requests already answered")
@@ -461,7 +461,7 @@ func enrolDecide(args []string, approve bool) error {
 	if approve {
 		verb = "approve"
 	}
-	fs := flag.NewFlagSet("enrol "+verb, flag.ExitOnError)
+	fs := newFlagSet("enrol "+verb, flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	name := fs.String("name", "", "issue under this name instead of the requested one")

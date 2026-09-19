@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/logging"
+
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -241,6 +243,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.listener = ln
 	s.httpSrv = &http.Server{
+		ErrorLog:     logging.StandardLogger(s.log, slog.LevelError),
 		Handler:      mux,
 		ReadTimeout:  s.cfg.ReadTimeout,
 		WriteTimeout: s.cfg.WriteTimeout,

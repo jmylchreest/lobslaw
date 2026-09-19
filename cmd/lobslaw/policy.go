@@ -90,11 +90,11 @@ func dispatchPolicy(args []string) bool {
 
 	run := policyRoute(sub[0], offline)
 	if run == nil {
-		fmt.Fprintf(os.Stderr, "unknown policy subcommand %q\n\n%s\n", sub[0], policyUsage)
+		diagnosticf("unknown policy subcommand %q\n\n%s\n", sub[0], policyUsage)
 		os.Exit(2)
 	}
 	if err := run(rest); err != nil {
-		fmt.Fprintf(os.Stderr, "policy %s: %v\n", sub[0], err)
+		diagnosticf("policy %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
 	return true
@@ -116,7 +116,7 @@ func policyClient(node *liveNode) (lobslawv1.PolicyServiceClient, func(), error)
 // so the filter is the same one the offline form applies, against the
 // same constant. No new RPC was needed for reading.
 func policyApprovalsLive(args []string) error {
-	fs := flag.NewFlagSet("policy approvals", flag.ExitOnError)
+	fs := newFlagSet("policy approvals", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	asJSON := fs.Bool("json", false, "emit JSON")
@@ -146,7 +146,7 @@ func policyApprovalsLive(args []string) error {
 // client is one an attacker replaces — and "revocable" is only worth
 // something if the revoking stays narrow.
 func policyRevokeLive(args []string) error {
-	fs := flag.NewFlagSet("policy revoke-approvals", flag.ExitOnError)
+	fs := newFlagSet("policy revoke-approvals", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	apply := fs.Bool("apply", false, "actually delete (default is a dry run)")
@@ -282,7 +282,7 @@ func renderRevocation(w io.Writer, source string, revoked, refused, notFound []s
 // --- offline -----------------------------------------------------------
 
 func policyApprovals(args []string) error {
-	fs := flag.NewFlagSet("policy approvals", flag.ExitOnError)
+	fs := newFlagSet("policy approvals", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	asJSON := fs.Bool("json", false, "emit JSON")
@@ -327,7 +327,7 @@ func policyApprovals(args []string) error {
 }
 
 func policyRevokeApprovals(args []string) error {
-	fs := flag.NewFlagSet("policy revoke-approvals", flag.ExitOnError)
+	fs := newFlagSet("policy revoke-approvals", flag.ExitOnError)
 	var store offlineStore
 	store.bind(fs)
 	apply := fs.Bool("apply", false, "actually delete (default is a dry run)")

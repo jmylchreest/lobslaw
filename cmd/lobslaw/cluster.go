@@ -40,7 +40,7 @@ func dispatchCluster(args []string) bool {
 	case "reset":
 		clusterReset(sub[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "lobslaw cluster: unknown subcommand %q\n", sub[0])
+		diagnosticf("lobslaw cluster: unknown subcommand %q\n", sub[0])
 		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, export-operator, reset")
 		os.Exit(2)
 	}
@@ -48,7 +48,7 @@ func dispatchCluster(args []string) bool {
 }
 
 func clusterCAInit(args []string) {
-	fs := flag.NewFlagSet("cluster ca-init", flag.ExitOnError)
+	fs := newFlagSet("cluster ca-init", flag.ExitOnError)
 	caCert := fs.String("ca-cert", envOr("LOBSLAW_CA_CERT", ""), "path to write the CA public certificate")
 	caKey := fs.String("ca-key", envOr("LOBSLAW_CA_KEY", ""), "path to write the CA private key")
 	commonName := fs.String("common-name", "Lobslaw Cluster CA", "CA certificate Subject Common Name")
@@ -86,7 +86,7 @@ func clusterCAInit(args []string) {
 }
 
 func clusterSignNode(args []string) {
-	fs := flag.NewFlagSet("cluster sign-node", flag.ExitOnError)
+	fs := newFlagSet("cluster sign-node", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml; pre-fills --ca-cert/--node-cert/--node-key from [cluster.mtls]")
 	caCert := fs.String("ca-cert", envOr("LOBSLAW_CA_CERT", ""), "path to the CA public certificate")
 	caKey := fs.String("ca-key", envOr("LOBSLAW_CA_KEY", ""), "path to the CA private key (consumed only by this subcommand; intentionally not in runtime config)")
@@ -194,7 +194,7 @@ func clusterSignNode(args []string) {
 // process (raftboltdb takes an exclusive lock on raft.db; the rm
 // would succeed but the running node would keep its in-memory state).
 func clusterReset(args []string) {
-	fs := flag.NewFlagSet("cluster reset", flag.ExitOnError)
+	fs := newFlagSet("cluster reset", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml; reads [cluster] data_dir for the wipe target")
 	dataDir := fs.String("data-dir", "", "explicit data dir (overrides --config)")
 	includeState := fs.Bool("include-state", false, "also wipe state.db (memory FSM); leave false to preserve memory across the reset where possible")
@@ -289,7 +289,7 @@ func ensureDir(path string) error {
 }
 
 func exitWith(msg string) {
-	fmt.Fprintln(os.Stderr, "lobslaw:", msg)
+	diagnosticln("lobslaw:", msg)
 	os.Exit(1)
 }
 
@@ -305,12 +305,11 @@ func clusterExportOperator(args []string, legacyName bool) {
 		// A deprecation notice, not a refusal. Somebody with this in a
 		// runbook should get the credential they asked for and learn
 		// the new name at the same time.
-		fmt.Fprintln(os.Stderr,
-			"note: `cluster sign-operator` is now `cluster export-operator` — "+
-				"renamed because it hands over a PRIVATE KEY, which then has to travel. "+
-				"`lobslaw enrol` avoids that; see the operator-credentials docs.")
+		diagnosticln("note: `cluster sign-operator` is now `cluster export-operator` — " +
+			"renamed because it hands over a PRIVATE KEY, which then has to travel. " +
+			"`lobslaw enrol` avoids that; see the operator-credentials docs.")
 	}
-	fs := flag.NewFlagSet("cluster export-operator", flag.ExitOnError)
+	fs := newFlagSet("cluster export-operator", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""),
 		"path to config.toml; pre-fills --ca-cert from [cluster.mtls]")
 	caCert := fs.String("ca-cert", envOr("LOBSLAW_CA_CERT", ""), "path to the CA public certificate")

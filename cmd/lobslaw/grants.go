@@ -64,18 +64,18 @@ func dispatchGrants(args []string) bool {
 	case "revoke":
 		run = grantsRevoke
 	default:
-		fmt.Fprintf(os.Stderr, "unknown grants subcommand %q\n\n%s\n", sub[0], grantsUsage)
+		diagnosticf("unknown grants subcommand %q\n\n%s\n", sub[0], grantsUsage)
 		os.Exit(2)
 	}
 	if err := run(sub[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "grants %s: %v\n", sub[0], err)
+		diagnosticf("grants %s: %v\n", sub[0], err)
 		os.Exit(1)
 	}
 	return true
 }
 
 func grantsList(args []string) error {
-	fs := flag.NewFlagSet("grants list", flag.ExitOnError)
+	fs := newFlagSet("grants list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	conversation := fs.String("conversation", "", "narrow to one conversation (<channel>:<id>)")
@@ -102,7 +102,7 @@ func grantsList(args []string) error {
 }
 
 func grantsRevoke(args []string) error {
-	fs := flag.NewFlagSet("grants revoke", flag.ExitOnError)
+	fs := newFlagSet("grants revoke", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	conversation := fs.String("conversation", "", "revoke every grant in one conversation")

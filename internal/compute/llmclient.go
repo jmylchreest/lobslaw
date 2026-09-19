@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/logging"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -206,10 +207,9 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 			"params_len", len(t.Parameters),
 			"params", string(t.Parameters))
 	}
-	// System prompt + first user turn get logged at DEBUG so
-	// operators can see exactly what the model is reasoning over.
-	// Each message body is truncated at 2KB; the full prompt goes
-	// to multiple log records to avoid single-line bloat.
+	// DEBUG logs a 512-byte excerpt of every message, including tool results.
+	// Credential redaction is defense in depth; excerpts may still contain
+	// private conversation or file content.
 	for i, m := range req.Messages {
 		c.log.Debug("llm: request.message",
 			"endpoint", c.endpoint,
@@ -247,12 +247,17 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	rawBody, readErr := io.ReadAll(resp.Body)
+	var bodyReader io.Reader = resp.Body
+	if resp.StatusCode >= 400 {
+		bodyReader = io.LimitReader(resp.Body, maxDiagnosticBodyBytes+1)
+	}
+	rawBody, readErr := io.ReadAll(bodyReader)
 	if readErr != nil {
 		return nil, fmt.Errorf("llm: read response body: %w", readErr)
 	}
 
 	if resp.StatusCode >= 400 {
+		excerpt := truncateBody(rawBody)
 		// WARN, not DEBUG — operators need to see provider
 		// failures without enabling verbose logs. Body is
 		// truncated so a long error page doesn't flood stderr.
@@ -261,8 +266,8 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 			"endpoint", c.endpoint,
 			"model", model,
 			"duration", time.Since(start),
-			"body", truncateBody(rawBody))
-		return nil, classifyHTTPError(resp.StatusCode, rawBody)
+			"body", excerpt)
+		return nil, classifyHTTPError(resp.StatusCode, rawBody, excerpt)
 	}
 
 	var openResp openAIResponse
@@ -298,9 +303,7 @@ func finishReasonOrEmpty(r *openAIResponse) string {
 
 // classifyHTTPError turns a non-2xx response into the right sentinel
 // wrapped with enough context (status + body excerpt) for triage.
-func classifyHTTPError(status int, body []byte) error {
-	excerpt := truncateBody(body)
-
+func classifyHTTPError(status int, body []byte, excerpt string) error {
 	var err error
 	switch status {
 	case http.StatusTooManyRequests:
@@ -323,9 +326,15 @@ func classifyHTTPError(status int, body []byte) error {
 	return &DriverError{Class: ClassifyHTTPStatus(status, string(body)), Err: err}
 }
 
+const maxDiagnosticBodyBytes = 64 << 10
+
 // truncateBody caps a body excerpt at 512 bytes so error messages
 // don't carry a full malformed page payload into logs / telemetry.
 func truncateBody(body []byte) string {
+	if len(body) > maxDiagnosticBodyBytes {
+		return "[body omitted: diagnostic size limit exceeded]"
+	}
+	body = []byte(logging.SanitizeText(string(body)))
 	const max = 512
 	if len(body) <= max {
 		return string(body)

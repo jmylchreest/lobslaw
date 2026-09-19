@@ -32,6 +32,7 @@ func New(w io.Writer, level slog.Level, format Format) *slog.Logger {
 		logfilter.WithLevel(level),
 		logfilter.WithFormat(resolveFormat(w, format)),
 		logfilter.WithSource(true),
+		logfilter.WithSanitizer(sanitizer),
 	)
 }
 
