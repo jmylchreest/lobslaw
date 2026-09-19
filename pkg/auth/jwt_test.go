@@ -321,3 +321,14 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 	// future additions drop the import — trivial compile check.
 	_ = strings.TrimSpace
 }
+
+func TestNewValidatorHS256SecretLength(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int{1, 31, 32, 64} {
+		secret := strings.Repeat("x", size)
+		_, err := NewValidator(Config{AllowHS256: true, HS256Secret: secret})
+		if (err != nil) != (size < 32) {
+			t.Errorf("secret length %d: error = %v", size, err)
+		}
+	}
+}
