@@ -1268,6 +1268,15 @@ message CredentialRecord {
   // values are a syntactic dead-end). Parsed by the credential
   // service into the in-memory ACL.
   map<string, AllowedScopes> allowed_scopes_per_skill = 12;
+
+  // CAS revision and a fresh identity for each explicit account replacement.
+  uint64 revision = 13;
+  string generation = 14;
+  // Refresh attempt ownership is durable and never taken over on expiry.
+  string claimed_by = 15;
+  google.protobuf.Timestamp refresh_deadline = 16;
+  bool refresh_uncertain = 17;
+
 }
 
 message AllowedScopes {

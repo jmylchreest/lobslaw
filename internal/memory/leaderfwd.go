@@ -9,6 +9,8 @@ import (
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -158,6 +160,9 @@ func (n *RaftNode) ApplyOrForward(ctx context.Context, data []byte, timeout time
 	}
 	if _, err := lobslawv1.NewNodeServiceClient(conn).Propose(ctx,
 		&lobslawv1.ProposeRequest{Entry: data}); err != nil {
+		if status.Code(err) == codes.Aborted {
+			return nil, fmt.Errorf("%w: forwarded claim rejected", ErrClaimConflict)
+		}
 		// Includes the far side answering "not the leader" — it lost
 		// leadership between our read of LeaderAddress and the call.
 		// Retryable, and the caller re-reads the leader on the way
