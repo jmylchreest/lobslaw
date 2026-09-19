@@ -20,6 +20,18 @@ Review buttons expire after 30 minutes and survive node restarts when durable pr
 
 This is a human command, not an agent tool: the model cannot approve its own proposals. The node must host the self-learning store and a prompt registry. Policy must explicitly allow `command:exec` on resource `learned` for the user, and they can review only records they own. Group chats and unowned records are refused. Notice allowlists only control who receives reminders; they do not grant approval permission.
 
+For example, to permit the configured owner scope:
+
+```toml
+[[policy.rules]]
+id = "owner-learned-review"
+subject = "scope:owner"
+action = "command:exec"
+resource = "learned"
+effect = "allow"
+priority = 20
+```
+
 Other channels and operators can continue using `lobslaw learned pending --all`, `show`, `approve`, `accept`, `reject`, and `archive` against a running node.
 
 ## Anatomy
