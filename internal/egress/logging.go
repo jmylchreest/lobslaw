@@ -6,14 +6,14 @@ import (
 	"log/slog"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/jmylchreest/lobslaw/internal/logging"
 )
 
 // Smokescreen requires logrus. This adapter has no output sink or filtering
 // policy of its own: every level is forwarded to the supplied slog pipeline.
 func logrusFromSlog(l *slog.Logger) *logrus.Logger {
-	if l == nil {
-		l = slog.Default()
-	}
+	l = logging.OrDefault(l)
 	bridge := logrus.New()
 	bridge.SetOutput(io.Discard)
 	bridge.SetLevel(logrus.TraceLevel)

@@ -58,6 +58,9 @@ func TestTelegramErrorsAndLogsHideToken(t *testing.T) {
 				t.Run(call.name, func(t *testing.T) {
 					e := call.run()
 					if body && call.name == "file" {
+						if e != nil {
+							t.Fatalf("successful getFile: %v", e)
+						}
 						return
 					}
 					if e == nil {

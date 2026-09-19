@@ -31,3 +31,14 @@ func TestDependencyLoggerUsesSharedPipeline(t *testing.T) {
 		t.Fatal(out.String())
 	}
 }
+
+func TestSmokescreenNilLoggerRedactsBeforeDefaultSetup(t *testing.T) {
+	var out bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
+	defer slog.SetDefault(previous)
+	logrusFromSlog(nil).WithField("password", "secret-value").Warn("hello")
+	if out.Len() == 0 || strings.Contains(out.String(), "secret-value") {
+		t.Fatal(out.String())
+	}
+}

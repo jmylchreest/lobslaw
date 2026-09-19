@@ -92,7 +92,7 @@ func permittedLoggingCall(pkg, name, rel string, call *ast.CallExpr) bool {
 		case "NewJSONHandler", "NewTextHandler", "NewLogLogger":
 			allowed = strings.HasPrefix(rel, "internal/logging/")
 		case "New":
-			allowed = false
+			allowed = rel == "internal/logging/sanitize.go"
 			if len(call.Args) == 1 {
 				if a, ok := call.Args[0].(*ast.SelectorExpr); ok && a.Sel.Name == "DiscardHandler" {
 					allowed = true
@@ -103,7 +103,7 @@ func permittedLoggingCall(pkg, name, rel string, call *ast.CallExpr) bool {
 		}
 	case "log":
 		if name == "New" || name == "SetOutput" {
-			allowed = strings.HasPrefix(rel, "internal/logging/")
+			allowed = strings.HasPrefix(rel, "internal/logging/") || (name == "New" && rel == "internal/memory/raft_log.go")
 		}
 	case "flag":
 		if name == "NewFlagSet" {

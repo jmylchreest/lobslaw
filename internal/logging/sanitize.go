@@ -28,18 +28,14 @@ func SafeError(err error) error    { return logfilter.SanitizeError(err, sanitiz
 // StandardLogger forwards standard-library diagnostics through the supplied
 // logger's handler, preserving the single filtering/sanitization pipeline.
 func StandardLogger(l *slog.Logger, level slog.Level) *log.Logger {
-	if l == nil {
-		l = slog.Default()
-	}
+	l = OrDefault(l)
 	return slog.NewLogLogger(l.Handler(), level)
 }
 
 // Writer adapts complete diagnostic writes to the shared logger. It retains no
 // buffered fragments and is intended for line-oriented library/flag diagnostics.
 func Writer(l *slog.Logger, level slog.Level) io.Writer {
-	if l == nil {
-		l = slog.Default()
-	}
+	l = OrDefault(l)
 	return diagnosticWriter{logger: l, level: level}
 }
 
@@ -51,4 +47,14 @@ type diagnosticWriter struct {
 func (w diagnosticWriter) Write(p []byte) (int, error) {
 	w.logger.Log(context.Background(), w.level, SanitizeText(strings.TrimSpace(string(p))))
 	return len(p), nil
+}
+
+// OrDefault preserves an injected pipeline. Before application logger setup,
+// nil callers still get mandatory redaction around the existing default sink.
+// This does not install a logger or replace the live filter configuration.
+func OrDefault(l *slog.Logger) *slog.Logger {
+	if l != nil {
+		return l
+	}
+	return slog.New(logfilter.SanitizingHandler(slog.Default().Handler(), sanitizer))
 }
