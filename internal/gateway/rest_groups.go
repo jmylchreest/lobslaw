@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -317,22 +318,22 @@ func (s *Server) ensureOwnersTeam(ctx context.Context, principal string) (string
 // for the operator who already had the assistant; a team that cannot
 // take the chief gets its own, named from the team.
 func (s *Server) ensureTeamCoordinator(ctx context.Context, principal string, team *lobslawv1.GroupRecord) error {
-	if team == nil || strings.TrimSpace(team.GetCoordinatorBotId()) != "" {
+	if team == nil {
 		return nil
 	}
 	if s.cfg.Bots == nil {
 		return errors.New("this node does not host the bot registry")
 	}
-	coordID := memory.ChiefBotID
+	coordID := strings.TrimSpace(team.GetCoordinatorBotId())
+	if coordID == "" {
+		coordID = memory.ChiefBotID
+	}
 	rec, err := s.cfg.Bots.Get(ctx, coordID)
 	if err == nil && rec != nil {
 		owner := strings.TrimSpace(rec.GetOwner())
 		if owner != "" && owner != principal {
-			// The chief is somebody else's. This team needs its own
-			// coordinator rather than borrowing another person's bot.
-			coordID = team.GetId() + "-lead"
-			rec = nil
-		} else if strings.TrimSpace(rec.GetGroupId()) != team.GetId() && strings.TrimSpace(rec.GetGroupId()) != "" {
+			// The coordinator is somebody else's. This team needs its
+			// own rather than borrowing another person's bot.
 			coordID = team.GetId() + "-lead"
 			rec = nil
 		}
@@ -342,9 +343,9 @@ func (s *Server) ensureTeamCoordinator(ctx context.Context, principal string, te
 	if rec == nil {
 		rec, err = s.cfg.Bots.Put(ctx, &lobslawv1.BotRecord{
 			Id:            coordID,
-			DisplayName:   "Chief",
-			Description:   "The coordinator: answers when you message.",
-			Instructions:  "You are the coordinator. Answer directly when you can, and hand specialist work to the right bot.",
+			DisplayName:   coordinatorName,
+			Description:   "The coordinator: answers when you message and manages the team's bots.",
+			Instructions:  "You are the coordinator. Answer directly when you can, hand specialist work to the right bot, and manage the team's bots when asked.",
 			IsCoordinator: true,
 			Enabled:       true,
 			GroupId:       team.GetId(),
@@ -355,7 +356,56 @@ func (s *Server) ensureTeamCoordinator(ctx context.Context, principal string, te
 			return err
 		}
 	}
-	team.CoordinatorBotId = rec.GetId()
-	_, err = s.cfg.Groups.Put(ctx, team, team.GetRevision())
+	if coordID != strings.TrimSpace(team.GetCoordinatorBotId()) {
+		team.CoordinatorBotId = coordID
+		if _, err := s.cfg.Groups.Put(ctx, team, team.GetRevision()); err != nil {
+			return err
+		}
+	}
+	return s.syncCoordinator(ctx, rec)
+}
+
+// coordinatorName is the display name a team's coordinator shows by
+// default. The bot's id stays "chief" because the personality overlay
+// key derives from it.
+const coordinatorName = "Coordinator"
+
+// syncCoordinator keeps the coordinator able to reach every bot in its
+// team: its may_message list is the team's roster.
+//
+// One direction only. The edge list is validated as a DAG on write, so
+// a mutual edge would be rejected — the coordinator manages the bots,
+// not the other way round.
+func (s *Server) syncCoordinator(ctx context.Context, coord *lobslawv1.BotRecord) error {
+	if coord == nil {
+		return nil
+	}
+	bots, err := s.cfg.Bots.List(ctx)
+	if err != nil {
+		return err
+	}
+	want := make([]string, 0, len(bots))
+	for _, b := range bots {
+		if b.GetId() == coord.GetId() {
+			continue
+		}
+		if strings.TrimSpace(b.GetGroupId()) != strings.TrimSpace(coord.GetGroupId()) {
+			continue
+		}
+		want = append(want, b.GetId())
+	}
+	slices.Sort(want)
+	have := append([]string(nil), coord.GetMayMessage()...)
+	slices.Sort(have)
+	name := strings.TrimSpace(coord.GetDisplayName())
+	rename := name == "" || name == "Chief"
+	if !rename && slices.Equal(have, want) {
+		return nil
+	}
+	if rename {
+		coord.DisplayName = coordinatorName
+	}
+	coord.MayMessage = want
+	_, err = s.cfg.Bots.Put(ctx, coord, coord.GetRevision())
 	return err
 }

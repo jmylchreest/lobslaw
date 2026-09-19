@@ -79,12 +79,20 @@ func TestMCPManagementToolsAreSeedable(t *testing.T) {
 	}
 }
 
-func TestTeamToolsAreDefaultDenyLikeSoul(t *testing.T) {
+// The team tools are seeded default-allow like every other curated
+// builtin. A coordinator that cannot list, add or reach its own bots is
+// not a coordinator, and seeding them default-deny made the first
+// "create a bot" fail with "no rule matched". Operators tighten them
+// with [[policy.rules]] as they would any builtin.
+func TestTeamToolsAreSeedable(t *testing.T) {
 	t.Parallel()
 	seeds := readSeedSource(t)
-	for _, name := range []string{"ask_bot", "tell_bot", "inbox_post", "bot_create", "bot_update"} {
-		if !strings.Contains(seeds, `"`+name+`":`) {
-			t.Errorf("%s must be in noSeedTools (default-deny like soul_*)", name)
+	for _, name := range []string{
+		"bot_list", "bot_create", "bot_update",
+		"ask_bot", "tell_bot", "inbox_post",
+	} {
+		if strings.Contains(seeds, `"`+name+`":`) {
+			t.Errorf("%s is in noSeedTools; team tools must be seeded default-allow", name)
 		}
 	}
 }
