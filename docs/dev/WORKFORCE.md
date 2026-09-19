@@ -53,7 +53,9 @@ transcript has been saved through the session service. Retention keeps the most
 recent 32 eligible chat tasks and 64 display messages, plus active conversation
 messages. Receipt targets, predecessors/parents of nonterminal tasks, and tasks
 without a saved transcript are protected. Active, blocked, failed, approval and
-non-chat work is not silently discarded. Retention and each triggering mutation
+non-chat work is not silently discarded. Chat tasks carrying file artifacts are
+also protected so rolling conversation retention cannot invalidate their downloads.
+Retention and each triggering mutation
 share the project CAS; it neither deletes session transcripts nor evicts delivery
 receipts. This prevents ordinary conversation from exhausting the aggregate's
 task/message count while retaining the existing safety cap for unfinished work.
@@ -271,10 +273,52 @@ Project chat emits `start`, `reply`, `needs_confirmation` or `error` SSE events;
 the durable task survives a disconnected browser. Login revocation cancels its
 stream subscription.
 
-Task artifacts currently contain a text deliverable reference served by the
-owner-authorized `/v1/tasks/{id}/result` route. The API never turns a caller's
-filesystem path into an artifact. Attention is derived from owned task states;
-it is not a separate mutable inbox that can drift from the work.
+### File deliverables
+
+Worker responses retain attachment metadata alongside text results. Each public
+artifact has an opaque ID, display name, kind, normalized `mime_type`, reported
+`size`, timestamp and an authenticated relative reference:
+`/v1/tasks/{taskID}/artifacts/{artifactID}`. Internal `mount:path` references live
+only in `Execution.ArtifactReferences`. `LocalPath`, URL locators and binary file
+contents are never copied into this metadata. Repeated references across a paused
+turn retain their artifact ID; partial deliverables can survive later failure.
+
+Metadata is bounded to 16 file artifacts per task, 1 KiB per mount reference,
+128 bytes per display name/MIME value and a 64 MiB per-file download limit. Invalid
+reference shapes are refused without opening them. Download checks project/task
+ownership before resolving a private reference through `node.artifactOpener`.
+The opener uses `os.OpenRoot().Open()` so a symlink cannot escape the configured
+writable mount. The service revalidates references, requires a regular file and
+checks its actual size before streaming. Error responses omit underlying paths
+and opener errors.
+
+```mermaid
+sequenceDiagram
+  participant Runner
+  participant Raft
+  participant HTTP
+  participant Mount as Confined artifact opener
+  participant Browser
+  Runner->>Raft: Original claim + bounded attachment metadata
+  Browser->>HTTP: GET task/artifacts/id with user authentication
+  HTTP->>Raft: Check task owner; resolve opaque artifact ID
+  HTTP->>Mount: Open validated mount-relative reference
+  Mount-->>HTTP: Regular file, confined against symlink escape
+  HTTP-->>Browser: Bounded download, attachment disposition, no-store, nosniff
+```
+
+Downloads use `application/octet-stream` and attachment disposition rather than
+rendering model-produced HTML under the console origin. ConsoleService carries
+content disposition and length so remote downloads retain filenames and detect
+truncation. Text results use the same public artifact route; `/result` remains
+available for compatibility. Raft preserves metadata, while actual files remain
+subject to the configured storage mount's durability and artifact retention.
+
+Attention is derived from owned task states. `Task.acknowledged` is a durable
+human review flag: `ActTask` action `acknowledge` requires the current revision and
+only accepts `done` or `failed`. It hides that item from Attention without deleting
+the task or its deliverables. Retry resets the flag. There is no agent-facing
+acknowledgement, approval or completion shortcut.
 
 ## Verification
 

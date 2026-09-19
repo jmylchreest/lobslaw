@@ -27,7 +27,7 @@ func retainChat(st *State, incomingDependencies ...string) {
 	eligible := []*Task{}
 	for id, t := range st.Tasks {
 		x := st.Executions[id]
-		if x != nil && x.Chat && x.TranscriptSaved && t.Status == StatusDone && !protected[id] {
+		if x != nil && x.Chat && x.TranscriptSaved && len(x.ArtifactReferences) == 0 && t.Status == StatusDone && !protected[id] {
 			eligible = append(eligible, t)
 		}
 	}

@@ -232,7 +232,9 @@ func (s *Service) ListTasks(ctx context.Context, owner, id string) ([]Task, erro
 	}
 	out := []Task{}
 	for _, v := range st.Tasks {
-		out = append(out, *v)
+		view := *v
+		view.Artifacts = publicArtifacts(v)
+		out = append(out, view)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
@@ -242,6 +244,7 @@ func (s *Service) GetTask(ctx context.Context, owner, id string) (*Task, error) 
 	if e != nil {
 		return nil, e
 	}
+	st.Tasks[id].Artifacts = publicArtifacts(st.Tasks[id])
 	return st.Tasks[id], nil
 }
 func (s *Service) newTask(ctx context.Context, st *State, in Task, claims *types.Claims) (*Task, error) {
@@ -299,6 +302,11 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 			return memory.ErrClaimConflict
 		}
 		switch action {
+		case "acknowledge":
+			if t.Status != StatusDone && t.Status != StatusFailed {
+				return ErrInvalid
+			}
+			t.Acknowledged = true
 		case "cancel":
 			if t.Status == StatusDone {
 				return ErrInvalid
@@ -317,6 +325,7 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 				t.Instructions += "\nHuman clarification: " + answer
 			}
 			t.Status = StatusReady
+			t.Acknowledged = false
 			t.Error = ""
 			t.Question = ""
 			t.ManualStep = false
@@ -359,6 +368,9 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 		}
 		s.mu.Unlock()
 	}
+	if out != nil {
+		out.Artifacts = publicArtifacts(out)
+	}
 	return out, e
 }
 func (s *Service) Attention(ctx context.Context, owner string) ([]AttentionItem, error) {
@@ -373,6 +385,9 @@ func (s *Service) Attention(ctx context.Context, owner string) ([]AttentionItem,
 			return nil, e
 		}
 		for _, t := range tasks {
+			if t.Acknowledged {
+				continue
+			}
 			kind := ""
 			switch t.Status {
 			case StatusApproval:

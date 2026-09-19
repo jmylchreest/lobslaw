@@ -95,6 +95,7 @@ func (s *Service) AgentTask(ctx context.Context, id string) (*Task, error) {
 	if t == nil {
 		return nil, ErrNotFound
 	}
+	t.Artifacts = publicArtifacts(t)
 	return t, nil
 }
 func (s *Service) AgentCreateTask(ctx context.Context, input Task) (*Task, error) {

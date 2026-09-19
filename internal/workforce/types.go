@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/turn"
@@ -76,6 +77,8 @@ type Project struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 type Artifact struct {
+	MimeType  string    `json:"mime_type,omitempty"`
+	Size      int64     `json:"size,omitempty"`
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Kind      string    `json:"kind"`
@@ -83,6 +86,7 @@ type Artifact struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Task struct {
+	Acknowledged       bool       `json:"acknowledged"`
 	ParentID           string     `json:"parent_id,omitempty"`
 	Progress           string     `json:"progress,omitempty"`
 	ID                 string     `json:"id"`
@@ -166,22 +170,23 @@ type AttentionItem struct {
 
 // Execution fields are never decoded from caller-supplied task JSON.
 type Execution struct {
-	Children         int
-	Depth            int
-	BlockedQuestion  string
-	WorkHistory      []turn.Message
-	TranscriptSaved  bool
-	Claim            string
-	Expires          time.Time
-	Claims           *types.Claims
-	History          []turn.Message
-	Spent            turn.BudgetState
-	Action           string
-	Resource         string
-	Approved         bool
-	BudgetExtensions int
-	Routine          *Routine
-	Chat             bool
+	ArtifactReferences map[string]string
+	Children           int
+	Depth              int
+	BlockedQuestion    string
+	WorkHistory        []turn.Message
+	TranscriptSaved    bool
+	Claim              string
+	Expires            time.Time
+	Claims             *types.Claims
+	History            []turn.Message
+	Spent              turn.BudgetState
+	Action             string
+	Resource           string
+	Approved           bool
+	BudgetExtensions   int
+	Routine            *Routine
+	Chat               bool
 }
 type State struct {
 	Revision   uint64
@@ -205,6 +210,7 @@ type GroupReader interface {
 	Get(context.Context, string) (*lobslawv1.GroupRecord, error)
 }
 type Config struct {
+	OpenArtifact    func(string) (io.ReadCloser, error)
 	Repository      Repository
 	Bots            BotReader
 	Groups          GroupReader

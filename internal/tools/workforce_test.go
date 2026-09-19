@@ -122,7 +122,7 @@ func workforceAgentFixture(t *testing.T, script compute.ScriptFunc, allow bool) 
 	}
 	registry := NewRegistry()
 	for _, def := range WorkforceToolDefs() {
-		if strings.Contains(def.Name, "approve") || strings.Contains(def.Name, "finish") {
+		if strings.Contains(def.Name, "approve") || strings.Contains(def.Name, "finish") || strings.Contains(def.Name, "acknowledge") {
 			t.Fatal("agent authority escalation surface", def.Name)
 		}
 		if e = registry.Register(def); e != nil {
@@ -191,7 +191,7 @@ func TestActualAgentDelegatesAndReceivesDependencyResultsWithRecall(t *testing.T
 			return compute.MockResponse{Content: "ACTUAL-DEPENDENCY-EVIDENCE"}, nil
 		case 4:
 			last := req.Messages[len(req.Messages)-1].Content
-			for _, want := range []string{"ACTUAL-DEPENDENCY-EVIDENCE", upstreamID, "/v1/tasks/" + upstreamID + "/result", "PROJECT-PIN", "RECALL-CONTENT", "CHILD-CRITERION"} {
+			for _, want := range []string{"ACTUAL-DEPENDENCY-EVIDENCE", upstreamID, "/v1/tasks/" + upstreamID + "/artifacts/", "PROJECT-PIN", "RECALL-CONTENT", "CHILD-CRITERION"} {
 				if !strings.Contains(last, want) {
 					return compute.MockResponse{}, fmt.Errorf("successor missing %q", want)
 				}

@@ -72,7 +72,7 @@ func TestDependencyContextContainsActualResults(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, want := range []string{"PROJECT-PIN", "CHECK-CRITERION", a.ID, b.ID, "actual result", "/v1/tasks/" + a.ID + "/result", "untrusted:workforce-context"} {
+	for _, want := range []string{"PROJECT-PIN", "CHECK-CRITERION", a.ID, b.ID, "actual result", "/v1/tasks/" + a.ID + "/artifacts/", "untrusted:workforce-context"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in context", want)
 		}

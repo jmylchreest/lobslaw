@@ -36,6 +36,16 @@ func TestArtifactOpenerContainsReferences(t *testing.T) {
 	}}}
 	open := n.artifactOpener()
 
+	t.Run("rejects symlink escape", func(t *testing.T) {
+		if err := os.Symlink(outside, filepath.Join(root, "generated", "escape.txt")); err != nil {
+			t.Fatal(err)
+		}
+		if rc, err := open("store:generated/escape.txt"); err == nil {
+			_ = rc.Close()
+			t.Fatal("opened an outside file through a symlink")
+		}
+	})
+
 	t.Run("reads a contained reference", func(t *testing.T) {
 		rc, err := open("store:generated/ok.mp3")
 		if err != nil {
