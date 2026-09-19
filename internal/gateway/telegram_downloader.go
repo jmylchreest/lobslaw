@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/httpbody"
 	"github.com/jmylchreest/lobslaw/internal/logging"
-
 	"github.com/jmylchreest/lobslaw/internal/tools"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -156,7 +156,11 @@ func (h *TelegramHandler) resolveFileURL(ctx context.Context, fileID string) (re
 		} `json:"result"`
 		Description string `json:"description"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	raw, err := httpbody.Read(resp.Body, 1<<20)
+	if err != nil {
+		return "", fmt.Errorf("getFile read: %w", err)
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return "", fmt.Errorf("getFile decode: %w", err)
 	}
 	if !decoded.OK {

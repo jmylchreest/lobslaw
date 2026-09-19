@@ -1850,6 +1850,9 @@ message SessionMessage {
   // audit correlation and for trimming on turn boundaries.
   string turn_id = 7;
   google.protobuf.Timestamp timestamp = 8;
+  // Server-owned prepared input for a paused executor call. Only continuation
+  // messages carry this; never populated from LLM output or sent to a provider.
+  PreparedToolCall prepared_tool_call = 9;
 }
 
 // SessionToolCall mirrors the tool-call shape on the LLM wire.
@@ -2256,4 +2259,21 @@ message PromptRecord {
   // for the same reason: the answer has to reach something other than
   // a paused turn.
   string enrolment = 20;
+}
+
+// PreparedToolCall freezes hook output for confirmation/resume. This is not an
+// authorization grant; current policy and safety checks still apply on resume.
+message PreparedToolCall {
+  string call_id = 1;
+  string tool_name = 2;
+  string turn_id = 3;
+  string original_arguments = 4;
+  map<string, string> params = 5;
+  repeated PreparedApproval approvals = 6;
+}
+
+// PreparedApproval is scoped to its containing prepared call, not the session.
+message PreparedApproval {
+  string action = 1;
+  string resource = 2;
 }

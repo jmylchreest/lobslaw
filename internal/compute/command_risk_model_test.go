@@ -2,10 +2,14 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // What the model is allowed to move is the security-relevant part, so
@@ -215,4 +219,56 @@ func sameLabels(got, want []commandrisk.RiskLabel) bool {
 		}
 	}
 	return true
+}
+
+func TestGateUsesAdjudicatedVerdict(t *testing.T) {
+	previous := ActiveRiskJudge()
+	t.Cleanup(func() { SetRiskJudge(previous) })
+	for _, tt := range []struct {
+		name  string
+		mode  string
+		label commandrisk.RiskLabel
+		deny  bool
+		ask   bool
+	}{
+		{name: "resolved reads run", mode: "standard", label: commandrisk.LabelReads},
+		{name: "strict still asks", mode: "strict", label: commandrisk.LabelReads, ask: true},
+		{name: "network still asks", mode: "standard", label: commandrisk.LabelNetwork, ask: true},
+		{name: "failed model still asks", mode: "standard", ask: true},
+		{name: "explicit denial wins", mode: "standard", label: commandrisk.LabelReads, deny: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &countingRiskProvider{label: tt.label}
+			SetRiskJudge(&RiskJudge{provider: provider, trust: RiskTrustResolveUnknown, log: slog.New(slog.DiscardHandler)})
+			var rules []*lobslawv1.PolicyRule
+			if tt.deny {
+				rules = append(rules, &lobslawv1.PolicyRule{Id: "deny-shell", Subject: "*", Action: ShellAction, Resource: "*", Effect: "deny", Priority: 100})
+			}
+			e, _ := modeGatedExecutor(t, []string{tt.mode}, rules...)
+			err := e.CheckGate(context.Background(), &types.Claims{}, "shell_command", map[string]string{"command": "for b in kubectl helm; do command -v $b; done"})
+			if provider.calls != 1 {
+				t.Fatalf("model calls = %d, want 1", provider.calls)
+			}
+			var req *ConfirmationRequest
+			switch {
+			case tt.ask:
+				if !errors.As(err, &req) {
+					t.Fatalf("want confirmation, got %v", err)
+				}
+				want := tt.label
+				if want == "" {
+					want = commandrisk.LabelUnreadable
+				}
+				if !sameLabels(req.Labels, commandrisk.L(want)) || !strings.Contains(req.Summary, string(want)) {
+					t.Fatalf("inconsistent confirmation: %+v", req)
+				}
+			case tt.deny:
+				if err == nil || errors.As(err, &req) {
+					t.Fatalf("want denial, got %v", err)
+				}
+			case err != nil:
+				t.Fatal(err)
+			}
+		})
+	}
 }

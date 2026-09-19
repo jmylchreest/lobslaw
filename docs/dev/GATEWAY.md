@@ -50,6 +50,7 @@ Client then polls `GET /v1/prompts/<id>` for state and confirms via `POST /v1/pr
 
 | Method + Path | Purpose | Status codes |
 |---|---|---|
+| `POST /v1/uploads` | Authenticated raw image/audio upload; returns owner-bound staging ID | 201, 400, 401, 413, 415, 429, 500, 503 |
 | `POST /v1/messages` | Main user entry — sends a message to the agent | 200, 400, 401 (w/ RequireAuth), 500, 503 (no agent) |
 | `GET  /healthz` | Liveness — process alive | 200 |
 | `GET  /readyz` | Readiness — server bound + agent configured | 200, 503 |
@@ -789,3 +790,12 @@ in favour of the caller is the wrong way to be wrong about consensus.
 
 Operator certificates are shorter-lived than a node's by default: a
 person's credential lives on a laptop that travels.
+
+
+REST media uses `upload_ids` on `/v1/messages`; both upload and redemption
+require a valid JWT even when anonymous text chat is enabled. Uploads remain
+local to one gateway process in `incoming_dir`: provision 256 MiB plus headroom
+for other channels and abandoned directories. The process caps 128 files;
+each owner caps 64 MiB / 32 files, including full-size in-flight reservations.
+See [REST media configuration](../docs/configuration/channels.md) for formats,
+expiry, routing affinity and examples.

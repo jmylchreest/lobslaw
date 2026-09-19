@@ -246,12 +246,22 @@ func SetRiskJudge(j *RiskJudge) {
 // ActiveRiskJudge returns the judge in force, or nil.
 func ActiveRiskJudge() *RiskJudge { return activeRiskJudge.Load() }
 
+type commandVerdictKey struct{}
+
+type commandVerdict struct {
+	command string
+	verdict commandrisk.RiskVerdict
+}
+
 // VerdictFor classifies a call's parameters, consulting a configured
 // model where one is wired.
 //
 // This is what the prompt and the gate both read, so there is exactly
 // one place the two verdicts are combined.
 func VerdictFor(ctx context.Context, params map[string]string) commandrisk.RiskVerdict {
+	if cached, ok := ctx.Value(commandVerdictKey{}).(commandVerdict); ok && cached.command == params["command"] {
+		return cached.verdict
+	}
 	return AdjudicateWith(ctx, commandrisk.ClassifyRisk(params["command"]), params["command"], ActiveRiskJudge())
 }
 

@@ -288,6 +288,9 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 		return unreadable(name, why)
 	}
 	labels = verb
+	if (name == "apt-get" || name == "apt") && aptSimulation(args) {
+		labels = L(LabelReads)
+	}
 
 	for _, tok := range args {
 		for pattern, esc := range rule.Escalate {

@@ -510,6 +510,9 @@ func (f *FSM) purgeSession(sessionID string) error {
 // other payload types return an error so a misrouted CLAIM can't
 // silently overwrite a record that doesn't support CAS.
 func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
+	if rec := entry.GetSelfTaught(); rec != nil && rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ARCHIVED {
+		return f.applyReviewedArchive(entry, rec)
+	}
 	bucket, newPayload, err := bucketAndPayload(entry)
 	if err != nil {
 		return err

@@ -160,9 +160,8 @@ Authorization: Bearer <jwt>
 Content-Type: application/json
 
 {
-  "user_id": "alice",
-  "text": "what's on my calendar tomorrow?",
-  "stream": false
+  "message": "what's on my calendar tomorrow?",
+  "session_id": "daily-chat"
 }
 ```
 
@@ -172,9 +171,64 @@ HTTP/1.1 200 OK
 { "reply": "...", "tool_calls": [...] }
 ```
 
-Streaming (`"stream": true`) returns NDJSON events.
+Streaming uses `Accept: text/event-stream` and returns server-sent events (SSE).
 
 REST has **no async push** — replies are request/response. Use Telegram (or wire a webhook) for push notifications.
+
+### Images and recorded speech over REST
+
+Upload the raw image or audio body first, then include the returned `upload_id`
+in a message. The upload endpoint streams to disk; file bytes do not go into the
+message JSON or its existing 1 MiB request limit.
+
+```sh
+curl --fail-with-body "$GATEWAY/v1/uploads" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: image/png' \
+  --data-binary @photo.png
+# {"upload_id":"upload-...","mime_type":"image/png","size":12345,"expires_at":"..."}
+
+curl --fail-with-body "$GATEWAY/v1/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"message":"What is in this picture?","upload_ids":["upload-..."],"session_id":"daily-chat"}'
+```
+
+A browser can send a `File` or recorded audio `Blob` directly as the fetch body;
+use its supported MIME type in `Content-Type`. Do not wrap it in `FormData` or
+base64. For audio, use a prompt such as "Transcribe this recording". A message
+may omit `message` when it supplies uploads. Vision and speech recognition use
+the existing `read_image` / `read_audio` tools and their configured providers;
+uploading a file does not itself enable those capabilities.
+
+Supported media types: `image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+`audio/ogg`, `audio/webm`, `audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/x-wav`,
+and `audio/flac`. MIME parameters such as `audio/webm;codecs=opus` are accepted.
+The media tool validates the actual file; declaring a MIME type does not convert
+or validate the recording's codec.
+
+- Maximum file size: **32 MiB**, checked while reading, including chunked uploads.
+- Maximum staging capacity: **256 MiB and 128 files per gateway process**.
+  Each owner is limited to **64 MiB and 32 files**.
+  In-progress uploads reserve 32 MiB each; capacity exhaustion returns HTTP 429.
+- Up to **16 upload IDs per message**. Unknown, expired, duplicate or another
+  user's IDs return HTTP 404. Oversized uploads return 413; unsupported types 415.
+- Uploads expire after **one hour**. Files in use by a queued or active turn are
+  retained until that request finishes, including its confirmation wait.
+- Uploading and redeeming IDs require a valid JWT with a nonempty user ID,
+  including when `require_auth = false` permits anonymous text chat.
+- Files live in a private temporary subdirectory of `[gateway].incoming_dir`.
+  Provision at least the process staging budget plus headroom for other channels
+  and abandoned directories; quotas apply separately to each gateway process.
+  They are removed on expiry or graceful shutdown. After an abrupt process kill,
+  an operator may remove abandoned `rest-uploads-*` directories once the owning
+  process has stopped. Never remove directories used by a running gateway.
+
+Upload and message requests must reach the **same gateway process** (use session
+stickiness with multiple replicas). IDs do not survive restart and are not
+replicated or backed up. Re-upload expired files for later conversation turns.
+Media turns remain separate under `debounce` and `smart` queue modes; `latest`
+and `off` still return an explicit rejection when they discard a request.
 
 ### JWT validators
 
