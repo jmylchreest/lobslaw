@@ -1020,8 +1020,8 @@ func validateConfig(cfg Config) error {
 	if cfg.Creds == nil {
 		return errors.New("node.Config: Creds required (run `lobslaw cluster sign-node` first)")
 	}
-	if cfg.Creds.NodeID != cfg.NodeID {
-		return fmt.Errorf("node.Config: cert was signed for %q but this host resolves as %q — re-run `lobslaw cluster sign-node` on this host (or set LOBSLAW_NODE_ID to override)", cfg.Creds.NodeID, cfg.NodeID)
+	if cfg.Creds.NodeID() != cfg.NodeID {
+		return fmt.Errorf("node.Config: cert was signed for %q but this host resolves as %q — re-run `lobslaw cluster sign-node` on this host (or set LOBSLAW_NODE_ID to override)", cfg.Creds.NodeID(), cfg.NodeID)
 	}
 	if needsRaft(cfg.Functions) {
 		if cfg.DataDir == "" {
