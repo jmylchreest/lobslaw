@@ -21,6 +21,9 @@ type Policy struct {
 	// Landlock is installed, so /proc cannot expose host process environments.
 	PrivateProc     bool `json:"private_proc,omitempty"`
 	RequireLandlock bool `json:"require_landlock,omitempty"`
+	// HideDirs masks host-side socket directories before exec. Landlock filesystem
+	// rules alone do not restrict AF_UNIX connect to a known pathname.
+	HideDirs []string `json:"hide_dirs,omitempty"`
 	// AllowedPaths are RW paths visible to the sandbox. Landlock
 	// enforces the restriction once Phase 4.5.5 lands. Paths must be
 	// absolute; verified by Validate.
@@ -151,6 +154,14 @@ func (p *Policy) Normalise() {
 // Validate returns an error if the policy is internally inconsistent.
 // Callers call this at config-load time so bad config fails fast.
 func (p *Policy) Validate() error {
+	if len(p.HideDirs) > 0 && (!p.Namespaces.User || !p.Namespaces.Mount) {
+		return errors.New("HideDirs requires user and mount namespaces")
+	}
+	for _, path := range p.HideDirs {
+		if !filepath.IsAbs(path) || filepath.Clean(path) == "/" {
+			return errors.New("HideDirs requires absolute non-root directories")
+		}
+	}
 	if p.PrivateProc && (!p.Namespaces.User || !p.Namespaces.Mount || !p.Namespaces.PID) {
 		return errors.New("PrivateProc requires user, mount and PID namespaces")
 	}

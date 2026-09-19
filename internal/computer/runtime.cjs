@@ -9,7 +9,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const actionTimeout = 20000;
 const viewport = { width: 1280, height: 800 };
-const roleHeaders = { 'X-Lobslaw-Role': 'computer', 'Proxy-Authorization': 'Basic ' + Buffer.from('computer:_').toString('base64') };
+const observationLimits = { elements: 80, text: 6000, label: 160, nodes: 2000 };
+const privateEntryLimit = 100;
 // Structural selectors contain no field values, labels, IDs, or page text.
 function structuralSelector(node) {
   const segments = [];
@@ -21,14 +22,66 @@ function structuralSelector(node) {
   return segments.join(' > ');
 }
 
+// Runs in the page, with no access to Node, cookies, storage, or form values.
+// The same target classification gates automatic fill and redacts observations.
+function inspectDOM(root, options) {
+  const privateValues = [...(options.privateValues || []), ...[...document.querySelectorAll('input[type=password],input[autocomplete=current-password],input[autocomplete=one-time-code]')].map(node => node.value)].filter(Boolean);
+  function selector(node) {
+    const parts = [];
+    while (node && node.nodeType === Node.ELEMENT_NODE) {
+      const siblings = node.parentElement ? [...node.parentElement.children].filter(n => n.tagName === node.tagName) : [node];
+      parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(node) + 1})`); node = node.parentElement;
+    }
+    return parts.join(' > ');
+  }
+  function credentialField(node) {
+    if (!node.matches('input,textarea,select,[contenteditable]')) return false;
+    const type = (node.getAttribute('type') || '').toLowerCase();
+    const autocomplete = (node.getAttribute('autocomplete') || '').toLowerCase();
+    const identity = ['id', 'name', 'aria-label', 'placeholder'].map(k => node.getAttribute(k) || '').join(' ');
+    return ['password', 'email', 'tel'].includes(type) || /password|username|one-time-code|email|tel|cc-/.test(autocomplete)
+      || /password|passcode|secret|token|api[_ -]?key|credential|login|sign.?in|otp|username|email|auth|credit|card.?number|cvv|cvc|\bpin\b/i.test(identity);
+  }
+  function sensitive(node) {
+    const form = node.closest('form');
+    return credentialField(node) || !!form && [...form.querySelectorAll('input,textarea,select,[contenteditable]')].some(credentialField);
+  }
+  function redact(text) {
+    for (const value of privateValues) text = text.replaceAll(value, '[redacted]');
+    return text.replace(/\b(password|passcode|secret|token|api[_ -]?key|authorization)\s*[:=]\s*\S+/gi, '$1: [redacted]')
+      .replace(/\b[A-Za-z0-9_/-]{32,}\b/g, '[redacted]');
+  }
+  function describe(node) {
+    const secret = sensitive(node);
+    const editable = node.matches('input,textarea,select,[contenteditable]');
+    const label = editable ? (node.getAttribute('aria-label') || [...(node.labels || [])].map(label => label.textContent).join(' ') || node.getAttribute('placeholder') || '') : (node.textContent || '');
+    return { selector: selector(node), tag: node.tagName.toLowerCase(), type: node instanceof HTMLInputElement ? node.type : '', text: options.saturated ? '' : secret ? 'Manual credential entry' : redact(label.trim()).slice(0, options.label), sensitive: secret };
+  }
+  if (options.target) return describe(root);
+  const controls = [...root.querySelectorAll('a,button,input,textarea,select,[role=button],[contenteditable]')].filter(node => node.checkVisibility());
+  const manual_required = options.saturated || controls.some(sensitive);
+  const elements = controls.slice(0, options.elements).map(describe);
+  let text = '';
+  if (!manual_required) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node, count = 0;
+    while ((node = walker.nextNode()) && count++ < options.nodes && text.length < options.text) {
+      const parent = node.parentElement;
+      if (!parent || parent.closest('script,style,noscript,input,textarea,select,[contenteditable],[data-private],[data-sensitive]') || !parent.checkVisibility()) continue;
+      text += ' ' + redact(node.textContent.trim());
+    }
+  }
+  return { origin: location.origin, text: manual_required ? 'Sensitive form: ask the owner to take control for credential entry.' : text.trim().slice(0, options.text), elements, manual_required };
+}
+
 async function main() {
+  const privateValues = []; let saturated = false;
   execFileSync(process.env.COMPUTER_IP, ['link', 'set', 'lo', 'up']);
   const socketPath = process.env.COMPUTER_PROXY;
   const proxy = http.createServer((req, res) => {
-    const headers = { ...req.headers, ...roleHeaders };
+    const headers = { ...req.headers };
     delete headers['proxy-authorization'];
     delete headers['x-lobslaw-role'];
-    Object.assign(headers, roleHeaders);
     const upstream = http.request({ socketPath, method: req.method, path: req.url, headers }, reply => {
       res.writeHead(reply.statusCode, reply.headers); reply.pipe(res);
     });
@@ -38,7 +91,7 @@ async function main() {
   proxy.on('connect', (req, client, head) => {
     const upstream = net.connect(socketPath);
     upstream.on('connect', () => {
-      upstream.write(`CONNECT ${req.url} HTTP/1.1\r\nHost: ${req.url}\r\nX-Lobslaw-Role: computer\r\nProxy-Authorization: ${roleHeaders['Proxy-Authorization']}\r\n\r\n`);
+      upstream.write(`CONNECT ${req.url} HTTP/1.1\r\nHost: ${req.url}\r\n\r\n`);
       if (head.length) upstream.write(head);
       client.pipe(upstream); upstream.pipe(client);
     });
@@ -68,7 +121,7 @@ async function main() {
   } catch { /* First launch has no last location. */ }
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const line of input) {
-    let ok = false, result = {};
+    let ok = false, result = {}, code = '';
     try {
       const step = JSON.parse(line);
       switch (step.action) {
@@ -92,13 +145,26 @@ async function main() {
             await page.mouse.click(step.x, step.y);
           } else {
             const target = page.locator(step.selector);
-            result.selector = await target.evaluate(structuralSelector);
+            const info = await target.evaluate(inspectDOM, { ...observationLimits, target: true });
+            if (step.automated && info.sensitive) { const err = new Error('manual'); err.manual = true; throw err; }
+            result.selector = info.selector;
             await target.click();
           }
           break;
-        case 'fill': await page.locator(step.selector || ':focus').fill(step.value || ''); break;
+        case 'fill': {
+          const target = page.locator(step.selector || ':focus');
+          const info = await target.evaluate(inspectDOM, { ...observationLimits, target: true });
+          if (step.automated && info.sensitive) { const err = new Error('manual'); err.manual = true; throw err; }
+          result.selector = info.selector;
+          await target.fill(step.value || '');
+          if (!step.automated && step.value && !privateValues.includes(step.value)) {
+            if (privateValues.length < privateEntryLimit) privateValues.push(step.value); else saturated = true;
+          }
+          break;
+        }
         case 'press':
-          if (!/^(Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Space|Control\+[a-z])$/.test(step.value)) throw new Error('unsupported key');
+          if (!/^(Enter|Tab|Escape|Backspace|Delete|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Space|Control\+a)$/.test(step.value)) throw new Error('unsupported key');
+          if (step.automated && (await page.locator('body').evaluate(inspectDOM, observationLimits)).manual_required) { const err = new Error('manual'); err.manual = true; throw err; }
           await page.keyboard.press(step.value); break;
         case 'wait': {
           const target = page.locator(step.selector);
@@ -106,14 +172,17 @@ async function main() {
           result.selector = await target.evaluate(structuralSelector);
           break;
         }
-        case 'capture': result.screenshot = (await page.screenshot({ type: 'png' })).toString('base64'); break;
+        case 'capture':
+          if (!step.automated) result.screenshot = (await page.screenshot({ type: 'png' })).toString('base64');
+          break;
         default: throw new Error('unknown action');
       }
       // Local-only restore metadata. Never part of a recording or API response.
       if (/^https?:\/\//.test(page.url())) fs.writeFileSync(locationFile, page.url(), { mode: 0o600 });
+      if (step.automated) result.observation = await page.locator('body').evaluate(inspectDOM, { ...observationLimits, privateValues, saturated });
       ok = true;
-    } catch { /* Deliberately redact Playwright diagnostics and entered values. */ }
-    process.stdout.write(JSON.stringify({ ok, result }) + '\n');
+    } catch (err) { if (err.manual) code = 'manual'; /* Never emit diagnostic values. */ }
+    process.stdout.write(JSON.stringify({ ok, result, code }) + '\n');
   }
   await context.close(); proxy.close();
 }

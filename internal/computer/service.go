@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -18,11 +19,12 @@ import (
 )
 
 const (
-	ActionTimeout   time.Duration = 30 * time.Second
-	MaxWorkspaces   int           = 4
-	MaxSteps        int           = 100
-	privateDirMode  os.FileMode   = 0700
-	privateFileMode os.FileMode   = 0600
+	ActionTimeout        time.Duration = 30 * time.Second
+	MaxWorkspaces        int           = 4
+	MaxSteps             int           = 100
+	privateDirMode       os.FileMode   = 0700
+	privateFileMode      os.FileMode   = 0600
+	InputReviewedLiteral string        = "reviewed_literal"
 )
 
 var (
@@ -35,17 +37,21 @@ var (
 	ErrInvalid     = errors.New("computer: invalid action")
 )
 
+var structuralSelectorPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*:nth-of-type\([1-9][0-9]*\)( > [a-z][a-z0-9-]*:nth-of-type\([1-9][0-9]*\))*$`)
+
 type ProjectAuthorizer interface {
 	AuthorizeProject(ctx context.Context, principal, projectID string) error
 }
 
 type RoutineStep struct {
-	Action      string   `json:"action"`
-	Selector    string   `json:"selector,omitempty"`
-	Value       string   `json:"value,omitempty"`
-	URL         string   `json:"url,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Sensitive   bool     `json:"sensitive,omitempty"`
+	Action      string `json:"action"`
+	Selector    string `json:"selector,omitempty"`
+	Value       string `json:"value,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Description string `json:"description,omitempty"`
+	Sensitive   bool   `json:"sensitive,omitempty"`
+	InputMode   string `json:"input_mode,omitempty"`
+	automated   bool
 	X           *float64 `json:"x,omitempty"`
 	Y           *float64 `json:"y,omitempty"`
 }
@@ -60,8 +66,24 @@ type State struct {
 }
 
 type Result struct {
-	Screenshot string `json:"screenshot,omitempty"`
-	Selector   string `json:"selector,omitempty"`
+	Screenshot  string       `json:"screenshot,omitempty"`
+	Selector    string       `json:"selector,omitempty"`
+	Observation *Observation `json:"observation,omitempty"`
+}
+
+type Observation struct {
+	Origin         string    `json:"origin"`
+	Text           string    `json:"text"`
+	Elements       []Element `json:"elements"`
+	ManualRequired bool      `json:"manual_required"`
+}
+
+type Element struct {
+	Selector  string `json:"selector"`
+	Tag       string `json:"tag"`
+	Type      string `json:"type,omitempty"`
+	Text      string `json:"text"`
+	Sensitive bool   `json:"sensitive"`
 }
 
 type browser interface {
@@ -302,7 +324,7 @@ func (s *Service) Action(ctx context.Context, principal, projectID string, step 
 			_ = w.save()
 			return result, fmt.Errorf("%w: recording is limited to %d steps", ErrConflict, MaxSteps)
 		}
-		if step.Action == "click" || step.Action == "wait" {
+		if step.Action == "click" || step.Action == "wait" || step.Action == "fill" {
 			step.X = nil
 			step.Y = nil
 			step.Selector = result.Selector
@@ -321,26 +343,33 @@ func (s *Service) Action(ctx context.Context, principal, projectID string, step 
 // ExecuteStep is intentionally separate from owner controls. The worker evaluates
 // normal tool policy first, and cannot use takeover/release to bypass the fence.
 func (s *Service) ExecuteStep(ctx context.Context, principal, projectID string, step RoutineStep) error {
+	_, err := s.RunStep(ctx, principal, projectID, step)
+	return err
+}
+
+// RunStep is the bot-facing operation: ownership and takeover are checked here,
+// while the normal Executor applies policy before invoking the browser builtin.
+func (s *Service) RunStep(ctx context.Context, principal, projectID string, step RoutineStep) (Result, error) {
 	w, err := s.get(ctx, principal, projectID)
 	if err != nil {
-		return err
+		return Result{}, err
 	}
 	defer s.release(w)
 	if err := w.lock(ctx); err != nil {
-		return err
+		return Result{}, err
 	}
 	defer w.unlock()
 	if w.state.Control == "human" {
-		return ErrTakeover
+		return Result{}, ErrTakeover
 	}
-	if step.Sensitive {
-		return ErrManual
+	if step.Sensitive || (step.Action == "fill" && step.InputMode != InputReviewedLiteral) {
+		return Result{}, ErrManual
 	}
-	if !browserAction(step.Action) {
-		return ErrInvalid
+	if !browserAction(step.Action) || step.X != nil || step.Y != nil {
+		return Result{}, ErrInvalid
 	}
-	_, err = s.perform(ctx, w, step)
-	return err
+	step.automated = true
+	return s.perform(ctx, w, step)
 }
 
 func browserAction(action string) bool {
@@ -348,6 +377,9 @@ func browserAction(action string) bool {
 }
 
 func validateStep(step RoutineStep) error {
+	if step.Action == "press" && !slices.Contains([]string{"Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "Control+a"}, step.Value) {
+		return ErrInvalid
+	}
 	if (step.X == nil) != (step.Y == nil) {
 		return ErrInvalid
 	}
@@ -370,7 +402,14 @@ func recordable(step RoutineStep) RoutineStep {
 	step.Description = ""
 	// Any typed value may be a credential, including ordinary text inputs and
 	// contenteditable. Never guess based solely on type=password or field names.
-	if step.Action == "fill" || step.Sensitive {
+	if step.Action == "fill" {
+		selector := ""
+		if structuralSelectorPattern.MatchString(step.Selector) {
+			selector = step.Selector
+		}
+		return RoutineStep{Action: step.Action, Selector: selector, Sensitive: true, Description: "Enter manually, or explicitly review a non-sensitive replay value"}
+	}
+	if step.Sensitive {
 		return RoutineStep{Action: step.Action, Sensitive: true, Description: "Enter the value manually, then resume"}
 	}
 	if step.Action == "navigate" {
@@ -378,8 +417,15 @@ func recordable(step RoutineStep) RoutineStep {
 		if err != nil || u.RawQuery != "" || u.Fragment != "" {
 			return RoutineStep{Action: "navigate", Sensitive: true, Description: "Navigate manually, then resume"}
 		}
+		return RoutineStep{Action: step.Action, URL: step.URL}
 	}
-	return step
+	if step.Action == "click" || step.Action == "wait" {
+		return RoutineStep{Action: step.Action, Selector: step.Selector}
+	}
+	if step.Action == "press" {
+		return RoutineStep{Action: step.Action, Value: step.Value}
+	}
+	return RoutineStep{Action: step.Action}
 }
 
 func (s *Service) perform(ctx context.Context, w *workspace, step RoutineStep) (Result, error) {
@@ -400,6 +446,9 @@ func (s *Service) perform(ctx context.Context, w *workspace, step RoutineStep) (
 		w.state.Available = true
 	}
 	result, err := w.browser.Do(ctx, step)
+	if errors.Is(err, ErrManual) {
+		return Result{}, ErrManual
+	}
 	if err != nil {
 		// Errors deliberately omit runtime diagnostics: Playwright includes input
 		// values, page content and URLs in its ordinary timeout messages.

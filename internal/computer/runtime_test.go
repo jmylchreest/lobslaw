@@ -45,20 +45,50 @@ func TestChromiumPersistentProfile(t *testing.T) {
 	}))
 	defer fixture.Close()
 	root := t.TempDir()
-	socket := filepath.Join(root, "egress.sock")
-	proxy, err := egress.NewSmokescreenProvider(egress.SmokescreenConfig{UDSPath: socket, ACL: egress.Rules{Roles: map[string][]string{"computer": {"127.0.0.1"}}}, AllowRanges: []string{"127.0.0.0/8"}})
+	socket := filepath.Join(t.TempDir(), "egress.sock")
+	proxy, err := egress.NewSmokescreenProvider(egress.SmokescreenConfig{UDSPath: socket, ACL: egress.Rules{Roles: map[string][]string{"computer": {"127.0.0.1"}, "fetch_url": {"localhost"}}}, AllowRanges: []string{"127.0.0.0/8"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = proxy.Stop(context.Background()) }()
 	cfg := Config{Root: filepath.Join(root, "private"), Node: node, Chromium: os.Getenv("COMPUTER_TEST_CHROMIUM"), Playwright: os.Getenv("COMPUTER_TEST_PLAYWRIGHT"), IP: "/usr/sbin/ip", ProxySocket: socket,
-		ReadPaths: []string{"/usr", "/lib", "/lib64", "/etc/fonts", "/etc/ssl", "/etc/ld.so.cache", "/proc", "/sys", filepath.Dir(node), filepath.Dir(os.Getenv("COMPUTER_TEST_CHROMIUM")), filepath.Dir(os.Getenv("COMPUTER_TEST_PLAYWRIGHT"))}}
+		ProxyAddress: proxy.ProxyURL().Host,
+		ReadPaths:    []string{"/usr", "/lib", "/lib64", "/etc/fonts", "/etc/ssl", "/etc/ld.so.cache", "/proc", "/sys", filepath.Dir(node), filepath.Dir(os.Getenv("COMPUTER_TEST_CHROMIUM")), filepath.Dir(os.Getenv("COMPUTER_TEST_PLAYWRIGHT"))}}
 	s := New(cfg, ownerAuth{})
+	s.open = func(ctx context.Context, path string) (browser, error) {
+		// Execute native attacks from the real sandbox, before Chromium starts.
+		// A JavaScript route hook cannot provide this containment guarantee.
+		probe := fmt.Sprintf(`
+  try {
+  try { fs.writeFileSync(%q, '{"control":"bot"}'); throw new Error('host metadata writable'); }
+  catch (err) { if (!['EACCES','EPERM'].includes(err.code)) throw err; }
+  try { if (fs.statSync(%q).isSocket()) throw new Error('shared socket was not masked'); }
+  catch (err) { if (!['ENOENT','EACCES'].includes(err.code)) throw err; }
+  await new Promise((resolve,reject) => {
+    const socket=net.connect(%q); const timer=setTimeout(()=>{socket.destroy();reject(new Error('shared socket probe timeout'));},1000);
+    socket.on('connect',()=>{clearTimeout(timer);socket.destroy();reject(new Error('shared egress socket exposed'));});
+    socket.on('error',err=>{clearTimeout(timer);['ENOENT','ENOTSOCK','ECONNREFUSED','EACCES'].includes(err.code)?resolve():reject(err);});
+  });
+  await new Promise((resolve,reject)=>{
+    const req=http.request({socketPath:process.env.COMPUTER_PROXY,path:%q,headers:{'X-Lobslaw-Role':'fetch_url','Proxy-Authorization':'Basic '+Buffer.from('fetch_url:_').toString('base64')}},res=>{
+      res.resume();res.on('end',()=>res.statusCode===200?reject(new Error('forged role escaped')):resolve());
+    });req.on('error',reject);req.end();
+  });
+  } catch(err) { fs.writeFileSync(path.join(process.env.COMPUTER_PROFILE,'probe-error'),String(err.code || err.message));throw err; }
+`, filepath.Join(path, "control.json"), socket, socket, strings.Replace(fixture.URL, "127.0.0.1", "localhost", 1))
+		return cfg.openProcess(ctx, path, strings.Replace(runtimeScript, "async function main() {", "async function main() {"+probe, 1))
+	}
 	defer func() { _ = s.Close() }()
 	x, y := 250.0, 35.0
 	for _, step := range []RoutineStep{{Action: "takeover"}, {Action: "navigate", URL: fixture.URL}, {Action: "record"}, {Action: "fill", Selector: "#password", Value: "test-secret"}, {Action: "click", X: &x, Y: &y}, {Action: "capture"}} {
 		result, err := s.Action(t.Context(), "user:alice", "project", step)
 		if err != nil {
+			for _, space := range s.spaces {
+				diagnostic, _ := os.ReadFile(filepath.Join(space.path, "browser", "probe-error"))
+				if len(diagnostic) > 0 {
+					t.Logf("native containment probe: %s", diagnostic)
+				}
+			}
 			t.Fatalf("%s: %v", step.Action, err)
 		}
 		if step.Action == "capture" {
