@@ -245,7 +245,8 @@ func (s *Service) GetTask(ctx context.Context, owner, id string) (*Task, error) 
 	return st.Tasks[id], nil
 }
 func (s *Service) newTask(ctx context.Context, st *State, in Task, claims *types.Claims) (*Task, error) {
-	if st.Project.Status != "active" || len(st.Tasks) >= MaxRecords || strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Instructions) == "" || !validText(in.Title+in.Instructions+strings.Join(in.AcceptanceCriteria, "")) || len(in.DependsOn) > MaxRecords {
+	retainChat(st, in.DependsOn...)
+	if st.Project.Status != "active" || len(st.Tasks) >= MaxRecords || strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Instructions) == "" || !validText(in.Title+in.Instructions+strings.Join(in.AcceptanceCriteria, "")) || len(in.DependsOn) > MaxDependencies || len(in.AcceptanceCriteria) > MaxAcceptanceCriteria {
 		return nil, ErrInvalid
 	}
 	if in.AssigneeBotID == "" {
@@ -318,6 +319,7 @@ func (s *Service) ActTask(ctx context.Context, owner, id string, revision uint64
 			t.Error = ""
 			t.Question = ""
 			x.Claim = ""
+			x.BlockedQuestion = ""
 			if claims != nil {
 				x.Claims = claims
 			}
@@ -414,9 +416,6 @@ func (s *Service) Messages(ctx context.Context, owner, project string) ([]Projec
 func (s *Service) Chat(ctx context.Context, owner, project, message, bot string, claims *types.Claims) (*Task, error) {
 	var out *Task
 	e := s.mutate(ctx, owner, project, func(st *State) error {
-		if len(st.Messages) >= MaxRecords {
-			return ErrInvalid
-		}
 		var e error
 		out, e = s.newTask(ctx, st, Task{Title: "Project conversation", Instructions: message, AssigneeBotID: bot}, claims)
 		if e != nil {

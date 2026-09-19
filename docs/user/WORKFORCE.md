@@ -55,6 +55,19 @@ optional assignee from the project roster. Without an assignee, the coordinator
 runs it. Tasks without dependencies become ready immediately. To create a
 dependency, put an existing task ID from the same project in `depends_on`.
 
+You can also ask the coordinator in project chat to plan and delegate the work.
+Its workforce tools create actual durable tasks, inspect results, save progress
+and ask you blocker questions. If the bot has an explicit tool allowlist, include
+`workforce_project_get`, `workforce_task_list`, `workforce_task_get`,
+`workforce_task_create`, `workforce_task_checkpoint` and `workforce_task_block` as
+appropriate, and allow them through your normal tool policy. These tools cannot
+approve work or mark a task completed on demand.
+
+Successors receive their completed dependencies' actual result previews and
+artifact references, alongside project context and acceptance criteria. Larger
+results can be retrieved with the task-get tool. A task can create at most eight
+children, with delegation depth limited to four levels.
+
 ```sh
 curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   "$BASE/v1/projects/PROJECT_ID/tasks" -d '{
@@ -123,8 +136,13 @@ for each due occurrence. `POST /v1/routines/ROUTINE_ID/run` runs it on demand an
 returns its durable task, not an optimistic completion response.
 
 Browser recordings use `navigate`, `click`, `fill`, `press`, `wait` and `capture`
-steps. Fills and navigations containing URL credentials, queries or fragments
-are manual sensitive steps; their input is not stored in the routine. Complete
+steps. Recorded fills and navigations containing URL credentials, queries or
+fragments default to manual sensitive steps; their input is not stored in the
+recording. For a nonsecret form/search field, you can explicitly review its
+selector and literal value in the draft and set `input_mode` to
+`reviewed_literal` with `sensitive:false`, then approve that changed definition.
+Credential/login fields remain manual and are independently refused by the
+browser runtime. Complete
 the step in the browser, return control, then use `complete_step` on the blocked
 task. For a takeover without a manual step, return control and retry the task.
 Routine approval does not override browser policy or bot tool restrictions.
@@ -177,7 +195,13 @@ a same-origin request. Cross-owner/unowned records return 403, unknown records
 after a 409 before deciding whether to retry your edit.
 
 Each project holds at most 256 tasks, routines, triggers and event receipts, and
-its total record is bounded to 4 MiB. Receipts are retained so old deliveries
+its total hot record is bounded to 4 MiB. Ordinary completed conversation work
+rolls out automatically once its full transcript is saved: the hot view retains
+32 recent eligible conversation tasks and 64 display messages, plus active
+conversation messages. Full transcripts remain in the owner-authorized session
+store. Receipt targets and live dependency predecessors are protected, and
+unfinished/blocked/approval work is never silently removed. Other completed task
+records remain available on the task board. Receipts are retained so old deliveries
 cannot replay; there is no automatic receipt pruning. Start a new project when
 capacity is reached. Archive a project to prevent new work from dispatching.
 

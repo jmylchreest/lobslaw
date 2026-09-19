@@ -26,6 +26,52 @@ func TestRoutineDefinitionsDoNotStoreBrowserCredentials(t *testing.T) {
 
 type restrictedBots struct{}
 
+func TestReviewedRoutineInputsAreDigestBound(t *testing.T) {
+	t.Parallel()
+	s, _, _, p := fixture(t)
+	ctx := context.Background()
+	r, e := s.CreateRoutine(ctx, p.Owner, p.ID, Routine{Name: "search", Steps: []RoutineStep{{Action: "fill", Selector: "#search", Value: "bread", InputMode: ReviewedLiteralInput}}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	r, e = s.ActRoutine(ctx, p.Owner, r.ID, r.Revision, "approve", Routine{}, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	approved := r.ApprovedDigest
+	edit := *r
+	edit.Steps = append([]RoutineStep(nil), r.Steps...)
+	edit.Steps[0].Value = "different"
+	if digest(&edit) == approved {
+		t.Fatal("input value not digest bound")
+	}
+	edit.Steps[0].InputMode = ""
+	edit.Steps[0].Value = r.Steps[0].Value
+	if digest(&edit) == approved {
+		t.Fatal("input mode not digest bound")
+	}
+	if _, e = s.ActRoutine(ctx, p.Owner, r.ID, r.Revision, "edit", edit, nil); e == nil {
+		t.Fatal("unreviewed input accepted")
+	}
+	edit.Steps[0].InputMode = ReviewedLiteralInput
+	edit.Steps[0].Value = "new reviewed input"
+	updated, e := s.ActRoutine(ctx, p.Owner, r.ID, r.Revision, "edit", edit, nil)
+	if e != nil || updated.Status != "draft" || updated.ApprovedDigest != "" {
+		t.Fatal(updated, e)
+	}
+	if _, e = s.RunRoutine(ctx, p.Owner, r.ID, nil); !errors.Is(e, ErrForbidden) {
+		t.Fatal("edited input retained approval", e)
+	}
+	for _, selector := range []string{"", "html:nth-of-type(1) > body:nth-of-type(1) > input:nth-of-type(2)"} {
+		if e = validRoutineStep(RoutineStep{Action: "fill", Sensitive: true, Selector: selector}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = validRoutineStep(RoutineStep{Action: "fill", Sensitive: true, Selector: `input[value="credential"]`}); e == nil {
+		t.Fatal("recorded sensitive selector carries value")
+	}
+}
+
 func (restrictedBots) Get(context.Context, string) (*lobslawv1.BotRecord, error) {
 	return &lobslawv1.BotRecord{Id: "worker", Owner: "user:alice", Enabled: true, Tools: []string{"read_file"}}, nil
 }

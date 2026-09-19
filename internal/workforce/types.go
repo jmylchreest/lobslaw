@@ -13,28 +13,39 @@ import (
 )
 
 const (
-	StatusPlanned                      = "planned"
-	StatusReady                        = "ready"
-	StatusRunning                      = "running"
-	StatusBlocked                      = "blocked"
-	StatusApproval                     = "needs_approval"
-	StatusDone                         = "done"
-	StatusFailed                       = "failed"
-	StatusCancelled                    = "cancelled"
-	DefaultWorkers       int           = 2
-	MaxBudgetExtensions  int           = 1
-	DefaultTimeout       time.Duration = 2 * time.Minute
-	PollInterval         time.Duration = time.Second
-	ClaimGrace           time.Duration = 30 * time.Second
-	MaxRecords           int           = 256
-	MaxStateBytes        int           = 4 << 20
-	MaxTextBytes         int           = 32 << 10
-	MaxContinuationBytes int           = 512 << 10
-	MaxSteps             int           = 64
-	MaxRetries           int           = 8
-	DefaultToolCalls     int           = 24
-	DefaultSpendUSD      float64       = 1
-	DefaultEgressBytes   int64         = 16 << 20
+	StatusPlanned                           = "planned"
+	StatusReady                             = "ready"
+	StatusRunning                           = "running"
+	StatusBlocked                           = "blocked"
+	StatusApproval                          = "needs_approval"
+	StatusDone                              = "done"
+	StatusFailed                            = "failed"
+	StatusCancelled                         = "cancelled"
+	DefaultWorkers            int           = 2
+	MaxBudgetExtensions       int           = 1
+	MaxDelegatedTasks         int           = 8
+	MaxDelegationDepth        int           = 4
+	MaxRetainedChats          int           = 32
+	MaxChatMessages           int           = 64
+	MaxDependencyResultBytes  int           = 4096
+	MaxDependencyContextBytes int           = 32 << 10
+	MaxTaskContextBytes       int           = 128 << 10
+	MaxDependencies           int           = 32
+	MaxAcceptanceCriteria     int           = 32
+	MaxAgentTaskList          int           = 64
+	MaxAgentPreviewBytes      int           = 512
+	DefaultTimeout            time.Duration = 2 * time.Minute
+	PollInterval              time.Duration = time.Second
+	ClaimGrace                time.Duration = 30 * time.Second
+	MaxRecords                int           = 256
+	MaxStateBytes             int           = 4 << 20
+	MaxTextBytes              int           = 32 << 10
+	MaxContinuationBytes      int           = 512 << 10
+	MaxSteps                  int           = 64
+	MaxRetries                int           = 8
+	DefaultToolCalls          int           = 24
+	DefaultSpendUSD           float64       = 1
+	DefaultEgressBytes        int64         = 16 << 20
 )
 
 var (
@@ -71,6 +82,8 @@ type Artifact struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Task struct {
+	ParentID           string     `json:"parent_id,omitempty"`
+	Progress           string     `json:"progress,omitempty"`
 	ID                 string     `json:"id"`
 	ProjectID          string     `json:"project_id"`
 	Owner              string     `json:"owner"`
@@ -100,6 +113,7 @@ type ProjectMessage struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type RoutineStep struct {
+	InputMode   string `json:"input_mode,omitempty"`
 	Action      string `json:"action"`
 	Selector    string `json:"selector,omitempty"`
 	Value       string `json:"value,omitempty"`
@@ -150,6 +164,11 @@ type AttentionItem struct {
 
 // Execution fields are never decoded from caller-supplied task JSON.
 type Execution struct {
+	Children         int
+	Depth            int
+	BlockedQuestion  string
+	WorkHistory      []turn.Message
+	TranscriptSaved  bool
 	Claim            string
 	Expires          time.Time
 	Claims           *types.Claims

@@ -139,6 +139,7 @@ func (s *Service) execute(parent context.Context, p Project, t *Task, x *Executi
 	watchDone := make(chan struct{})
 	go s.watchClaim(ctx, cancel, p.ID, t.ID, token, watchDone)
 	defer func() { cancel(); <-watchDone }()
+	ctx = withExecution(ctx, p.ID, t.ID, token)
 	var resp *turn.Response
 	var err error
 	if x.Approved {
@@ -161,7 +162,13 @@ func (s *Service) execute(parent context.Context, p Project, t *Task, x *Executi
 		if s.cfg.Runner == nil {
 			err = ErrUnavailable
 		} else {
-			req := turn.Request{Message: t.Instructions, Claims: x.Claims, Principal: identity.Bot(t.AssigneeBotID), TurnID: t.ID, Channel: "workforce", ChannelID: p.ID, BotID: t.AssigneeBotID, Caps: turn.BudgetCaps{MaxToolCalls: DefaultToolCalls, MaxSpendUSD: DefaultSpendUSD, MaxEgressBytes: DefaultEgressBytes}, Spent: x.Spent, RecalledContext: "<untrusted:project-context>\n" + p.Context + "\n</untrusted:project-context>\nAcceptance criteria: " + strings.Join(t.AcceptanceCriteria, "; ")}
+			req := turn.Request{Message: t.Instructions, Claims: x.Claims, Principal: identity.Bot(t.AssigneeBotID), TurnID: t.ID, Channel: "workforce", ChannelID: p.ID, BotID: t.AssigneeBotID, Caps: turn.BudgetCaps{MaxToolCalls: DefaultToolCalls, MaxSpendUSD: DefaultSpendUSD, MaxEgressBytes: DefaultEgressBytes}, Spent: x.Spent, ConversationHistory: x.WorkHistory}
+			st, readErr := s.state(ctx, p.Owner, p.ID)
+			if readErr != nil {
+				err = readErr
+			} else {
+				req.RecalledContext, err = taskContext(st, t)
+			}
 			req.Caps.MaxToolCalls *= 1 + x.BudgetExtensions
 			req.Caps.MaxSpendUSD *= float64(1 + x.BudgetExtensions)
 			req.Caps.MaxEgressBytes *= int64(1 + x.BudgetExtensions)
@@ -285,12 +292,30 @@ func (s *Service) finish(ctx context.Context, project, id, token string, resp *t
 			runErr = nil
 		}
 		if resp != nil {
-			raw, marshalErr := json.Marshal(resp.Messages)
-			if marshalErr != nil || len(raw) > MaxContinuationBytes || !validText(resp.Reply) {
+			oversizedContinuation := false
+			if resp.NeedsConfirmation {
+				raw, marshalErr := json.Marshal(resp.Messages)
+				oversizedContinuation = marshalErr != nil || len(raw) > MaxContinuationBytes
+			}
+			if oversizedContinuation || !validText(resp.Reply) {
 				runErr = fmt.Errorf("%w: result exceeds durable task limits", ErrInvalid)
 			}
 		}
 		switch {
+		case x.BlockedQuestion != "":
+			t.Status = StatusBlocked
+			t.Question = x.BlockedQuestion
+			t.PromptID = ""
+			x.WorkHistory = x.History
+			x.History = nil
+			x.Action = ""
+			x.Resource = ""
+			if resp != nil {
+				raw, _ := json.Marshal(resp.Messages)
+				if len(raw) <= MaxContinuationBytes {
+					x.WorkHistory = resp.Messages
+				}
+			}
 		case runErr != nil:
 			t.Status = StatusFailed
 			t.Error = boundedText(runErr.Error())
@@ -310,6 +335,8 @@ func (s *Service) finish(ctx context.Context, project, id, token string, resp *t
 			x.Spent = resp.BudgetState
 		default:
 			x.History = nil
+			x.WorkHistory = nil
+			x.TranscriptSaved = s.cfg.SaveTranscript != nil
 			t.Status = StatusDone
 			t.Result = resp.Reply
 			t.Question = ""
@@ -320,6 +347,7 @@ func (s *Service) finish(ctx context.Context, project, id, token string, resp *t
 			}
 		}
 		bump(t)
+		retainChat(st)
 		return nil
 	})
 	if !errors.Is(e, ErrInvalid) {
