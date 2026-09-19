@@ -1276,7 +1276,6 @@ message CredentialRecord {
   string claimed_by = 15;
   google.protobuf.Timestamp refresh_deadline = 16;
   bool refresh_uncertain = 17;
-
 }
 
 message AllowedScopes {
