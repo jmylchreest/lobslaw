@@ -75,7 +75,9 @@ jobs:
         with:
           lint: true
           breaking: true
-          breaking_against: 'https://github.com/${{ github.repository }}.git#branch=main'
+          # Stacked PRs may intentionally predate newer main-branch fields.
+          # Compare against the immutable base commit of this PR, not main.
+          breaking_against: "https://github.com/${{ github.repository }}.git#ref=${{ github.event.pull_request.base.sha || 'main' }}"
           # Off because the job holds contents:read only, and posting a
           # comment needs pull-requests:write. The findings are already
           # in the job log and the check status; a convenience comment
