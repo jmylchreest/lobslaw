@@ -150,6 +150,20 @@ are omitted, known private entries are redacted from echoed text, and common tok
 patterns are redacted. The observation is a constrained view of an untrusted page,
 not a claim that arbitrary page prose is trustworthy.
 
+Cross-origin redaction runs in the trusted Node controller. Values entered on an
+earlier page are never sent as arguments to JavaScript executing on another page:
+that page could intercept them by replacing builtins such as `replaceAll`. The
+real node/browser integration test exercises that attack before checking the
+redacted observation.
+
+```mermaid
+flowchart LR
+  Page[Untrusted page] --> Extract[DOM observation]
+  Extract --> Redact[Trusted Node redaction]
+  Private[Private entries in controller memory] --> Redact
+  Redact --> Tool[Bounded untrusted tool result]
+```
+
 ### Agent tool registration
 
 `tools.BrowserToolDefs()` and
@@ -166,8 +180,12 @@ checks the original worker claim, current task and roster. The handler compares
 that scope with trusted `turn.Identity`: `Channel == "workforce"`, project in
 `ChannelID`, and human `BotOwner` (or human `Principal`). Tool JSON cannot supply or
 override the owner/project. This also rejects a nested bot borrowing its parent's
-channel context without its execution authority. The routine step adapter must
-copy `RoutineStep.InputMode` alongside the existing frozen fields.
+channel context without its execution authority. `wireWorkforceComputer` connects
+this resolver, the routine step executor and takeover Attention source. It copies
+`RoutineStep.InputMode` alongside the other reviewed fields. Runtime-detected
+credential entry becomes a durable `manual_step` blocker, so the owner can finish
+that step and advance its checkpoint without replaying earlier actions. Ordinary
+blockers cannot use that completion shortcut.
 
 `Takeovers(ctx, principal)` returns `{ProjectID,CreatedAt}` for active human fences.
 It checks the owner/project directory hash and current project authorization before

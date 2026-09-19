@@ -45,7 +45,8 @@ func TestMain(m *testing.M) {
 
 // This test joins both workstreams: real Raft task state, node policy/wiring,
 // Chromium, namespace containment and the owner-facing control fence.
-func TestWorkforceComputerRunsReviewedRoutine(t *testing.T) {
+func newIntegratedWorkforceComputer(t *testing.T) (*Node, *httptest.Server) {
+	t.Helper()
 	nodePath := os.Getenv("COMPUTER_TEST_NODE")
 	if nodePath == "" {
 		t.Skip("set COMPUTER_TEST_NODE/CHROMIUM/PLAYWRIGHT for browser integration")
@@ -57,17 +58,21 @@ func TestWorkforceComputerRunsReviewedRoutine(t *testing.T) {
 			_, _ = fmt.Fprint(w, `<label>Password<input id="password" type="password"></label>`)
 			return
 		}
+		if r.URL.Path == "/hostile" {
+			_, _ = fmt.Fprint(w, `<p>Public page</p><p id="probe">Nothing leaked</p><script>const original=String.prototype.replaceAll;String.prototype.replaceAll=function(pattern,...args){if(pattern==='private-secret-value'){document.getElementById('probe').textContent='LEAKED TO PAGE'}return original.call(this,pattern,...args)}</script>`)
+			return
+		}
 		_, _ = fmt.Fprint(w, `<label>Search<input id="search" type="search"></label><button id="submit" onclick="document.getElementById('result').textContent='Found '+document.getElementById('search').value">Search</button><p id="result"></p>`)
 	}))
-	defer web.Close()
+	t.Cleanup(web.Close)
 	proxy, err := egress.NewSmokescreenProvider(egress.SmokescreenConfig{
 		UDSPath: filepath.Join(t.TempDir(), "egress.sock"),
-		ACL:     egress.Rules{Roles: map[string][]string{"computer": {"127.0.0.1"}}}, AllowRanges: []string{"127.0.0.0/8"},
+		ACL:     egress.Rules{Roles: map[string][]string{"computer": {"127.0.0.1", "localhost"}}}, AllowRanges: []string{"127.0.0.0/8"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = proxy.Stop(context.Background()) }()
+	t.Cleanup(func() { _ = proxy.Stop(context.Background()) })
 	dir := t.TempDir()
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -101,7 +106,7 @@ func TestWorkforceComputerRunsReviewedRoutine(t *testing.T) {
 	if n.computer == nil {
 		t.Fatal("computer adapter was not wired")
 	}
-	defer func() { _ = n.computer.Close() }()
+	t.Cleanup(func() { _ = n.computer.Close() })
 	names := map[string]bool{}
 	for _, tool := range n.toolRegistry.LLMTools() {
 		names[tool.Name] = true
@@ -109,6 +114,12 @@ func TestWorkforceComputerRunsReviewedRoutine(t *testing.T) {
 	if !names["browser_fill"] || !names["workforce_task_create"] {
 		t.Fatalf("agent tools not wired: %v", names)
 	}
+	return n, web
+}
+
+func TestWorkforceComputerRunsReviewedRoutine(t *testing.T) {
+	n, web := newIntegratedWorkforceComputer(t)
+	ctx := t.Context()
 	project, err := n.workforce.CreateProject(ctx, "user:alice", workforce.Project{Name: "Search", BotIDs: []string{"worker"}, CoordinatorBotID: "worker"})
 	if err != nil {
 		t.Fatal(err)
@@ -175,5 +186,22 @@ func TestWorkforceComputerRunsReviewedRoutine(t *testing.T) {
 	raw, _ := json.Marshal(result.Observation)
 	if !strings.Contains(string(raw), "Found bread") {
 		t.Fatalf("browser action did not produce the expected result: %s", raw)
+	}
+	for _, step := range []computer.RoutineStep{
+		{Action: "takeover"}, {Action: "navigate", URL: web.URL + "/login"},
+		{Action: "fill", Selector: "#password", Value: "private-secret-value"},
+		{Action: "navigate", URL: strings.Replace(web.URL, "127.0.0.1", "localhost", 1) + "/hostile"}, {Action: "release"},
+	} {
+		if _, err := n.computer.Action(ctx, project.Owner, project.ID, step); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err = n.computer.RunStep(ctx, project.Owner, project.ID, computer.RoutineStep{Action: "capture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(result.Observation)
+	if strings.Contains(string(raw), "LEAKED TO PAGE") {
+		t.Fatal("redaction injected a previous origin's private value into page JavaScript")
 	}
 }

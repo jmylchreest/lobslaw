@@ -25,7 +25,7 @@ function structuralSelector(node) {
 // Runs in the page, with no access to Node, cookies, storage, or form values.
 // The same target classification gates automatic fill and redacts observations.
 function inspectDOM(root, options) {
-  const privateValues = [...(options.privateValues || []), ...[...document.querySelectorAll('input[type=password],input[autocomplete=current-password],input[autocomplete=one-time-code]')].map(node => node.value)].filter(Boolean);
+  const privateValues = [...document.querySelectorAll('input[type=password],input[autocomplete=current-password],input[autocomplete=one-time-code]')].map(node => node.value).filter(Boolean);
   function selector(node) {
     const parts = [];
     while (node && node.nodeType === Node.ELEMENT_NODE) {
@@ -76,6 +76,17 @@ function inspectDOM(root, options) {
 
 async function main() {
   const privateValues = []; let saturated = false;
+  // A page can replace its JavaScript builtins and observe their arguments.
+  // Never inject values entered on another origin into that realm for redaction.
+  function redactObservation(value) {
+    if (typeof value === 'string') {
+      for (const secret of privateValues) value = value.replaceAll(secret, '[redacted]');
+      return value;
+    }
+    if (Array.isArray(value)) return value.map(redactObservation);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactObservation(item)]));
+    return value;
+  }
   execFileSync(process.env.COMPUTER_IP, ['link', 'set', 'lo', 'up']);
   const socketPath = process.env.COMPUTER_PROXY;
   const proxy = http.createServer((req, res) => {
@@ -179,7 +190,7 @@ async function main() {
       }
       // Local-only restore metadata. Never part of a recording or API response.
       if (/^https?:\/\//.test(page.url())) fs.writeFileSync(locationFile, page.url(), { mode: 0o600 });
-      if (step.automated) result.observation = await page.locator('body').evaluate(inspectDOM, { ...observationLimits, privateValues, saturated });
+      if (step.automated) result.observation = redactObservation(await page.locator('body').evaluate(inspectDOM, { ...observationLimits, saturated }));
       ok = true;
     } catch (err) { if (err.manual) code = 'manual'; /* Never emit diagnostic values. */ }
     process.stdout.write(JSON.stringify({ ok, result, code }) + '\n');
