@@ -697,6 +697,48 @@ func TestABusyPersonCannotCrowdOutAQuietOne(t *testing.T) {
 	if len(sum.owners) != 2 {
 		t.Fatalf("consolidated for %d owners (%v), want both", len(sum.owners), sum.owners)
 	}
+	// Successful summarizer calls are not enough: both results must survive
+	// in storage, with each owner's sources and privacy intact.
+	stored := make(map[string]*lobslawv1.VectorRecord)
+	if err := svc.store.ForEach(BucketVectorRecords, func(id string, raw []byte) error {
+		var rec lobslawv1.VectorRecord
+		if err := proto.Unmarshal(raw, &rec); err != nil {
+			return err
+		}
+		if rec.Id != id {
+			t.Errorf("record ID %q differs from storage key %q", rec.Id, id)
+		}
+		stored[rec.Owner] = &rec
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range []string{"user:alice", "user:bob"} {
+		rec := stored[owner]
+		if rec == nil {
+			t.Errorf("missing persisted summary for %s; stored %d owners", owner, len(stored))
+			continue
+		}
+		if rec.Text != "summary for "+owner || rec.Visibility != lobslawv1.Visibility_VISIBILITY_PRIVATE {
+			t.Errorf("incorrect summary or visibility for %s: %v", owner, rec)
+		}
+		if len(rec.SourceIds) != sum.counts[owner] {
+			t.Errorf("%s has %d source IDs, want %d", owner, len(rec.SourceIds), sum.counts[owner])
+		}
+		for _, sourceID := range rec.SourceIds {
+			raw, err := svc.store.Get(BucketEpisodicRecords, sourceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var source lobslawv1.EpisodicRecord
+			if err := proto.Unmarshal(raw, &source); err != nil {
+				t.Fatal(err)
+			}
+			if source.Owner != owner {
+				t.Errorf("%s summary references %s's source %s", owner, source.Owner, sourceID)
+			}
+		}
+	}
 	// And the cap is per person, not shared out between them.
 	for owner, n := range sum.counts {
 		if n > 5 {
@@ -747,5 +789,47 @@ func putEpisodicOwned(t *testing.T, svc *Service, id, owner string, at time.Time
 	if _, err := svc.EpisodicAdd(context.Background(),
 		&lobslawv1.EpisodicAddRequest{Record: rec}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Separate attempts must retain their own summaries even when the pass clock
+// has not advanced, as can happen on retries or overlapping runs.
+func TestDreamConsolidationPreservesSameTimestampAttempts(t *testing.T) {
+	t.Parallel()
+	svc := newTestServiceStack(t)
+	now := fixedNow()
+	sum := &stubSummarizer{}
+	d := NewDreamRunner(svc.raft, svc.store, sum, DreamConfig{}, nil)
+	candidates := []scoredRecord{{
+		id: "source", record: &lobslawv1.EpisodicRecord{
+			Owner: "user:alice", Event: "original event",
+			Visibility: lobslawv1.Visibility_VISIBILITY_PRIVATE,
+		},
+	}}
+	for _, summary := range []string{"first attempt", "second attempt"} {
+		sum.summary = summary
+		if err := d.consolidate(context.Background(), candidates, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := make(map[string]bool)
+	if err := svc.store.ForEach(BucketVectorRecords, func(id string, raw []byte) error {
+		var rec lobslawv1.VectorRecord
+		if err := proto.Unmarshal(raw, &rec); err != nil {
+			return err
+		}
+		if rec.Id != id || !strings.HasPrefix(id, "dream-") {
+			t.Errorf("unexpected stored ID: key=%q record=%q", id, rec.Id)
+		}
+		if !rec.CreatedAt.AsTime().Equal(now) {
+			t.Errorf("created_at = %v, want pass timestamp %v", rec.CreatedAt, now)
+		}
+		seen[rec.Text] = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !seen["first attempt"] || !seen["second attempt"] {
+		t.Fatalf("attempt summaries were overwritten: %v", seen)
 	}
 }
