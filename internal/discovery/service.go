@@ -206,6 +206,9 @@ func (s *Service) Propose(ctx context.Context, req *lobslawv1.ProposeRequest) (*
 		return nil, status.Errorf(codes.Internal, "raft apply: %v", err)
 	}
 	if fsmErr, ok := resp.(error); ok && fsmErr != nil {
+		if status.Code(fsmErr) == codes.Aborted {
+			return nil, status.Error(codes.Aborted, fsmErr.Error())
+		}
 		return nil, status.Errorf(codes.Internal, "fsm apply: %v", fsmErr)
 	}
 	logging.From(ctx).Debug("applied forwarded entry", "bytes", len(req.Entry))

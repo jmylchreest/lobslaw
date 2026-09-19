@@ -2,13 +2,14 @@ package memory
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
 
 	"github.com/hashicorp/raft"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -18,7 +19,14 @@ import (
 // entry's expected_claimer didn't match the record's current claim.
 // Callers (the scheduler) treat this as "another node already won
 // the claim — skip."
-var ErrClaimConflict = errors.New("fsm: claim conflict")
+var ErrClaimConflict error = claimConflictError{}
+
+type claimConflictError struct{}
+
+func (claimConflictError) Error() string { return "fsm: claim conflict" }
+func (claimConflictError) GRPCStatus() *status.Status {
+	return status.New(codes.Aborted, "fsm: claim conflict")
+}
 
 // FSM is the raft.FSM implementation backed by Store. Apply
 // unmarshals each log entry as a LogEntry proto and dispatches
@@ -342,6 +350,8 @@ func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
 // interface because protoc-gen-go emits getters but no setters.
 func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
+	case *lobslawv1.CredentialRecord:
+		return p.Revision, true
 	case *lobslawv1.SoulTuneRecord:
 		return p.Revision, true
 	case *lobslawv1.ScheduledTaskRecord:
@@ -369,6 +379,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
+	case *lobslawv1.CredentialRecord:
+		p.Revision = rev
 	case *lobslawv1.SoulTuneRecord:
 		p.Revision = rev
 	case *lobslawv1.ScheduledTaskRecord:
@@ -540,6 +552,20 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	expectedRev := entry.GetExpectedRevision()
 
 	raw, getErr := f.store.Get(bucket, entry.Id)
+	if bucket == BucketCredentials {
+		// A credential CLAIM can only modify the same existing account generation.
+		// A delete/recreate may reset the revision; it must not admit an old claim.
+		if getErr != nil {
+			return fmt.Errorf("%w: credential unavailable", ErrClaimConflict)
+		}
+		var current lobslawv1.CredentialRecord
+		if err := proto.Unmarshal(raw, &current); err != nil {
+			return err
+		}
+		if current.Generation != newPayload.(*lobslawv1.CredentialRecord).Generation {
+			return fmt.Errorf("%w: credential replaced", ErrClaimConflict)
+		}
+	}
 	if getErr != nil {
 		if entry.ExpectedClaimer != "" {
 			return fmt.Errorf("CLAIM %s/%s: record missing, expected prior claimer %q",
@@ -602,6 +628,12 @@ type claimable interface {
 // holder's id as expected_claimer.
 func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
+	case BucketCredentials:
+		var r lobslawv1.CredentialRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	case BucketSoulTune:
 		var r lobslawv1.SoulTuneRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -680,7 +712,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
+	case BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
 		return true
 	default:
