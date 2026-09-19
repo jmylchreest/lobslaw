@@ -14,9 +14,11 @@ import (
 // Resolved once at the start of a turn and never re-read, so a bot
 // re-instructed mid-turn finishes under the brief it started with.
 type BotProfile struct {
-	ID            string
-	DisplayName   string
-	Instructions  string
+	ID           string
+	DisplayName  string
+	Instructions string
+	// Owner is the human principal this bot serves — "user:alice".
+	Owner         string
 	IsCoordinator bool
 	// Tools is the registry filter. Empty means the node's full set.
 	Tools []string

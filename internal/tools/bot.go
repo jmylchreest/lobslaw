@@ -343,11 +343,17 @@ func newAskBotHandler(runner AskRunner, bots compute.BotResolver, inbox InboxSer
 
 		child, cancel := context.WithTimeout(ctx, askBotTimeout)
 		defer cancel()
+		// The child carries the CALLER's claims, so its tool calls are
+		// evaluated with the authority of whoever asked. Without them
+		// every child turn evaluated as "no claims" and its tools were
+		// default-denied, which read as the bot being useless.
 		resp, err := runner.RunToolCallLoop(child, compute.ProcessMessageRequest{
-			Bot:    profile.Without("ask_bot"),
-			BotID:  target,
-			Budget: budget,
-			TurnID: identity.TurnID,
+			Bot:       profile.Without("ask_bot"),
+			BotID:     target,
+			Budget:    budget,
+			Claims:    claimsFromTurn(identity),
+			Principal: botPrincipal(target),
+			TurnID:    identity.TurnID,
 			Message: me + " asks:\n\n" + promptgen.WrapContext([]promptgen.ContextBlock{{
 				Source:  "ask_bot:" + me,
 				Trust:   promptgen.TrustUntrusted,
@@ -470,6 +476,23 @@ func requesterLabel(id turn.Identity) string {
 		return "bot:" + id.BotID
 	}
 	return ""
+}
+
+// botPrincipal is a package-level helper because the handler shadows
+// the identity package with a local turn identity.
+func botPrincipal(id string) identity.Principal { return identity.Bot(id) }
+
+// claimsFromTurn reconstitutes the caller's claims from the turn
+// identity, so a delegated child is authorised as the asker.
+func claimsFromTurn(id turn.Identity) *types.Claims {
+	if id.UserID == "" && id.Scope == "" && len(id.Roles) == 0 {
+		return nil
+	}
+	return &types.Claims{
+		UserID: id.UserID,
+		Scope:  id.Scope,
+		Roles:  append([]string(nil), id.Roles...),
+	}
 }
 
 // callerScope is the owner and team a new bot inherits from whoever

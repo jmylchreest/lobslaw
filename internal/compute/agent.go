@@ -1787,6 +1787,9 @@ func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	}
 	if req.Principal != "" {
 		t.Principal = req.Principal
+		if req.Bot != nil {
+			t.BotOwner = identity.Principal(strings.TrimSpace(req.Bot.Owner))
+		}
 		return t
 	}
 	// A nil resolver maps every id to itself, which is the correct

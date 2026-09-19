@@ -44,6 +44,7 @@ func botProfileFrom(rec *lobslawv1.BotRecord) *compute.BotProfile {
 		ID:            rec.GetId(),
 		DisplayName:   rec.GetDisplayName(),
 		Instructions:  rec.GetInstructions(),
+		Owner:         rec.GetOwner(),
 		IsCoordinator: rec.GetIsCoordinator(),
 		Tools:         rec.GetTools(),
 		MayMessage:    rec.GetMayMessage(),

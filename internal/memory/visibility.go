@@ -44,6 +44,12 @@ type Audience struct {
 	// this conversation itself produced. The second half is what keeps
 	// the agent useful in a team channel rather than amnesiac.
 	conversation string
+	// also is a second principal whose records are readable in
+	// addition to the first. Used for a bot turn, which reads its own
+	// diary AND the memory of the human it serves — a specialist that
+	// cannot recall what its owner told the assistant is one with no
+	// context at all. It never widens on its own: the caller sets it.
+	also identity.Principal
 }
 
 // For returns the audience for a principal. A zero principal — an
@@ -63,6 +69,13 @@ func For(p identity.Principal) Audience {
 // a view of every conversation.
 func ForConversation(p identity.Principal, conversation string) Audience {
 	return Audience{set: true, principal: p, conversation: conversation}
+}
+
+// ForWith returns an audience for one principal that also reads
+// another's records — a bot and the human it serves, in that order.
+// An empty extra principal degrades to For(p).
+func ForWith(p, extra identity.Principal) Audience {
+	return Audience{set: true, principal: p, also: extra}
 }
 
 // Everyone is the unrestricted read, spelled out so it can be grepped
@@ -114,6 +127,9 @@ func (a Audience) allows(owner string, vis lobslawv1.Visibility, sessionRef stri
 		return true
 	}
 	if !a.principal.IsZero() && owner == a.principal.String() {
+		return true
+	}
+	if !a.also.IsZero() && owner == a.also.String() {
 		return true
 	}
 	return a.conversation != "" && sessionRef == a.conversation

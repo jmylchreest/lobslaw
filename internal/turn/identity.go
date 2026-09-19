@@ -74,6 +74,12 @@ type Identity struct {
 	// is an input to a rule, and the rule is what allows or denies.
 	Roles []string
 
+	// BotOwner is the human a bot turn serves, when the turn runs as a
+	// bot. A bot reads its own records AND this principal's, so a
+	// specialist can recall what its owner told the assistant. Empty
+	// for a turn that is not a bot's.
+	BotOwner identity.Principal
+
 	// TurnID identifies this turn. Carried so a builtin can bound a
 	// per-turn budget — the pinned-memory tools cap consecutive
 	// failures so a fragile edit cannot loop the turn to exhaustion

@@ -48,6 +48,12 @@ func ReadAudience(ctx context.Context, turn turn.Identity, authz CrossOwnerAutho
 	if authz != nil && authz.AllowsAny(ctx, turn.Claims()) {
 		return memory.Everyone()
 	}
+	// A bot reads its own records and its owner's. It serves one
+	// person; a specialist with no recall of what that person told the
+	// assistant has no context to work from.
+	if turn.Principal.IsBot() && !turn.BotOwner.IsZero() {
+		return memory.ForWith(turn.Principal, turn.BotOwner)
+	}
 	// A conversation several people can read gets the records that
 	// conversation produced, on top of the speaker's own. Not the other
 	// way round: this WIDENS a shared channel to its own history, it
