@@ -118,13 +118,16 @@ sequenceDiagram
           Agent->>Exec: Invoke(ToolCall)
           Exec->>Exec: hardlineCheck(params)
           Note over Exec: compiled-in floor, before policy<br/>so it cannot be configured away
+          Exec->>Policy: Reject tool-policy denials before hooks
+          Exec->>Hooks: PreToolUse (fresh calls only)
+          Hooks-->>Exec: effective input or block
+          Exec->>Exec: recheck hardline on effective input
           Exec->>Policy: Evaluate(claims, tool:exec, tool)
           Policy-->>Exec: allow
+          Exec->>Exec: separate sensitive-path confirmation
           Exec->>Policy: Evaluate(claims, gate action, per-call resource)
           Note over Exec,Policy: the per-tool gate: memory:write for<br/>memory_write, shell:run for the command
           Policy-->>Exec: allow
-          Exec->>Hooks: PreToolUse
-          Hooks-->>Exec: allow
           Exec->>Sandbox: Apply(cmd, policy)
           Note over Sandbox: may reexec via sandbox-exec<br/>for NoNewPrivs/Landlock/seccomp
           Sandbox-->>Exec: cmd ready

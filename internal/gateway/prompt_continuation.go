@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"encoding/json"
+	"maps"
+
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -45,6 +48,21 @@ func continuationToProto(c *Continuation) *lobslawv1.Continuation {
 	for _, m := range c.Messages {
 		out.Messages = append(out.Messages, messageToProto(m))
 	}
+
+	// Older readers ignore prepared metadata, so persist the effective arguments
+	// in the existing tool-call field too. New readers recover the original binding.
+	for _, m := range c.Messages {
+		if p := m.PreparedToolCall; p != nil {
+			raw, _ := json.Marshal(p.Params) // map[string]string is always JSON encodable.
+			for _, wire := range out.Messages {
+				for _, tc := range wire.ToolCalls {
+					if tc.Id == p.CallID && tc.Name == p.ToolName && tc.Arguments == p.OriginalArguments {
+						tc.Arguments = string(raw)
+					}
+				}
+			}
+		}
+	}
 	return out
 }
 
@@ -85,6 +103,20 @@ func continuationFromProto(p *lobslawv1.Continuation, caps compute.BudgetCaps) (
 	for _, m := range p.Messages {
 		out.Messages = append(out.Messages, messageFromProto(m))
 	}
+
+	for _, m := range out.Messages {
+		if p := m.PreparedToolCall; p != nil {
+			raw, _ := json.Marshal(p.Params)
+			for i := range out.Messages {
+				for j := range out.Messages[i].ToolCalls {
+					tc := &out.Messages[i].ToolCalls[j]
+					if tc.ID == p.CallID && tc.Name == p.ToolName && tc.Arguments == string(raw) {
+						tc.Arguments = p.OriginalArguments
+					}
+				}
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -93,6 +125,12 @@ func messageToProto(m compute.Message) *lobslawv1.SessionMessage {
 		Role:       m.Role,
 		Content:    m.Content,
 		ToolCallId: m.ToolCallID,
+	}
+	if p := m.PreparedToolCall; p != nil {
+		out.PreparedToolCall = &lobslawv1.PreparedToolCall{CallId: p.CallID, ToolName: p.ToolName, TurnId: p.TurnID, OriginalArguments: p.OriginalArguments, Params: maps.Clone(p.Params)}
+		for _, op := range p.Approvals {
+			out.PreparedToolCall.Approvals = append(out.PreparedToolCall.Approvals, &lobslawv1.PreparedApproval{Action: op.Action, Resource: op.Resource})
+		}
 	}
 	for _, tc := range m.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, &lobslawv1.SessionToolCall{
@@ -107,6 +145,12 @@ func messageFromProto(m *lobslawv1.SessionMessage) compute.Message {
 		Role:       m.Role,
 		Content:    m.Content,
 		ToolCallID: m.ToolCallId,
+	}
+	if p := m.PreparedToolCall; p != nil {
+		out.PreparedToolCall = &compute.PreparedToolCall{CallID: p.CallId, ToolName: p.ToolName, TurnID: p.TurnId, OriginalArguments: p.OriginalArguments, Params: maps.Clone(p.Params)}
+		for _, op := range p.Approvals {
+			out.PreparedToolCall.Approvals = append(out.PreparedToolCall.Approvals, compute.PreparedApproval{Action: op.Action, Resource: op.Resource})
+		}
 	}
 	for _, tc := range m.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, compute.ToolCall{
