@@ -736,7 +736,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	}
 
 	buttons := []map[string]string{
-		{"text": "Approve", "callback_data": "prompt:approve:" + p.ID},
+		{"text": "Approve once", "callback_data": "prompt:approve:" + p.ID},
 	}
 	// "for this chat" is offered only when a policy rule asked AND the
 	// answer is worth remembering. A budget confirmation is about

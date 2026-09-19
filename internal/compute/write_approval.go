@@ -171,6 +171,14 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 		}
 	}
 
+	// Resolve the model verdict before policy, then carry that exact answer
+	// into the summary. Asking again could describe a different decision.
+	if tool == "shell_command" && gate.resolve != nil {
+		verdict := VerdictFor(ctx, params)
+		labels = verdict.Labels
+		ctx = context.WithValue(ctx, commandVerdictKey{}, commandVerdict{command: params["command"], verdict: verdict})
+	}
+
 	// Labels this conversation has already approved are SUBTRACTED
 	// before policy is asked.
 	//
