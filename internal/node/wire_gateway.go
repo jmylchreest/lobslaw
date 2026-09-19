@@ -114,6 +114,7 @@ func (n *Node) wireGateway() error {
 	}
 
 	cfg := gateway.RESTConfig{
+		Computer:         n.computer,
 		Notices:          n.notices,
 		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
 		QueueDebounce:    n.cfg.Gateway.QueueDebounce,

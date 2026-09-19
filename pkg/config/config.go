@@ -11,6 +11,7 @@ import (
 // validates its own slice — this layer only parses and resolves
 // secret references.
 type Config struct {
+	Computer     ComputerConfig     `koanf:"computer"`
 	Memory       MemoryConfig       `koanf:"memory"`
 	Storage      StorageConfig      `koanf:"storage"`
 	Policy       PolicyConfig       `koanf:"policy"`

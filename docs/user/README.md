@@ -23,5 +23,7 @@ User docs are stubs until the project reaches running-end-to-end state (Phase 5 
 
 ## If you're looking for something now
 
+- **Project browsers and demonstrated routines** — [COMPUTER.md](COMPUTER.md) covers setup, takeover, private profiles and the workforce console.
+
 - **What is lobslaw?** — [../../README.md](../../README.md) at repo root has the entry-point.
 - **How do the internals work?** — [`../dev/`](../dev/) has subsystem docs.

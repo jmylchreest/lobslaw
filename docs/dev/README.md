@@ -19,6 +19,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Agent loop | [AGENT.md](AGENT.md) | RunToolCallLoop, resolver, promptgen, LLM client, budget |
 | Bots | [BOTS.md](BOTS.md) | Named agents as principals, ownership, per-bot soul overlay |
 | Workforce | [WORKFORCE.md](WORKFORCE.md) | Project CAS aggregates, task workers, approvals, routines and event dedupe |
+| Browser computers | [COMPUTER.md](COMPUTER.md) | Private project profiles, actual browser actions, takeover fencing, recording and worker/Attention adapters |
 | Providers | [PROVIDERS.md](PROVIDERS.md) | **Design.** Drivers vs providers, modalities as tools, per-modality failover, external drivers as skills |
 | Tracing | [TRACE.md](TRACE.md) | **Design.** Per-turn spans, tool context-cost attribution, OTel / file / webhook export |
 | Gateway (channels) | [GATEWAY.md](GATEWAY.md) | REST server, Telegram webhook, confirmation prompts, JWT validator |

@@ -172,7 +172,7 @@ export function isUnavailable(err: unknown): boolean {
   return false;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -393,7 +393,7 @@ export async function streamBotChat(
   await readSSE(res, onEvent);
 }
 
-async function readSSE(
+export async function readSSE(
   res: Response,
   onEvent: (event: string, data: Record<string, unknown>) => void,
 ): Promise<void> {

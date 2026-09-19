@@ -17,6 +17,10 @@ import (
 // what's wired now vs. what's deferred — the struct reflects the
 // full design so config files stay forward-compatible.
 type Policy struct {
+	// PrivateProc mounts procfs for the subprocess PID namespace before
+	// Landlock is installed, so /proc cannot expose host process environments.
+	PrivateProc     bool `json:"private_proc,omitempty"`
+	RequireLandlock bool `json:"require_landlock,omitempty"`
 	// AllowedPaths are RW paths visible to the sandbox. Landlock
 	// enforces the restriction once Phase 4.5.5 lands. Paths must be
 	// absolute; verified by Validate.
@@ -147,6 +151,9 @@ func (p *Policy) Normalise() {
 // Validate returns an error if the policy is internally inconsistent.
 // Callers call this at config-load time so bad config fails fast.
 func (p *Policy) Validate() error {
+	if p.PrivateProc && (!p.Namespaces.User || !p.Namespaces.Mount || !p.Namespaces.PID) {
+		return errors.New("PrivateProc requires user, mount and PID namespaces")
+	}
 	for _, path := range p.AllowedPaths {
 		if len(path) == 0 || path[0] != '/' {
 			return fmt.Errorf("AllowedPaths: %q is not absolute", path)

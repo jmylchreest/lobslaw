@@ -19,6 +19,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	"github.com/jmylchreest/lobslaw/internal/computer"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/turn"
@@ -32,6 +33,7 @@ import (
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
 	Workforce     *workforce.Service
+	Computer      *computer.Service
 	RemoteConsole lobslawv1.ConsoleServiceClient
 	// Notices appends operator notices to outbound replies. Nil
 	// disables them entirely, which is what a deployment that never
@@ -262,6 +264,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/v1/session", s.handleSession)
 	mux.HandleFunc("/v1/session/code", s.handleSessionCode)
 	mux.HandleFunc("/v1/tools", s.consoleRoute(s.handleTools))
+	mux.HandleFunc("/v1/computers/", s.consoleRoute(s.handleComputer))
 	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	// General to the gateway rather than gated on compute-teams: a
 	// node with no bots still has a configuration worth reading and a
