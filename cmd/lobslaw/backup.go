@@ -116,6 +116,25 @@ func backupCreate(args []string) error {
 
 func backupRestore(args []string) error {
 	fs := newFlagSet("backup restore", flag.ContinueOnError)
+	fs.Usage = func() {
+		_, _ = fmt.Fprint(fs.Output(), `Usage: lobslaw backup restore SNAPSHOT_ID --repository PATH --identity FILE [flags]
+
+Restore uses the destination's current certificates, which may differ from the
+source. Select them with --context, or --addr, --ca-cert (destination cluster CA),
+--node-cert and --node-key (destination operator credential). --server-name sets
+the expected server certificate hostname when using a tunnel.
+
+--identity decrypts the backup using its original age key; it is not an mTLS key.
+Certificates, credentials and policy grants are not restored. Bootstrap destination
+trust and authorize archive:import before restoring into an empty knowledge store.
+Start the destination with [memory] restore_mode = true.
+Map every nonempty data owner with --owner old=new, including unchanged identities.
+Preview first; repeat with --apply and identical owner mappings to write or resume.
+
+Flags:
+`)
+		fs.PrintDefaults()
+	}
 	var node liveNode
 	node.bind(fs)
 	node.timeout = 30 * time.Minute
