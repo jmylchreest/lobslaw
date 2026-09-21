@@ -50,3 +50,14 @@ condition = "AND"
 # identifier. Anchored so it cannot cover a longer string containing it.
 paths = ['''internal/secrets/provider\.go''']
 regexes = ['''^onepassword$''']
+
+[[allowlists]]
+description = """
+The workforce browser rejection test deliberately supplies a credential-shaped
+URL at example.test to verify it cannot be stored. This exact URL is a dummy
+fixture, not a service credential. Full-history scans include its feature branch.
+"""
+condition = "AND"
+regexTarget = "match"
+paths = ['''^internal/workforce/browser_test\.go$''']
+regexes = ['''^https://name:password@example\.test/"?$''']
