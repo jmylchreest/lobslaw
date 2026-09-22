@@ -3,10 +3,102 @@ package secrets
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 )
+
+func TestResolverKeepsOneCleanupTimer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := NewResolver(nil, 2*time.Minute)
+		var scheduled, pending atomic.Int64
+		r.afterFunc = func(delay time.Duration, fn func()) *time.Timer {
+			scheduled.Add(1)
+			pending.Add(1)
+			return time.AfterFunc(delay, func() {
+				pending.Add(-1)
+				fn()
+			})
+		}
+		check := func(wantScheduled, wantPending int64) {
+			t.Helper()
+			synctest.Wait()
+			if got := scheduled.Load(); got != wantScheduled {
+				t.Fatalf("scheduled %d cleanup timers; want %d", got, wantScheduled)
+			}
+			if got := pending.Load(); got != wantPending {
+				t.Fatalf("pending cleanup timers=%d; want %d", got, wantPending)
+			}
+		}
+		var wg sync.WaitGroup
+		for i := range 10 {
+			wg.Go(func() { r.store(fmt.Sprint(i), "value") })
+		}
+		wg.Wait()
+		check(1, 1)
+		time.Sleep(time.Minute)
+		check(2, 1)
+		r.store("0", "refreshed")
+		check(2, 1)
+		time.Sleep(time.Minute)
+		check(3, 1)
+		if value, ok := r.cached("0"); !ok || value != "refreshed" {
+			t.Fatal("cleanup lost refreshed entry")
+		}
+		time.Sleep(time.Minute)
+		check(3, 0)
+		// A drained resolver restarts exactly one chain, even on replacement.
+		r.store("new", "value")
+		r.store("new", "replacement")
+		check(4, 1)
+		time.Sleep(2 * time.Minute)
+		check(5, 0)
+	})
+}
+
+func TestResolverShortTTLDoesNotSpinCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const ttl = time.Millisecond
+		r := NewResolver(nil, ttl)
+		var scheduled atomic.Int64
+		r.afterFunc = func(delay time.Duration, fn func()) *time.Timer {
+			scheduled.Add(1)
+			if delay < time.Second {
+				t.Errorf("cleanup delay=%v; want at least one second", delay)
+			}
+			return time.AfterFunc(delay, fn)
+		}
+		r.store("lookup", "value")
+		r.store("idle", "value")
+		time.Sleep(ttl)
+		synctest.Wait()
+		if _, ok := r.cached("lookup"); ok {
+			t.Fatal("cleanup floor extended lookup TTL")
+		}
+		// Refresh just before the first scan so its callback must rearm.
+		time.Sleep(time.Second - ttl - ttl/2)
+		r.store("idle", "fresh")
+		time.Sleep(ttl / 2)
+		synctest.Wait()
+		if got := scheduled.Load(); got != 2 {
+			t.Fatalf("scheduled %d timers through first scan; want 2", got)
+		}
+		if value, ok := r.cached("idle"); !ok || value != "fresh" {
+			t.Fatal("first scan lost unexpired refresh")
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if len(r.cache) != 0 || r.cleanupScheduled {
+			t.Fatal("idle short-TTL cache did not drain")
+		}
+		if got := scheduled.Load(); got != 2 {
+			t.Fatalf("cleanup kept scheduling after idle expiry: %d timers", got)
+		}
+	})
+}
 
 func TestResolverIdleCleanupAndRestart(t *testing.T) {
 	for _, ttl := range []time.Duration{10 * time.Second, DefaultCacheTTL} {

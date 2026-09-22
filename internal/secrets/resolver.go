@@ -41,6 +41,12 @@ const DefaultCacheTTL = 5 * time.Minute
 // Bound both retained entries and the work done by expiry/capacity scans.
 const maxCacheEntries = 1024
 
+// Short TTLs still expire on lookup; idle cleanup must not become a busy timer.
+const (
+	minCacheCleanupInterval = time.Second
+	maxCacheCleanupInterval = time.Minute
+)
+
 // Resolver turns a reference into a secret.
 //
 // It is deliberately shaped as func(string) (string, error) at the
@@ -50,6 +56,7 @@ const maxCacheEntries = 1024
 type Resolver struct {
 	providers map[string]Provider
 	ttl       time.Duration
+	afterFunc func(time.Duration, func()) *time.Timer
 
 	mu               sync.Mutex
 	cache            map[string]cacheEntry
@@ -70,6 +77,7 @@ func NewResolver(providers map[string]Provider, ttl time.Duration) *Resolver {
 	return &Resolver{
 		providers: providers,
 		ttl:       ttl,
+		afterFunc: time.AfterFunc,
 		cache:     make(map[string]cacheEntry),
 	}
 }
@@ -170,8 +178,12 @@ func (r *Resolver) store(ref, value string) {
 	r.cache[ref] = cacheEntry{value: value, expiresAt: now.Add(r.ttl)}
 	if !r.cleanupScheduled {
 		r.cleanupScheduled = true
-		time.AfterFunc(min(r.ttl, time.Minute), r.cleanup)
+		r.afterFunc(r.cleanupInterval(), r.cleanup)
 	}
+}
+
+func (r *Resolver) cleanupInterval() time.Duration {
+	return max(min(r.ttl, maxCacheCleanupInterval), minCacheCleanupInterval)
 }
 
 // removeExpired runs with mu held. It drops references, not copies already
@@ -195,7 +207,7 @@ func (r *Resolver) cleanup() {
 		r.cleanupScheduled = false
 		return
 	}
-	time.AfterFunc(min(r.ttl, time.Minute), r.cleanup)
+	r.afterFunc(r.cleanupInterval(), r.cleanup)
 }
 
 // Bootstrap is the resolver used before any provider exists, and for
