@@ -3625,3 +3625,451 @@ var ArchiveService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "lobslaw/v1/lobslaw.proto",
 }
+
+const (
+	TaskApprovalService_CreateTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/CreateTaskApproval"
+	TaskApprovalService_PauseTaskApproval_FullMethodName      = "/lobslaw.v1.TaskApprovalService/PauseTaskApproval"
+	TaskApprovalService_GetTaskApproval_FullMethodName        = "/lobslaw.v1.TaskApprovalService/GetTaskApproval"
+	TaskApprovalService_ListTaskApproval_FullMethodName       = "/lobslaw.v1.TaskApprovalService/ListTaskApproval"
+	TaskApprovalService_DecideTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/DecideTaskApproval"
+	TaskApprovalService_ClaimTaskApproval_FullMethodName      = "/lobslaw.v1.TaskApprovalService/ClaimTaskApproval"
+	TaskApprovalService_FinishTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/FinishTaskApproval"
+	TaskApprovalService_CancelTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/CancelTaskApproval"
+	TaskApprovalService_RecoverTaskApproval_FullMethodName    = "/lobslaw.v1.TaskApprovalService/RecoverTaskApproval"
+	TaskApprovalService_CheckGrantTaskApproval_FullMethodName = "/lobslaw.v1.TaskApprovalService/CheckGrantTaskApproval"
+)
+
+// TaskApprovalServiceClient is the client API for TaskApprovalService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// TaskApprovalService is peer-only. Gateways assert the authenticated owner;
+// runners assert their task actor. Neither identity comes from tool arguments.
+type TaskApprovalServiceClient interface {
+	CreateTaskApproval(ctx context.Context, in *CreateTaskApprovalRequest, opts ...grpc.CallOption) (*CreateTaskApprovalResponse, error)
+	PauseTaskApproval(ctx context.Context, in *PauseTaskApprovalRequest, opts ...grpc.CallOption) (*PauseTaskApprovalResponse, error)
+	GetTaskApproval(ctx context.Context, in *GetTaskApprovalRequest, opts ...grpc.CallOption) (*GetTaskApprovalResponse, error)
+	ListTaskApproval(ctx context.Context, in *ListTaskApprovalRequest, opts ...grpc.CallOption) (*ListTaskApprovalResponse, error)
+	DecideTaskApproval(ctx context.Context, in *DecideTaskApprovalRequest, opts ...grpc.CallOption) (*DecideTaskApprovalResponse, error)
+	ClaimTaskApproval(ctx context.Context, in *ClaimTaskApprovalRequest, opts ...grpc.CallOption) (*ClaimTaskApprovalResponse, error)
+	FinishTaskApproval(ctx context.Context, in *FinishTaskApprovalRequest, opts ...grpc.CallOption) (*FinishTaskApprovalResponse, error)
+	CancelTaskApproval(ctx context.Context, in *CancelTaskApprovalRequest, opts ...grpc.CallOption) (*CancelTaskApprovalResponse, error)
+	RecoverTaskApproval(ctx context.Context, in *RecoverTaskApprovalRequest, opts ...grpc.CallOption) (*RecoverTaskApprovalResponse, error)
+	CheckGrantTaskApproval(ctx context.Context, in *CheckGrantTaskApprovalRequest, opts ...grpc.CallOption) (*CheckGrantTaskApprovalResponse, error)
+}
+
+type taskApprovalServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewTaskApprovalServiceClient(cc grpc.ClientConnInterface) TaskApprovalServiceClient {
+	return &taskApprovalServiceClient{cc}
+}
+
+func (c *taskApprovalServiceClient) CreateTaskApproval(ctx context.Context, in *CreateTaskApprovalRequest, opts ...grpc.CallOption) (*CreateTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_CreateTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) PauseTaskApproval(ctx context.Context, in *PauseTaskApprovalRequest, opts ...grpc.CallOption) (*PauseTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PauseTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_PauseTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) GetTaskApproval(ctx context.Context, in *GetTaskApprovalRequest, opts ...grpc.CallOption) (*GetTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_GetTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) ListTaskApproval(ctx context.Context, in *ListTaskApprovalRequest, opts ...grpc.CallOption) (*ListTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_ListTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) DecideTaskApproval(ctx context.Context, in *DecideTaskApprovalRequest, opts ...grpc.CallOption) (*DecideTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecideTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_DecideTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) ClaimTaskApproval(ctx context.Context, in *ClaimTaskApprovalRequest, opts ...grpc.CallOption) (*ClaimTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_ClaimTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) FinishTaskApproval(ctx context.Context, in *FinishTaskApprovalRequest, opts ...grpc.CallOption) (*FinishTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinishTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_FinishTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) CancelTaskApproval(ctx context.Context, in *CancelTaskApprovalRequest, opts ...grpc.CallOption) (*CancelTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_CancelTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) RecoverTaskApproval(ctx context.Context, in *RecoverTaskApprovalRequest, opts ...grpc.CallOption) (*RecoverTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecoverTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_RecoverTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) CheckGrantTaskApproval(ctx context.Context, in *CheckGrantTaskApprovalRequest, opts ...grpc.CallOption) (*CheckGrantTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckGrantTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_CheckGrantTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// TaskApprovalServiceServer is the server API for TaskApprovalService service.
+// All implementations should embed UnimplementedTaskApprovalServiceServer
+// for forward compatibility.
+//
+// TaskApprovalService is peer-only. Gateways assert the authenticated owner;
+// runners assert their task actor. Neither identity comes from tool arguments.
+type TaskApprovalServiceServer interface {
+	CreateTaskApproval(context.Context, *CreateTaskApprovalRequest) (*CreateTaskApprovalResponse, error)
+	PauseTaskApproval(context.Context, *PauseTaskApprovalRequest) (*PauseTaskApprovalResponse, error)
+	GetTaskApproval(context.Context, *GetTaskApprovalRequest) (*GetTaskApprovalResponse, error)
+	ListTaskApproval(context.Context, *ListTaskApprovalRequest) (*ListTaskApprovalResponse, error)
+	DecideTaskApproval(context.Context, *DecideTaskApprovalRequest) (*DecideTaskApprovalResponse, error)
+	ClaimTaskApproval(context.Context, *ClaimTaskApprovalRequest) (*ClaimTaskApprovalResponse, error)
+	FinishTaskApproval(context.Context, *FinishTaskApprovalRequest) (*FinishTaskApprovalResponse, error)
+	CancelTaskApproval(context.Context, *CancelTaskApprovalRequest) (*CancelTaskApprovalResponse, error)
+	RecoverTaskApproval(context.Context, *RecoverTaskApprovalRequest) (*RecoverTaskApprovalResponse, error)
+	CheckGrantTaskApproval(context.Context, *CheckGrantTaskApprovalRequest) (*CheckGrantTaskApprovalResponse, error)
+}
+
+// UnimplementedTaskApprovalServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedTaskApprovalServiceServer struct{}
+
+func (UnimplementedTaskApprovalServiceServer) CreateTaskApproval(context.Context, *CreateTaskApprovalRequest) (*CreateTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) PauseTaskApproval(context.Context, *PauseTaskApprovalRequest) (*PauseTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PauseTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) GetTaskApproval(context.Context, *GetTaskApprovalRequest) (*GetTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) ListTaskApproval(context.Context, *ListTaskApprovalRequest) (*ListTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) DecideTaskApproval(context.Context, *DecideTaskApprovalRequest) (*DecideTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DecideTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) ClaimTaskApproval(context.Context, *ClaimTaskApprovalRequest) (*ClaimTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) FinishTaskApproval(context.Context, *FinishTaskApprovalRequest) (*FinishTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FinishTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) CancelTaskApproval(context.Context, *CancelTaskApprovalRequest) (*CancelTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) RecoverTaskApproval(context.Context, *RecoverTaskApprovalRequest) (*RecoverTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecoverTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) CheckGrantTaskApproval(context.Context, *CheckGrantTaskApprovalRequest) (*CheckGrantTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckGrantTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) testEmbeddedByValue() {}
+
+// UnsafeTaskApprovalServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to TaskApprovalServiceServer will
+// result in compilation errors.
+type UnsafeTaskApprovalServiceServer interface {
+	mustEmbedUnimplementedTaskApprovalServiceServer()
+}
+
+func RegisterTaskApprovalServiceServer(s grpc.ServiceRegistrar, srv TaskApprovalServiceServer) {
+	// If the following call pancis, it indicates UnimplementedTaskApprovalServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&TaskApprovalService_ServiceDesc, srv)
+}
+
+func _TaskApprovalService_CreateTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).CreateTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_CreateTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).CreateTaskApproval(ctx, req.(*CreateTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_PauseTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PauseTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).PauseTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_PauseTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).PauseTaskApproval(ctx, req.(*PauseTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_GetTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).GetTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_GetTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).GetTaskApproval(ctx, req.(*GetTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_ListTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).ListTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_ListTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).ListTaskApproval(ctx, req.(*ListTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_DecideTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecideTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).DecideTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_DecideTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).DecideTaskApproval(ctx, req.(*DecideTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_ClaimTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).ClaimTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_ClaimTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).ClaimTaskApproval(ctx, req.(*ClaimTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_FinishTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinishTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).FinishTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_FinishTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).FinishTaskApproval(ctx, req.(*FinishTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_CancelTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).CancelTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_CancelTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).CancelTaskApproval(ctx, req.(*CancelTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_RecoverTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecoverTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).RecoverTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_RecoverTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).RecoverTaskApproval(ctx, req.(*RecoverTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_CheckGrantTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckGrantTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).CheckGrantTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_CheckGrantTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).CheckGrantTaskApproval(ctx, req.(*CheckGrantTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// TaskApprovalService_ServiceDesc is the grpc.ServiceDesc for TaskApprovalService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var TaskApprovalService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.TaskApprovalService",
+	HandlerType: (*TaskApprovalServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateTaskApproval",
+			Handler:    _TaskApprovalService_CreateTaskApproval_Handler,
+		},
+		{
+			MethodName: "PauseTaskApproval",
+			Handler:    _TaskApprovalService_PauseTaskApproval_Handler,
+		},
+		{
+			MethodName: "GetTaskApproval",
+			Handler:    _TaskApprovalService_GetTaskApproval_Handler,
+		},
+		{
+			MethodName: "ListTaskApproval",
+			Handler:    _TaskApprovalService_ListTaskApproval_Handler,
+		},
+		{
+			MethodName: "DecideTaskApproval",
+			Handler:    _TaskApprovalService_DecideTaskApproval_Handler,
+		},
+		{
+			MethodName: "ClaimTaskApproval",
+			Handler:    _TaskApprovalService_ClaimTaskApproval_Handler,
+		},
+		{
+			MethodName: "FinishTaskApproval",
+			Handler:    _TaskApprovalService_FinishTaskApproval_Handler,
+		},
+		{
+			MethodName: "CancelTaskApproval",
+			Handler:    _TaskApprovalService_CancelTaskApproval_Handler,
+		},
+		{
+			MethodName: "RecoverTaskApproval",
+			Handler:    _TaskApprovalService_RecoverTaskApproval_Handler,
+		},
+		{
+			MethodName: "CheckGrantTaskApproval",
+			Handler:    _TaskApprovalService_CheckGrantTaskApproval_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
