@@ -155,8 +155,8 @@ func (c *Client) DownloadBundle(ctx context.Context, entry *SkillEntry) (io.Read
 // the name. Owner prefixes are stripped here for operators who paste
 // the full page URL slug ("steipete/gog") instead of the API slug.
 //
-// Caller (typically Installer.InstallBySlug) is responsible for
-// ProcessBundle on the returned bytes.
+// ShareSource bounds, validates and converts the returned bytes into a
+// portable artifact; the destination owns installation and activation.
 func (c *Client) DownloadBundleBySlug(ctx context.Context, slug string) (io.ReadCloser, error) {
 	apiSlug, err := normalizeSlug(slug)
 	if err != nil {

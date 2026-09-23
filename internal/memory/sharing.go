@@ -79,7 +79,10 @@ func (s *SharingStore) snapshot() (shareSnapshot, error) {
 	return out, err
 }
 
-func (snap shareSnapshot) digest() string { raw, _ := json.Marshal(snap); return sharing.Hash(raw) }
+func (snap shareSnapshot) digest() string {
+	raw, _ := json.Marshal(snap) // map[string][]byte is always JSON encodable.
+	return sharing.Hash(raw)
+}
 func (snap shareSnapshot) read(kind, id string, p proto.Message) error {
 	raw, ok := snap[shareKey(kind, id)]
 	if !ok {
@@ -464,6 +467,8 @@ func (s *SharingStore) CheckTask(task *lobslawv1.ScheduledTaskRecord) (sharing.A
 
 // Approval includes local bindings as well as portable content.
 func shareApprovalRoot(rec *lobslawv1.ShareInstallation) string {
+	// This fixed shape contains only strings, bytes and string maps/slices;
+	// JSON encoding cannot fail. Revisit error handling if these types change.
 	raw, _ := json.Marshal(struct {
 		Artifact  []byte
 		Owner     string

@@ -27,7 +27,7 @@ func ClawhubToolDefs() []*types.ToolDef {
 	return []*types.ToolDef{{Name: "clawhub_install", Path: compute.BuiltinScheme + "clawhub_install",
 		Description:      "Fetch and stage a ClawHub skill proposal for the current user. Pass slug (name or owner/name), or name and version for a native catalogue. Returns an installation ID and human review instructions. Does not activate skills, install binaries or grant permissions. A human must review and activate through skills activate-install. Default-deny applies.",
 		ParametersSchema: []byte(`{"type":"object","properties":{"slug":{"type":"string","description":"ClawHub slug; mutually exclusive with name and version."},"name":{"type":"string","description":"Native catalogue skill name."},"version":{"type":"string","description":"Native catalogue version, required with name."}},"additionalProperties":false}`),
-		RiskTier:         types.RiskReversible}}
+		RiskTier:         types.RiskCommunicating}}
 }
 
 func newClawhubInstallHandler(cfg ClawhubConfig) compute.BuiltinFunc {

@@ -3,7 +3,10 @@ package clawhub
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -103,5 +106,40 @@ func TestShareSourceRejectsUntrustedCatalogSignature(t *testing.T) {
 	}
 	if _, err := source.Fetch(context.Background(), "clawhub:demo@1.0.0"); err == nil {
 		t.Fatal("present catalogue signature ignored without trust keys")
+	}
+}
+
+func TestShareSourceVerifiesSignedCatalogBeforeConversion(t *testing.T) {
+	bundle := makeBundle(t, map[string]string{"manifest.yaml": "name: demo\nversion: 1.0.0\nruntime: prose\nbody: SKILL.md\n", "SKILL.md": "Instructions"})
+	verifier, key := newFakeVerifier(t, "publisher")
+	for _, tampered := range []bool{false, true} {
+		t.Run(fmt.Sprint(tampered), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/bundle" {
+					_, _ = w.Write(bundle)
+					return
+				}
+				entry := &SkillEntry{Name: "demo", Version: "1.0.0", BundleURL: "http://" + r.Host + "/bundle", BundleSHA256: sha256Hex(bundle), SignedBy: "publisher"}
+				signEntry(t, key, entry)
+				if tampered {
+					// A well-formed signature over different bytes, not a parse error.
+					entry.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(key, []byte("different catalogue entry")))
+				}
+				_ = json.NewEncoder(w).Encode(entry)
+			}))
+			defer server.Close()
+			source, err := NewShareSource(server.URL, verifier)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = source.Fetch(t.Context(), "clawhub:demo@1.0.0")
+			if tampered {
+				if err == nil || !strings.Contains(err.Error(), "signature") {
+					t.Fatalf("tampered catalogue signature accepted: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

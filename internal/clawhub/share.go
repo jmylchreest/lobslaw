@@ -65,6 +65,9 @@ func (s *ShareSource) Fetch(ctx context.Context, ref string) (sharing.Artifact, 
 			return sharing.Artifact{}, err
 		}
 	}
+	// Conversion validates structure and declared file digests. Preserve the
+	// manifest signature below: the destination verifies it against its own
+	// trusted publishers before staging, activation and scheduled execution.
 	parsed, err := skills.ParseWithPolicy(dir, skills.SigningOff, nil)
 	if err != nil {
 		return sharing.Artifact{}, err

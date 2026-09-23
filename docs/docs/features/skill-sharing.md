@@ -48,6 +48,14 @@ binary requirements. The package records its source reference, catalogue and
 download digest as provenance. This is not a publisher signature: converted
 packages remain unsigned and destination signing policy still applies.
 
+The outer release signature and the original manifest signature are separate.
+Conversion preserves `manifest.yaml.sig` but cannot verify it against the
+destination's trust store. Before staging, activation and scheduled execution,
+the destination requires any present manifest signature to verify against its
+trusted publishers, even when signing policy is `off`. Declared handler and
+reference digests are checked during conversion too. Conversion never turns an
+upstream manifest signature into a signature over added schedule declarations.
+
 Versioned catalogue downloads check the advertised digest and any present
 catalogue signature against locally configured trusted publisher keys. Slug
 downloads have no advertised digest in the existing API; their downloaded bytes
@@ -184,3 +192,16 @@ or stored skill release.
 
 Upgrade every Raft member before using sharing. Older binaries cannot replay the
 new sharing transaction and deliberately stop on unsupported log entries.
+
+## Scheduled execution authority
+
+Activating a shared schedule delegates the bound owner's permissions to it.
+Importing with an owner only stages the schedule; activation authorizes execution.
+The preview identifies the owner and explains that the scheduled agent can use
+other tools allowed to that user, beyond the imported skill.
+
+Each run resolves the owner's current roles, so later grants and revocations
+apply. Execution keeps scheduler scope and the normal policy and credential
+checks. A tool requiring interactive confirmation cannot complete unattended.
+Changing approved content or ownership requires fresh activation. The publisher's
+and importer's permissions do not grant execution authority.

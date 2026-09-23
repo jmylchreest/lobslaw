@@ -11,8 +11,8 @@ import (
 
 // ClawdbotMetadata is the structured form of the metadata.clawdbot
 // block in a clawhub-format SKILL.md. ClawHub bundles encode their
-// runtime requirements + install methods here; lobslaw consumes
-// them via SatisfyBinaryRequirements at install time.
+// runtime requirements + install methods here. Conversion retains the
+// requirements but does not execute the declared installation methods.
 type ClawdbotMetadata struct {
 	Emoji    string            `yaml:"emoji,omitempty"`
 	Requires ClawdbotRequires  `yaml:"requires,omitempty"`

@@ -1260,6 +1260,8 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 			return err
 		}
 		claims = n.schedulerClaims(strings.TrimPrefix(task.Owner, "user:"))
+		// Activation delegates the bound owner’s authority. Resolve current
+		// roles on every run so later grants and revocations take effect.
 		claims.Roles = n.resolveUserRoles(claims.UserID)
 	}
 	prompt := task.Params["prompt"]

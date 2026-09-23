@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -152,13 +153,18 @@ func (s *skillService) shareResult(ctx context.Context, p *memory.SharePlan, a s
 	}
 	// Include the original manifest and complete artifact fingerprint in the
 	// review. Its declarations are requests, never policy grants.
+	authority := ""
+	if len(p.ScheduleIDs) > 0 {
+		authority = fmt.Sprintf("When activated, these schedules act as %s using that user’s current permissions on each run. They may use any tools allowed to that user in scheduler scope. Required interactive confirmation blocks unattended completion.", p.Owner)
+	}
 	raw, err := json.Marshal(struct {
 		*memory.SharePlan
-		Manifest  string          `json:"manifest"`
-		Publisher string          `json:"publisher,omitempty"`
-		Applied   bool            `json:"applied"`
-		Origin    *sharing.Origin `json:"origin,omitempty"`
-	}{p, string(a.Package().Manifest), a.Publisher(), apply, a.Package().Origin})
+		ScheduleAuthority string          `json:"schedule_authority,omitempty"`
+		Manifest          string          `json:"manifest"`
+		Publisher         string          `json:"publisher,omitempty"`
+		Applied           bool            `json:"applied"`
+		Origin            *sharing.Origin `json:"origin,omitempty"`
+	}{p, authority, string(a.Package().Manifest), a.Publisher(), apply, a.Package().Origin})
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

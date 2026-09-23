@@ -171,6 +171,24 @@ Registered during `node.New` when both a scheduler and an agent are present. Dis
 
 A user who wants "every morning check the weather and summarize" asks the agent, which creates the task through its schedule tool with `HandlerRef = "agent:turn"` and `Params.prompt = "check the weather and summarize it"`. Natural-language commitments ("remind me to call the plumber in 2 hours") skip `Params` and let `Reason` drive.
 
+Shared schedules are staged disabled and require a separate human activation.
+Before each run, `checkSharedTask` checks the installation approval, bound task
+content, destination signature policy and byte-for-byte equality with the loaded
+skill. A missing approval or changed override refuses execution before the agent
+starts. An interactive confirmation request fails the scheduled run; activation
+does not answer future tool confirmations.
+
+```mermaid
+flowchart LR
+    Due[Claim due shared task] --> Approval[Check active approval and bound content]
+    Approval --> Signature[Validate signatures against destination trust]
+    Signature --> Loaded[Compare loaded skill bytes with approved release]
+    Loaded --> Agent[Run agent with normal policy gates]
+    Agent --> Confirm{Interactive approval needed?}
+    Confirm -->|Yes| Fail[Report incomplete scheduled run]
+    Confirm -->|No| Done[Complete]
+```
+
 Handler errors are logged; the next tick retries via the regular cron schedule (for tasks) or not at all (commitments — they're one-shot).
 
 ### Built-in `memory:dream`
@@ -260,3 +278,14 @@ Records written before ownership existed have an empty owner and stay
 actionable by anyone — the alternative is that an upgrade silently orphans every
 commitment already scheduled, and a reminder that never fires is worse than one
 visible to the wrong person on a node that probably has one user.
+
+### Shared schedule owner delegation
+
+Architectural decision (approved 2026-09-23, PR #361): explicitly activated
+shared schedules delegate the bound owner's current roles, resolved on every
+run, while retaining `scheduler` scope. Import ownership alone does not activate
+execution. The activation preview discloses this delegation, including access to
+other tools permitted to the owner. Existing policy, credential and confirmation
+checks still apply; interactive confirmation prevents unattended completion.
+Content or owner changes invalidate approval. A separate automation role is not
+required: explicit activation is the owner's authorization to act on their behalf.
