@@ -181,10 +181,18 @@ func refuseArtefact(a Artefact) string {
 		if reason := refuseFilePath(path); reason != "" {
 			return reason
 		}
+		if reason := refuseOwnedName(path, BodyFile, manifestFile, signatureFile); reason != "" {
+			return reason
+		}
 	}
 	return ""
 }
 
+// refuseFilePath refuses a bundled path by shape alone: empty, or able
+// to leave the skill directory. What a path may not NAME, as opposed
+// to what shape it may not have, is a second and separate question,
+// answered by refuseOwnedName, because the two callers own different
+// names.
 func refuseFilePath(path string) string {
 	if strings.TrimSpace(path) == "" {
 		return "a bundled file has an empty path"
@@ -193,8 +201,21 @@ func refuseFilePath(path string) string {
 	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return fmt.Sprintf("bundled file %q is outside the skill directory", path)
 	}
-	if cleaned == BodyFile || cleaned == manifestFile || cleaned == manifestFile+".sig" {
-		return fmt.Sprintf("bundled file %q would overwrite a file the materialiser owns", path)
+	return ""
+}
+
+// refuseOwnedName refuses a bundled path that names a file the caller
+// writes itself. The set differs by caller: the agent side writes
+// BodyFile as a separate field alongside the manifest and its
+// signature, so a bundled file with that name would collide; the
+// stored side writes only the manifest and its signature, so a
+// bundled SKILL.md is the skill's own body, not a collision.
+func refuseOwnedName(path string, owned ...string) string {
+	cleaned := filepath.Clean(path)
+	for _, name := range owned {
+		if cleaned == name {
+			return fmt.Sprintf("bundled file %q would overwrite a file the materialiser owns", path)
+		}
 	}
 	return ""
 }
@@ -521,6 +542,13 @@ func refuseStored(sk StoredSkill) string {
 	}
 	for path := range sk.Files {
 		if reason := refuseFilePath(path); reason != "" {
+			return reason
+		}
+		// No BodyFile here: for a stored skill the materialiser writes
+		// only the manifest and its signature (MaterialiseStored above),
+		// so the skill's own body arrives as one of these Files and must
+		// not be refused as a collision that cannot happen on this side.
+		if reason := refuseOwnedName(path, manifestFile, signatureFile); reason != "" {
 			return reason
 		}
 	}

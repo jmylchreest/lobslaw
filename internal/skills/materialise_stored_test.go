@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/memory"
 )
 
 // The store is the authority for imported skills; the cache is where
@@ -285,6 +287,92 @@ func TestANameThatWouldEscapeIsRefused(t *testing.T) {
 		}
 		if _, refused := res.Refused[name]; !refused {
 			t.Errorf("name %q was accepted", name)
+		}
+	}
+}
+
+// The documented convention for a bundled skill's body is SKILL.md
+// (skill.go's Body field comment). The materialiser writes only the
+// manifest and its signature for a stored skill, so a bundled SKILL.md
+// is the skill's own body, not a name the materialiser owns.
+func TestAStoredSkillWithASKILLBodyMaterialises(t *testing.T) {
+	t.Parallel()
+	m := materialiser(t)
+	sk := stored("tidy", "1.2.3")
+	sk.Files[BodyFile] = []byte("# tidy\n\nhow to tidy up")
+	res, err := m.MaterialiseStored([]StoredSkill{sk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Written) != 1 {
+		t.Fatalf("written = %v, refused = %v", res.Written, res.Refused)
+	}
+	got, err := os.ReadFile(filepath.Join(m.ImportedRoot(), "tidy", "1.2.3", BodyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "# tidy\n\nhow to tidy up" {
+		t.Errorf("body = %q", got)
+	}
+}
+
+// The repo's own remote-dispatch skill uses body: SKILL.md, the
+// convention the fix restores for imported skills. Materialising it
+// through the store path, rather than a synthetic fixture, is the
+// strongest evidence the refusal is gone: a manifest whose body_sha256
+// is pinned against real content only parses if the bytes on disk are
+// exactly what was imported.
+func TestAStoredSkillFromTheRepoBundleMaterialises(t *testing.T) {
+	t.Parallel()
+	src := filepath.Join("..", "..", "bundles", "lobslaw-core", "remote-dispatch")
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		t.Skip("no bundles/lobslaw-core/remote-dispatch in this tree")
+	}
+	bundle, err := memory.ReadBundle(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	m := materialiser(t)
+	res, err := m.MaterialiseStored([]StoredSkill{{
+		Name:         "remote-dispatch",
+		Version:      "1.0.0",
+		ManifestYAML: bundle.Manifest,
+		ManifestSig:  bundle.Signature,
+		Files:        bundle.Files,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Written) != 1 {
+		t.Fatalf("written = %v, refused = %v", res.Written, res.Refused)
+	}
+
+	dir := filepath.Join(m.ImportedRoot(), "remote-dispatch", "1.0.0")
+	skill, err := Parse(dir)
+	if err != nil {
+		t.Fatalf("the materialised skill does not parse: %v", err)
+	}
+	if skill.Manifest.Name != "remote-dispatch" {
+		t.Errorf("manifest = %+v", skill.Manifest)
+	}
+}
+
+// A path can be shaped for traversal even though it never names
+// something the materialiser owns; that check runs regardless of
+// ownership.
+func TestAStoredBundledFileCannotEscapeTheSkillDirectory(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"/etc/passwd", ""} {
+		m := materialiser(t)
+		sk := stored("tidy", "1.2.3")
+		sk.Files[path] = []byte("payload")
+		res, err := m.MaterialiseStored([]StoredSkill{sk})
+		if err != nil {
+			t.Fatalf("%q: %v", path, err)
+		}
+		if _, refused := res.Refused["tidy"]; !refused {
+			t.Errorf("bundled path %q was accepted", path)
 		}
 	}
 }
