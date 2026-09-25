@@ -134,6 +134,7 @@ func nodeWireStages() []WireStage {
 		{Name: "raft", Gate: gateRaft, Wire: (*Node).wireRaftStage},
 		{Name: "policy-svc", Gate: gateRaft, Wire: (*Node).wirePolicyService},
 		{Name: "memory-svc", Gate: gateRaft, Wire: (*Node).wireMemoryService},
+		{Name: "task-approvals", Gate: gateRaft, Wire: (*Node).wireTaskApprovals},
 		{Name: "session-svc", Gate: gateRaft, Wire: (*Node).wireSessionService},
 		{Name: "identity-svc", Gate: gateRaft, Wire: (*Node).wireIdentityService},
 		{Name: "trace-svc", Gate: gateAlways, Wire: (*Node).wireTraceService},

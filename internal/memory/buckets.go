@@ -73,7 +73,8 @@ const (
 	// than per-process so an approval tapped on one node resolves a
 	// prompt issued by another, and so a restart does not lose the
 	// turn the user was answering. See R2.
-	BucketPrompts = "prompts"
+	BucketPrompts       = "prompts"
+	BucketTaskApprovals = "task_approvals"
 
 	// BucketConsolidations holds Dream's adjudication log: what it
 	// decided about each cluster of near-duplicate memories and why.
@@ -181,6 +182,7 @@ var allBuckets = []string{
 	BucketSessionMessages,
 	BucketSessionLeases,
 	BucketPrompts,
+	BucketTaskApprovals,
 	BucketConsolidations,
 	BucketDisputes,
 	BucketPinned,

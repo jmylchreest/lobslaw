@@ -163,6 +163,9 @@ var (
 
 // Invoke executes the requested tool end-to-end.
 func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *InvokeResult, err error) {
+	if err := checkTaskExecution(ctx); err != nil {
+		return nil, err
+	}
 	req.Params = maps.Clone(req.Params)
 	if req.ToolName == "" {
 		return nil, fmt.Errorf("InvokeRequest: ToolName required")
@@ -413,6 +416,9 @@ func (e *Executor) CheckPolicy(ctx context.Context, claims *types.Claims, action
 // — callers in Phase 6 will convert ErrRequireConfirm into a
 // Channel.Prompt flow.
 func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action, resource string) error {
+	if err := checkTaskExecution(ctx); err != nil {
+		return err
+	}
 	dec, err := e.policyDecision(ctx, claims, action, resource)
 	if err != nil {
 		return err
@@ -440,7 +446,7 @@ func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action
 				"action", action, "resource", resource)
 			return nil
 		}
-		if e.approvals.Granted(ctx, action, resource) {
+		if e.approvalGranted(ctx, action, resource) {
 			e.logger.Debug("policy: confirmation already approved for this conversation",
 				"action", action, "resource", resource)
 			return nil
