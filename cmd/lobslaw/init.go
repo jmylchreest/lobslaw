@@ -223,6 +223,7 @@ func runInit(ans initAnswers) error {
 	}
 	nodeCertPEM, nodeKeyPEM, err := mtls.SignNodeCert(caCert, caKey, mtls.SignOpts{
 		NodeID:   derivedNodeID(),
+		IPs:      mtls.LoopbackIPs(),
 		ValidFor: 365 * 24 * time.Hour,
 	})
 	if err != nil {
