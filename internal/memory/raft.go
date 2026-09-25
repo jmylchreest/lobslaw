@@ -14,6 +14,21 @@ import (
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 )
 
+const (
+	// RaftLogFile is the bolt-backed log raft keeps directly under
+	// DataDir.
+	RaftLogFile = "raft.db"
+	// SnapshotDir is the directory lobslaw hands to
+	// raft.NewFileSnapshotStore, directly under DataDir.
+	SnapshotDir = "snapshots"
+	// RaftSnapshotStoreSegment is hashicorp/raft's own subdirectory
+	// name for a snapshot store, one level below SnapshotDir. It
+	// mirrors the unexported snapPath constant in
+	// hashicorp/raft's file_snapshot.go. Raft does not export it, so
+	// anything matching its output needs its own copy of the name.
+	RaftSnapshotStoreSegment = "snapshots"
+)
+
 // RaftConfig holds the parameters for constructing a Raft node.
 type RaftConfig struct {
 	// NodeID is the raft.ServerID — must be stable across restarts.
@@ -110,13 +125,13 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
-	raftDB := filepath.Join(cfg.DataDir, "raft.db")
+	raftDB := filepath.Join(cfg.DataDir, RaftLogFile)
 	boltStore, err := raftboltdb.New(raftboltdb.Options{Path: raftDB})
 	if err != nil {
-		return nil, fmt.Errorf("open raft.db: %w", err)
+		return nil, fmt.Errorf("open %s: %w", RaftLogFile, err)
 	}
 
-	snapDir := filepath.Join(cfg.DataDir, "snapshots")
+	snapDir := filepath.Join(cfg.DataDir, SnapshotDir)
 	snapStore, err := raft.NewFileSnapshotStore(snapDir, 2, os.Stderr)
 	if err != nil {
 		_ = boltStore.Close()
