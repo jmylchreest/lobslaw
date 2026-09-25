@@ -442,10 +442,12 @@ type PolicyConfig struct {
 	// Rules are operator-declared [[policy.rules]] entries seeded
 	// at boot via raft. Each rule mirrors lobslawv1.PolicyRule
 	// fields. Subjects MUST be "kind:value" (scope:owner,
-	// user:alice, role:admin) or "*" — bare strings like "owner"
-	// are treated as malformed (fail-closed) by the engine.
-	// Higher Priority wins. Default-deny seeds for builtins land
-	// at priority=10; operator allow rules typically use 20+.
+	// user:alice, role:admin) or "*". A bare string like "owner",
+	// or any other kind the engine does not match, fails the node
+	// at boot rather than seeding a rule that would silently never
+	// apply. Higher Priority wins. Sensitive built-ins get no seed
+	// at all (fall through to default-deny); operator allow rules
+	// typically use priority 20+.
 	Rules []PolicyRuleConfig `koanf:"rules,omitempty"`
 }
 

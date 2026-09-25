@@ -342,12 +342,15 @@ action      = "tool:exec"
 resource    = "soul_*"             # glob — * prefix or suffix
 ```
 
-**Subject matching** uses `kind:value` form. Common kinds:
+**Subject matching** uses `kind:value` form. Matchable kinds:
 
 - `scope:owner`, `scope:public` — scope claims
 - `user:alice` — specific user ID
-- `channel:telegram` — channel type
-- `subject:google:1234567890` — OAuth subject
+- `role:admin`: a role the claims carry
+- `*` (or an empty subject): everyone
+
+A rule whose subject kind is not one of these fails the node at boot, naming the rule id. See
+[Subject matching](/configuration/policy-rules#subject-matching).
 
 Multiple rules per request? The engine sorts by `priority` (descending) and takes the first match's effect. If nothing matches and the resource has a default-allow seed (built-in tools at priority 1), allow. Otherwise deny.
 
@@ -368,7 +371,7 @@ A higher number wins. Within the same priority, the engine is deterministic (sor
 On first boot, `internal/node/wire_seeds.go` writes a fixed set of rules:
 
 - **Allow** every `BuiltinScheme` tool (the in-process built-ins) at priority 1.
-- **Deny** every sensitive built-in (`oauth_*`, `credentials_*`, `clawhub_install`, `soul_*`) at priority 10. The operator overrides these with priority-20 allows in `config.toml`.
+- Sensitive built-ins (`oauth_*`, `credentials_*`, `clawhub_install`, `soul_*`, and a few others) get **no seed at all**: no allow, no deny. They fall through to the engine's default-deny until the operator adds a priority-20 allow rule in `config.toml`.
 
 Skills, MCP servers, and clawhub-installed tools are **not** seeded. They're invisible to the agent until the operator adds an allow rule:
 

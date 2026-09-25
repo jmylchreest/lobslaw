@@ -95,11 +95,6 @@ type MintRequest struct {
 	Resource string
 }
 
-// approvalSubjectKinds are the subject prefixes the engine can
-// actually match. Kept in step with subjectMatches — a kind here that
-// the engine does not know produces a dead rule.
-var approvalSubjectKinds = []string{"user:", "role:", "scope:"}
-
 // Mint records a permanent allow rule for an approved operation.
 func (a *ApprovalRules) Mint(_ context.Context, req MintRequest) (*lobslawv1.PolicyRule, error) {
 	promptID := strings.TrimSpace(req.PromptID)
@@ -112,17 +107,16 @@ func (a *ApprovalRules) Mint(_ context.Context, req MintRequest) (*lobslawv1.Pol
 		return nil, errors.New("approval rule: prompt id is required for provenance")
 	case subject == "":
 		return nil, errors.New("approval rule: subject is required; an empty subject matches everyone")
+	case subject == "*":
+		return nil, errors.New("approval rule: refusing a wildcard subject; an approval belongs to the principal who saw the prompt, not everyone")
 	case action == "":
 		return nil, errors.New("approval rule: action is required")
 	case resource == "":
 		return nil, errors.New("approval rule: resource is required")
 	}
 
-	if !hasAnyPrefix(subject, approvalSubjectKinds) {
-		return nil, fmt.Errorf(
-			"approval rule: subject %q is not a principal the engine can match; "+
-				"use one of %v — a conversation-scoped grant is SessionApprovals, not a rule",
-			subject, approvalSubjectKinds)
+	if err := ValidateSubject(subject); err != nil {
+		return nil, fmt.Errorf("approval rule: %w; a conversation-scoped grant is SessionApprovals, not a rule", err)
 	}
 
 	// A wildcard in either position turns "always allow this" into
@@ -239,15 +233,6 @@ func hardlineGuard(resource string) error {
 		return fmt.Errorf("%w: %v", ErrHardlineRule, hErr)
 	}
 	return nil
-}
-
-func hasAnyPrefix(s string, prefixes []string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(s, p) && len(s) > len(p) {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *ApprovalRules) apply(entry *lobslawv1.LogEntry) error {
