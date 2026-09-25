@@ -260,3 +260,19 @@ Records written before ownership existed have an empty owner and stay
 actionable by anyone — the alternative is that an upgrade silently orphans every
 commitment already scheduled, and a reminder that never fires is worse than one
 visible to the wrong person on a node that probably has one user.
+
+## Recurring agent schedule validation
+
+Recurring `agent:turn` tasks have a one-minute minimum recurrence. The shared
+`ParseAgentSchedule` parser validates cron syntax and rejects `@every` intervals
+shorter than a minute. Five-field cron and calendar descriptors already have
+minute resolution; the wait until the first firing is deliberately not used as
+the interval, so an hourly task due in one second remains valid.
+
+`schedule_create` validates before writing to Raft. The scheduler also validates
+agent tasks before using a stored `NextRun`, covering existing and imported
+records. Invalid tasks remain stored and visible, but are skipped with a warning
+rather than silently rewritten. Delete and recreate them with a valid schedule.
+Internal maintenance handlers retain their existing cadence, and one-shot
+commitments are unaffected. `MinFireInterval` remains a retry-loop throttle, not
+a recurrence or spending limit.
