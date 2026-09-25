@@ -99,3 +99,128 @@ func TestApprovalRuleJSONCarriesProvenance(t *testing.T) {
 		t.Errorf("effect = %v, want allow", m["effect"])
 	}
 }
+
+// `policy rules` is the complete set: no provenance filter, unlike
+// approvals. An operator-authored rule and one an approval minted must
+// both come back.
+
+func TestPolicyReadAllRulesIncludesEveryProvenance(t *testing.T) {
+	t.Parallel()
+	store := policyTestStore(t,
+		&lobslawv1.PolicyRule{
+			Id: "approval:p1", Subject: "user:alice", Action: "tool:exec",
+			Resource: "write_file", Effect: "allow", CreatedBy: "approval:p1",
+		},
+		&lobslawv1.PolicyRule{
+			Id: "operator-allow-all", Subject: "*", Action: "*",
+			Resource: "*", Effect: "allow",
+		},
+		&lobslawv1.PolicyRule{
+			Id: "seeded-stdlib", Subject: "*", Action: "tool:exec",
+			Resource: "read_file", Effect: "allow", CreatedBy: "seed:stdlib",
+		},
+	)
+
+	got, err := policyReadAllRules(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("found %d rules, want 3 (unfiltered): %+v", len(got), got)
+	}
+}
+
+// --- filter --------------------------------------------------------------
+
+func TestFilterPolicyRules(t *testing.T) {
+	t.Parallel()
+	rules := []*lobslawv1.PolicyRule{
+		{Id: "a", Subject: "user:alice", CreatedBy: "lobslaw-builtin-tools"},
+		{Id: "b", Subject: "user:bob", CreatedBy: "approval:p1"},
+		{Id: "c", Subject: "user:alice", CreatedBy: "operator"},
+	}
+
+	tests := []struct {
+		name      string
+		subject   string
+		createdBy string
+		wantIDs   []string
+	}{
+		{name: "no filter keeps everything", wantIDs: []string{"a", "b", "c"}},
+		{name: "subject is an exact match, not a prefix", subject: "user:alice", wantIDs: []string{"a", "c"}},
+		{name: "subject matching nothing keeps nothing", subject: "user:carol", wantIDs: nil},
+		{name: "created-by is a prefix match", createdBy: "lobslaw-builtin-", wantIDs: []string{"a"}},
+		{name: "both filters narrow together", subject: "user:alice", createdBy: "operator", wantIDs: []string{"c"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := filterPolicyRules(rules, tt.subject, tt.createdBy)
+			gotIDs := make([]string, 0, len(got))
+			for _, r := range got {
+				gotIDs = append(gotIDs, r.GetId())
+			}
+			if !equalStrings(gotIDs, tt.wantIDs) {
+				t.Errorf("ids = %v, want %v", gotIDs, tt.wantIDs)
+			}
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// --- sort ------------------------------------------------------------------
+
+// Priority descending, id-tiebroken, so the same rule set prints in
+// the same order every time: an operator diffing two runs needs
+// nothing else to have changed for the ORDER to tell them so.
+func TestSortPolicyRulesByPriorityThenID(t *testing.T) {
+	t.Parallel()
+	rules := []*lobslawv1.PolicyRule{
+		{Id: "b", Priority: 5},
+		{Id: "a", Priority: 5},
+		{Id: "z", Priority: 10},
+		{Id: "m", Priority: 0},
+	}
+	sortPolicyRules(rules)
+	got := make([]string, len(rules))
+	for i, r := range rules {
+		got[i] = r.GetId()
+	}
+	want := []string{"z", "a", "b", "m"}
+	if !equalStrings(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+// --- JSON shape --------------------------------------------------------
+
+func TestPolicyRuleJSONShape(t *testing.T) {
+	t.Parallel()
+	m := policyRuleJSON(&lobslawv1.PolicyRule{
+		Id: "operator-1", Subject: "role:admin", Action: "tool:exec",
+		Resource: "*", Effect: "deny", Priority: 42, CreatedBy: "",
+	})
+	want := map[string]any{
+		"id": "operator-1", "subject": "role:admin", "action": "tool:exec",
+		"resource": "*", "effect": "deny", "priority": int32(42), "created_by": "",
+	}
+	for k, v := range want {
+		if m[k] != v {
+			t.Errorf("m[%q] = %v (%T), want %v (%T)", k, m[k], m[k], v, v)
+		}
+	}
+	if len(m) != len(want) {
+		t.Errorf("m has %d fields, want exactly %d (the shape must stay stable): %+v", len(m), len(want), m)
+	}
+}
