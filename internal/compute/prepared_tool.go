@@ -15,6 +15,9 @@ import (
 // a provider wire field. It freezes effective input while a confirmation waits.
 // Saved answers never override current policy denials or safety checks.
 type PreparedToolCall struct {
+	// DispatchKind prevents a saved skill approval being replayed as an executor tool.
+	// Empty retains the existing executor representation.
+	DispatchKind      string
 	CallID            string
 	ToolName          string
 	TurnID            string

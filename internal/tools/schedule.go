@@ -17,6 +17,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -28,7 +29,7 @@ import (
 // task created via schedule_create. Matches the existing
 // node.AgentTurnHandlerRef so scheduler-created tasks dispatch
 // through the same agent-turn path as operator-defined ones.
-const ScheduleHandlerRef = "agent:turn"
+const ScheduleHandlerRef = scheduler.AgentTurnHandlerRef
 
 // ScheduleConfig wires the schedule_* builtins. Store lets list/get
 // read directly from the scheduled-tasks bucket without an RPC
@@ -62,7 +63,7 @@ func ScheduleToolDefs() []*types.ToolDef {
 		{
 			Name:        "schedule_create",
 			Path:        compute.BuiltinScheme + "schedule_create",
-			Description: "Create a recurring scheduled task. Use when the user asks for a recurring check (\"check my mail every 5 minutes\", \"every morning at 8am tell me the weather\"). Pass name (human-readable), when (cron OR natural language: \"every 5m\", \"every 1h\", \"every 30s\", \"daily 08:00\"), and prompt (the self-instruction the agent executes each tick). Optional notify_on: \"always\" (ping on every tick), \"match\" (let the agent decide per tick, default), \"never\" (silent; memory-only). Returns {id} for the caller to reference. The task runs via agent.self_prompt; each tick fires your prompt through your own agent loop with full tool access.",
+			Description: "Create a recurring scheduled task (minimum interval: one minute). Use when the user asks for a recurring check (\"check my mail every 5 minutes\", \"every morning at 8am tell me the weather\"). Pass name (human-readable), when (cron OR natural language: \"every 5m\", \"every 1h\", \"daily 08:00\"), and prompt (the self-instruction the agent executes each tick). Optional notify_on: \"always\" (ping on every tick), \"match\" (let the agent decide per tick, default), \"never\" (silent; memory-only). Returns {id} for the caller to reference. The task runs via agent.self_prompt; each tick fires your prompt through your own agent loop with full tool access.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -142,6 +143,10 @@ func newScheduleCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 
 		cron, err := normaliseToCron(when)
 		if err != nil {
+			return nil, 2, fmt.Errorf("schedule_create: %w", err)
+		}
+
+		if _, err := scheduler.ParseAgentSchedule(cron); err != nil {
 			return nil, 2, fmt.Errorf("schedule_create: %w", err)
 		}
 
@@ -302,7 +307,8 @@ func newScheduleDeleteHandler(store *memory.Store, raft memoryRaftApplier) compu
 	}
 }
 
-// normaliseToCron accepts either a cron expression (5 or 6 fields)
+// normaliseToCron accepts either a cron expression (five fields, optionally
+// prefixed with TZ or CRON_TZ)
 // or a natural-language phrase. Natural forms supported:
 //
 //	"every 30s"  → cron can't express sub-minute — rejected
@@ -312,8 +318,7 @@ func newScheduleDeleteHandler(store *memory.Store, raft memoryRaftApplier) compu
 //	"daily HH:MM"→ "M H * * *"
 //	"every day HH:MM" → same
 //
-// Unknown forms pass through to cron parsing (which will reject
-// bad input at scheduler-level).
+// Cron-looking input is validated by ParseAgentSchedule before saving.
 var everyRe = regexp.MustCompile(`^every\s+(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hr|hours?)$`)
 var dailyRe = regexp.MustCompile(`^(?:daily|every\s+day)\s+(\d{1,2}):(\d{2})$`)
 
@@ -321,7 +326,7 @@ func normaliseToCron(when string) (string, error) {
 	w := strings.TrimSpace(strings.ToLower(when))
 	// Already looks like a cron expression (5+ fields separated by whitespace)?
 	if fields := strings.Fields(w); len(fields) >= 5 {
-		return when, nil // trust operator input
+		return when, nil // validated before saving
 	}
 	if w == "hourly" {
 		return "0 * * * *", nil

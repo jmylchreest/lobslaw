@@ -2032,6 +2032,7 @@ message LogEntry {
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
     ShareBatch share_batch = 37;
+    TaskApprovalRecord task_approval = 50;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -2338,10 +2339,194 @@ message PreparedToolCall {
   string original_arguments = 4;
   map<string, string> params = 5;
   repeated PreparedApproval approvals = 6;
+  string dispatch_kind = 7;
 }
 
 // PreparedApproval is scoped to its containing prepared call, not the session.
 message PreparedApproval {
   string action = 1;
   string resource = 2;
+}
+
+// TaskApprovalService is peer-only. Gateways assert the authenticated owner;
+// runners assert their task actor. Neither identity comes from tool arguments.
+service TaskApprovalService {
+  rpc CreateTaskApproval(CreateTaskApprovalRequest) returns (CreateTaskApprovalResponse);
+  rpc PauseTaskApproval(PauseTaskApprovalRequest) returns (PauseTaskApprovalResponse);
+  rpc GetTaskApproval(GetTaskApprovalRequest) returns (GetTaskApprovalResponse);
+  rpc ListTaskApproval(ListTaskApprovalRequest) returns (ListTaskApprovalResponse);
+  rpc DecideTaskApproval(DecideTaskApprovalRequest) returns (DecideTaskApprovalResponse);
+  rpc ClaimTaskApproval(ClaimTaskApprovalRequest) returns (ClaimTaskApprovalResponse);
+  rpc FinishTaskApproval(FinishTaskApprovalRequest) returns (FinishTaskApprovalResponse);
+  rpc CancelTaskApproval(CancelTaskApprovalRequest) returns (CancelTaskApprovalResponse);
+  rpc RecoverTaskApproval(RecoverTaskApprovalRequest) returns (RecoverTaskApprovalResponse);
+  rpc CheckGrantTaskApproval(CheckGrantTaskApprovalRequest) returns (CheckGrantTaskApprovalResponse);
+}
+
+enum TaskApprovalState {
+  TASK_APPROVAL_STATE_UNSPECIFIED = 0;
+  TASK_APPROVAL_STATE_RUNNING = 1;
+  TASK_APPROVAL_STATE_WAITING = 2;
+  TASK_APPROVAL_STATE_READY = 3;
+  TASK_APPROVAL_STATE_RESUMING = 4;
+  TASK_APPROVAL_STATE_COMPLETED = 5;
+  TASK_APPROVAL_STATE_DENIED = 6;
+  TASK_APPROVAL_STATE_CANCELLED = 7;
+  TASK_APPROVAL_STATE_EXPIRED = 8;
+  TASK_APPROVAL_STATE_OUTCOME_UNKNOWN = 9;
+}
+
+enum TaskApprovalChoice {
+  TASK_APPROVAL_CHOICE_UNSPECIFIED = 0;
+  TASK_APPROVAL_CHOICE_ONCE = 1;
+  TASK_APPROVAL_CHOICE_OPERATION = 2;
+  TASK_APPROVAL_CHOICE_RISK_LABELS = 3;
+  TASK_APPROVAL_CHOICE_DENY = 4;
+  TASK_APPROVAL_CHOICE_BUDGET_EXTENSION = 5;
+}
+
+message TaskOperation {
+  string call_id = 1;
+  string tool_name = 2;
+  string action = 3;
+  string resource = 4;
+  string summary = 5;
+  bool grantable = 6;
+  repeated string labels = 7;
+  bool requires_budget_extension = 8;
+}
+
+// Zero means no extension in a decision; in limits it retains the existing
+// convention of an uncapped dimension. Non-finite and negative values fail.
+message TaskBudget {
+  int32 tool_calls = 1;
+  double spend_usd = 2;
+  int64 egress_bytes = 3;
+}
+
+message TaskGrant {
+  string action = 1;
+  string resource = 2;
+}
+message TaskApprovalRecord {
+  string id = 1;
+  string owner = 2;
+  string actor = 3;
+  string parent_id = 4;
+  TaskApprovalState state = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  TaskOperation operation = 7;
+  Continuation continuation = 8;
+  repeated TaskGrant grants = 9;
+  string decided_by = 10;
+  google.protobuf.Timestamp decided_at = 11;
+  // Unique execution token; never returned by owner-facing listing endpoints.
+  string claimed_by = 12;
+  google.protobuf.Timestamp claim_expires_at = 13;
+  uint64 revision = 14;
+  string result = 15;
+  google.protobuf.Timestamp created_at = 16;
+  string turn_id = 17;
+  TaskBudget budget_policy = 18;
+  TaskBudget budget_limits = 19;
+  TaskBudget budget_spent = 20;
+}
+message CreateTaskApprovalRequest {
+  string owner = 1;
+  string actor = 2;
+  string parent_id = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+message PauseTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+  string actor = 3;
+  uint64 revision = 4;
+  string claim_token = 5;
+  TaskOperation operation = 6;
+  Continuation continuation = 7;
+  string turn_id = 8;
+  TaskBudget budget_policy = 9;
+  TaskBudget budget_limits = 10;
+}
+message GetTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+}
+message ListTaskApprovalRequest {
+  string owner = 1;
+  int32 limit = 2;
+  string after_id = 3;
+}
+message DecideTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+  uint64 revision = 3;
+  TaskApprovalChoice choice = 4;
+  TaskBudget extra_budget = 5;
+}
+message ClaimTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+  string actor = 3;
+  uint64 revision = 4;
+}
+message FinishTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+  string actor = 3;
+  uint64 revision = 4;
+  string claim_token = 5;
+  string result = 6;
+}
+message CancelTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+  uint64 revision = 3;
+}
+message RecoverTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+  uint64 revision = 3;
+  // Explicit acknowledgement that retry may duplicate an external effect.
+  bool acknowledge_duplicate_risk = 4;
+}
+message CheckGrantTaskApprovalRequest {
+  string id = 1;
+  string owner = 2;
+  string actor = 3;
+  string claim_token = 4;
+  string action = 5;
+  string resource = 6;
+}
+message CreateTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message PauseTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message GetTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message ListTaskApprovalResponse {
+  repeated TaskApprovalRecord records = 1;
+  string next_after_id = 2;
+}
+message DecideTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message ClaimTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message FinishTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message CancelTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message RecoverTaskApprovalResponse {
+  TaskApprovalRecord record = 1;
+}
+message CheckGrantTaskApprovalResponse {
+  bool granted = 1;
 }

@@ -502,7 +502,7 @@ func (s *Scheduler) nextDueTime(now time.Time) (time.Time, error) {
 		}
 		due, err := s.taskNextRun(t, now)
 		if err != nil {
-			s.log.Warn("scheduler: task has unparseable schedule — skipping",
+			s.log.Warn("scheduler: task has invalid schedule — skipping",
 				"task_id", t.Id, "schedule", t.Schedule, "err", err)
 			continue
 		}
@@ -538,12 +538,24 @@ func (s *Scheduler) nextDueTime(now time.Time) (time.Time, error) {
 // "0 7 * * *" must fire at 07:00 the same day — anchoring at the
 // creation time gets us that, even when we re-evaluate at 07:11.
 func (s *Scheduler) taskNextRun(t *lobslawv1.ScheduledTaskRecord, now time.Time) (time.Time, error) {
+	var schedule cron.Schedule
+	var err error
+	// Validate agent recurrence even when a persisted/imported task already
+	// has NextRun. Both next-due scanning and dispatch pass through here.
+	if t.HandlerRef == AgentTurnHandlerRef {
+		schedule, err = ParseAgentSchedule(t.Schedule)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
 	if t.NextRun != nil && !t.NextRun.AsTime().IsZero() {
 		return t.NextRun.AsTime(), nil
 	}
-	schedule, err := s.cronParser.Parse(t.Schedule)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse schedule %q: %w", t.Schedule, err)
+	if schedule == nil {
+		schedule, err = s.cronParser.Parse(t.Schedule)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse schedule %q: %w", t.Schedule, err)
+		}
 	}
 	var anchor time.Time
 	switch {

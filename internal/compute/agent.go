@@ -1311,6 +1311,9 @@ type chatWithCost struct {
 // PostLLMCall hooks around it, and packages the usage with a cost
 // record. The caller records spend via TurnBudget.RecordCostUSD.
 func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages []Message) (*chatWithCost, error) {
+	if err := checkTaskExecution(ctx); err != nil {
+		return nil, err
+	}
 	if a.cfg.Hooks != nil {
 		_, err := a.cfg.Hooks.Dispatch(ctx, types.HookPreLLMCall, map[string]any{
 			"turn_id": req.TurnID,
@@ -1748,6 +1751,9 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 }
 
 func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageRequest, tc ToolCall, prepared *PreparedToolCall) (ToolInvocation, *pendingConfirmation, error) {
+	if err := checkTaskExecution(ctx); err != nil {
+		return ToolInvocation{}, nil, err
+	}
 	if prepared != nil && (prepared.CallID != tc.ID || prepared.ToolName != tc.Name || prepared.TurnID != req.TurnID || prepared.OriginalArguments != tc.Arguments) {
 		return ToolInvocation{}, nil, fmt.Errorf("prepared tool call does not match the pending call")
 	}
@@ -1815,51 +1821,16 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	// dispatch uses internally, so allow rules behave
 	// identically across all dispatch paths.
 	if a.cfg.Skills != nil && a.cfg.Skills.Has(tc.Name) {
-		if prepared != nil {
-			return inv, nil, fmt.Errorf("prepared executor tool now resolves to a skill")
-		}
-		if a.cfg.Executor != nil {
-			if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
-				inv.Error = err.Error()
-				if errors.Is(err, ErrRequireConfirm) {
-					action, resource, grantable, labels := confirmationOperation(err, tc.Name)
-					return inv, &pendingConfirmation{
-						Reason: confirmationReason(err), Action: action,
-						Resource: resource, Grantable: grantable, Labels: labels,
-					}, nil
-				}
-				return inv, nil, nil
-			}
-		}
-		skillParams := make(map[string]any, len(params))
-		for k, v := range params {
-			skillParams[k] = v
-		}
-		skillRes, err := a.cfg.Skills.Invoke(ctx, SkillInvokeRequest{
-			Name:   tc.Name,
-			Params: skillParams,
-			Claims: req.Claims,
-			TurnID: req.TurnID,
-		})
-		if err != nil {
-			inv.Error = err.Error()
-			a.logToolFailure(req, tc.Name, "skill dispatch failed", -1, err.Error())
-			return inv, nil, nil
-		}
-		inv.ExitCode = skillRes.ExitCode
-		if skillRes.ExitCode != 0 {
-			a.logToolFailure(req, tc.Name, "skill returned a non-zero exit",
-				skillRes.ExitCode, string(skillRes.Stderr))
-		}
-		inv.Output = combineSkillOutputs(skillRes)
-		req.Budget.RecordEgressBytes(int64(len(skillRes.Stdout) + len(skillRes.Stderr)))
-		return inv, nil, nil
+		return a.runSkillToolCall(ctx, req, tc, prepared, params, inv)
 	}
 
 	if a.cfg.Executor == nil {
 		inv.Error = fmt.Sprintf("tool %q not found (no executor or skill dispatcher registered)", tc.Name)
 		a.logToolFailure(req, tc.Name, "no executor or skill dispatcher registered", -1, "")
 		return inv, nil, nil
+	}
+	if prepared != nil && prepared.DispatchKind != "" {
+		return inv, nil, fmt.Errorf("prepared skill no longer resolves to a skill")
 	}
 	invReq := InvokeRequest{
 		ToolName: tc.Name,
@@ -1921,6 +1892,53 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	req.Budget.RecordEgressBytes(int64(len(result.Stdout) + len(result.Stderr)))
 
 	return inv, nil, nil
+}
+
+// runSkillToolCall keeps skill approval and prepared-call binding together;
+// executor approvals cannot be replayed against a newly registered skill.
+func (a *Agent) runSkillToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall, prepared *PreparedToolCall, params map[string]string, inv ToolInvocation) (ToolInvocation, *pendingConfirmation, error) {
+
+	if prepared != nil && prepared.DispatchKind != "skill" {
+		return inv, nil, fmt.Errorf("prepared executor tool now resolves to a skill")
+	}
+	if a.cfg.Executor != nil {
+		if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
+			inv.Error = err.Error()
+			if errors.Is(err, ErrRequireConfirm) {
+				inv.prepared = &PreparedToolCall{CallID: tc.ID, ToolName: tc.Name, TurnID: req.TurnID, OriginalArguments: tc.Arguments, Params: maps.Clone(params), DispatchKind: "skill"}
+				action, resource, grantable, labels := confirmationOperation(err, tc.Name)
+				return inv, &pendingConfirmation{
+					Reason: confirmationReason(err), Action: action,
+					Resource: resource, Grantable: grantable, Labels: labels,
+				}, nil
+			}
+			return inv, nil, nil
+		}
+	}
+	skillParams := make(map[string]any, len(params))
+	for k, v := range params {
+		skillParams[k] = v
+	}
+	skillRes, err := a.cfg.Skills.Invoke(ctx, SkillInvokeRequest{
+		Name:   tc.Name,
+		Params: skillParams,
+		Claims: req.Claims,
+		TurnID: req.TurnID,
+	})
+	if err != nil {
+		inv.Error = err.Error()
+		a.logToolFailure(req, tc.Name, "skill dispatch failed", -1, err.Error())
+		return inv, nil, nil
+	}
+	inv.ExitCode = skillRes.ExitCode
+	if skillRes.ExitCode != 0 {
+		a.logToolFailure(req, tc.Name, "skill returned a non-zero exit",
+			skillRes.ExitCode, string(skillRes.Stderr))
+	}
+	inv.Output = combineSkillOutputs(skillRes)
+	req.Budget.RecordEgressBytes(int64(len(skillRes.Stdout) + len(skillRes.Stderr)))
+	return inv, nil, nil
+
 }
 
 // combineSkillOutputs formats a skill result the same way

@@ -579,7 +579,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 // scheduled task or commitment as an agent turn. Operators who want
 // "every morning run the check-in skill" configure a task with this
 // ref and a Params["prompt"].
-const AgentTurnHandlerRef = "agent:turn"
+const AgentTurnHandlerRef = scheduler.AgentTurnHandlerRef
 
 // DreamHandlerRef is the well-known HandlerRef for the memory
 // Dream/REM consolidation pass. Every node's scheduler races to

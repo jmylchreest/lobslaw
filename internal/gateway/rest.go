@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -128,7 +129,9 @@ type RESTConfig struct {
 	// return NeedsConfirmation register a prompt here; UIs poll
 	// and resolve. Nil = no prompt flow (NeedsConfirmation returns
 	// as plain text like Phase 6e).
-	Prompts Prompts
+	Prompts       Prompts
+	TaskApprovals TaskApprovalAPI
+	TaskIdentity  *identity.Resolver
 
 	// ConfirmationTTL is how long a pending prompt waits before
 	// auto-denying on timeout. 0 → 5 minutes default.
@@ -218,6 +221,10 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", s.handleMessages)
+	if s.cfg.TaskApprovals != nil {
+		mux.HandleFunc("/v1/task-approvals", s.handleTaskApprovals)
+		mux.HandleFunc("/v1/task-approvals/", s.handleTaskApprovals)
+	}
 	mux.HandleFunc("/v1/uploads", s.handleUpload)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)

@@ -470,7 +470,8 @@ type Node struct {
 	// promptRegistry, kept separately because the sweeper needs the
 	// concrete type. Nil on a gateway node that does not host raft —
 	// there, confirmations stay process-local.
-	promptStore *memory.PromptStore
+	promptStore   *memory.PromptStore
+	taskApprovals *taskApprovalServer
 
 	// leaderGate fans raft leadership transitions out to leader-pinned
 	// singleton workloads (currently just the telegram long-poller).
