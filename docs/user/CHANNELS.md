@@ -58,6 +58,27 @@ If the node is reachable on more than loopback, `require_auth` is mandatory: the
 
 When compute-teams is off (the default), you get a single-assistant chat. Both chat views display approval buttons when an operation requires confirmation. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
 
+In the team console, open **Task approvals** for delegated work waiting on you.
+The page shows the task's actor, pending operation, state, expiry and budget
+consumption. You can approve once, grant an offered operation/category for that
+task, deny, or add a bounded budget allowance. Approval queues the saved task for
+its worker; **ready** does not mean it has executed. Refresh or use the next-page
+button to inspect older tasks. Task approval remains available after closing the
+chat that initiated the work.
+
+An **outcome unknown** task may already have produced external effects. Recovery
+requires acknowledging possible duplicate effects, then a fresh approval.
+Cancelling running work prevents further authorisation but cannot undo effects
+already started. Decisions are revision checked; reload a changed task before
+deciding again.
+
+Signing out cancels all active browser streams. Images in model replies appear
+as links that you choose to open, rather than loading automatically. Tool
+receipts distinguish returned results from attempts that may have been refused,
+paused or failed; a returned result alone does not prove the requested external
+effect succeeded. Older inbox records show tool attempts because they lack
+per-call execution evidence.
+
 ## Telegram
 
 lobslaw supports two transports for Telegram: **poll** (outbound-only long-polling, right for personal deployments) and **webhook** (inbound HTTPS, right for cloud deployments with a stable public URL).

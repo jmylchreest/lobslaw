@@ -13,8 +13,9 @@ import (
 
 type taskAPISpy struct {
 	TaskApprovalAPI
-	owner string
-	calls int
+	owner    string
+	calls    int
+	revision uint64
 }
 
 func (s *taskAPISpy) ListTaskApproval(_ context.Context, q *pb.ListTaskApprovalRequest) (*pb.ListTaskApprovalResponse, error) {
@@ -24,6 +25,7 @@ func (s *taskAPISpy) ListTaskApproval(_ context.Context, q *pb.ListTaskApprovalR
 }
 func (s *taskAPISpy) DecideTaskApproval(_ context.Context, q *pb.DecideTaskApprovalRequest) (*pb.DecideTaskApprovalResponse, error) {
 	s.owner = q.Owner
+	s.revision = q.Revision
 	s.calls++
 	return &pb.DecideTaskApprovalResponse{}, nil
 }

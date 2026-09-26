@@ -220,7 +220,9 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		}
 		if decision != PromptApproved {
 			emit("reply", map[string]any{
-				"text": fmt.Sprintf("Confirmation %s: %s", decision.String(), resp.ConfirmationReason),
+				"text":            fmt.Sprintf("Confirmation %s: %s", decision.String(), resp.ConfirmationReason),
+				"tools_used":      invokedToolNames(resp.ToolCalls),
+				"tools_attempted": unconfirmedToolNames(resp.ToolCalls),
 			})
 			return
 		}
@@ -261,22 +263,41 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		// the names tell you whether the thing it SAYS it did is among
 		// them — which is the check that catches a bot reporting work
 		// it never performed.
-		"tools_used":  invokedToolNames(resp.ToolCalls),
-		"tool_calls":  len(resp.ToolCalls),
-		"tokens_used": 0,
-		"cost_usd":    resp.BudgetState.SpendUSD,
-		"session_id":  botChannel + ":" + botID,
+		"tools_used":      invokedToolNames(resp.ToolCalls),
+		"tool_calls":      returnedToolCount(resp.ToolCalls),
+		"tools_attempted": unconfirmedToolNames(resp.ToolCalls),
+		"tokens_used":     0,
+		"cost_usd":        resp.BudgetState.SpendUSD,
+		"session_id":      botChannel + ":" + botID,
 	})
 }
 
-// invokedToolNames is the distinct tools a turn actually invoked,
-// sorted for a stable rendering. The result text is the bot's account
-// of its work; this is the record of it.
+// A returned result is evidence of invocation, not of successful external
+// effects. An invocation error may be a refusal, a pending approval or a
+// failure after dispatch; none is evidence that the action completed.
 func invokedToolNames(calls []turn.ToolInvocation) []string {
+	return receiptToolNames(calls, false)
+}
+
+func unconfirmedToolNames(calls []turn.ToolInvocation) []string {
+	return receiptToolNames(calls, true)
+}
+
+func returnedToolCount(calls []turn.ToolInvocation) int {
+	count := 0
+	for _, call := range calls {
+		if call.Error == "" {
+			count++
+		}
+	}
+	return count
+}
+
+func receiptToolNames(calls []turn.ToolInvocation, unconfirmed bool) []string {
 	seen := make(map[string]struct{}, len(calls))
 	out := make([]string, 0, len(calls))
 	for _, c := range calls {
-		if c.ToolName == "" {
+		if c.ToolName == "" || (c.Error != "") != unconfirmed {
 			continue
 		}
 		if _, ok := seen[c.ToolName]; ok {
@@ -293,6 +314,10 @@ func invokedToolNames(calls []turn.ToolInvocation) []string {
 // is a client that has gone away, and there is nowhere left to report
 // that to.
 func sendSSE(w http.ResponseWriter, flusher http.Flusher, event string, payload any) {
+	if sink, ok := w.(interface{ consoleEvent(string, any) error }); ok {
+		_ = sink.consoleEvent(event, payload)
+		return
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return

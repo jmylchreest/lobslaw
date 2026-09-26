@@ -10,6 +10,7 @@ import { setRoster } from "./theme";
 import { Company } from "./routes/Company";
 import { Config } from "./routes/Config";
 import { NewBot } from "./routes/NewBot";
+import { TaskApprovals } from "./routes/TaskApprovals";
 
 export function App() {
   return <LoginGate><Console /></LoginGate>;
@@ -156,6 +157,7 @@ function Shell() {
         </div>
 
         <div className="side-foot">
+          <NavLink to="/approvals">Task approvals</NavLink>
           <NavLink to="/config">Config</NavLink>
           <Signed />
         </div>
@@ -178,6 +180,7 @@ function Shell() {
           <Route path="/" element={<Company group={current} onRenamed={reloadGroups} />} />
           <Route path="/coordinator" element={<Landing bots={bots} />} />
           <Route path="/config" element={<Config />} />
+          <Route path="/approvals" element={<TaskApprovals />} />
           <Route path="/bots/new" element={<NewBot group={current} onCreated={refresh} />} />
           <Route path="/bots/:botId" element={<BotRoom onChanged={refresh} />} />
           <Route path="*" element={<div className="empty"><b>Nothing here</b><span>That page does not exist.</span></div>} />

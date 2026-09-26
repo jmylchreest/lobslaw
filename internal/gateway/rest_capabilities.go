@@ -45,7 +45,6 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			if s.remoteCaps != nil {
 				out = *s.remoteCaps
 			}
-			out.Compute.Enabled, out.Compute.Configured = true, true
 			out.Compute.Available, out.ComputeTeams.Available = false, false
 		} else {
 			cached := out

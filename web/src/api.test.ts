@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api, isUnavailable, streamBotChat } from "./api";
+import { ApiError, api, isUnavailable, streamBotChat, streamChat, cancelActiveStreams } from "./api";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { cancelActiveStreams(); vi.unstubAllGlobals(); });
 
 describe("bot streams", () => {
   it("reports folded acceptance rather than a failed turn", async () => {
@@ -13,12 +13,54 @@ describe("bot streams", () => {
 
   it("passes navigation cancellation to the outstanding request", async () => {
     const controller = new AbortController();
-    const fetch = vi.fn().mockResolvedValue(new Response('event: reply\ndata: {"text":"done"}\n\n'));
+    let signal: AbortSignal | undefined;
+    const fetch = vi.fn((_path: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal;
+      return Promise.resolve(new Response(new ReadableStream()));
+    });
     vi.stubGlobal("fetch", fetch);
     const event = vi.fn();
-    await streamBotChat("worker", "hello", event, controller.signal);
-    expect(fetch).toHaveBeenCalledWith("/v1/bots/worker/messages", expect.objectContaining({ signal: controller.signal }));
-    expect(event).toHaveBeenCalledWith("reply", { text: "done" });
+    const running = streamBotChat("worker", "hello", event, controller.signal);
+    const stopped = expect(running).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => expect(signal).toBeDefined());
+    controller.abort();
+    await stopped;
+    expect(signal?.aborted).toBe(true);
+    expect(event).not.toHaveBeenCalled();
+  });
+
+  it("logout cancels every remaining bot and single-chat stream after another finishes", async () => {
+    const signals: AbortSignal[] = [];
+    const cancelled = vi.fn();
+    vi.stubGlobal("fetch", vi.fn((path: string, init: RequestInit) => {
+      if (path === "/v1/session") return Promise.resolve(new Response('{"status":"ok"}'));
+      signals.push(init.signal as AbortSignal);
+      if (path.includes("finished")) return Promise.resolve(new Response('event: reply\ndata: {"text":"done"}\n\n'));
+      return Promise.resolve(new Response(new ReadableStream({ cancel: cancelled })));
+    }));
+    const event = vi.fn();
+    const bot = streamBotChat("worker", "hello", event);
+    const single = streamChat("hello", event);
+    const botStopped = expect(bot).rejects.toMatchObject({ name: "AbortError" });
+    const singleStopped = expect(single).rejects.toMatchObject({ name: "AbortError" });
+    await streamBotChat("finished", "hello", vi.fn());
+    await api.logout();
+    await Promise.all([botStopped, singleStopped]);
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true, false]);
+    expect(cancelled).toHaveBeenCalledTimes(2);
+    expect(event).not.toHaveBeenCalled();
+  });
+});
+
+describe("durable task decisions", () => {
+  it("preserves the exact revision, bounded extra budget and explicit recovery acknowledgement", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response('{"record":{}}')));
+    vi.stubGlobal("fetch", fetch);
+    const task = { id: "task", actor: "bot:worker", state: "TASK_APPROVAL_STATE_WAITING", revision: "9007199254740993" };
+    await api.decideTask(task, "budget_extension", { tool_calls: 3, spend_usd: 0.5, egress_bytes: 4096 });
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ revision: task.revision, choice: "budget_extension", extra_budget: { tool_calls: 3, spend_usd: 0.5, egress_bytes: 4096 } });
+    await api.recoverTask(task, true);
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ revision: task.revision, acknowledge_duplicate_risk: true });
   });
 });
 

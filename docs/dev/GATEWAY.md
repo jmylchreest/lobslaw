@@ -101,7 +101,30 @@ Bot data and chat routes check the bot's explicit human owner; listing filters i
 
 `GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. Bot/group registries require `FunctionComputeTeams` on the serving compute backend (`--compute-teams` or `[compute-teams].enabled`); a web-only node forwards those routes without enabling local teams. Channel handlers set `turn.Request.BotID` via `TeamRouter` and do not import `internal/compute`. `ui-web` is true when the console handler is mounted. The SPA hides team chrome when teams are off rather than inventing a default team.
 
-A ui-web node without local compute forwards the browser channel to `[ui-web].backend` through the peer-only streaming `ConsoleService.ConsoleForward` RPC. Only an allowlisted set of data/chat/approval routes can be forwarded; login, credentials and static assets cannot. The web node authenticates the user and checks cookie CSRF before forwarding claims. The backend independently checks target ownership. Records, conversation gates and pending prompts stay together on the backend, including when the web node has no memory function. Capability discovery reads the backend's teams gate; cached capability presence survives outages with availability false.
+A ui-web node without local compute calls `[ui-web].backend` through peer-only
+`ConsoleService.QueryConsole`, `MutateConsole` and streaming `ChatConsole` RPCs.
+Queries, mutations, results and chat events are closed protobuf oneofs with
+resource-specific messages. No method, URL, opaque JSON body, HTTP status or SSE
+frame crosses gRPC. Browser HTTP is decoded on the web node; the backend's local
+adapters reuse the existing REST ownership, revision and audit logic. A peer
+cannot select a handler outside the typed operation set. Login, credentials and
+static assets have no peer operation.
+
+The web node authenticates the user and checks cookie CSRF before asserting
+claims plus a canonical principal. The backend verifies the node certificate,
+rejects operator certificates and claims/principal disagreement, and independently
+checks target ownership. Records, conversation gates and pending prompts stay
+together on the backend, including when the web node has no memory function.
+Capability discovery reads the backend's gates: an initial outage returns 503;
+after discovery an outage preserves known enabled/configured flags with
+availability false. It never invents disabled features from a failed probe.
+
+Durable task queries/decisions reuse the owner-facing messages and service from
+[TASK_APPROVALS.md](TASK_APPROVALS.md). The console overwrites request owners with
+the verified principal; no execution-claim operation is exposed. The backend
+invokes its shared `TaskApprovalAPI`, so the worker retains responsibility for
+scheduling ready tasks. Legacy `ConsoleForward` clients are no longer supported;
+upgrade the web node and its console backend together.
 
 `AgentService` remains the remote `turn.Runner` transport. Both RPC services reject operator certificates and unidentified callers: only node peers may assert a user. Remote resume transfers the exact action/resource approval once, consuming the local context grant and reconstructing its one-shot counterpart on the compute node.
 
@@ -142,12 +165,12 @@ sequenceDiagram
       Server-->>SPA: 503
       SPA->>SPA: unavailable, not deleted
     else remote backend
-      Server->>Compute: ConsoleForward (verified user claims)
+      Server->>Compute: ChatConsole (verified claims + principal, typed message)
       Compute->>Compute: Authorize target and acquire conversation gate
       Compute-->>Server: Stream typing / needs_confirmation / final
       Server-->>SPA: SSE events
       SPA->>Server: Approve prompt
-      Server->>Compute: Forward authenticated approval
+      Server->>Compute: MutateConsole.resolve_prompt (typed owner decision)
     else
       Server->>Runner: Run
       Runner-->>SPA: SSE typing / interim / final
@@ -156,6 +179,19 @@ sequenceDiagram
     Server-->>Browser: 404
   end
 ```
+
+Each active login stream has a distinct registration. Finishing one stream
+removes only that registration; logout atomically revokes the session and cancels
+every remaining stream, including gRPC-backed turns. A registration racing after
+revocation is cancelled immediately. The browser also aborts all active fetches
+on logout and suppresses callbacks after cancellation.
+
+Model Markdown images render as explicit links, never `<img>` elements: neither
+external nor same-origin image URLs may issue requests just because a reply was
+rendered. Chat receipts distinguish tools with returned results from
+refused/pending/failed attempts. A returned result is not proof of successful
+external effects. Historical inbox tool names lack per-call outcome evidence and
+are labelled attempts rather than execution receipts.
 
 ---
 

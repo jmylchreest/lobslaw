@@ -19,6 +19,9 @@ export function Markdown({ children }: { children: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          // Even an image on our origin can be an action URL. Model-authored
+          // sources are links only: rendering a reply must not make requests.
+          img: ({ src, alt }) => <a href={src} target="_blank" rel="noopener noreferrer nofollow">{alt || "Image"} (open image)</a>,
           // Tables are the main offender on a phone: too wide to fit
           // and nothing sensible to wrap on. Give each its own
           // horizontal scroller so the table slides instead of the

@@ -24,7 +24,7 @@ type Entry =
   | {
       kind: "said"; from: "me" | "bot"; text: string; at: number; notice?: boolean;
       // What the turn actually ran, carried alongside what it said.
-      tools?: string[]; tokens?: number; cost?: number; sessionId?: string;
+      tools?: string[]; attempts?: string[]; tokens?: number; cost?: number; sessionId?: string;
     }
   | { kind: "work"; item: InboxItem; at: number }
   | { kind: "sent"; item: InboxItem; at: number };
@@ -165,6 +165,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           setSaid((p) => [...p, {
             kind: "said", from: "bot", text: String(data.text ?? ""), at: Date.now(),
             tools: (data.tools_used as string[]) ?? [],
+            attempts: (data.tools_attempted as string[]) ?? [],
             tokens: Number(data.tokens_used ?? 0),
             cost: Number(data.cost_usd ?? 0),
             sessionId: String(data.session_id ?? ""),
@@ -412,29 +413,22 @@ function toEntry(m: TranscriptMessage): Entry | null {
  * hung. So it says WHO is working and HOW LONG it has been, which is
  * the difference between "still going" and "something broke".
  */
-/** What a turn actually ran, printed under what it said.
- *
- * A coordinator turn reported setting a reminder it never set, and
- * nothing in the console contradicted it — the reply was the only
- * record, and a reply is a claim. These are the tools the turn really
- * invoked, so a claim and the evidence for it sit in the same place.
- *
- * Quiet by design: it should be glanceable when you are checking and
- * ignorable when you are not.
- */
-function Receipt({ tools, tokens, cost }: { tools?: string[]; tokens?: number; cost?: number }) {
+/** Returned tool results prove dispatch, not successful external effects.
+ * Historical inbox names lack outcome evidence and remain labelled attempts. */
+export function Receipt({ tools, attempts, tokens, cost }: { tools?: string[]; attempts?: string[]; tokens?: number; cost?: number }) {
   const ran = tools ?? [];
-  if (ran.length === 0 && !tokens) return null;
+  if (tools === undefined && attempts === undefined && !tokens && !cost) return null;
   return (
     <div className="receipt">
       {ran.length > 0 ? (
         <>
-          <span className="receipt-lbl">ran</span>
+          <span className="receipt-lbl">returned a result (not proof of success)</span>
           {ran.map((t) => <code key={t}>{t}</code>)}
         </>
       ) : (
-        <span className="receipt-lbl">no tools used</span>
+        <span className="receipt-lbl">no confirmed tool execution</span>
       )}
+      {!!attempts?.length && <><span className="receipt-lbl">attempted · may be refused, pending or failed</span>{attempts.map((t) => <code key={t}>{t}</code>)}</>}
       {!!tokens && <span className="receipt-num">{tokens.toLocaleString()} tokens</span>}
       {!!cost && cost > 0 && <span className="receipt-num">${cost.toFixed(4)}</span>}
     </div>
@@ -479,7 +473,7 @@ function Said({ e, bot }: { e: Extract<Entry, { kind: "said" }>; bot: Bot }) {
         {e.notice
           ? <div className="txt notice">{e.text}</div>
           : <div className="txt"><Markdown>{e.text}</Markdown></div>}
-        {!e.notice && <Receipt tools={e.tools} tokens={e.tokens} cost={e.cost} />}
+        {!e.notice && <Receipt tools={e.tools} attempts={e.attempts} tokens={e.tokens} cost={e.cost} />}
       </div>
     </div>
   );
@@ -591,7 +585,7 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
         </div>
         {item.result && !open && <div className="ev-body"><Markdown>{item.result}</Markdown></div>}
         {item.status === "done" && (
-          <Receipt tools={item.tools_used} tokens={item.tokens_used} cost={item.cost_usd} />
+          <Receipt attempts={item.tools_used} tokens={item.tokens_used} cost={item.cost_usd} />
         )}
         {/* A failed item keeps its error, visibly. A task that vanished
             quietly is the failure the queue exists to prevent. */}
