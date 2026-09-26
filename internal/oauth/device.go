@@ -111,7 +111,7 @@ func StartDeviceAuth(ctx context.Context, p ProviderConfig, scopes []string) (*D
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("oauth: device auth HTTP %d: %s",
-			resp.StatusCode, textutil.Truncate(string(body), "…", 256))
+			resp.StatusCode, textutil.Truncate(string(body), "…", maxErrorPreviewRunes))
 	}
 	var out DeviceAuthResponse
 	if err := json.Unmarshal(body, &out); err != nil {
@@ -122,7 +122,7 @@ func StartDeviceAuth(ctx context.Context, p ProviderConfig, scopes []string) (*D
 	}
 	if out.Interval <= 0 {
 		// RFC 8628 §3.2: SHOULD default to 5 seconds when absent.
-		out.Interval = 5
+		out.Interval = int(defaultDevicePollInterval / time.Second)
 	}
 	return &out, nil
 }
@@ -181,7 +181,7 @@ func PollToken(ctx context.Context, p ProviderConfig, deviceCode string) (*Token
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("oauth: token HTTP %d: %s",
-			resp.StatusCode, textutil.Truncate(string(body), "…", 256))
+			resp.StatusCode, textutil.Truncate(string(body), "…", maxErrorPreviewRunes))
 	}
 	if out.AccessToken == "" {
 		return nil, errors.New("oauth: token response missing access_token")
@@ -199,13 +199,13 @@ func PollToken(ctx context.Context, p ProviderConfig, deviceCode string) (*Token
 func PollUntilGrant(ctx context.Context, p ProviderConfig, da *DeviceAuthResponse) (*TokenResponse, error) {
 	interval := time.Duration(da.Interval) * time.Second
 	if interval <= 0 {
-		interval = 5 * time.Second
+		interval = defaultDevicePollInterval
 	}
 	deadline := time.Now().Add(time.Duration(da.ExpiresIn) * time.Second)
 	if da.ExpiresIn <= 0 {
 		// Most providers cap device-code lifetime at 30 min; use
 		// that as a fallback when the response omitted expires_in.
-		deadline = time.Now().Add(30 * time.Minute)
+		deadline = time.Now().Add(defaultDeviceCodeLifetime)
 	}
 
 	for {
@@ -226,7 +226,7 @@ func PollUntilGrant(ctx context.Context, p ProviderConfig, da *DeviceAuthRespons
 		case errors.Is(err, ErrAuthorizationPending):
 			// Keep polling; interval unchanged.
 		case errors.Is(err, ErrSlowDown):
-			interval *= 2
+			interval *= deviceSlowdownFactor
 		case errors.Is(err, ErrExpiredToken),
 			errors.Is(err, ErrAccessDenied):
 			return nil, err

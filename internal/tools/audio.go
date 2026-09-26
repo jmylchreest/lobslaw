@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -66,7 +65,7 @@ func RegisterAudioBuiltin(b *Builtins, cfgs ...AudioConfig) error {
 		}
 		client := cfg.HTTPClient
 		if client == nil {
-			client = &http.Client{Timeout: 120 * time.Second}
+			client = &http.Client{Timeout: compute.DefaultAudioTimeout}
 		}
 		handlers = append(handlers, compute.FailoverHandler{Label: cfg.Label, Tier: cfg.TrustTier, Fn: newReadAudioHandler(cfg, client)})
 	}

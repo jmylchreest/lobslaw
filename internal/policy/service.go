@@ -3,7 +3,6 @@ package policy
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -99,7 +98,7 @@ func (s *Service) AddRule(ctx context.Context, req *lobslawv1.AddRuleRequest) (*
 		return nil, status.Errorf(codes.Internal, "marshal log entry: %v", err)
 	}
 
-	res, err := s.raft.Apply(data, 5*time.Second)
+	res, err := s.raft.Apply(data, policyApplyTimeout)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "raft apply: %v", err)
 	}

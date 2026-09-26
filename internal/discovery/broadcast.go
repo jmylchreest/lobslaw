@@ -70,7 +70,7 @@ func NewBroadcaster(cfg BroadcastConfig) (*Broadcaster, error) {
 		return nil, fmt.Errorf("BroadcastConfig: Local.ID required")
 	}
 	if cfg.Interval <= 0 {
-		cfg.Interval = 30 * time.Second
+		cfg.Interval = defaultBroadcastInterval
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -171,12 +171,12 @@ func (b *Broadcaster) runAnnouncer(ctx context.Context) {
 // Each well-formed announce from a peer folds into the registry;
 // packets from ourselves are ignored.
 func (b *Broadcaster) runListener(ctx context.Context) {
-	buf := make([]byte, 4096)
+	buf := make([]byte, broadcastMaxDatagramBytes)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		_ = b.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		_ = b.conn.SetReadDeadline(time.Now().Add(broadcastReadPollInterval))
 		n, src, err := b.conn.ReadFromUDP(buf)
 		if err != nil {
 			// Closed socket or read deadline. Loop checks ctx.

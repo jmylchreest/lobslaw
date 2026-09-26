@@ -234,7 +234,7 @@ func ApplyRebindReplicated(_ context.Context, raft RebindApplier, store *Store, 
 		if merr != nil {
 			return i, fmt.Errorf("encode entry %s: %w", entry.GetId(), merr)
 		}
-		res, aerr := raft.Apply(data, 5*time.Second)
+		res, aerr := raft.Apply(data, rebindApplyTimeout)
 		if aerr != nil {
 			// The count is returned alongside the error so the caller can
 			// say how far it got. "Rebind failed" without a number leaves

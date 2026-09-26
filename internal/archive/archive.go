@@ -329,8 +329,8 @@ func SourceIdentity(manifest Manifest, override string) (string, error) {
 	if id == "" {
 		id = override
 	}
-	if strings.TrimSpace(id) != id || len(id) > 256 {
-		return "", errors.New("source id must be trimmed and at most 256 bytes")
+	if strings.TrimSpace(id) != id || len(id) > MaxSourceIDBytes {
+		return "", fmt.Errorf("source id must be trimmed and at most %d bytes", MaxSourceIDBytes)
 	}
 	return id, nil
 }

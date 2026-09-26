@@ -74,26 +74,26 @@ func openSafetensors(path string) (*safetensors, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf(format, args...)
 	}
-	if len(m.data) < 8 {
+	if len(m.data) < safetensorsHeaderBytes {
 		return fail("safetensors: %s is too short to hold a header length", path)
 	}
-	n := binary.LittleEndian.Uint64(m.data[:8])
+	n := binary.LittleEndian.Uint64(m.data[:safetensorsHeaderBytes])
 	// The length prefix is the first thing in an untrusted file and
 	// decides how much is parsed as JSON. Bounded before it is used.
 	if n == 0 || n > maxHeaderLen {
 		return fail("safetensors: header length %d out of range (max %d)", n, maxHeaderLen)
 	}
-	if uint64(len(m.data)) < 8+n {
+	if uint64(len(m.data)) < uint64(safetensorsHeaderBytes)+n {
 		return fail("safetensors: file is shorter than its own header claims")
 	}
 	var index map[string]tensorInfo
-	if err := json.Unmarshal(m.data[8:8+n], &index); err != nil {
+	if err := json.Unmarshal(m.data[safetensorsHeaderBytes:uint64(safetensorsHeaderBytes)+n], &index); err != nil {
 		return fail("safetensors: parse header: %w", err)
 	}
 	// __metadata__ is a free-form string map, not a tensor; leaving it
 	// in makes every "unknown tensor" error message misleading.
 	delete(index, "__metadata__")
-	return &safetensors{f: f, m: m, index: index, dataOff: int64(8 + n)}, nil
+	return &safetensors{f: f, m: m, index: index, dataOff: int64(uint64(safetensorsHeaderBytes) + n)}, nil
 }
 
 func (s *safetensors) Close() error {
@@ -119,16 +119,16 @@ func (s *safetensors) tensor(name string) ([]float32, []int, error) {
 		return nil, nil, fmt.Errorf("safetensors: tensor %q has dtype %s, only F32 is supported", name, info.DType)
 	}
 	size := info.Offsets[1] - info.Offsets[0]
-	if size < 0 || size%4 != 0 {
+	if size < 0 || size%float32Bytes != 0 {
 		return nil, nil, fmt.Errorf("safetensors: tensor %q has byte length %d, not a whole number of f32", name, size)
 	}
 	want := 1
 	for _, d := range info.Shape {
 		want *= d
 	}
-	if size/4 != want {
+	if size/float32Bytes != want {
 		return nil, nil, fmt.Errorf("safetensors: tensor %q shape %v implies %d values but the byte range holds %d",
-			name, info.Shape, want, size/4)
+			name, info.Shape, want, size/float32Bytes)
 	}
 
 	start := s.dataOff + int64(info.Offsets[0])
@@ -146,12 +146,12 @@ func (s *safetensors) tensor(name string) ([]float32, []int, error) {
 	// seen so far, but the format does not guarantee it, and a
 	// misaligned float32 slice is undefined behaviour rather than a
 	// slow path. Checked, not assumed.
-	if nativeLittleEndian && uintptr(unsafe.Pointer(&buf[0]))%4 == 0 {
-		return unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), size/4), info.Shape, nil
+	if nativeLittleEndian && uintptr(unsafe.Pointer(&buf[0]))%uintptr(float32Bytes) == 0 {
+		return unsafe.Slice((*float32)(unsafe.Pointer(&buf[0])), size/float32Bytes), info.Shape, nil
 	}
-	out := make([]float32, size/4)
+	out := make([]float32, size/float32Bytes)
 	for i := range out {
-		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[i*4:]))
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[i*float32Bytes:]))
 	}
 	return out, info.Shape, nil
 }

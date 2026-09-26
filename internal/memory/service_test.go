@@ -157,8 +157,8 @@ func TestServiceEpisodicAdd(t *testing.T) {
 	if err := proto.Unmarshal(raw, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Importance != 5 {
-		t.Errorf("Importance = %d, want 5 (default)", got.Importance)
+	if got.Importance != DefaultImportance {
+		t.Errorf("Importance = %d, want %d (default)", got.Importance, DefaultImportance)
 	}
 	if got.Retention != lobslawv1.Retention_RETENTION_EPISODIC {
 		t.Errorf("Retention = %v, want episodic (default)", got.Retention)

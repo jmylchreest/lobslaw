@@ -158,7 +158,7 @@ func (r *ArtifactResolver) Resolve(ctx context.Context, a *Artifact, name string
 func (r *ArtifactResolver) download(ctx context.Context, url string) ([]byte, string, error) {
 	client := r.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Minute}
+		client = &http.Client{Timeout: artifactDownloadTimeout}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -169,7 +169,7 @@ func (r *ArtifactResolver) download(ctx context.Context, url string) ([]byte, st
 		return nil, "", Transient(fmt.Errorf("artifact: fetch: %w", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, "", &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, ""),
 			Err:   fmt.Errorf("artifact: fetch: HTTP %d", resp.StatusCode),
@@ -279,7 +279,7 @@ func safeArtifactName(name, mime string) string {
 // something nothing downstream can identify by name.
 func hasFileExt(base string) bool {
 	ext := filepath.Ext(base)
-	if len(ext) < 2 || len(ext) > 6 {
+	if len(ext) < 2 || len(ext) > artifactExtensionMaxBytes {
 		return false
 	}
 	for _, r := range ext[1:] {
@@ -296,8 +296,8 @@ func hasFileExt(base string) bool {
 // filesystem limit waiting to be hit.
 func ArtifactFileName(s, fallback string) string {
 	words := strings.Fields(s)
-	if len(words) > 5 {
-		words = words[:5]
+	if len(words) > artifactNameMaxWords {
+		words = words[:artifactNameMaxWords]
 	}
 	var b strings.Builder
 	for _, w := range words {

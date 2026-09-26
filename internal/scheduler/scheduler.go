@@ -177,19 +177,19 @@ func NewScheduler(cfg Config, raft Raft, handlers *HandlerRegistry) (*Scheduler,
 		handlers = NewHandlerRegistry()
 	}
 	if cfg.ClaimTTL <= 0 {
-		cfg.ClaimTTL = 5 * time.Minute
+		cfg.ClaimTTL = DefaultClaimTTL
 	}
 	if cfg.MaxSleep <= 0 {
-		cfg.MaxSleep = 60 * time.Second
+		cfg.MaxSleep = DefaultMaxSleep
 	}
 	if cfg.WakeDebounce <= 0 {
-		cfg.WakeDebounce = 50 * time.Millisecond
+		cfg.WakeDebounce = DefaultWakeDebounce
 	}
 	if cfg.MinFireInterval <= 0 {
-		cfg.MinFireInterval = 250 * time.Millisecond
+		cfg.MinFireInterval = DefaultMinFireInterval
 	}
 	if cfg.RaftApplyTimeout <= 0 {
-		cfg.RaftApplyTimeout = 5 * time.Second
+		cfg.RaftApplyTimeout = DefaultRaftApplyTimeout
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -261,7 +261,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	// nothing scheduled happens — which is indistinguishable from
 	// having nothing to do. This says the difference out loud, once,
 	// after long enough that it cannot be the ordinary case.
-	stallAfter := 3 * s.cfg.MaxSleep
+	stallAfter := time.Duration(stallSleepMultiplier) * s.cfg.MaxSleep
 	started := time.Now()
 	stallReported := false
 
@@ -427,7 +427,7 @@ func (s *Scheduler) ensureBarrierDone() bool {
 	}
 	s.barrierMu.Unlock()
 
-	if err := s.raft.Barrier(5 * time.Second); err != nil {
+	if err := s.raft.Barrier(barrierTimeout); err != nil {
 		s.log.Warn("scheduler: barrier failed; deferring fire to next tick",
 			"err", err)
 		return false

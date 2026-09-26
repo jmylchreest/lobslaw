@@ -115,7 +115,7 @@ type Fetcher struct {
 func NewFetcher() *Fetcher {
 	base := egress.For("modelsdev").HTTPClient()
 	wrapped := *base
-	wrapped.Timeout = 30 * time.Second
+	wrapped.Timeout = defaultHTTPTimeout
 	return &Fetcher{
 		URL:    DefaultURL,
 		MaxAge: DefaultCacheMaxAge,
@@ -227,7 +227,7 @@ func (f *Fetcher) fetchHTTP(ctx context.Context) (Catalog, error) {
 	if client == nil {
 		base := egress.For("modelsdev").HTTPClient()
 		wrapped := *base
-		wrapped.Timeout = 30 * time.Second
+		wrapped.Timeout = defaultHTTPTimeout
 		client = &wrapped
 	}
 	resp, err := client.Do(req)

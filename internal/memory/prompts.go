@@ -240,7 +240,7 @@ func (p *PromptStore) SweepLoop(ctx context.Context, interval time.Duration) err
 // it is short.
 func (p *PromptStore) Wait(ctx context.Context, id string, poll time.Duration) (*lobslawv1.PromptRecord, error) {
 	if poll <= 0 {
-		poll = 250 * time.Millisecond
+		poll = DefaultPromptPollInterval
 	}
 	t := time.NewTicker(poll)
 	defer t.Stop()
@@ -287,7 +287,7 @@ func (p *PromptStore) apply(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("prompt: marshal: %w", err)
 	}
-	res, err := p.raft.Apply(data, 5*time.Second)
+	res, err := p.raft.Apply(data, promptApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("prompt: raft apply: %w", err)
 	}

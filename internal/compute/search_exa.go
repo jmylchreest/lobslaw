@@ -96,7 +96,7 @@ func (d *exaSearchDriver) Search(ctx context.Context, req SearchRequest) ([]Sear
 	if resp.StatusCode != http.StatusOK {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("exa search: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("exa search: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, DiagnosticExcerptMaxBytes)),
 		}
 	}
 	var decoded exaSearchResponse

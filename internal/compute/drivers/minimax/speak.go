@@ -174,10 +174,10 @@ func (d *SpeakDriver) Speak(ctx context.Context, req compute.SpeakRequest) (*com
 	if readErr != nil {
 		return nil, compute.Transient(fmt.Errorf("minimax speak: read: %w", readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("minimax speak: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
+			Err:   fmt.Errorf("minimax speak: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)),
 		}
 	}
 

@@ -320,7 +320,7 @@ func (s *SessionGrantStore) apply(_ context.Context, op lobslawv1.LogOp, grant *
 	if err != nil {
 		return fmt.Errorf("session grants: marshal: %w", err)
 	}
-	res, err := s.raft.Apply(data, 5*time.Second)
+	res, err := s.raft.Apply(data, sessionGrantApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("session grants: apply: %w", err)
 	}

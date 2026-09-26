@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -263,7 +262,7 @@ func (p *PinnedStore) mutate(_ context.Context, kind PinnedKind, userID string, 
 	if err != nil {
 		return fmt.Errorf("pinned memory: marshal: %w", err)
 	}
-	res, err := p.raft.Apply(data, 5*time.Second)
+	res, err := p.raft.Apply(data, pinnedApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("pinned memory: raft apply: %w", err)
 	}

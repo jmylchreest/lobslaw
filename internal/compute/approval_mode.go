@@ -248,6 +248,6 @@ func ApprovalModeDefaults(approved map[commandrisk.RiskLabel]bool) []types.Polic
 			Op:    "in",
 			Value: strings.Join(names, ","),
 		}},
-		Priority: -1 << 30,
+		Priority: defaultApprovalPriority,
 	}}
 }

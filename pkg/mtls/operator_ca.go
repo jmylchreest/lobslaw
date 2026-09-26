@@ -54,7 +54,7 @@ const OperatorCACommonName = "lobslaw-operator-ca"
 // delegate would be a way to smuggle the authority somewhere else.
 func GenerateOperatorCA(validFor time.Duration) (certPEM, keyPEM []byte, err error) {
 	if validFor <= 0 {
-		validFor = 10 * 365 * 24 * time.Hour
+		validFor = DefaultCAValidity
 	}
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -162,7 +162,7 @@ func SignOperatorCSR(caCert *x509.Certificate, caKey ed25519.PrivateKey,
 		return nil, fmt.Errorf("operator keys are ed25519; this request carries %T", csr.PublicKey)
 	}
 	if validFor <= 0 {
-		validFor = 90 * 24 * time.Hour
+		validFor = DefaultOperatorCertValidity
 	}
 
 	serial, err := randomSerial()

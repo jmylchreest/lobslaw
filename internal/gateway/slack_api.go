@@ -58,7 +58,7 @@ func newSlackAPI(botToken, base string, client *http.Client) *slackAPI {
 		base = defaultSlackAPIBase
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{Timeout: slackAPIRequestTimeout}
 	}
 	return &slackAPI{botToken: botToken, base: strings.TrimRight(base, "/"), client: client}
 }
@@ -320,7 +320,7 @@ func (a *slackAPI) uploadBytes(ctx context.Context, uploadURL string, body []byt
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, slackAPIErrorMaxBytes))
 		return fmt.Errorf("slack: upload: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return nil
@@ -378,7 +378,7 @@ func (a *slackAPI) replies(ctx context.Context, channel, ts string, limit int) (
 // works in. Bounded by maxPages at the call site.
 func (a *slackAPI) listConversations(ctx context.Context, cursor string) ([]slackConversation, string, error) {
 	body := map[string]any{
-		"limit":            200,
+		"limit":            slackConversationPageSize,
 		"exclude_archived": true,
 		"types":            "public_channel,private_channel",
 	}

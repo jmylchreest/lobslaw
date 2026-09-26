@@ -116,9 +116,8 @@ func backupCreate(args []string) error {
 
 func backupRestore(args []string) error {
 	fs := newFlagSet("backup restore", flag.ContinueOnError)
-	var node liveNode
+	node := liveNode{timeout: defaultRestoreTimeout}
 	node.bind(fs)
-	node.timeout = 30 * time.Minute
 	var opts memory.ArchiveImportOptions
 	bindArchiveImportOptions(fs, &opts)
 	path := fs.String("repository", "", "local backup repository directory")
@@ -200,8 +199,8 @@ func backupRetentionAge(value string) (time.Duration, error) {
 	}
 	if days, ok := strings.CutSuffix(value, "d"); ok {
 		n, err := strconv.ParseInt(days, 10, 32)
-		if err != nil || n <= 0 || n > 100000 {
-			return 0, errors.New("retention days must be between 1 and 100000")
+		if err != nil || n <= 0 || n > maxBackupRetentionDays {
+			return 0, fmt.Errorf("retention days must be between 1 and %d", maxBackupRetentionDays)
 		}
 		return time.Duration(n) * 24 * time.Hour, nil
 	}

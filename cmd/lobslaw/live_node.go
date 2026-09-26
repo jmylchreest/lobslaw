@@ -53,7 +53,10 @@ func (l *liveNode) bind(fs *flag.FlagSet) {
 	fs.StringVar(&l.caCert, "ca-cert", "", "CA cert; overrides --config")
 	fs.StringVar(&l.nodeCert, "node-cert", "", "client cert; overrides --config")
 	fs.StringVar(&l.nodeKey, "node-key", "", "client key; overrides --config")
-	fs.DurationVar(&l.timeout, "timeout", 10*time.Second, "per-call timeout")
+	if l.timeout <= 0 {
+		l.timeout = defaultRPCTimeout
+	}
+	fs.DurationVar(&l.timeout, "timeout", l.timeout, "per-call timeout")
 }
 
 // dial opens an mTLS connection to the node.

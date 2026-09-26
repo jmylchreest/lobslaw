@@ -56,6 +56,13 @@ const (
 	VerbosityDetailed Verbosity = "detailed"
 )
 
+const (
+	// MinEmotiveValue is the lower bound of an emotive style dimension.
+	MinEmotiveValue int = 0
+	// MaxEmotiveValue is the upper bound shared by validation and adjustment.
+	MaxEmotiveValue int = 10
+)
+
 // EmotiveStyle scores the soul on numeric dimensions (0-10) plus
 // emoji_usage as "minimal" | "moderate" | "generous". Dynamic
 // adjustment mutates these within ±3 of the baseline.

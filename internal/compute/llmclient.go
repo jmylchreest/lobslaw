@@ -248,7 +248,7 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 	defer func() { _ = resp.Body.Close() }()
 
 	var bodyReader io.Reader = resp.Body
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		bodyReader = io.LimitReader(resp.Body, maxDiagnosticBodyBytes+1)
 	}
 	rawBody, readErr := io.ReadAll(bodyReader)
@@ -256,7 +256,7 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 		return nil, fmt.Errorf("llm: read response body: %w", readErr)
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		excerpt := truncateBody(rawBody)
 		// WARN, not DEBUG — operators need to see provider
 		// failures without enabling verbose logs. Body is
@@ -335,7 +335,7 @@ func truncateBody(body []byte) string {
 		return "[body omitted: diagnostic size limit exceeded]"
 	}
 	body = []byte(logging.SanitizeText(string(body)))
-	const max = 512
+	const max = DiagnosticExcerptMaxBytes
 	if len(body) <= max {
 		return string(body)
 	}

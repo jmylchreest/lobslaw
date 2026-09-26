@@ -73,7 +73,7 @@ func main() {
 	// at low tens of requests within a burst. Conservative default;
 	// bump via --rpm if your tier allows more. Retry-on-1002 saves
 	// us if we undershoot.
-	flag.IntVar(&rpm, "rpm", 10, "embedding requests per minute (respect provider rate limit)")
+	flag.IntVar(&rpm, "rpm", defaultEmbeddingRPM, "embedding requests per minute (respect provider rate limit)")
 	flag.BoolVar(&force, "force", false,
 		"re-embed records that ALREADY have a vector, deleting the old one. "+
 			"Required after changing the embedding model: vectors from two "+
@@ -300,8 +300,8 @@ func main() {
 // one code path is worth more than a saved branch.
 func embedBatchWithRetry(ec compute.EmbeddingProvider, texts []string) ([][]float32, error) {
 	var lastErr error
-	for attempt := range 5 {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	for attempt := range embeddingMaxAttempts {
+		ctx, cancel := context.WithTimeout(context.Background(), embeddingRequestTimeout)
 		vecs, err := ec.EmbedBatch(ctx, texts)
 		cancel()
 		if err == nil {
@@ -311,7 +311,7 @@ func embedBatchWithRetry(ec compute.EmbeddingProvider, texts []string) ([][]floa
 		if !isRateLimited(err.Error()) {
 			return nil, err
 		}
-		wait := min(time.Duration(5<<attempt)*time.Second, 60*time.Second)
+		wait := min(embeddingInitialBackoff<<attempt, embeddingMaxBackoff)
 		fmt.Fprintf(os.Stderr, "  [RATE-LIMIT] %v — sleeping %s\n", err, wait)
 		time.Sleep(wait)
 	}
@@ -384,7 +384,7 @@ func backfillEmbeddingFactory(name string) compute.EmbeddingDriverFactory {
 // node does at boot — so re-embedding after a model change does not
 // require the operator to have fetched it by hand first.
 func openBuiltin(cfg *config.Config) (*embedder.Encoder, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), modelLoadTimeout)
 	defer cancel()
 	// Through egress like the node's own fetch, not http.DefaultClient
 	// — a lint rule enforces this, and rightly: a tool that reached the

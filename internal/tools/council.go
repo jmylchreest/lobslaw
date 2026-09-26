@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -70,7 +69,7 @@ func CouncilToolDefs() []*types.ToolDef {
 		{
 			Name:        "council_review",
 			Path:        compute.BuiltinScheme + "council_review",
-			Description: "Fan out a question to multiple providers in parallel, return their answers. Use when the user asks for 'a council', 'a second opinion', 'adversarial review', 'consensus check', or when you notice you're uncertain about a factual claim. question is required. providers is an optional array of provider labels (default: all configured). mode is 'independent' (each answers in isolation, default) or 'adversarial' (each sees the others' first-round answers and critiques/refines). Fan-out is capped at 4. Returns JSON {responses: [{label, content}], mode}. Narrate the results in your own voice — describe where providers agree, where they diverge, and which answer you lean toward (if any).",
+			Description: fmt.Sprintf("Fan out a question to multiple providers in parallel, return their answers. Use when the user asks for 'a council', 'a second opinion', 'adversarial review', 'consensus check', or when you notice you're uncertain about a factual claim. question is required. providers is an optional array of provider labels (default: all configured). mode is 'independent' (each answers in isolation, default) or 'adversarial' (each sees the others' first-round answers and critiques/refines). Fan-out is capped at %d. Returns JSON {responses: [{label, content}], mode}. Narrate the results in your own voice — describe where providers agree, where they diverge, and which answer you lean toward (if any).", councilMaxFanout),
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -187,7 +186,7 @@ func newCouncilReviewHandler(reg *compute.ProviderRegistry) compute.BuiltinFunc 
 			go func(i int, t compute.ProviderEntry) {
 				defer wg.Done()
 				responses[i] = response{Label: t.Label}
-				roundCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+				roundCtx, cancel := context.WithTimeout(ctx, councilRoundTimeout)
 				defer cancel()
 				req := compute.ChatRequest{
 					Messages: []compute.Message{
@@ -220,7 +219,7 @@ func newCouncilReviewHandler(reg *compute.ProviderRegistry) compute.BuiltinFunc 
 				go func(i int, t compute.ProviderEntry) {
 					defer wg2.Done()
 					round2[i] = response{Label: t.Label}
-					roundCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+					roundCtx, cancel := context.WithTimeout(ctx, councilRoundTimeout)
 					defer cancel()
 					req := compute.ChatRequest{
 						Messages: []compute.Message{

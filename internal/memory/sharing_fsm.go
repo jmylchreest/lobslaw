@@ -12,7 +12,7 @@ import (
 )
 
 func (f *FSM) applyShareBatch(batch *lobslawv1.ShareBatch) error {
-	if batch == nil || batch.ExpectedState == "" || proto.Size(batch) > 4<<20 {
+	if batch == nil || batch.ExpectedState == "" || proto.Size(batch) > maxShareBatchBytes {
 		return errors.New("sharing: invalid transaction")
 	}
 	err := f.store.loadDB().Update(func(tx *bolt.Tx) error {

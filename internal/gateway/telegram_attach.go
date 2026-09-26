@@ -102,7 +102,7 @@ func (h *TelegramHandler) sendAttachment(chatID int64, a types.Attachment, open 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, telegramAPIErrorMaxBytes))
 		return fmt.Errorf("%s non-2xx (HTTP %d): %s", method, resp.StatusCode, string(raw))
 	}
 	h.log.Debug("telegram: attachment delivered",

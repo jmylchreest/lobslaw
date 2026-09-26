@@ -92,7 +92,7 @@ func (m ghReleaseManager) ResolveLatest(ctx context.Context, urlPattern string) 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("gh-release: GET %s HTTP %d", endpoint, resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxReleaseMetadataBytes))
 	if err != nil {
 		return "", err
 	}
@@ -237,13 +237,13 @@ func (m ghReleaseManager) Install(ctx context.Context, spec InstallSpec, _ Proce
 }
 
 func detectArchive(b []byte) string {
-	if len(b) >= 2 && b[0] == 0x1f && b[1] == 0x8b {
+	if len(b) >= len(gzipMagic) && string(b[:len(gzipMagic)]) == gzipMagic {
 		return "tar.gz"
 	}
-	if len(b) >= 4 && b[0] == 0x50 && b[1] == 0x4b && (b[2] == 0x03 || b[2] == 0x05 || b[2] == 0x07) {
+	if len(b) >= zipSignatureBytes && string(b[:len(zipMagicPrefix)]) == zipMagicPrefix && (b[len(zipMagicPrefix)] == zipLocalFileMarker || b[len(zipMagicPrefix)] == zipEmptyArchiveMarker || b[len(zipMagicPrefix)] == zipSpannedArchiveMarker) {
 		return "zip"
 	}
-	if len(b) >= 263 && string(b[257:262]) == "ustar" {
+	if len(b) >= tarSignatureProbeBytes && string(b[tarMagicOffset:tarMagicOffset+len(tarMagic)]) == tarMagic {
 		return "tar"
 	}
 	return ""

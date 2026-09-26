@@ -91,9 +91,9 @@ func (e *scanEntry) decode(b []byte) error {
 			if n < 0 {
 				return protowire.ParseError(n)
 			}
-			for len(v) >= 4 {
+			for len(v) >= protobufFloat32Bytes {
 				e.embedding = append(e.embedding, math.Float32frombits(binary.LittleEndian.Uint32(v)))
-				v = v[4:]
+				v = v[protobufFloat32Bytes:]
 			}
 			b = b[n:]
 		case num == fieldEmbedding && typ == protowire.Fixed32Type:
@@ -168,7 +168,7 @@ func vectorSearch(store *Store, query []float32, limit int, audience Audience, s
 		return nil, errors.New("search query embedding is empty")
 	}
 	if limit <= 0 {
-		limit = 10
+		limit = DefaultSearchLimit
 	}
 	queryNorm := norm(query)
 	if queryNorm == 0 {

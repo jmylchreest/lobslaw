@@ -111,7 +111,7 @@ type dotenvPair struct {
 func parseDotenv(r io.Reader) ([]dotenvPair, error) {
 	scanner := bufio.NewScanner(r)
 	// Allow lines up to 1MB — some API keys / JSON blobs get long.
-	scanner.Buffer(make([]byte, 64*1024), 1<<20)
+	scanner.Buffer(make([]byte, dotenvInitialBufferBytes), maxDotenvLineBytes)
 
 	var out []dotenvPair
 	lineNo := 0

@@ -177,7 +177,7 @@ func LoadTokenizer(path string) (*Tokenizer, error) {
 		piece2id:        make(map[string]int32, len(entries)),
 		scores:          make([]float64, len(entries)),
 		minScore:        math.Inf(1),
-		unkID:           3,
+		unkID:           defaultUnigramUnknownTokenID,
 		bosID:           -1,
 		eosID:           -1,
 	}
@@ -254,7 +254,7 @@ func loadWordPiece(raw []byte, meta tokenizerJSON) (*Tokenizer, error) {
 	wp := &wordPiece{
 		vocab:      doc.Model.Vocab,
 		prefix:     doc.Model.Prefix,
-		maxWordLen: 100,
+		maxWordLen: defaultWordPieceMaxWordRunes,
 		norm: bertNormalizer{
 			cleanText:          boolOr(doc.Normalizer.CleanText, true),
 			handleChineseChars: boolOr(doc.Normalizer.HandleChineseChars, true),

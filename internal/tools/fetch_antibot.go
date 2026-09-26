@@ -136,12 +136,12 @@ func newAntibotClient(cfg AntibotConfig) (*antibotClient, error) {
 		endpoint: endpoint,
 		timeout:  timeout,
 		http: &http.Client{
-			Timeout: timeout + 5*time.Second,
+			Timeout: timeout + solverResponseGrace,
 			Transport: &http.Transport{
 				// Pinned to the configured host. A redirect cannot
 				// walk this connection somewhere else, and neither can
 				// a DNS answer that changes between calls.
-				DialContext: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+				DialContext: (&net.Dialer{Timeout: solverDialTimeout}).DialContext,
 			},
 		},
 	}, nil
@@ -157,7 +157,7 @@ func (a *antibotClient) fetch(ctx context.Context, target string) (string, error
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, a.timeout+5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, a.timeout+solverResponseGrace)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.endpoint, bytes.NewReader(payload))
@@ -189,7 +189,7 @@ func (a *antibotClient) fetch(ctx context.Context, target string) (string, error
 	// A solver reporting ok while the SITE refused is still a refusal.
 	// Without this the caller would cache and return a challenge page
 	// as though it were the article.
-	if out.Solution.Status >= 400 {
+	if out.Solution.Status >= http.StatusBadRequest {
 		return "", fmt.Errorf("antibot: solved but the site answered HTTP %d", out.Solution.Status)
 	}
 	if strings.TrimSpace(out.Solution.Response) == "" {

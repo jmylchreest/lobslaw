@@ -136,10 +136,13 @@ RUN set -e; \
 # Non-root runtime user — matches the distroless nonroot UID/GID so
 # shared volumes mounted from a distroless-based peer have consistent
 # permissions.
-RUN groupadd --system --gid 65532 lobslaw && \
-    useradd --system --uid 65532 --gid 65532 \
+COPY deploy/image-defaults.env /tmp/lobslaw-image-defaults.env
+RUN . /tmp/lobslaw-image-defaults.env && \
+    groupadd --system --gid "$GID_IN_IMAGE" lobslaw && \
+    useradd --system --uid "$UID_IN_IMAGE" --gid "$GID_IN_IMAGE" \
         --home-dir /lobslaw --create-home --shell /usr/sbin/nologin \
-        lobslaw
+        lobslaw && \
+    rm /tmp/lobslaw-image-defaults.env
 
 COPY --from=build /out/lobslaw /usr/local/bin/lobslaw
 

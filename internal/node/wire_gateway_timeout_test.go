@@ -23,12 +23,12 @@ func TestRESTWriteTimeoutExceedsHardTimeout(t *testing.T) {
 		{
 			name: "derived from an explicit hard timeout",
 			cfg:  config.GatewayConfig{HardTimeout: 5 * time.Minute},
-			want: 5*time.Minute + 30*time.Second,
+			want: 5*time.Minute + gatewayWriteDeadlineSlack,
 		},
 		{
 			name: "derived from the default when hard timeout is unset",
 			cfg:  config.GatewayConfig{},
-			want: gateway.DefaultHardTimeout + 30*time.Second,
+			want: gateway.DefaultHardTimeout + gatewayWriteDeadlineSlack,
 		},
 		{
 			name: "an explicit write timeout is honoured as given",

@@ -220,7 +220,7 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 	// command anybody wrote by hand, and an unbounded loop over
 	// attacker-shaped argv is not worth the elegance.
 	var floor []RiskLabel
-	for range 4 {
+	for range maxWrapperDepth {
 		if tokens[0].expands {
 			return unreadable("", "variable_command")
 		}

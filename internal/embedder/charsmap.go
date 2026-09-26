@@ -163,7 +163,7 @@ func (p *precompiled) normalize(s string) string {
 		cluster := s[i:end]
 		i = end
 
-		if len(cluster) < 6 {
+		if len(cluster) < wholeClusterLookupLimitBytes {
 			if rep, ok := p.replacement([]byte(cluster)); ok {
 				b.WriteString(rep)
 				continue

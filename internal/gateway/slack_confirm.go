@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
@@ -26,7 +25,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 	channel := r.channel
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
-		ttl = 5 * time.Minute
+		ttl = DefaultPromptTTL
 	}
 	p, err := h.cfg.Prompts.Create(NewPrompt{
 		TurnID:       req.TurnID,

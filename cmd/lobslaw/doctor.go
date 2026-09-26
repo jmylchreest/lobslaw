@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/secrets"
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 )
 
@@ -208,10 +208,10 @@ func (d doctorEnv) checkMemoryKey() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decode base64: %w", err)
 	}
-	if len(raw) != 32 {
-		return "", fmt.Errorf("%d bytes decoded; want 32", len(raw))
+	if len(raw) != crypto.KeySize {
+		return "", fmt.Errorf("%d bytes decoded; want %d", len(raw), crypto.KeySize)
 	}
-	return "32-byte key resolved via " + ref, nil
+	return fmt.Sprintf("%d-byte key resolved via %s", crypto.KeySize, ref), nil
 }
 
 func (d doctorEnv) checkCACert() (string, error) {
@@ -342,7 +342,7 @@ func (d doctorEnv) checkLLMReachable() (string, error) {
 	if first.Endpoint == "" {
 		return "", fmt.Errorf("provider %q has empty endpoint", first.Label)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), doctorProviderProbeTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, first.Endpoint, nil)
 	if err != nil {

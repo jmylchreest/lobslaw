@@ -155,7 +155,7 @@ func Load(dir string) (*Model, error) {
 		return nil, fmt.Errorf("embedder: hidden_act=%q unsupported (gelu only)", cfg.HiddenAct)
 	}
 	if cfg.LNEps == 0 {
-		cfg.LNEps = 1e-12
+		cfg.LNEps = defaultLayerNormEpsilon
 	}
 
 	st, err := openSafetensors(filepath.Join(dir, "model.safetensors"))

@@ -218,7 +218,7 @@ emotive_style:
 	if s.Config.Language.Default != "en" {
 		t.Errorf("default language: %q", s.Config.Language.Default)
 	}
-	if s.Config.Adjustments.FeedbackCoefficient != 0.15 {
+	if s.Config.Adjustments.FeedbackCoefficient != DefaultFeedbackCoefficient {
 		t.Errorf("default feedback_coefficient: %v", s.Config.Adjustments.FeedbackCoefficient)
 	}
 	if s.Config.Feedback.Classifier != "llm" {

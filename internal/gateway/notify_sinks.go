@@ -149,7 +149,7 @@ func (s *CallbackSink) Deliver(ctx context.Context, address, body string) error 
 	defer func() { _ = resp.Body.Close() }()
 	// The body is drained but not read: a callback receiver has nothing
 	// to say back, and leaving it unread wastes the connection.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, notifyResponseDrainBytes))
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("callback sink: %s answered HTTP %d", u.Host, resp.StatusCode)

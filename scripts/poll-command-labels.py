@@ -9,6 +9,10 @@ final call stays with a human reading the result.
 import json, os, statistics, sys, time, urllib.request, collections
 from concurrent.futures import ThreadPoolExecutor
 
+MAX_COMPLETION_TOKENS = 512
+REQUEST_TIMEOUT_SECONDS = 90
+MAX_WORKERS = 6
+
 QWEN_KEY = os.environ["LOBSLAW_QWEN_API_KEY"]
 MINIMAX_KEY = os.environ["LOBSLAW_MINIMAX_API_KEY"]
 QWEN_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
@@ -77,14 +81,14 @@ LABELS = {"reads", "writes", "deletes", "disrupts", "network", "privilege", "unr
 def ask(model, command):
     url, key = MODELS[model]
     body = json.dumps({
-        "model": model, "temperature": 0, "max_tokens": 512,
+        "model": model, "temperature": 0, "max_tokens": MAX_COMPLETION_TOKENS,
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": command}],
     }).encode()
     req = urllib.request.Request(url, data=body, headers={
         "Content-Type": "application/json", "Authorization": f"Bearer {key}"})
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as r:
             d = json.loads(r.read())
         content = (d["choices"][0]["message"] or {}).get("content") or ""
         i = content.find("{")
@@ -104,7 +108,7 @@ def poll(command):
 
 if __name__ == "__main__":
     results = {}
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         for cmd, per in ex.map(poll, COMMANDS):
             results[cmd] = {m: sorted(s) if s is not None else None for m, s in per.items()}
             print(".", end="", file=sys.stderr, flush=True)

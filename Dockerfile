@@ -75,6 +75,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ---- Runtime stage -------------------------------------------------
 FROM debian:12-slim
 
+COPY deploy/image-defaults.env /tmp/lobslaw-image-defaults.env
+
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -84,12 +86,14 @@ RUN apt-get update && \
         file \
         git && \
     rm -rf /var/lib/apt/lists/* && \
-    groupadd --system --gid 65532 nonroot && \
-    useradd --system --uid 65532 --gid 65532 \
+    . /tmp/lobslaw-image-defaults.env && \
+    groupadd --system --gid "$GID_IN_IMAGE" nonroot && \
+    useradd --system --uid "$UID_IN_IMAGE" --gid "$GID_IN_IMAGE" \
         --home-dir /lobslaw --create-home --shell /usr/sbin/nologin \
         nonroot && \
     mkdir -p /lobslaw/usr/local/bin && \
-    chown -R 65532:65532 /lobslaw
+    chown -R "$UID_IN_IMAGE:$GID_IN_IMAGE" /lobslaw && \
+    rm /tmp/lobslaw-image-defaults.env
 # git is in the apt-install above because brew's bootstrap clones
 # the brew repo (and homebrew-core tap) via git rather than curl+tar.
 # Brew installs at /lobslaw/usr/local (Satisfier's prefix); the manual

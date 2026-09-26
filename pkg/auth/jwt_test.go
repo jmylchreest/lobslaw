@@ -324,10 +324,10 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 
 func TestNewValidatorHS256SecretLength(t *testing.T) {
 	t.Parallel()
-	for _, size := range []int{1, 31, 32, 64} {
+	for _, size := range []int{1, minHS256SecretBytes - 1, minHS256SecretBytes, minHS256SecretBytes + 1} {
 		secret := strings.Repeat("x", size)
 		_, err := NewValidator(Config{AllowHS256: true, HS256Secret: secret})
-		if (err != nil) != (size < 32) {
+		if (err != nil) != (size < minHS256SecretBytes) {
 			t.Errorf("secret length %d: error = %v", size, err)
 		}
 	}

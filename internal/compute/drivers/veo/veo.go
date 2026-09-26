@@ -79,7 +79,7 @@ func New(cfg Config) (*Driver, error) {
 	}
 	c := cfg.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 60 * time.Second}
+		c = &http.Client{Timeout: compute.DefaultJobRequestTimeout}
 	}
 	return &Driver{cfg: cfg, client: c}, nil
 }
@@ -271,10 +271,10 @@ func (d *Driver) post(ctx context.Context, url string, body []byte, what string)
 	if readErr != nil {
 		return nil, compute.Transient(fmt.Errorf("veo: %s: read: %w", what, readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("veo: %s: HTTP %d: %s", what, resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
+			Err:   fmt.Errorf("veo: %s: HTTP %d: %s", what, resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)),
 		}
 	}
 	return raw, nil
