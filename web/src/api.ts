@@ -73,8 +73,7 @@ export interface InboxItem {
   attempts: number;
   correlation_id?: string;
   session_id?: string;
-  /** The distinct tools the working turn actually invoked. The result
-   *  text is the bot's account of its work; this is the record of it. */
+  /** Historical inbox names are attempts, without per-call outcome evidence. */
   tools_used?: string[];
   tokens_used?: number;
   cost_usd?: number;
@@ -85,6 +84,26 @@ export interface InboxItem {
 export interface SessionInfo {
   user_id: string;
 }
+
+// The shared TaskApprovalService uses protobuf JSON names and string revisions.
+// Keep revisions as strings: converting them to JS numbers loses CAS precision.
+export interface TaskApproval {
+  id: string;
+  actor: string;
+  parentId?: string;
+  state: string;
+  revision: string;
+  expiresAt?: string;
+  result?: string;
+  operation?: {
+    toolName?: string; action?: string; resource?: string; summary?: string;
+    grantable?: boolean; labels?: string[]; requiresBudgetExtension?: boolean;
+  };
+  budgetSpent?: { toolCalls?: number; spendUsd?: number; egressBytes?: string };
+  budgetLimits?: { toolCalls?: number; spendUsd?: number; egressBytes?: string };
+}
+export type TaskChoice = "once" | "operation" | "risk_labels" | "deny" | "budget_extension";
+export interface ExtraTaskBudget { tool_calls: number; spend_usd: number; egress_bytes: number }
 
 /** One selectable tool in the console's picker. */
 export interface ToolInfo {
@@ -164,6 +183,13 @@ const httpUnavailable = 503;
 const httpNotFound = 404;
 const httpAccepted = 202;
 
+const activeStreams = new Set<AbortController>();
+
+export function cancelActiveStreams(): void {
+  for (const stream of activeStreams) stream.abort();
+  activeStreams.clear();
+}
+
 export function isUnavailable(err: unknown): boolean {
   if (err instanceof TypeError) return true;
   if (err instanceof ApiError) {
@@ -190,6 +216,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
   if (res.status === 401 && path !== "/v1/session") {
+    cancelActiveStreams();
     // A protected call lost its session (node restart, expired or
     // dropped cookie). Tell the gate to show sign-in again rather
     // than rendering "missing bearer token" at the user.
@@ -213,6 +240,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  taskApprovals: (after = "") => request<{ records?: TaskApproval[]; nextAfterId?: string }>(`/v1/task-approvals?after=${encodeURIComponent(after)}`),
+  decideTask: (task: TaskApproval, choice: TaskChoice, extra_budget?: ExtraTaskBudget) =>
+    request<{ record: TaskApproval }>(`/v1/task-approvals/${encodeURIComponent(task.id)}/decide`, {
+      method: "POST", body: JSON.stringify({ revision: task.revision, choice, extra_budget }),
+    }),
+  cancelTask: (task: TaskApproval) =>
+    request<{ record: TaskApproval }>(`/v1/task-approvals/${encodeURIComponent(task.id)}/cancel`, {
+      method: "POST", body: JSON.stringify({ revision: task.revision }),
+    }),
+  recoverTask: (task: TaskApproval, acknowledgeDuplicateRisk: boolean) =>
+    request<{ record: TaskApproval }>(`/v1/task-approvals/${encodeURIComponent(task.id)}/recover`, {
+      method: "POST", body: JSON.stringify({ revision: task.revision, acknowledge_duplicate_risk: acknowledgeDuplicateRisk }),
+    }),
   session: () => request<SessionInfo>("/v1/session"),
 
   login: (token: string) =>
@@ -227,7 +267,10 @@ export const api = {
       body: JSON.stringify({ code }),
     }),
 
-  logout: () => request<{ status: string }>("/v1/session", { method: "DELETE" }),
+  logout: () => {
+    cancelActiveStreams();
+    return request<{ status: string }>("/v1/session", { method: "DELETE" });
+  },
 
   capabilities: () => request<Capabilities>("/v1/capabilities"),
 
@@ -343,22 +386,9 @@ export const api = {
 export async function streamChat(
   message: string,
   onEvent: (event: string, data: Record<string, unknown>) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
-  let res: Response;
-  try {
-    res = await fetch("/v1/messages", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify({ message, session_id: consoleSessionID }),
-    });
-  } catch (err) {
-    throw err instanceof Error ? err : new TypeError("network error");
-  }
-  await readSSE(res, onEvent);
+  await streamRequest("/v1/messages", { message, session_id: consoleSessionID }, onEvent, signal);
 }
 
 /** streamBotChat talks to ONE bot over SSE.
@@ -373,29 +403,50 @@ export async function streamBotChat(
   onEvent: (event: string, data: Record<string, unknown>) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  let res: Response;
+  await streamRequest(`/v1/bots/${encodeURIComponent(botId)}/messages`, { message }, onEvent, signal);
+}
+
+async function streamRequest(
+  path: string,
+  body: Record<string, unknown>,
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+  parentSignal?: AbortSignal,
+): Promise<void> {
+  const controller = new AbortController();
+  activeStreams.add(controller);
+  const abort = () => controller.abort();
+  parentSignal?.addEventListener("abort", abort, { once: true });
+  if (parentSignal?.aborted) controller.abort();
+  const { signal } = controller;
   try {
-    res = await fetch(`/v1/bots/${encodeURIComponent(botId)}/messages`, {
+    const res = await fetch(path, {
       signal,
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(body),
     });
-  } catch (err) {
-    throw err instanceof Error ? err : new TypeError("network error");
+    if (res.status === 401) {
+      cancelActiveStreams();
+      window.dispatchEvent(new Event("lobslaw:unauthorized"));
+    }
+    if (res.status === httpAccepted) {
+      const result = await res.json() as { error?: string };
+      signal.throwIfAborted();
+      onEvent("accepted", { message: result.error ?? "Message accepted by the active turn." });
+      return;
+    }
+    await readSSE(res, onEvent, signal);
+  } finally {
+    activeStreams.delete(controller);
+    parentSignal?.removeEventListener("abort", abort);
   }
-  if (res.status === httpAccepted) {
-    const result = await res.json() as { error?: string };
-    onEvent("accepted", { message: result.error ?? "Message accepted by the active turn." });
-    return;
-  }
-  await readSSE(res, onEvent);
 }
 
 async function readSSE(
   res: Response,
   onEvent: (event: string, data: Record<string, unknown>) => void,
+  signal: AbortSignal,
 ): Promise<void> {
   if (!res.ok || !res.body) {
     const text = await res.text();
@@ -409,29 +460,40 @@ async function readSSE(
   }
 
   const reader = res.body.getReader();
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", abort, { once: true });
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // Events are separated by a blank line. Anything after the last
-    // one is a partial frame and stays in the buffer.
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      let event = "message";
-      let data = "{}";
-      for (const line of frame.split("\n")) {
-        if (line.startsWith("event: ")) event = line.slice(7).trim();
-        if (line.startsWith("data: ")) data = line.slice(6);
-      }
-      try {
-        onEvent(event, JSON.parse(data) as Record<string, unknown>);
-      } catch {
-        /* a frame we cannot parse is one we cannot act on */
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const { done, value } = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // Events are separated by a blank line. Anything after the last
+      // one is a partial frame and stays in the buffer.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        signal.throwIfAborted();
+        let event = "message";
+        let data = "{}";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event: ")) event = line.slice(7).trim();
+          if (line.startsWith("data: ")) data = line.slice(6);
+        }
+        try {
+          onEvent(event, JSON.parse(data) as Record<string, unknown>);
+        } catch {
+          /* a frame we cannot parse is one we cannot act on */
+        }
       }
     }
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 

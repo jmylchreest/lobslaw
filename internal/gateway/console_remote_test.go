@@ -29,11 +29,11 @@ type outageConsoleClient struct {
 	down atomic.Bool
 }
 
-func (c *outageConsoleClient) ConsoleForward(ctx context.Context, in *lobslawv1.ConsoleForwardRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[lobslawv1.ConsoleForwardResponse], error) {
+func (c *outageConsoleClient) QueryConsole(ctx context.Context, in *lobslawv1.QueryConsoleRequest, opts ...grpc.CallOption) (*lobslawv1.QueryConsoleResponse, error) {
 	if c.down.Load() {
 		return nil, status.Error(codes.Unavailable, "backend unavailable")
 	}
-	return c.ConsoleServiceClient.ConsoleForward(ctx, in, opts...)
+	return c.ConsoleServiceClient.QueryConsole(ctx, in, opts...)
 }
 
 func TestRemoteDiscoveryDistinguishesUnknownFromDisabled(t *testing.T) {
@@ -76,7 +76,10 @@ func (s consolePeerStream) Context() context.Context { return s.ctx }
 func testConsoleClient(t *testing.T, backend *Server) lobslawv1.ConsoleServiceClient {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
-	server := grpc.NewServer(grpc.StreamInterceptor(func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		ctx = peer.NewContext(ctx, &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}}})
+		return handler(ctx, req)
+	}), grpc.StreamInterceptor(func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := peer.NewContext(stream.Context(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{}}}}}})
 		return handler(srv, consolePeerStream{ServerStream: stream, ctx: ctx})
 	}))
@@ -129,11 +132,8 @@ func TestRemoteConsoleUsesBackendTeamsAndUserAuthorization(t *testing.T) {
 	if req.Claims.UserID != "alice" || req.Principal != identity.Bot("alice-worker") {
 		t.Fatalf("identity changed across forwarding: %+v", req)
 	}
-	stream, err := client.ConsoleForward(context.Background(), &lobslawv1.ConsoleForwardRequest{Method: http.MethodPost, Path: "/v1/session/code", Claims: &lobslawv1.Claims{UserId: "alice"}})
-	if err == nil {
-		_, err = stream.Recv()
-	}
-	if err == nil {
-		t.Fatal("login endpoint was exposed over forwarding")
+	_, err := client.QueryConsole(context.Background(), &lobslawv1.QueryConsoleRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("missing verified identity accepted: %v", err)
 	}
 }

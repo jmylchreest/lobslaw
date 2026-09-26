@@ -250,6 +250,48 @@ bots' proposals under their existing operator-authorised learned-review path.
 - Reconcile parent/child completion without lending grants between them. The
   parent can remain available for unrelated work while its child waits.
 
+### Console owner interface
+
+The team console's **Task approvals** page lists owner-visible task states,
+pending operations, expiration, consumed budgets and current limits. It supports
+revision-checked once/operation/risk-label decisions, denial, bounded additional
+budget, cancellation and explicit duplicate-risk recovery. Approval means ready
+for a worker, not execution complete. Pagination and polling keep waiting,
+denied, expired and uncertain records discoverable independently of a chat stream.
+
+`/v1/task-approvals` accepts authenticated browser sessions with the same unsafe
+method Origin check as chat, as well as bearer authentication. Anonymous access
+is refused even when normal REST chat permits it. The owner comes from the
+authenticated canonical identity, never JSON. Revisions remain decimal strings
+in the SPA to avoid JavaScript's integer precision limit; HTTP accepts either
+decimal strings or numbers and parses the complete uint64 value.
+
+For a remote console the owner-facing protobuf request/response types are reused
+inside `ConsoleService`'s typed oneofs. The backend sets the owner from its
+verified peer assertion before calling `TaskApprovalAPI`. Create/Pause/Claim/
+Finish/CheckGrant and private checkpoint access are not console operations.
+
+```mermaid
+sequenceDiagram
+  participant Owner as Owner browser
+  participant Web as ui-web gateway
+  participant Backend as ConsoleService backend
+  participant Approval as Shared TaskApprovalAPI
+  participant Worker as Delegation/inbox worker
+  Owner->>Web: GET task-approvals (login cookie)
+  Web->>Backend: QueryConsole.task_approvals (verified identity)
+  Backend->>Approval: ListTaskApproval (canonical owner)
+  Approval-->>Owner: Owner-visible state, operation, revision and budgets
+  Owner->>Web: POST decide (revision, choice, bounded extra budget)
+  Web->>Web: Authenticate and check Origin
+  Web->>Backend: MutateConsole.decide_task_approval
+  Backend->>Approval: DecideTaskApproval (owner from assertion)
+  Approval-->>Owner: Ready, denied, or revision conflict
+  Worker->>Approval: Claim ready checkpoint through shared runner
+  Worker->>Worker: Recheck current authority and resume saved operation
+  Owner->>Web: Refresh task state independently of chat
+```
+
 ## Verification
 
 Coverage includes real-Raft concurrent decisions and claims, lost-claim recovery,

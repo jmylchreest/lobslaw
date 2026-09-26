@@ -37,11 +37,13 @@ type loginSession struct {
 type loginStore struct {
 	mu           sync.Mutex
 	sessions     map[string]*loginSession
-	streams      map[string][]context.CancelFunc
+	streams      map[string]map[*loginStream]struct{}
 	codes        map[string]loginCode
 	codeAttempts int
 	codeWindow   time.Time
 }
+
+type loginStream struct{ cancel context.CancelFunc }
 
 type loginCode struct {
 	UserID    string
@@ -53,7 +55,7 @@ type loginCode struct {
 func newLoginStore() *loginStore {
 	return &loginStore{
 		sessions: make(map[string]*loginSession),
-		streams:  make(map[string][]context.CancelFunc),
+		streams:  make(map[string]map[*loginStream]struct{}),
 		codes:    make(map[string]loginCode),
 	}
 }
@@ -86,39 +88,40 @@ func (s *loginStore) revoke(id string) {
 	s.cancelLocked(id)
 }
 
-func (s *loginStore) track(id string, cancel context.CancelFunc) {
+func (s *loginStore) track(id string, cancel context.CancelFunc) *loginStream {
 	if id == "" || cancel == nil {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.streams[id] = append(s.streams[id], cancel)
+	registration := &loginStream{cancel: cancel}
+	sess := s.sessions[id]
+	if sess == nil || (!sess.ExpiresAt.IsZero() && !time.Now().Before(sess.ExpiresAt)) {
+		cancel()
+		return registration
+	}
+	if s.streams[id] == nil {
+		s.streams[id] = make(map[*loginStream]struct{})
+	}
+	s.streams[id][registration] = struct{}{}
+	return registration
 }
 
-func (s *loginStore) untrack(id string, cancel context.CancelFunc) {
-	if id == "" || cancel == nil {
+func (s *loginStore) untrack(id string, registration *loginStream) {
+	if id == "" || registration == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cur := s.streams[id]
-	out := cur[:0]
-	want := fmt.Sprintf("%p", cancel)
-	for _, c := range cur {
-		if fmt.Sprintf("%p", c) != want {
-			out = append(out, c)
-		}
-	}
-	if len(out) == 0 {
+	delete(s.streams[id], registration)
+	if len(s.streams[id]) == 0 {
 		delete(s.streams, id)
-		return
 	}
-	s.streams[id] = out
 }
 
 func (s *loginStore) cancelLocked(id string) {
-	for _, c := range s.streams[id] {
-		c()
+	for registration := range s.streams[id] {
+		registration.cancel()
 	}
 	delete(s.streams, id)
 }
@@ -323,9 +326,9 @@ func (s *Server) bindStream(ctx context.Context, loginID string) (context.Contex
 		return ctx, func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	s.logins.track(loginID, cancel)
+	registration := s.logins.track(loginID, cancel)
 	return ctx, func() {
-		s.logins.untrack(loginID, cancel)
+		s.logins.untrack(loginID, registration)
 		cancel()
 	}
 }

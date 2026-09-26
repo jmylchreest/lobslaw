@@ -263,7 +263,7 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", s.consoleRoute(s.handleMessages))
-	if s.cfg.TaskApprovals != nil {
+	if s.cfg.TaskApprovals != nil || s.cfg.RemoteConsole != nil {
 		mux.HandleFunc("/v1/task-approvals", s.handleTaskApprovals)
 		mux.HandleFunc("/v1/task-approvals/", s.handleTaskApprovals)
 	}

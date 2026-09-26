@@ -4391,7 +4391,9 @@ var TaskApprovalService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ConsoleService_ConsoleForward_FullMethodName = "/lobslaw.v1.ConsoleService/ConsoleForward"
+	ConsoleService_QueryConsole_FullMethodName  = "/lobslaw.v1.ConsoleService/QueryConsole"
+	ConsoleService_MutateConsole_FullMethodName = "/lobslaw.v1.ConsoleService/MutateConsole"
+	ConsoleService_ChatConsole_FullMethodName   = "/lobslaw.v1.ConsoleService/ChatConsole"
 )
 
 // ConsoleServiceClient is the client API for ConsoleService service.
@@ -4402,7 +4404,9 @@ const (
 // backend. Login and static assets stay on the web node; records, conversations
 // and pending approvals stay together on the backend. Only node peers may call.
 type ConsoleServiceClient interface {
-	ConsoleForward(ctx context.Context, in *ConsoleForwardRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConsoleForwardResponse], error)
+	QueryConsole(ctx context.Context, in *QueryConsoleRequest, opts ...grpc.CallOption) (*QueryConsoleResponse, error)
+	MutateConsole(ctx context.Context, in *MutateConsoleRequest, opts ...grpc.CallOption) (*MutateConsoleResponse, error)
+	ChatConsole(ctx context.Context, in *ChatConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatConsoleResponse], error)
 }
 
 type consoleServiceClient struct {
@@ -4413,13 +4417,33 @@ func NewConsoleServiceClient(cc grpc.ClientConnInterface) ConsoleServiceClient {
 	return &consoleServiceClient{cc}
 }
 
-func (c *consoleServiceClient) ConsoleForward(ctx context.Context, in *ConsoleForwardRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ConsoleForwardResponse], error) {
+func (c *consoleServiceClient) QueryConsole(ctx context.Context, in *QueryConsoleRequest, opts ...grpc.CallOption) (*QueryConsoleResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ConsoleService_ServiceDesc.Streams[0], ConsoleService_ConsoleForward_FullMethodName, cOpts...)
+	out := new(QueryConsoleResponse)
+	err := c.cc.Invoke(ctx, ConsoleService_QueryConsole_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[ConsoleForwardRequest, ConsoleForwardResponse]{ClientStream: stream}
+	return out, nil
+}
+
+func (c *consoleServiceClient) MutateConsole(ctx context.Context, in *MutateConsoleRequest, opts ...grpc.CallOption) (*MutateConsoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MutateConsoleResponse)
+	err := c.cc.Invoke(ctx, ConsoleService_MutateConsole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *consoleServiceClient) ChatConsole(ctx context.Context, in *ChatConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatConsoleResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ConsoleService_ServiceDesc.Streams[0], ConsoleService_ChatConsole_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ChatConsoleRequest, ChatConsoleResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -4430,7 +4454,7 @@ func (c *consoleServiceClient) ConsoleForward(ctx context.Context, in *ConsoleFo
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ConsoleService_ConsoleForwardClient = grpc.ServerStreamingClient[ConsoleForwardResponse]
+type ConsoleService_ChatConsoleClient = grpc.ServerStreamingClient[ChatConsoleResponse]
 
 // ConsoleServiceServer is the server API for ConsoleService service.
 // All implementations should embed UnimplementedConsoleServiceServer
@@ -4440,7 +4464,9 @@ type ConsoleService_ConsoleForwardClient = grpc.ServerStreamingClient[ConsoleFor
 // backend. Login and static assets stay on the web node; records, conversations
 // and pending approvals stay together on the backend. Only node peers may call.
 type ConsoleServiceServer interface {
-	ConsoleForward(*ConsoleForwardRequest, grpc.ServerStreamingServer[ConsoleForwardResponse]) error
+	QueryConsole(context.Context, *QueryConsoleRequest) (*QueryConsoleResponse, error)
+	MutateConsole(context.Context, *MutateConsoleRequest) (*MutateConsoleResponse, error)
+	ChatConsole(*ChatConsoleRequest, grpc.ServerStreamingServer[ChatConsoleResponse]) error
 }
 
 // UnimplementedConsoleServiceServer should be embedded to have
@@ -4450,8 +4476,14 @@ type ConsoleServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedConsoleServiceServer struct{}
 
-func (UnimplementedConsoleServiceServer) ConsoleForward(*ConsoleForwardRequest, grpc.ServerStreamingServer[ConsoleForwardResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method ConsoleForward not implemented")
+func (UnimplementedConsoleServiceServer) QueryConsole(context.Context, *QueryConsoleRequest) (*QueryConsoleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) MutateConsole(context.Context, *MutateConsoleRequest) (*MutateConsoleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MutateConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) ChatConsole(*ChatConsoleRequest, grpc.ServerStreamingServer[ChatConsoleResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ChatConsole not implemented")
 }
 func (UnimplementedConsoleServiceServer) testEmbeddedByValue() {}
 
@@ -4473,16 +4505,52 @@ func RegisterConsoleServiceServer(s grpc.ServiceRegistrar, srv ConsoleServiceSer
 	s.RegisterService(&ConsoleService_ServiceDesc, srv)
 }
 
-func _ConsoleService_ConsoleForward_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ConsoleForwardRequest)
+func _ConsoleService_QueryConsole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryConsoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConsoleServiceServer).QueryConsole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConsoleService_QueryConsole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConsoleServiceServer).QueryConsole(ctx, req.(*QueryConsoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConsoleService_MutateConsole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MutateConsoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConsoleServiceServer).MutateConsole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConsoleService_MutateConsole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConsoleServiceServer).MutateConsole(ctx, req.(*MutateConsoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConsoleService_ChatConsole_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ChatConsoleRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(ConsoleServiceServer).ConsoleForward(m, &grpc.GenericServerStream[ConsoleForwardRequest, ConsoleForwardResponse]{ServerStream: stream})
+	return srv.(ConsoleServiceServer).ChatConsole(m, &grpc.GenericServerStream[ChatConsoleRequest, ChatConsoleResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ConsoleService_ConsoleForwardServer = grpc.ServerStreamingServer[ConsoleForwardResponse]
+type ConsoleService_ChatConsoleServer = grpc.ServerStreamingServer[ChatConsoleResponse]
 
 // ConsoleService_ServiceDesc is the grpc.ServiceDesc for ConsoleService service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -4490,11 +4558,20 @@ type ConsoleService_ConsoleForwardServer = grpc.ServerStreamingServer[ConsoleFor
 var ConsoleService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "lobslaw.v1.ConsoleService",
 	HandlerType: (*ConsoleServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "QueryConsole",
+			Handler:    _ConsoleService_QueryConsole_Handler,
+		},
+		{
+			MethodName: "MutateConsole",
+			Handler:    _ConsoleService_MutateConsole_Handler,
+		},
+	},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "ConsoleForward",
-			Handler:       _ConsoleService_ConsoleForward_Handler,
+			StreamName:    "ChatConsole",
+			Handler:       _ConsoleService_ChatConsole_Handler,
 			ServerStreams: true,
 		},
 	},
