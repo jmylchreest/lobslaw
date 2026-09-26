@@ -108,7 +108,7 @@ Sensitive — operator-only by default. See [OAuth and credentials](/security/oa
 
 | Tool | Risk | Description |
 |---|---|---|
-| `clawhub_install` | mutating | Install a clawhub bundle (gated by `[security] clawhub_base_url`) |
+| `clawhub_install` | reversible | Stage a ClawHub proposal for human activation; requires tool and owner-scoped proposal grants |
 | `mcp_add` | mutating | Add a configuration entry for a new MCP server |
 | `mcp_list` | read | List wired MCP servers |
 

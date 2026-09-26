@@ -17,9 +17,8 @@ import (
 )
 
 // ProcessResult captures what came out of processing a clawhub
-// bundle: the canonical artefacts on disk + the install specs the
-// caller (Installer.Install) should hand to binaries.Satisfier
-// before promoting the staging dir into place.
+// bundle: the canonical artefacts on disk and declared dependency metadata.
+// Retrieval never executes install specs or promotes the directory to a mount.
 type ProcessResult struct {
 	// Name is the skill name from SKILL.md front-matter (or the
 	// manifest.yaml's Name field when the bundle is lobslaw-native).
@@ -31,8 +30,8 @@ type ProcessResult struct {
 	Format string
 
 	// RequiresBins is the host-binary names declared in
-	// clawdbot.requires.bins. Satisfier.Satisfy(name, InstallSpecs)
-	// is the next step. Empty for native bundles (their
+	// clawdbot.requires.bins. Execution nodes must provide them;
+	// retrieval does not install them. Empty for native bundles (their
 	// requires_binary lives in the manifest itself).
 	RequiresBins []string
 
@@ -54,9 +53,8 @@ type ProcessResult struct {
 
 // ProcessBundle extracts bundle bytes into stagingDir, detects format,
 // and (for clawhub-format bundles) synthesizes a manifest.yaml the
-// existing skills watcher will pick up. Caller is responsible for
-// promoting stagingDir → installDir via os.Rename and for calling
-// Satisfier.Satisfy on the returned RequiresBins+InstallSpecs.
+// portable sharing path can validate and preserve. The directory is temporary;
+// the destination validates and stages its bytes through Raft before activation.
 //
 // Format precedence: a bundle containing both SKILL.md and
 // manifest.yaml is treated as native (manifest.yaml wins). The

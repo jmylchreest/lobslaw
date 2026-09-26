@@ -3,6 +3,7 @@ package memory
 // Bucket names inside state.db. Each record type lives in its own
 // top-level bbolt bucket, keyed by record ID.
 const (
+	BucketSkillInstallations = "skill_installations"
 	// BucketArchiveImports holds encrypted receipts, excluded from portable exports.
 	BucketArchiveMappings = "archive_mappings"
 	BucketArchiveImports  = "archive_imports"
@@ -164,6 +165,7 @@ const SoulTuneRecordID = "soul:tune"
 
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
+	BucketSkillInstallations,
 	BucketArchiveImports,
 	BucketArchiveMappings,
 	BucketRaftMeta,

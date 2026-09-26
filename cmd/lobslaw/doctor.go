@@ -304,7 +304,7 @@ func (d doctorEnv) checkOAuthProviders() (string, error) {
 
 func (d doctorEnv) checkSkillMounts() (string, error) {
 	if len(d.cfg.Storage.Mounts) == 0 {
-		return "no [[storage.mounts]] (skills + clawhub install will fail)", nil
+		return "no [[storage.mounts]] (filesystem skill discovery unavailable; Raft skill staging is independent)", nil
 	}
 	labels := make(map[string]bool, len(d.cfg.Storage.Mounts))
 	for _, m := range d.cfg.Storage.Mounts {
@@ -316,15 +316,7 @@ func (d doctorEnv) checkSkillMounts() (string, error) {
 		}
 		labels[m.Label] = true
 	}
-	if d.cfg.Security.ClawhubBaseURL != "" {
-		target := d.cfg.Security.ClawhubInstallMount
-		if target == "" {
-			target = config.DefaultSkillMountLabel
-		}
-		if !labels[target] {
-			return "", fmt.Errorf("clawhub install mount %q not in [[storage.mounts]]", target)
-		}
-	}
+
 	out := make([]string, 0, len(labels))
 	for l := range labels {
 		out = append(out, l)

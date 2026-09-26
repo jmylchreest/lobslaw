@@ -93,6 +93,20 @@ func TestGetSkillRejectsMissingFields(t *testing.T) {
 	}
 }
 
+func TestGetSkillRejectsOversizedMetadata(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"name":"demo","version":"1.0.0","bundle_url":"https://example.com/a","bundle_sha256":"digest","description":"`+strings.Repeat("x", 1<<20)+`"}`)
+	}))
+	defer srv.Close()
+	c, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetSkill(context.Background(), "demo", "1.0.0"); err == nil {
+		t.Fatal("unbounded catalogue response accepted")
+	}
+}
+
 func TestDownloadBundleStreamsBody(t *testing.T) {
 	t.Parallel()
 	payload := strings.Repeat("a", 1024)
