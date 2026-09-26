@@ -68,29 +68,17 @@ Some paths stay leader-only by design and do *not* forward: `Dream`, session pru
 
 Snapshots are bolt-DB-style — periodically the FSM writes the current store state to a snapshot stream. Restore replaces the store entirely.
 
-The tricky part: at boot or post-snapshot-restore, *outside references* to the bolt handle (held by policy engine, scheduler, services) are still pointing at the old `*bolt.DB`. If we close-and-reopen, those references are dangling.
+Services retain a `*Store`, whose atomic database pointer is replaced only after a new snapshot has been staged, synced, validated and opened. Preparation failures leave the original store usable. A lifecycle mutex serializes restores and shutdown; repeated restores always target the canonical `state.db` path.
 
-Fix: `internal/memory/store.go` wraps the bolt handle in `atomic.Pointer[bolt.DB]`:
+Before replacing the canonical file, restore creates and syncs a sibling recovery hard link (`state.db.restore-*.previous`). If syncing the installed snapshot fails, it rolls back to the original file. A failed rollback disables the store and shuts down Raft and the owning node rather than continuing with ambiguous disk state. This requires a filesystem supporting same-directory hard links, rename and directory sync.
 
-```go
-type Store struct {
-    db   atomic.Pointer[bolt.DB]
-    path string
-    key  crypto.Key
-}
+After successful publication, cleanup failures are logged as warnings: the restore remains committed, including the FSM's last-applied cache reset. Active transactions on the old database drain before its handle closes. A caller that loaded the old handle but has not started its transaction may receive `database not open`; restore does not provide transaction leasing.
 
-func (s *Store) RestoreFromSnapshot(rc io.ReadCloser) error {
-    newDB, err := openFromSnapshot(rc, s.path, s.key)
-    if err != nil { return err }
-    old := s.db.Swap(newDB)
-    if old != nil { _ = old.Close() }
-    return nil
-}
-```
+### Interrupted restore recovery
 
-Outside refs hold `*Store`, not `*bolt.DB`. They call `s.loadDB().View(...)` per access; the pointer is always live.
+Startup refuses to open a database while a matching `.previous` recovery file exists. This can indicate an interrupted restore, a failed rollback, or incomplete cleanup after a committed restore. Do not delete the recovery file merely to bypass the check.
 
-This was a real bug — pre-fix, snapshot restore cascaded "database not open" errors across every service for ~5 seconds until they all gave up. Now it's seamless.
+Stop the node and retain copies of the canonical database and all `state.db.restore-*` files. Inspect the logged restore error, the candidate and previous databases, and their last-applied indexes against the node's Raft snapshot/log metadata. Recover a consistent database and Raft state together, or rebuild the affected peer from a healthy cluster using the normal recovery procedure. Only remove the recovery marker after resolving that consistency check. The filenames alone do not identify which state Raft committed.
 
 ## Leader election + failover
 

@@ -84,8 +84,8 @@ var asymmetricSigningMethods = []string{
 func NewValidator(cfg Config) (*Validator, error) {
 	v := &Validator{issuer: cfg.Issuer}
 	if cfg.AllowHS256 {
-		if cfg.HS256Secret == "" {
-			return nil, errors.New("auth: allow_hs256=true requires a non-empty HS256 secret")
+		if len(cfg.HS256Secret) < 32 {
+			return nil, errors.New("auth: allow_hs256=true requires an HS256 secret of at least 32 bytes")
 		}
 		v.hs256Secret = []byte(cfg.HS256Secret)
 	}

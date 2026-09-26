@@ -211,7 +211,7 @@ func ShellCommandSummary(ctx context.Context, params map[string]string) string {
 	b.WriteString("`")
 
 	if !grantable {
-		b.WriteString(" (asked every time: this command has no stable form to remember)")
+		b.WriteString(" (no reusable command-specific approval is available for this command)")
 	}
 	if hasNonASCII(resource) || hasNonASCII(cmd) || hasNonASCII(params["cwd"]) {
 		b.WriteString(" — note: contains non-ASCII characters")

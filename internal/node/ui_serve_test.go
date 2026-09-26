@@ -35,7 +35,7 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 		Functions:      []types.NodeFunction{types.FunctionUIWeb},
 		ListenAddr:     "127.0.0.1:0",
 		Creds:          creds,
-		APIKeyResolver: func(string) (string, error) { return "ui-web-test-hs256-secret", nil },
+		APIKeyResolver: func(string) (string, error) { return "ui-web-test-hs256-secret-at-least-32-bytes", nil },
 		Auth:           config.AuthConfig{RequireAuth: true, AllowHS256: true, JWTSecretRef: "env:UI_WEB_TEST_JWT"},
 		Gateway: config.GatewayConfig{
 			Enabled:          true,
@@ -110,7 +110,7 @@ func TestNodeBootsUIWebWithoutAssets(t *testing.T) {
 		Functions:      []types.NodeFunction{types.FunctionUIWeb},
 		ListenAddr:     "127.0.0.1:0",
 		Creds:          creds,
-		APIKeyResolver: func(string) (string, error) { return "ui-web-test-hs256-secret", nil },
+		APIKeyResolver: func(string) (string, error) { return "ui-web-test-hs256-secret-at-least-32-bytes", nil },
 		Auth:           config.AuthConfig{RequireAuth: true, AllowHS256: true, JWTSecretRef: "env:UI_WEB_TEST_JWT"},
 		Gateway: config.GatewayConfig{
 			Enabled:          true,

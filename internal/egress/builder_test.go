@@ -333,7 +333,7 @@ func TestTheHuggingFaceWildcardMatchesRealCDNHosts(t *testing.T) {
 	rules := Build(ACLInputs{
 		EmbeddingModelURL: "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main",
 	})
-	acl := buildSmokescreenACL(rules)
+	acl := buildSmokescreenACL(rules, nil)
 	for _, host := range []string{
 		"us.aws.cdn.hf.co",       // Xet-backed repos, US
 		"eu.aws.cdn.hf.co",       // Xet-backed repos, EU
@@ -360,7 +360,7 @@ func TestTheHuggingFaceAllowanceDoesNotLeakToOtherHosts(t *testing.T) {
 	rules := Build(ACLInputs{
 		EmbeddingModelURL: "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main",
 	})
-	acl := buildSmokescreenACL(rules)
+	acl := buildSmokescreenACL(rules, nil)
 	for _, host := range []string{
 		"evil.example.com",
 		"huggingface.co.evil.example.com",

@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/httpbody"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
@@ -105,7 +105,7 @@ func StartDeviceAuth(ctx context.Context, p ProviderConfig, scopes []string) (*D
 		return nil, fmt.Errorf("oauth: device auth POST: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpbody.Read(resp.Body, maxResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: read device auth body: %w", err)
 	}
@@ -157,7 +157,7 @@ func PollToken(ctx context.Context, p ProviderConfig, deviceCode string) (*Token
 		return nil, fmt.Errorf("oauth: token POST: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpbody.Read(resp.Body, maxResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: read token body: %w", err)
 	}

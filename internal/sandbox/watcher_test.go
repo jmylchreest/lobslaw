@@ -262,3 +262,82 @@ func TestWatcherPermRejectIsLoggedNotFatal(t *testing.T) {
 		t.Error("bad file should not have loaded")
 	}
 }
+
+func TestWatcherPresetDeletionRestoresEarlierLayer(t *testing.T) {
+	t.Parallel()
+	first, second := t.TempDir(), t.TempDir()
+	writePolicyFile(t, filepath.Join(first, "_presets", "tmp.toml"), "paths = [\"/tmp:r\"]")
+	writePolicyFile(t, filepath.Join(second, "_presets", "tmp.toml"), "paths = [\"/tmp:rwx\"]")
+	writePolicyFile(t, filepath.Join(second, "tool.toml"), "presets = [\"tmp\"]")
+	sink := newRecordingSink()
+	w := NewWatcherMulti([]string{first, second}, sink, LoadOptions{}, 0)
+	check := func(write, exec bool) {
+		t.Helper()
+		if _, err := w.reloadNow(); err != nil {
+			t.Fatal(err)
+		}
+		p, ok := sink.lastFor("tool")
+		if !ok || p == nil || len(p.Mounts) != 1 {
+			t.Fatalf("unexpected policy: %+v", p)
+		}
+		m := p.Mounts[0]
+		if !m.Read || m.Write != write || m.Exec != exec {
+			t.Fatalf("mount = %+v; want read=true write=%v exec=%v", m, write, exec)
+		}
+	}
+	check(true, true)
+	if err := os.Remove(filepath.Join(second, "_presets", "tmp.toml")); err != nil {
+		t.Fatal(err)
+	}
+	check(false, false)
+	if err := os.Remove(filepath.Join(first, "_presets", "tmp.toml")); err != nil {
+		t.Fatal(err)
+	}
+	check(true, false)
+}
+
+func TestWatcherDeletedCustomPresetClearsDependentPolicy(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writePolicyFile(t, filepath.Join(dir, "_presets", "custom.toml"), "paths = [\"/tmp:r\"]")
+	writePolicyFile(t, filepath.Join(dir, "tool.toml"), "presets = [\"custom\"]")
+	sink := newRecordingSink()
+	w := NewWatcher(dir, sink, LoadOptions{}, 0)
+	if _, err := w.reloadNow(); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := sink.lastFor("tool"); p == nil {
+		t.Fatal("initial policy missing")
+	}
+	if err := os.Remove(filepath.Join(dir, "_presets", "custom.toml")); err != nil {
+		t.Fatal(err)
+	}
+	result, err := w.reloadNow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("expected unknown-preset error, got %v", result.Errors)
+	}
+	if p, _ := sink.lastFor("tool"); p != nil {
+		t.Fatalf("stale policy retained: %+v", p)
+	}
+}
+
+func TestOperatorReloadDoesNotChangeGlobalPresets(t *testing.T) {
+	original, _ := LookupPreset("tmp")
+	t.Cleanup(func() { RegisterPreset(original) })
+	RegisterPreset(Preset{Name: "tmp", Description: "skill preset"})
+	dir := t.TempDir()
+	writePolicyFile(t, filepath.Join(dir, "tool.toml"), "presets = [\"tmp\"]")
+	result, err := LoadPolicyDirs([]string{dir}, LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := result.Policies["tool"]; p == nil || len(p.Mounts) == 0 {
+		t.Fatal("operator load inherited global override instead of built-in")
+	}
+	if p, _ := LookupPreset("tmp"); p.Description != "skill preset" {
+		t.Fatal("operator load changed global preset")
+	}
+}

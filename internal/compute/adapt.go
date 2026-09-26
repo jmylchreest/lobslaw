@@ -67,9 +67,13 @@ func responseToTurn(resp *ProcessMessageResponse) *turn.Response {
 	if resp == nil {
 		return nil
 	}
+	calls := make([]turn.ToolInvocation, len(resp.ToolCalls))
+	for i, c := range resp.ToolCalls {
+		calls[i] = turn.ToolInvocation{CallID: c.CallID, ToolName: c.ToolName, Args: c.Args, Output: c.Output, ExitCode: c.ExitCode, Error: c.Error}
+	}
 	return &turn.Response{
 		Reply:                 resp.Reply,
-		ToolCalls:             resp.ToolCalls,
+		ToolCalls:             calls,
 		Attachments:           resp.Attachments,
 		Messages:              resp.Messages,
 		TurnStartIndex:        resp.TurnStartIndex,

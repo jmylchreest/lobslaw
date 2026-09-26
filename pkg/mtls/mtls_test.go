@@ -48,8 +48,8 @@ func TestRoundTripCAAndNodeCert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadNodeCreds: %v", err)
 	}
-	if creds.NodeID != "node-1" {
-		t.Errorf("NodeID = %q, want node-1", creds.NodeID)
+	if creds.NodeID() != "node-1" {
+		t.Errorf("NodeID = %q, want node-1", creds.NodeID())
 	}
 	if len(creds.Certificate().Certificate) != 1 {
 		t.Errorf("cert chain length = %d, want 1", len(creds.Certificate().Certificate))
@@ -95,8 +95,8 @@ func TestReloadAtomicSwapsCertificate(t *testing.T) {
 	if string(original.Certificate[0]) == string(rotated.Certificate[0]) {
 		t.Error("Reload did not swap the certificate bytes")
 	}
-	if creds.NodeID != "node-1-rotated" {
-		t.Errorf("NodeID = %q, want node-1-rotated", creds.NodeID)
+	if creds.NodeID() != "node-1-rotated" {
+		t.Errorf("NodeID = %q, want node-1-rotated", creds.NodeID())
 	}
 }
 
@@ -107,7 +107,7 @@ func TestReloadRejectsCertNotSignedByCA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadNodeCreds: %v", err)
 	}
-	originalNodeID := creds.NodeID
+	originalNodeID := creds.NodeID()
 
 	// Generate a fresh, unrelated CA and sign a cert with it.
 	wrongCAPEM, wrongCAKeyPEM, err := GenerateCA(CAOpts{CommonName: "rogue-ca"})
@@ -131,8 +131,8 @@ func TestReloadRejectsCertNotSignedByCA(t *testing.T) {
 	if err := creds.Reload(); err == nil {
 		t.Error("Reload must reject a cert signed by a different CA")
 	}
-	if creds.NodeID != originalNodeID {
-		t.Errorf("NodeID changed after failed Reload: got %q, want %q (Reload should be all-or-nothing)", creds.NodeID, originalNodeID)
+	if creds.NodeID() != originalNodeID {
+		t.Errorf("NodeID changed after failed Reload: got %q, want %q (Reload should be all-or-nothing)", creds.NodeID(), originalNodeID)
 	}
 }
 

@@ -51,7 +51,7 @@ type doctorEnv struct {
 // lobslawDoctor runs every check and reports pass/fail. The checks
 // themselves are methods on doctorEnv, so this stays a list.
 func lobslawDoctor(args []string) {
-	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	fs := newFlagSet("doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml")
 	offline := fs.Bool("offline", false, "skip network reachability checks")
 	_ = fs.Parse(args)
@@ -100,7 +100,7 @@ func lobslawDoctor(args []string) {
 	}
 
 	if failures > 0 {
-		fmt.Fprintf(os.Stderr, "\n%d check(s) failed\n", failures)
+		diagnosticf("\n%d check(s) failed\n", failures)
 		os.Exit(1)
 	}
 	fmt.Println("\nall checks passed")
@@ -130,7 +130,7 @@ func (d doctorEnv) checkSecretProviders() (string, error) {
 	if len(d.cfg.Secrets.Providers) == 0 {
 		return "none declared (env: and file: always available)", nil
 	}
-	resolver, err := secrets.FromConfig(d.cfg.Secrets, secrets.DefaultRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	resolver, err := secrets.FromConfig(d.cfg.Secrets, secrets.DefaultRegistry(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		return "", err
 	}
@@ -304,7 +304,7 @@ func (d doctorEnv) checkOAuthProviders() (string, error) {
 
 func (d doctorEnv) checkSkillMounts() (string, error) {
 	if len(d.cfg.Storage.Mounts) == 0 {
-		return "no [[storage.mounts]] (skills + clawhub install will fail)", nil
+		return "no [[storage.mounts]] (filesystem skill discovery unavailable; Raft skill staging is independent)", nil
 	}
 	labels := make(map[string]bool, len(d.cfg.Storage.Mounts))
 	for _, m := range d.cfg.Storage.Mounts {
@@ -316,15 +316,7 @@ func (d doctorEnv) checkSkillMounts() (string, error) {
 		}
 		labels[m.Label] = true
 	}
-	if d.cfg.Security.ClawhubBaseURL != "" {
-		target := d.cfg.Security.ClawhubInstallMount
-		if target == "" {
-			target = config.DefaultSkillMountLabel
-		}
-		if !labels[target] {
-			return "", fmt.Errorf("clawhub install mount %q not in [[storage.mounts]]", target)
-		}
-	}
+
 	out := make([]string, 0, len(labels))
 	for l := range labels {
 		out = append(out, l)

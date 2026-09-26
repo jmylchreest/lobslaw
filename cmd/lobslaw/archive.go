@@ -67,14 +67,14 @@ func dispatchArchive(args []string) bool {
 		err = fmt.Errorf("unknown archive command %q", args[0])
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "archive: %v\n", err)
+		diagnosticf("archive: %v\n", err)
 		os.Exit(1)
 	}
 	return true
 }
 
 func archiveExport(args []string) error {
-	fs := flag.NewFlagSet("archive export", flag.ContinueOnError)
+	fs := newFlagSet("archive export", flag.ContinueOnError)
 	var opts offlineStore
 	opts.bind(fs)
 	sourceID := fs.String("source-id", envOr("LOBSLAW_ARCHIVE_SOURCE_ID", ""), "stable source identity shared by every generation")
@@ -178,7 +178,7 @@ func publishArchive(path string, write func(io.Writer) error) error {
 }
 
 func archiveInspect(args []string, inspect bool) error {
-	fs := flag.NewFlagSet("archive verify", flag.ContinueOnError)
+	fs := newFlagSet("archive verify", flag.ContinueOnError)
 	identity := fs.String("identity", "", "age identity file")
 	pos, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {

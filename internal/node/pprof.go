@@ -2,12 +2,15 @@ package node
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/logging"
 )
 
 // pprofDefaultAddr is used when the operator asks for pprof without
@@ -54,6 +57,7 @@ func (n *Node) startPprof(ctx context.Context) {
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	srv := &http.Server{
+		ErrorLog:          logging.StandardLogger(n.log, slog.LevelError),
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,

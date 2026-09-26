@@ -243,6 +243,15 @@ enabled = true
 # MUST be kind:value — a bare "owner" is malformed and never matches)
 # keeps strangers out.
 
+# Human review only; the agent receives no approval tool.
+[[policy.rules]]
+id       = "owner-learned-review"
+subject  = "scope:owner"
+action   = "command:exec"
+resource = "learned"
+effect   = "allow"
+priority = 20
+
 [[policy.rules]]
 id       = "owner-soul-tools"
 subject  = "scope:owner"

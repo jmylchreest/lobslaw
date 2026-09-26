@@ -21,6 +21,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/logging"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -31,6 +32,9 @@ import (
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
 	RemoteConsole lobslawv1.ConsoleServiceClient
+	// IncomingDir holds temporary, owner-bound REST media uploads.
+	IncomingDir string
+
 	// Notices appends operator notices to outbound replies. Nil
 	// disables them entirely, which is what a deployment that never
 	// opted this channel in gets.
@@ -134,7 +138,9 @@ type RESTConfig struct {
 	// return NeedsConfirmation register a prompt here; UIs poll
 	// and resolve. Nil = no prompt flow (NeedsConfirmation returns
 	// as plain text like Phase 6e).
-	Prompts Prompts
+	Prompts       Prompts
+	TaskApprovals TaskApprovalAPI
+	TaskIdentity  *identity.Resolver
 
 	// ConfirmationTTL is how long a pending prompt waits before
 	// auto-denying on timeout. 0 → 5 minutes default.
@@ -205,11 +211,12 @@ type Server struct {
 	// gate serialises turns per session. See turnqueue.go.
 	gate *TurnGate
 
-	cfg    RESTConfig
-	runner turn.Runner
-	log    *slog.Logger
-	conv   *conversationLog
-	logins *loginStore
+	cfg     RESTConfig
+	runner  turn.Runner
+	log     *slog.Logger
+	conv    *conversationLog
+	logins  *loginStore
+	uploads *restUploads
 
 	mu         sync.Mutex
 	httpSrv    *http.Server
@@ -240,12 +247,13 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 		cfg.Logger = slog.Default()
 	}
 	return &Server{
-		cfg:    cfg,
-		runner: runner,
-		log:    cfg.Logger,
-		gate:   NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
-		conv:   newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
-		logins: newLoginStore(),
+		cfg:     cfg,
+		runner:  runner,
+		log:     cfg.Logger,
+		gate:    NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
+		conv:    newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
+		logins:  newLoginStore(),
+		uploads: newRESTUploads(cfg.IncomingDir),
 	}
 }
 
@@ -255,6 +263,11 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", s.consoleRoute(s.handleMessages))
+	if s.cfg.TaskApprovals != nil {
+		mux.HandleFunc("/v1/task-approvals", s.handleTaskApprovals)
+		mux.HandleFunc("/v1/task-approvals/", s.handleTaskApprovals)
+	}
+	mux.HandleFunc("/v1/uploads", s.handleUpload)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/v1/session", s.handleSession)
@@ -297,12 +310,17 @@ func (s *Server) Start(ctx context.Context) error {
 	s.listener = ln
 	s.httpSrv = &http.Server{
 		Handler:      s.withAccessLog(mux),
+		ErrorLog:     logging.StandardLogger(s.log, slog.LevelError),
 		ReadTimeout:  s.cfg.ReadTimeout,
 		WriteTimeout: s.cfg.WriteTimeout,
 		IdleTimeout:  s.cfg.IdleTimeout,
 	}
 	s.ready = true
 	s.mu.Unlock()
+
+	uploadCtx, stopUploads := context.WithCancel(ctx)
+	defer func() { stopUploads(); s.uploads.close() }()
+	go s.uploads.run(uploadCtx)
 
 	s.log.Info("rest server listening", "addr", ln.Addr().String(), "tls", s.cfg.TLSCert != "")
 
@@ -377,9 +395,10 @@ func (s *Server) Addr() string {
 // turn.Request server-side from this + config +
 // any auth context.
 type messageRequest struct {
-	Message string `json:"message"`
-	TurnID  string `json:"turn_id,omitempty"`
-	Model   string `json:"model,omitempty"` // optional override
+	UploadIDs []string `json:"upload_ids,omitempty"`
+	Message   string   `json:"message"`
+	TurnID    string   `json:"turn_id,omitempty"`
+	Model     string   `json:"model,omitempty"` // optional override
 	// SessionID opts this request into a durable conversation: the
 	// prior transcript is replayed into the turn and this turn is
 	// appended to it. Omitting it keeps the legacy stateless
@@ -494,7 +513,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Message) == "" {
+	if len(req.UploadIDs) > restMessageMaxUploads {
+		s.jsonErr(w, http.StatusBadRequest, fmt.Sprintf("at most %d uploads per message", restMessageMaxUploads))
+		return
+	}
+	if strings.TrimSpace(req.Message) == "" && len(req.UploadIDs) == 0 {
 		s.jsonErr(w, http.StatusBadRequest, "message is required")
 		return
 	}
@@ -519,8 +542,26 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := authn.Claims
+	if len(req.UploadIDs) > 0 && (claims == nil || claims.UserID == "" || claims.UserID == "anon") {
+		s.jsonErr(w, http.StatusUnauthorized, "authentication required for uploads")
+		return
+	}
+	userID := ""
+	if claims != nil {
+		userID = claims.UserID
+	}
 	reqCtx, stopStream := s.bindStream(r.Context(), authn.LoginID)
 	defer stopStream()
+
+	attachments, releaseUploads, err := s.uploads.acquire(userID, req.UploadIDs, time.Now())
+	if err != nil {
+		s.jsonErr(w, http.StatusNotFound, errUploadUnavailable.Error())
+		return
+	}
+	defer releaseUploads()
+	if strings.TrimSpace(req.Message) == "" {
+		req.Message = "Please examine the attached media."
+	}
 
 	var sessionRef SessionRef
 	var prior Transcript
@@ -538,7 +579,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		// Telegram path does: Load → run → Append is not atomic, and
 		// each request is its own goroutine. Only sessioned requests
 		// need it — a session-less call has no transcript to corrupt.
-		lease, disposition := s.gate.Acquire(r.Context(), cacheKey(sessionRef), req.TurnID, req.Message)
+		lease, disposition := s.gate.acquire(r.Context(), cacheKey(sessionRef), req.TurnID, req.Message, len(attachments) > 0)
 		switch disposition {
 		case Folded:
 			// Another in-flight turn absorbed this message and will
@@ -567,11 +608,8 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			"summarised", prior.Summary != "")
 	}
 
-	userID := ""
-	if claims != nil {
-		userID = claims.UserID
-	}
 	agentReq := turn.Request{
+		Attachments:         attachments,
 		Message:             req.Message,
 		Claims:              claims,
 		TurnID:              req.TurnID,
@@ -792,28 +830,26 @@ func (s *Server) jsonErr(w http.ResponseWriter, status int, reason string) {
 
 // authenticate extracts + validates the Authorization: Bearer JWT,
 // if one is present, and returns a *types.Claims. Behaviour when
-// no token or an invalid token is presented depends on RequireAuth:
+// no token or an invalid token is presented depends on required. Uploads and
+// media messages always require authentication; text messages use RequireAuth:
 //
 //   - RequireAuth=false + no/invalid token → synthetic "anon" claims
 //     with DefaultScope. Good for localhost / behind reverse proxy.
 //   - RequireAuth=true  + no/invalid token → 401 error returned to
 //     the caller via jsonErr. Good for internet-reachable deployments.
 //
-// When the validator itself is nil, RequireAuth is ignored (no way
-// to validate) and anonymous is assumed. Operators who set
-// RequireAuth without configuring a validator get a boot-time
-// warning via Start's logs (Phase 6d.2 — JWKS wiring).
-func (s *Server) authenticate(r *http.Request) (*types.Claims, error) {
+// A required request without a configured validator is refused.
+func (s *Server) authenticate(r *http.Request, required bool) (*types.Claims, error) {
 	token := auth.ExtractBearer(r.Header.Get("Authorization"))
 
 	if s.cfg.JWTValidator == nil {
-		if s.cfg.RequireAuth {
+		if required {
 			return nil, fmt.Errorf("auth required but no validator configured")
 		}
 		return anonClaims(s.cfg.DefaultScope), nil
 	}
 	if token == "" {
-		if s.cfg.RequireAuth {
+		if required {
 			return nil, fmt.Errorf("missing bearer token")
 		}
 		return anonClaims(s.cfg.DefaultScope), nil
@@ -821,7 +857,7 @@ func (s *Server) authenticate(r *http.Request) (*types.Claims, error) {
 
 	claims, err := s.cfg.JWTValidator.Validate(token)
 	if err != nil {
-		if s.cfg.RequireAuth {
+		if required {
 			return nil, fmt.Errorf("token validation failed: %w", err)
 		}
 		s.log.Warn("jwt validation failed; falling back to anon",

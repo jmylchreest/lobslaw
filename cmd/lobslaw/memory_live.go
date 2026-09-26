@@ -36,7 +36,7 @@ func memoryClient(node *liveNode) (lobslawv1.MemoryServiceClient, func(), error)
 // --- list --------------------------------------------------------------
 
 func memoryListLive(args []string) error {
-	fs := flag.NewFlagSet("memory list", flag.ExitOnError)
+	fs := newFlagSet("memory list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	var filter memory.RecordFilter
@@ -96,7 +96,7 @@ func memoryListLive(args []string) error {
 // --- show --------------------------------------------------------------
 
 func memoryShowLive(args []string) error {
-	fs := flag.NewFlagSet("memory show", flag.ExitOnError)
+	fs := newFlagSet("memory show", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	asJSON := fs.Bool("json", false, "emit JSON instead of text")
@@ -184,7 +184,7 @@ func printRecord(w io.Writer, rec *memRecord, refs []string) {
 // --- forget ------------------------------------------------------------
 
 func memoryForgetLive(args []string) error {
-	fs := flag.NewFlagSet("memory forget", flag.ExitOnError)
+	fs := newFlagSet("memory forget", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	var ids stringList
@@ -301,7 +301,7 @@ func printForgetPlan(w io.Writer, source string, matched, swept, missing []strin
 // stopping the thing it audits is one nobody reads — and this log is
 // the whole justification for letting Dream rewrite memory at all.
 func memoryConsolidationsLive(args []string) error {
-	fs := flag.NewFlagSet("memory consolidations", flag.ExitOnError)
+	fs := newFlagSet("memory consolidations", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	owner := fs.String("owner", "", "restrict to one principal (e.g. user:alice)")
@@ -349,7 +349,7 @@ func memoryUnshareLive(args []string) error {
 }
 
 func runVisibilityLive(name string, args []string, to lobslawv1.Visibility) error {
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs := newFlagSet(name, flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	apply := fs.Bool("apply", false, "actually write; without it this is a dry run")

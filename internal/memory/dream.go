@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 
 	"google.golang.org/protobuf/proto"
@@ -396,9 +397,11 @@ func (d *DreamRunner) consolidate(ctx context.Context, candidates []scoredRecord
 	// records is as private as they are; leaving it unowned made it
 	// readable by everyone, which is the one outcome consolidation
 	// must not produce.
+	// Mint once before Raft submission: owners and repeated attempts must not
+	// share a key just because they share the pass timestamp.
 	owner := candidates[0].record.GetOwner()
 	consolidated := &lobslawv1.VectorRecord{
-		Id:         fmt.Sprintf("dream-%d", now.UnixNano()),
+		Id:         "dream-" + ids.New(),
 		Embedding:  embedding,
 		Text:       summary,
 		Retention:  highestRetention(retentions),

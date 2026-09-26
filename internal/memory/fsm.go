@@ -7,9 +7,12 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hashicorp/raft"
 	bolt "go.etcd.io/bbolt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -19,14 +22,23 @@ import (
 // entry's expected_claimer didn't match the record's current claim.
 // Callers (the scheduler) treat this as "another node already won
 // the claim — skip."
-var ErrClaimConflict = errors.New("fsm: claim conflict")
+var ErrClaimConflict error = claimConflictError{}
+
+type claimConflictError struct{}
+
+func (claimConflictError) Error() string { return "fsm: claim conflict" }
+func (claimConflictError) GRPCStatus() *status.Status {
+	return status.New(codes.Aborted, "fsm: claim conflict")
+}
 
 // FSM is the raft.FSM implementation backed by Store. Apply
 // unmarshals each log entry as a LogEntry proto and dispatches
 // to the appropriate bucket by payload type.
 type FSM struct {
-	mu    sync.RWMutex
-	store *Store
+	mu      sync.RWMutex
+	store   *Store
+	failed  chan struct{}
+	failure atomic.Pointer[fsmFailure]
 
 	// lastApplied* caches the highest raft index applied, so the
 	// already-applied check in Apply is not a bbolt read per entry.
@@ -90,7 +102,7 @@ type FSM struct {
 
 // NewFSM wraps a Store as a Raft FSM.
 func NewFSM(store *Store) *FSM {
-	return &FSM{store: store}
+	return &FSM{store: store, failed: make(chan struct{})}
 }
 
 // SetSchedulerChangeCallback registers a callback that fires after
@@ -154,6 +166,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if err := f.Failure(); err != nil {
+		return err
+	}
+
 	// Already-applied entries are skipped, because THIS FSM'S STATE IS
 	// DURABLE and hashicorp/raft does not assume that.
 	//
@@ -192,13 +208,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 
 	var entry lobslawv1.LogEntry
 	if err := proto.Unmarshal(l.Data, &entry); err != nil {
-		// Still advance: a malformed entry will be malformed on every
-		// replay, and refusing to record it means re-deciding that
-		// forever.
-		if l.Index != 0 {
-			f.setLastApplied(l.Index)
-		}
-		return fmt.Errorf("unmarshal log entry: %w", err)
+		return f.halt(l.Index, fmt.Errorf("unmarshal log entry: %w", err))
+	}
+	if err := validateLogEntrySupport(&entry); err != nil {
+		return f.halt(l.Index, err)
 	}
 	// Advanced even when the apply below returns an error. A CAS that
 	// legitimately loses is a decided outcome, not a retryable one:
@@ -252,6 +265,9 @@ func (f *FSM) Apply(l *raft.Log) any {
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
+	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ShareBatch); ok {
+		return f.applyShareBatch(p.ShareBatch)
+	}
 	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ArchiveBatch); ok {
 		return f.applyArchiveBatch(p.ArchiveBatch)
 	}
@@ -340,6 +356,8 @@ func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
 // interface because protoc-gen-go emits getters but no setters.
 func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
+	case *lobslawv1.CredentialRecord:
+		return p.Revision, true
 	case *lobslawv1.SoulTuneRecord:
 		return p.Revision, true
 	case *lobslawv1.ScheduledTaskRecord:
@@ -353,6 +371,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 	case *lobslawv1.PinnedMemory:
 		return p.Revision, true
 	case *lobslawv1.SelfTaughtRecord:
+		return p.Revision, true
+	case *lobslawv1.TaskApprovalRecord:
 		return p.Revision, true
 	case *lobslawv1.SessionGrant:
 		return p.Revision, true
@@ -373,6 +393,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
+	case *lobslawv1.CredentialRecord:
+		p.Revision = rev
 	case *lobslawv1.SoulTuneRecord:
 		p.Revision = rev
 	case *lobslawv1.ScheduledTaskRecord:
@@ -386,6 +408,8 @@ func setRevision(m proto.Message, rev uint64) {
 	case *lobslawv1.PinnedMemory:
 		p.Revision = rev
 	case *lobslawv1.SelfTaughtRecord:
+		p.Revision = rev
+	case *lobslawv1.TaskApprovalRecord:
 		p.Revision = rev
 	case *lobslawv1.SessionGrant:
 		p.Revision = rev
@@ -524,6 +548,9 @@ func (f *FSM) purgeSession(sessionID string) error {
 // other payload types return an error so a misrouted CLAIM can't
 // silently overwrite a record that doesn't support CAS.
 func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
+	if rec := entry.GetSelfTaught(); rec != nil && rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ARCHIVED {
+		return f.applyReviewedArchive(entry, rec)
+	}
 	bucket, newPayload, err := bucketAndPayload(entry)
 	if err != nil {
 		return err
@@ -547,6 +574,20 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	expectedRev := entry.GetExpectedRevision()
 
 	raw, getErr := f.store.Get(bucket, entry.Id)
+	if bucket == BucketCredentials {
+		// A credential CLAIM can only modify the same existing account generation.
+		// A delete/recreate may reset the revision; it must not admit an old claim.
+		if getErr != nil {
+			return fmt.Errorf("%w: credential unavailable", ErrClaimConflict)
+		}
+		var current lobslawv1.CredentialRecord
+		if err := proto.Unmarshal(raw, &current); err != nil {
+			return err
+		}
+		if current.Generation != newPayload.(*lobslawv1.CredentialRecord).Generation {
+			return fmt.Errorf("%w: credential replaced", ErrClaimConflict)
+		}
+	}
 	if getErr != nil {
 		if entry.ExpectedClaimer != "" {
 			return fmt.Errorf("CLAIM %s/%s: record missing, expected prior claimer %q",
@@ -655,6 +696,12 @@ type claimable interface {
 // holder's id as expected_claimer.
 func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
+	case BucketCredentials:
+		var r lobslawv1.CredentialRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	case BucketSoulTune:
 		var r lobslawv1.SoulTuneRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -700,6 +747,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 		return &r, nil
 	case BucketEnrolments:
 		var r lobslawv1.EnrolmentRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
+	case BucketTaskApprovals:
+		var r lobslawv1.TaskApprovalRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
 			return nil, err
 		}
@@ -751,7 +804,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
+	case BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
 		BucketBots, BucketGroups, BucketBotInbox:
 		return true
@@ -811,6 +864,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSessions, p.Session, nil
 	case *lobslawv1.LogEntry_SessionLease:
 		return BucketSessionLeases, p.SessionLease, nil
+	case *lobslawv1.LogEntry_TaskApproval:
+		return BucketTaskApprovals, p.TaskApproval, nil
 	case *lobslawv1.LogEntry_Prompt:
 		return BucketPrompts, p.Prompt, nil
 	case *lobslawv1.LogEntry_Consolidation:
@@ -852,7 +907,10 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return &snapshot{store: f.store}, nil
+	if err := f.Failure(); err != nil {
+		return nil, err
+	}
+	return &snapshot{store: f.store, fsm: f}, nil
 }
 
 // Restore replaces state.db's contents with the bbolt dump read from
@@ -865,6 +923,9 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	defer f.mu.Unlock()
 	defer func() { _ = rc.Close() }()
 
+	if err := f.Failure(); err != nil {
+		return err
+	}
 	if err := f.store.RestoreFromSnapshot(rc); err != nil {
 		return err
 	}
@@ -918,6 +979,7 @@ func (f *FSM) setLastApplied(idx uint64) {
 // snapshot is the per-Snapshot() state captured for raft's async
 // Persist call.
 type snapshot struct {
+	fsm   *FSM
 	store *Store
 }
 
@@ -925,9 +987,26 @@ type snapshot struct {
 // own goroutine; the underlying store must remain safe to read from
 // concurrent Apply calls (bbolt handles this via Tx read isolation).
 func (s *snapshot) Persist(sink raft.SnapshotSink) error {
+	if s.fsm != nil {
+		if err := s.fsm.Failure(); err != nil {
+			_ = sink.Cancel()
+			return err
+		}
+	}
+
 	if err := s.store.WriteSnapshot(sink); err != nil {
 		_ = sink.Cancel()
 		return err
+	}
+	// Serialize publication with the failure latch, without blocking Apply
+	// during the potentially long snapshot copy.
+	if s.fsm != nil {
+		s.fsm.mu.RLock()
+		defer s.fsm.mu.RUnlock()
+		if err := s.fsm.Failure(); err != nil {
+			_ = sink.Cancel()
+			return err
+		}
 	}
 	return sink.Close()
 }

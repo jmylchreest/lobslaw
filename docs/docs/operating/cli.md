@@ -35,6 +35,12 @@ lobslaw skills             # skills held in the cluster store
   skills list              # what is installed
   skills import <path>     # add one
   skills remove <name>     # take one out
+  skills fetch clawhub:<slug> --to file:<path> # retrieve for review
+  skills publish --dir <path> --to file:<path> # create a portable release
+  skills inspect file:<path> # inspect without connecting to a node
+  skills sign file:<path> --key <key> --publisher <name> --to file:<path>
+  skills install <file:path|clawhub:slug> --owner user:<id> # preview staged installation
+  skills activate-install <id> --owner user:<id> # preview activation
 lobslaw learned            # what the agent taught itself
   learned list             # artefacts it wrote for itself
   learned pending          # refinements awaiting a decision
@@ -262,17 +268,16 @@ on production.
 ## `lobslaw plugin install <bundle>`
 
 ```bash
-# from clawhub
-lobslaw plugin install clawhub:gws-workspace@1.0.0
+# ClawHub: same reviewed cluster staging as skills install.
+lobslaw plugin install clawhub:gws-workspace@1.0.0 --context home --owner user:alice
 
-# from local directory
-lobslaw plugin install file:///path/to/manifest-dir/
-
-# from a git repo (planned)
-lobslaw plugin install git://github.com/owner/skill@v1.0.0
+# Local plugin directory (separate local-plugin flow).
+lobslaw plugin install /path/to/plugin-dir/
 ```
 
-Honours `[security] clawhub_signing_policy`.
+For ClawHub, preview first and repeat with `--apply --expected-plan <digest>`.
+Activation is separate via `skills activate-install`. The old ClawHub `--root`
+and `--yes` options are rejected. See [ClawHub](../features/clawhub.md).
 
 ## `lobslaw audit`
 
@@ -495,6 +500,53 @@ The local repository uses a `.lock` directory. After a crash, check that no back
 process remains before removing a stale lock. Incomplete generations without a
 completion manifest are ignored. Filesystem attachments and deployment secrets
 remain outside this knowledge backup.
+
+### Restoring with changed certificates or identities
+
+A knowledge backup is independent of the source deployment's mTLS certificates.
+The recovery deployment can use a new cluster CA, operator CA, node certificates
+and memory encryption key. Keep the original **age backup identity**: new mTLS
+credentials cannot decrypt an existing backup.
+
+1. Bootstrap the recovery deployment's CAs and node certificates, and obtain an
+   operator certificate trusted by its operator CA. See
+   [mTLS](/security/mtls) and [operator credentials](/security/operator-credentials).
+   Start the node with `[memory] restore_mode = true` and an empty knowledge store.
+2. Configure the recovery operator's data role and grant `archive:import` on
+   `memory:*`. Certificates, credentials and policy grants are excluded from the
+   backup, so restore cannot supply its own access permissions.
+3. Select the recovery context, or pass the destination connection and certificate
+   paths explicitly. `--ca-cert` is the destination **cluster CA** used to verify
+   the server; `--node-cert` and `--node-key` are the recovery **operator's** client
+   credential, despite their flag names.
+4. Supply `--owner old=new` for every nonempty data identity. Reissuing a certificate
+   alone does not require renaming data owners: use `--owner user:alice=user:alice`
+   when the data identity remains the same. If the destination identity changes,
+   use its new value and configure the corresponding identity bindings and access.
+   Prefixed `owner` values and bare `user_id` values are distinct: if both occur,
+   supply both `--owner user:alice=user:alice-new` and `--owner alice=alice-new`.
+5. Configure destination trust for archived signed skills before restoring. Their
+   signatures must verify against a destination-trusted key during import, even
+   if ordinary skill signing policy is off; otherwise restore fails.
+
+For example, preview a restore using new certificates and a renamed owner:
+
+```sh
+lobslaw backup restore SNAPSHOT_ID --repository ./backups \
+  --identity ./original-backup-key.txt \
+  --addr recovered.example:7443 --ca-cert ./recovered/ca.pem \
+  --node-cert ./recovered/operator.pem --node-key ./recovered/operator-key.pem \
+  --owner user:alice=user:alice-new --owner alice=alice-new \
+  --source-timezone Europe/London
+```
+
+When connecting through a tunnel, add `--server-name` with a hostname on the
+destination server certificate. Repeat the preview command with `--apply` to
+restore; use the same owner mappings when resuming an interrupted restore.
+
+After verification, recreate required credentials and grants, review skills and
+paused schedules/reminders, and disable restore mode before resuming normal
+operation. Signed skill bytes are preserved exactly.
 
 ## `lobslaw memory` and `lobslaw session`
 

@@ -84,11 +84,15 @@ type PresetSpec struct {
 // the presets list via Resolve, parses inline Paths, and fills in
 // the other fields (namespaces, seccomp, etc.).
 func (s *PolicySpec) ToPolicy() (*Policy, error) {
+	return s.toPolicy(LookupPreset)
+}
+
+func (s *PolicySpec) toPolicy(lookup func(string) (Preset, bool)) (*Policy, error) {
 	inline, err := parsePathList(s.Paths)
 	if err != nil {
 		return nil, fmt.Errorf("policy %q: %w", s.Name, err)
 	}
-	resolved, err := Resolve(s.Presets, inline)
+	resolved, err := resolvePresets(s.Presets, inline, lookup)
 	if err != nil {
 		return nil, fmt.Errorf("policy %q: %w", s.Name, err)
 	}

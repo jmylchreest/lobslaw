@@ -506,7 +506,7 @@ One authority for the sandbox, rather than two that can disagree.
 
 #### Hooks
 
-Lobslaw has a subprocess-based hook framework aligned with Claude Code's event schema. This is what lets Claude Code plugins (and RTK) drop in unchanged.
+Lobslaw has a subprocess-based hook framework aligned with Claude Code's event schema. See the hook reference for supported response fields and the string-valued tool-input restriction.
 
 **Event schema:** JSON on stdin; optional JSON on stdout; non-zero exit blocks with stderr as feedback. Input format matches Claude Code:
 
@@ -527,16 +527,22 @@ Optional stdout response:
 {
   "decision": "approve" | "block" | "modify",
   "reason": "...",
-  "hookSpecificOutput": { ... }
+  "hookSpecificOutput": { "updatedInput": { "command": "rtk git status" } }
 }
 ```
+
+`modify` is supported for `PreToolUse` only. `updatedInput` is a string-valued
+argument patch, applied in hook order; subsequent hooks see earlier changes.
+The executor rechecks the effective arguments before execution. Confirmation
+continuations retain prepared input so approval does not rerun the hook chain.
+See [Hooks](docs/docs/reference/hooks.md) for the supported contract.
 
 **Events:**
 
 | Event | Fires | Use case |
 |-------|-------|----------|
-| `PreToolUse` | before tool exec (after policy allow) | RTK command rewrite; env injection; dry-run logging |
-| `PostToolUse` | after tool exec, before result enters context | RTK output compression; redaction; audit emit |
+| `PreToolUse` | before argument-dependent approval and tool exec (after denial checks) | argument rewriting; blocking; dry-run logging |
+| `PostToolUse` | after tool exec, before result enters context | advisory audit emit (tool output is not rewritten) |
 | `UserPromptSubmit` | inbound channel message received | classification tagging; PII scrub |
 | `SessionStart` / `SessionEnd` | conversation lifecycle | warm cache; persist session summary |
 | `Stop` | assistant turn complete | final audit anchor |
@@ -581,7 +587,7 @@ lobslaw plugin import ~/.claude/plugins/<name>   # from Claude Code
 
 Install shows the manifest + file tree and asks for operator approval. A SHA-256 of the plugin tree is recorded; subsequent installs of the same ref re-check and re-prompt if changed.
 
-**MCP servers:** Plugins can declare MCP servers in `.mcp.json` (same format as Claude Code). Lobslaw acts as an MCP client; exposed MCP tools appear in the tool registry and go through the same policy + hook pipeline. This brings the existing MCP ecosystem (playwright, chrome-devtools, gmail, etc.) in unchanged.
+**MCP servers:** Plugins can declare MCP servers in `.mcp.json` (same format as Claude Code). Lobslaw acts as an MCP client; exposed MCP tools use their separate policy-gated dispatch path. Executor hooks currently cover builtins and subprocess tools, not MCP or skills. This brings the existing MCP ecosystem (playwright, chrome-devtools, gmail, etc.) in unchanged.
 
 #### RTK (canonical plugin example)
 
@@ -611,7 +617,7 @@ command = "rtk"
 args = ["compress"]
 ```
 
-Because lobslaw's hook schema matches Claude Code's, RTK's own `rtk init -g` output can be dropped into lobslaw config with no translation.
+Use RTK hooks with the supported event and response contract in [Hooks](docs/docs/reference/hooks.md); configuration matching uses exact strings.
 
 ### Gateway Node
 
@@ -993,7 +999,7 @@ type SkillResult struct {
 }
 ```
 
-Invocations run through the same sandbox + policy + hook pipeline as tool calls.
+Skill invocations use their own sandbox and policy path; executor hooks do not currently wrap that path.
 
 ### Plugin-Bundled Skills
 

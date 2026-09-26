@@ -44,7 +44,7 @@ cluster" is one nobody performs.`
 
 // livePending lists what is waiting for somebody.
 func livePending(args []string) error {
-	fs := flag.NewFlagSet("learned pending", flag.ExitOnError)
+	fs := newFlagSet("learned pending", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	all := fs.Bool("all", false, "include live artefacts with a staged refinement")
@@ -107,7 +107,7 @@ func livePending(args []string) error {
 
 // liveApprove lets proposals out of PROPOSED.
 func liveApprove(args []string) error {
-	fs := flag.NewFlagSet("learned approve", flag.ExitOnError)
+	fs := newFlagSet("learned approve", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	as := fs.String("as", "", "principal recorded as the approver; defaults to the OS user")
@@ -141,7 +141,7 @@ func liveApprove(args []string) error {
 		})
 		cancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", id, err)
+			diagnosticf("%s: %v\n", id, err)
 			failed++
 			continue
 		}
@@ -159,7 +159,7 @@ func liveDecide(args []string, accept bool) error {
 	if accept {
 		name = "accept"
 	}
-	fs := flag.NewFlagSet("learned "+name, flag.ExitOnError)
+	fs := newFlagSet("learned "+name, flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	as := fs.String("as", "", "principal recorded as the approver; defaults to the OS user")
@@ -196,7 +196,7 @@ func liveDecide(args []string, accept bool) error {
 		})
 		cancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", id, err)
+			diagnosticf("%s: %v\n", id, err)
 			failed++
 			continue
 		}
@@ -211,7 +211,7 @@ func liveDecide(args []string, accept bool) error {
 
 // liveShelve archives one artefact on a running node.
 func liveShelve(args []string) error {
-	fs := flag.NewFlagSet("learned archive", flag.ExitOnError)
+	fs := newFlagSet("learned archive", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	rest, err := parseFlagsAndPositionals(fs, args)
@@ -241,7 +241,7 @@ func liveShelve(args []string) error {
 
 // liveRestore brings archived artefacts back as proposals.
 func liveRestore(args []string) error {
-	fs := flag.NewFlagSet("learned restore", flag.ExitOnError)
+	fs := newFlagSet("learned restore", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	ids, err := parseFlagsAndPositionals(fs, args)
@@ -265,7 +265,7 @@ func liveRestore(args []string) error {
 		_, err := client.RestoreArtefact(ctx, &lobslawv1.RestoreArtefactRequest{Id: id})
 		cancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", id, err)
+			diagnosticf("%s: %v\n", id, err)
 			failed++
 			continue
 		}
@@ -306,7 +306,7 @@ func approverName(as string) (string, error) {
 // constraint — and on a laptop it meant printing "the agent has taught
 // itself nothing" about a cluster it never contacted.
 func liveList(args []string) error {
-	fs := flag.NewFlagSet("learned list", flag.ExitOnError)
+	fs := newFlagSet("learned list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	archived := fs.Bool("archived", false, "read the archive instead of the live set")
@@ -360,7 +360,7 @@ func filterByOwner(records []*lobslawv1.SelfTaughtRecord, owner string) []*lobsl
 // question about a running agent, so requiring it be stopped first
 // made the answer unavailable exactly when it was wanted.
 func liveHistory(args []string) error {
-	fs := flag.NewFlagSet("learned history", flag.ExitOnError)
+	fs := newFlagSet("learned history", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	rest, err := parseFlagsAndPositionals(fs, args)
@@ -393,7 +393,7 @@ func liveHistory(args []string) error {
 // from the server, so what it describes is what the write would do
 // rather than what a second read of a different store suggests.
 func liveRollback(args []string) error {
-	fs := flag.NewFlagSet("learned rollback", flag.ExitOnError)
+	fs := newFlagSet("learned rollback", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	apply := fs.Bool("apply", false, "actually write (default is a dry run)")

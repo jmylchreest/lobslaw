@@ -52,6 +52,11 @@ func WithTurnApproval(ctx context.Context, action, resource string) context.Cont
 	return context.WithValue(ctx, turnApprovalKey{}, &turnApproval{action: action, resource: resource})
 }
 
+// WithoutApproval masks an old answer when effective input must be prepared again.
+func WithoutApproval(ctx context.Context) context.Context {
+	return context.WithValue(ctx, turnApprovalKey{}, &turnApproval{})
+}
+
 // ApprovalPending reports whether ctx carries an approval that has
 // not been spent yet.
 //

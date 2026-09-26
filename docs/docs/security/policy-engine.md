@@ -424,3 +424,6 @@ These land in `audit/audit-YYYYMMDD.jsonl` and (if `[audit.raft]` is set) replic
 - `internal/policy/rules.go` — TOML schema
 - `internal/node/wire_seeds.go` — default seeds
 - `internal/audit/` — audit log writer
+
+Task runners can also use [task-scoped approvals](task-approvals.md), including
+durable pause/resume and explicit budget extensions. These do not inherit chat grants.

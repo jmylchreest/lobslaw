@@ -14,7 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/logging"
+
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+	"github.com/jmylchreest/lobslaw/internal/httpbody"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -160,6 +163,9 @@ type TelegramConfig struct {
 	// inline keyboard with Approve / Deny buttons; the button's
 	// callback_data carries the prompt ID.
 	Prompts Prompts
+
+	// Learned exposes owner-scoped human review, never agent approval tools.
+	Learned LearnedReviews
 
 	// ConfirmationTTL mirrors RESTConfig.ConfirmationTTL. 0 → 5min.
 	ConfirmationTTL time.Duration
@@ -452,6 +458,7 @@ func NewTelegramHandler(cfg TelegramConfig, runner turn.Runner) (*TelegramHandle
 	}
 	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
 	RegisterBuiltinCommands(h.commands, h.conv)
+	h.registerLearnedCommand()
 	// Nil leaves /grants unregistered — see RegisterGrantCommands.
 	RegisterGrantCommands(h.commands, cfg.SessionGrants)
 	return h, nil
@@ -672,9 +679,17 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		// a Telegram username is attributed as "tg-@name", which no
 		// config file can predict, while the id is what the operator
 		// wrote down and what identity resolution is keyed on.
-		h.sendText(msg.Chat.ID, h.cfg.Notices.Append(ctx,
+		reply := h.cfg.Notices.Append(ctx,
 			"telegram", sessionRef.ChannelID, grantSubject(claims), resp.Reply,
-			numericSubject(msg.From)))
+			numericSubject(msg.From))
+		if h.cfg.Learned != nil && reply != resp.Reply && strings.Contains(strings.TrimPrefix(reply, resp.Reply), "/learned") {
+			if err := h.learnedPost(ctx, "sendMessage", map[string]any{"chat_id": msg.Chat.ID, "text": reply, "reply_markup": map[string]any{"inline_keyboard": [][]map[string]string{{{"text": "Review pending skills", "callback_data": "learned:list:1"}}}}}); err != nil {
+				h.log.Warn("telegram: review notice delivery failed", "err", err)
+				h.sendText(msg.Chat.ID, reply)
+			}
+		} else {
+			h.sendText(msg.Chat.ID, reply)
+		}
 	}
 	// After the text: a file the turn produced is context for the
 	// reply, not a replacement for it.
@@ -723,7 +738,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req turn.Reques
 	}
 
 	buttons := []map[string]string{
-		{"text": "Approve", "callback_data": "prompt:approve:" + p.ID},
+		{"text": "Approve once", "callback_data": "prompt:approve:" + p.ID},
 	}
 	// "for this chat" is offered only when a policy rule asked AND the
 	// answer is worth remembering. A budget confirmation is about
@@ -875,6 +890,11 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 		"callback_query_id": q.ID,
 	})
 
+	if strings.HasPrefix(q.Data, "learned:") {
+		h.handleLearnedCallback(ctx, q)
+		return
+	}
+
 	parts := strings.SplitN(q.Data, ":", 3)
 	if len(parts) != 3 || parts[0] != "prompt" {
 		h.log.Debug("telegram: unhandled callback_data shape", "data", q.Data)
@@ -888,6 +908,10 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	}
 
 	if !h.mayResolve(ctx, promptID, q) {
+		return
+	}
+	if p, err := h.cfg.Prompts.Get(promptID); err == nil && strings.HasPrefix(p.Action, "learned:") {
+		h.answerCallback(q, "Use the skill review buttons or reopen /learned.")
 		return
 	}
 
@@ -1044,7 +1068,7 @@ func (h *TelegramHandler) postJSON(method string, body any) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		h.log.Error("telegram: "+method+" non-2xx",
 			"status", resp.StatusCode, "body", string(raw))
 	}
@@ -1083,7 +1107,8 @@ func (h *TelegramHandler) rolesFor(userID string) []string {
 // builtin so scheduled tasks can deliver replies to chats they
 // weren't invoked from. Safe to call concurrently — the underlying
 // http.Client is a pool.
-func (h *TelegramHandler) Send(chatID int64, text string) error {
+func (h *TelegramHandler) Send(chatID int64, text string) (retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	body := map[string]any{
 		"chat_id": chatID,
 		"text":    text,
@@ -1123,7 +1148,7 @@ func (h *TelegramHandler) sendText(chatID int64, text string) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		h.log.Error("telegram: sendMessage non-2xx",
 			"status", resp.StatusCode, "body", string(raw))
 	}
@@ -1551,7 +1576,8 @@ func (h *TelegramHandler) persistOffset(ctx context.Context, nextOffset int64) {
 // getUpdates calls the Bot API's getUpdates with the supplied offset
 // and long-poll timeout. Returns the decoded updates and the offset
 // to pass on the next call (lastUpdateID + 1).
-func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout time.Duration) ([]tgUpdate, int64, error) {
+func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout time.Duration) (result []tgUpdate, resultOffset int64, retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	body := map[string]any{
 		"timeout": int(timeout.Seconds()),
 	}
@@ -1579,7 +1605,7 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := httpbody.Read(resp.Body, 8<<20)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1634,7 +1660,8 @@ func isPollerConflict(err error) bool  { return errors.Is(err, errPollerConflict
 
 // deleteWebhook clears any registered webhook so getUpdates works.
 // No-op if no webhook is set.
-func (h *TelegramHandler) deleteWebhook(ctx context.Context) error {
+func (h *TelegramHandler) deleteWebhook(ctx context.Context) (retErr error) {
+	defer func() { retErr = logging.SafeError(retErr) }()
 	url := fmt.Sprintf("%s/bot%s/deleteWebhook", h.base, h.cfg.BotToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {

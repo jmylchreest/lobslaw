@@ -73,19 +73,34 @@ The MemoryKey is provisioned at cluster bootstrap (currently via `LOBSLAW_MEMORY
 
 ## Refresh on spawn
 
-Every time a skill subprocess spawns:
+`CredentialService.IssueForSkill` checks the skill's grant and refreshes tokens
+that expire within 60 seconds. Before contacting the provider, it acquires a
+revision-checked claim through Raft for that provider and subject. Other callers,
+including callers on other nodes, wait for the result; unrelated credentials
+can refresh independently. Each caller's permissions are checked again against
+the refreshed record, and returned scopes are limited to those still granted
+by both the operator and provider.
 
-```go
-// internal/skills/invoker.go
-cred, err := credentialsService.Get(ctx, claims, role)
-if cred.RefreshToken != "" && time.Until(cred.ExpiresAt) < 5*time.Minute {
-    cred, err = oauth.Refresh(ctx, provider, cred)
-    credentialsService.Put(ctx, cred)  // writes raft entry
-}
-env = append(env, fmt.Sprintf("LOBSLAW_CRED_%s_TOKEN=%s", role, cred.AccessToken))
-```
+The refresh has a 30-second context deadline and a separate 10-second persistence
+budget. If the initiating caller disconnects, the refresh continues so a rotated
+token is not discarded. Grant/revoke operations use conditional writes; refresh
+completion preserves their changes. Deleting or reconnecting an account prevents
+an older in-flight refresh from overwriting it.
 
-The skill never sees the refresh token, only the (short-lived) access token. It can't persist; it can't refresh on its own.
+A refresh error, lost response, or crashed refresher can leave the provider's
+rotation outcome uncertain. The durable attempt is **not** automatically taken
+over when its deadline passes: resending an already-consumed token could revoke
+the replacement. The call reports `refresh outcome uncertain; reconnect the
+account`. Re-run `oauth_start` and restore the required skill grants. The current
+refresher interface cannot distinguish safely retryable provider errors from
+uncertain outcomes, so errors are conservatively treated this way. An abandoned
+claim remains visible after restart; a successful new authorization replaces it.
+
+Upgrade every node that applies credential writes or serves credential requests
+before resuming OAuth credential operations. Older binaries do not enforce the
+new claim fields. No new token-encryption format or external service is required.
+
+The skill receives only the short-lived access token, never the refresh token.
 
 ## Granting skills access
 
@@ -121,7 +136,7 @@ client_secret_ref = "env:GITHUB_OAUTH_CLIENT_SECRET"
 ## Common pitfalls
 
 - **`oauth_start: provider "google" not configured`** — missing `[security.oauth.google]` block.
-- **`cred refresh failed: invalid_grant`** — refresh token revoked (user re-authed elsewhere, password changed, security review). Re-run the device flow.
+- **`refresh outcome uncertain; reconnect the account`** — a refresh failed or its completion could not be confirmed. Re-run the device flow; the old token will not be retried automatically.
 - **Skill error: "no credential available"** — operator hasn't granted access. Run `credentials_grant`.
 - **Skill works once, then 401s** — operator's clock is wildly off and the access token "expires" before refresh logic kicks in. Run NTP.
 

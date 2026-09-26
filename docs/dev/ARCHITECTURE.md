@@ -158,7 +158,7 @@ The diagrams below are **retroactively added** per aide decision `lobslaw-docume
 
 ### Tool invocation pipeline (Phase 4)
 
-Agent loop → Executor → Registry → Policy → PreToolUse hook → Sandbox → subprocess → PostToolUse hook.
+Agent loop → Executor → Registry → denial checks → PreToolUse rewrite → effective-input safety and approval gates → Sandbox → subprocess → PostToolUse hook.
 
 ```mermaid
 sequenceDiagram
@@ -174,9 +174,12 @@ sequenceDiagram
   Agent->>Exec: Invoke(InvokeRequest{tool, params, claims})
   Exec->>Reg: Get(tool)
   Reg-->>Exec: ToolDef
-  Exec->>Exec: resolveToolPath (EvalSymlinks, root-contain)
   Exec->>Exec: hardlineCheck(params)
   Note over Exec: compiled-in floor, evaluated BEFORE policy<br/>so no configuration can reach past it
+  Exec->>Pol: Reject tool-policy denials before hooks
+  Exec->>Hook: PreToolUse (fresh calls only)
+  Hook-->>Exec: effective input or block/error
+  Exec->>Exec: hardlineCheck(effective input)
   Exec->>Pol: Evaluate(claims, "tool:exec", tool)
   alt decision = deny / require_confirmation
     Pol-->>Exec: deny / require_confirmation
@@ -189,12 +192,9 @@ sequenceDiagram
       Pol-->>Exec: require_confirmation
       Exec-->>Agent: ConfirmationRequest{action, resource, summary}
     end
-    Exec->>Hook: PreToolUse(payload)
-    alt hook blocks
-      Hook-->>Exec: ErrHookBlocked
-      Exec-->>Agent: error
-    else hook allows
-      Hook-->>Exec: ok
+    Exec->>Exec: sensitive-path confirmation
+    opt gates approved
+      Exec->>Exec: resolveToolPath (EvalSymlinks, root-contain)
       Exec->>Exec: resolvePolicy(tool) → tool-spec → fleet → nil
       Exec->>SB: Apply(cmd, policy)
       Note over SB: may rewrite cmd<br/>to /proc/self/exe sandbox-exec<br/>if Policy has enforcement

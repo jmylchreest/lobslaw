@@ -185,6 +185,6 @@ func backupArchiveDestination(node *liveNode, path, identityPath string) (string
 	if digest != expected {
 		return "", errors.New("verified backup differs from destination export")
 	}
-	fmt.Fprintf(os.Stderr, "Verified and pinned destination backup: %s\n", generation.Manifest.SnapshotID)
+	noticef("Verified and pinned destination backup: %s\n", generation.Manifest.SnapshotID)
 	return digest, nil
 }

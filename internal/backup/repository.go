@@ -210,7 +210,7 @@ func (r Repository) generation(id string) (Generation, error) {
 	if err != nil {
 		return generation, err
 	}
-	if generation.Manifest.SnapshotID != id || generation.Manifest.Format != archive.Format || generation.Manifest.SchemaVersion != archive.SchemaVersion {
+	if generation.Manifest.SnapshotID != id || generation.Manifest.Format != archive.Format || !archive.SupportsSchema(generation.Manifest.SchemaVersion) {
 		return generation, errors.New("invalid backup generation manifest")
 	}
 	path = filepath.Join(dir, "archive.age")

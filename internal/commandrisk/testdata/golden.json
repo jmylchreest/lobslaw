@@ -7205,6 +7205,16 @@
   ],
   "why": ""
  },
+ "find -fls thing": {
+  "headline": "writes · find",
+  "labels": [
+   "writes"
+  ],
+  "programs": [
+   "find"
+  ],
+  "why": ""
+ },
  "find -fprint* thing": {
   "headline": "writes · find",
   "labels": [

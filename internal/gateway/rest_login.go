@@ -274,7 +274,7 @@ func (s *Server) authenticateRequest(r *http.Request) (requestAuth, error) {
 		}
 	}
 
-	claims, err := s.authenticate(r)
+	claims, err := s.authenticate(r, s.cfg.RequireAuth)
 	if err != nil {
 		return requestAuth{}, err
 	}

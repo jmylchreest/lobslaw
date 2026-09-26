@@ -51,13 +51,14 @@ const (
 	// HookBlock stops the action; Reason is surfaced to the agent.
 	HookBlock HookDecision = "block"
 	// HookModify lets the action proceed with the substitutions in
-	// HookSpecificOutput applied.
+	// HookSpecificOutput.updatedInput applied (PreToolUse only).
+	// updatedInput is a string-valued patch; omitted arguments are retained.
 	HookModify HookDecision = "modify"
 )
 
 // HookResponse is the JSON a hook subprocess writes to stdout. The
-// field names are Claude Code's, including the camelCase
-// hookSpecificOutput, so plugins remain portable.
+// envelope uses camelCase hookSpecificOutput. PreToolUse modifications use
+// updatedInput; compatibility depends on the supported decision and value types.
 type HookResponse struct {
 	Decision           HookDecision   `json:"decision,omitempty"`
 	Reason             string         `json:"reason,omitempty"`

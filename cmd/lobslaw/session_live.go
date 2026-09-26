@@ -36,7 +36,7 @@ func sessionClient(node *liveNode) (lobslawv1.SessionServiceClient, func(), erro
 // --- list --------------------------------------------------------------
 
 func sessionListLive(args []string) error {
-	fs := flag.NewFlagSet("session list", flag.ExitOnError)
+	fs := newFlagSet("session list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	channel := fs.String("channel", "", "only conversations on this channel kind (telegram, rest, ...)")
@@ -98,7 +98,7 @@ func renderSessionList(w io.Writer, records []*lobslawv1.SessionRecord, source s
 // --- show --------------------------------------------------------------
 
 func sessionShowLive(args []string) error {
-	fs := flag.NewFlagSet("session show", flag.ExitOnError)
+	fs := newFlagSet("session show", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	trunc := fs.Int("truncate", 0, "cap each message at N characters (0 = full text)")
@@ -160,7 +160,7 @@ func renderTranscript(w io.Writer, rec *lobslawv1.SessionRecord,
 // --- search ------------------------------------------------------------
 
 func sessionSearchLive(args []string) error {
-	fs := flag.NewFlagSet("session search", flag.ExitOnError)
+	fs := newFlagSet("session search", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	channel := fs.String("channel", "", "restrict to one channel kind")

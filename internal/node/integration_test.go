@@ -181,8 +181,8 @@ func mustSignNodeCertForIntegration(t *testing.T, dir, nodeID string) *mtls.Node
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(creds.NodeID, nodeID) {
-		t.Fatalf("unexpected NodeID %q", creds.NodeID)
+	if !strings.Contains(creds.NodeID(), nodeID) {
+		t.Fatalf("unexpected NodeID %q", creds.NodeID())
 	}
 	return creds
 }

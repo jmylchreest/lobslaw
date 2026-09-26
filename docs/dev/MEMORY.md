@@ -1063,3 +1063,52 @@ is one nobody reads to the end.
 
 A **denial** carries no content. It is not a question, and the person
 seeing it is not deciding anything.
+
+
+## Unsupported committed entries
+
+The memory FSM stops on an unknown log operation, an unrecognised payload,
+or malformed protobuf. It records the failure in memory, leaves the durable
+last-applied index at the preceding entry, rejects further application and
+snapshot creation/persistence, and signals Raft and the node to shut down.
+The diagnostic includes the offending index without logging the entry payload.
+Normal deterministic rejections, including a lost claim CAS, still advance the
+index. Unknown optional protobuf fields on recognised payloads remain accepted.
+
+Retain the node's data directory and upgrade to a binary that understands the
+entry before restarting. An incompatible binary stops again when it encounters
+that entry. Corrupt entries require operator recovery rather than automatic
+skipping. This does not recover entries already skipped by older binaries, and
+it does not provide general schema-version negotiation for snapshots or new
+semantics in optional fields.
+
+Deploy compatible binaries to every voter before enabling features that write
+new log payloads. An incompatible node stops rather than serving divergent
+state; losing a voting majority makes writes unavailable. Shutdown is signalled
+asynchronously because waiting for Raft from its FSM callback would deadlock.
+
+## Snapshot restore recovery
+
+A failed rollback stops the node and leaves `state.db.restore-*.previous`
+(and sometimes candidate/rollback files) beside `state.db`. Startup refuses
+these markers because the canonical image may be ambiguous. A successful
+publication followed by an old-handle close warning still removes the marker;
+a failed marker removal requires inspection before restart.
+
+1. Stop the affected service and its automatic restart loop. For Docker Compose,
+   run `docker compose stop SERVICE`; `restart: unless-stopped` does not interpret
+   a special recovery exit code. For systemd, stop the unit before inspection.
+2. Preserve a copy of the entire data directory, including Raft state and all
+   recovery images. Do not delete markers merely to force startup.
+3. Use offline read commands with `--recovery-read-only --state-db PATH` and the
+   original encryption key to inspect the canonical or `.previous` image.
+   This mode creates no buckets and refuses writes and snapshot restores.
+   Normal write commands, including `backfill-embeddings`, remain blocked.
+4. Recover the node using a consistent database and matching Raft state from a
+   verified backup, or rebuild the affected replica from healthy cluster peers
+   using the normal membership/rejoin procedure. A standalone database swap is
+   insufficient: the Raft applied index must agree with the restored image.
+5. After recovery and removal of resolved markers, explicitly start the service.
+
+The read-only bypass is diagnostic access, not evidence that an image is safe
+for service. Keep the original recovery files until the node is healthy.

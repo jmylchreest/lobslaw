@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/httpbody"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
@@ -55,7 +55,7 @@ func FetchSubject(ctx context.Context, p ProviderConfig, tok *TokenResponse) (st
 		return "", fmt.Errorf("oauth: userinfo GET: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpbody.Read(resp.Body, maxResponseBytes)
 	if err != nil {
 		return "", fmt.Errorf("oauth: read userinfo body: %w", err)
 	}

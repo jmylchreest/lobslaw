@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 func TestPrettyToolName(t *testing.T) {
@@ -30,32 +30,32 @@ func TestFormatToolCallPrimaryArg(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		inv  compute.ToolInvocation
+		inv  turn.ToolInvocation
 		want string
 	}{
 		{
 			"path arg",
-			compute.ToolInvocation{ToolName: "read_file", Args: `{"path":"/etc/hosts"}`},
+			turn.ToolInvocation{ToolName: "read_file", Args: `{"path":"/etc/hosts"}`},
 			"ReadFile(/etc/hosts)",
 		},
 		{
 			"pattern arg",
-			compute.ToolInvocation{ToolName: "grep", Args: `{"pattern":"lobslaw","path":"/x"}`},
+			turn.ToolInvocation{ToolName: "grep", Args: `{"pattern":"lobslaw","path":"/x"}`},
 			"Grep(lobslaw)",
 		},
 		{
 			"url arg",
-			compute.ToolInvocation{ToolName: "fetch_url", Args: `{"url":"https://example.com"}`},
+			turn.ToolInvocation{ToolName: "fetch_url", Args: `{"url":"https://example.com"}`},
 			"FetchUrl(https://example.com)",
 		},
 		{
 			"no args",
-			compute.ToolInvocation{ToolName: "current_time", Args: `{}`},
+			turn.ToolInvocation{ToolName: "current_time", Args: `{}`},
 			"CurrentTime()",
 		},
 		{
 			"namespaced mcp",
-			compute.ToolInvocation{ToolName: "gmail.search", Args: `{"query":"urgent"}`},
+			turn.ToolInvocation{ToolName: "gmail.search", Args: `{"query":"urgent"}`},
 			"Gmail.Search(urgent)",
 		},
 	}
@@ -68,7 +68,7 @@ func TestFormatToolCallPrimaryArg(t *testing.T) {
 
 func TestDeniedByPolicyExtractsReason(t *testing.T) {
 	t.Parallel()
-	inv := compute.ToolInvocation{
+	inv := turn.ToolInvocation{
 		Error: "policy denied: subject=public; action=shell_command; rule=deny-all-shell",
 	}
 	got := deniedByPolicy(inv)
@@ -82,10 +82,10 @@ func TestDeniedByPolicyExtractsReason(t *testing.T) {
 
 func TestDeniedByPolicyNoMatch(t *testing.T) {
 	t.Parallel()
-	if deniedByPolicy(compute.ToolInvocation{Error: "some other error"}) != "" {
+	if deniedByPolicy(turn.ToolInvocation{Error: "some other error"}) != "" {
 		t.Error("should only match policy-denied errors")
 	}
-	if deniedByPolicy(compute.ToolInvocation{Error: ""}) != "" {
+	if deniedByPolicy(turn.ToolInvocation{Error: ""}) != "" {
 		t.Error("empty error should yield empty reason")
 	}
 }

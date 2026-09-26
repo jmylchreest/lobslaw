@@ -45,12 +45,12 @@ The scheduler never polls. It computes the earliest firing time across all tasks
 
 `nextDueTime` walks every scheduled task + pending commitment on each wake. Baseline from `BenchmarkSchedulerNextDueTime`:
 
-| Tasks   | ns/op   | Notes                                  |
-|---------|---------|----------------------------------------|
-| 10      |   7,181 | personal-scale (microseconds)          |
-| 100     |  66,624 | typical operator-scripted deployment   |
-| 1,000   | 620,463 | sub-ms — still negligible              |
-| 10,000  | 7.1 ms  | within any reasonable tick cadence     |
+| Tasks  | ns/op   | Notes                                |
+| ------ | ------- | ------------------------------------ |
+| 10     | 7,181   | personal-scale (microseconds)        |
+| 100    | 66,624  | typical operator-scripted deployment |
+| 1,000  | 620,463 | sub-ms — still negligible            |
+| 10,000 | 7.1 ms  | within any reasonable tick cadence   |
 
 Classic O(n), ~10× per decade of task count. Works fine through low thousands; at tens of thousands the scan approaches noticeable cost (not a hotspot, but measurable).
 
@@ -79,11 +79,11 @@ Expiry bypass: a claim whose `ClaimExpiresAt` is in the past counts as unclaimed
 
 ### Why the revision, and not just the claimer
 
-`ClaimedBy` cannot distinguish *"nobody holds this"* from *"somebody held it, did the work, and released it"* — both are the empty string. Every write also replaces the whole record from the writer's own read. Together those let a writer whose read had gone stale pass the check, which produced three bugs:
+`ClaimedBy` cannot distinguish _"nobody holds this"_ from _"somebody held it, did the work, and released it"_ — both are the empty string. Every write also replaces the whole record from the writer's own read. Together those let a writer whose read had gone stale pass the check, which produced three bugs:
 
 - **Double fire.** A and B both scan and see an unclaimed, due task. A claims, runs it, and completes, clearing the claim. B then claims from its original read, succeeds, and the task runs twice.
 - **Lost update.** B's write is its entire stale record, so it also rolls `NextRun` back into the past and drops `LastRun` — and the task fires again on the very next scan.
-- **Reverted operator edits.** The completion path writes a record cloned at *claim* time, so disabling a task or changing its schedule while the handler ran was silently undone.
+- **Reverted operator edits.** The completion path writes a record cloned at _claim_ time, so disabling a task or changing its schedule while the handler ran was silently undone.
 
 `Revision` is assigned by the FSM and bumped on every write to that record, so it detects staleness directly rather than through a proxy. A successful CAS always writes `expected + 1`, which lets a caller track the new revision without reading it back — necessary, because a write forwarded to the leader returns no FSM response.
 
@@ -171,6 +171,24 @@ Registered during `node.New` when both a scheduler and an agent are present. Dis
 
 A user who wants "every morning check the weather and summarize" asks the agent, which creates the task through its schedule tool with `HandlerRef = "agent:turn"` and `Params.prompt = "check the weather and summarize it"`. Natural-language commitments ("remind me to call the plumber in 2 hours") skip `Params` and let `Reason` drive.
 
+Shared schedules are staged disabled and require a separate human activation.
+Before each run, `checkSharedTask` checks the installation approval, bound task
+content, destination signature policy and byte-for-byte equality with the loaded
+skill. A missing approval or changed override refuses execution before the agent
+starts. An interactive confirmation request fails the scheduled run; activation
+does not answer future tool confirmations.
+
+```mermaid
+flowchart LR
+    Due[Claim due shared task] --> Approval[Check active approval and bound content]
+    Approval --> Signature[Validate signatures against destination trust]
+    Signature --> Loaded[Compare loaded skill bytes with approved release]
+    Loaded --> Agent[Run agent with normal policy gates]
+    Agent --> Confirm{Interactive approval needed?}
+    Confirm -->|Yes| Fail[Report incomplete scheduled run]
+    Confirm -->|No| Done[Complete]
+```
+
 Handler errors are logged; the next tick retries via the regular cron schedule (for tasks) or not at all (commitments — they're one-shot).
 
 ### Built-in `memory:dream`
@@ -199,11 +217,11 @@ Cluster behaviour: the scheduler's CAS-claim model means exactly one node per fi
 
 Three RPCs:
 
-| RPC | Behaviour |
-|---|---|
-| `GetPlan(window)` | Aggregates pending commitments and enabled scheduled tasks whose next firing is in `[now, now+window]`. Sorted ascending by fire time. Window defaults to 24h. Done / cancelled commitments and disabled tasks are filtered — this is "what's coming," not audit history. |
-| `AddCommitment(AgentCommitment)` | Writes via `LOG_OP_PUT`. Auto-fills `id` (random 32 hex) and `status="pending"`. Strips caller-supplied claim fields. `due_at` required. |
-| `CancelCommitment(id)` | `LOG_OP_CLAIM` with `expected_claimer=""` — fails with `Aborted` if a handler is firing (claim held, not expired), succeeds on pending or on an expired-stale claim (so cancelling a crashed node's work works). Already-done / already-cancelled return `FailedPrecondition`. |
+| RPC                              | Behaviour                                                                                                                                                                                                                                                                      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GetPlan(window)`                | Aggregates pending commitments and enabled scheduled tasks whose next firing is in `[now, now+window]`. Sorted ascending by fire time. Window defaults to 24h. Done / cancelled commitments and disabled tasks are filtered — this is "what's coming," not audit history.      |
+| `AddCommitment(AgentCommitment)` | Writes via `LOG_OP_PUT`. Auto-fills `id` (random 32 hex) and `status="pending"`. Strips caller-supplied claim fields. `due_at` required.                                                                                                                                       |
+| `CancelCommitment(id)`           | `LOG_OP_CLAIM` with `expected_claimer=""` — fails with `Aborted` if a handler is firing (claim held, not expired), succeeds on pending or on an expired-stale claim (so cancelling a crashed node's work works). Already-done / already-cancelled return `FailedPrecondition`. |
 
 ### REST surface
 
@@ -260,3 +278,30 @@ Records written before ownership existed have an empty owner and stay
 actionable by anyone — the alternative is that an upgrade silently orphans every
 commitment already scheduled, and a reminder that never fires is worse than one
 visible to the wrong person on a node that probably has one user.
+
+### Shared schedule owner delegation
+
+Architectural decision (approved 2026-09-23, PR #361): explicitly activated
+shared schedules delegate the bound owner's current roles, resolved on every
+run, while retaining `scheduler` scope. Import ownership alone does not activate
+execution. The activation preview discloses this delegation, including access to
+other tools permitted to the owner. Existing policy, credential and confirmation
+checks still apply; interactive confirmation prevents unattended completion.
+Content or owner changes invalidate approval. A separate automation role is not
+required: explicit activation is the owner's authorization to act on their behalf.
+
+## Recurring agent schedule validation
+
+Recurring `agent:turn` tasks have a one-minute minimum recurrence. The shared
+`ParseAgentSchedule` parser validates cron syntax and rejects `@every` intervals
+shorter than a minute. Five-field cron and calendar descriptors already have
+minute resolution; the wait until the first firing is deliberately not used as
+the interval, so an hourly task due in one second remains valid.
+
+`schedule_create` validates before writing to Raft. The scheduler also validates
+agent tasks before using a stored `NextRun`, covering existing and imported
+records. Invalid tasks remain stored and visible, but are skipped with a warning
+rather than silently rewritten. Delete and recreate them with a valid schedule.
+Internal maintenance handlers retain their existing cadence, and one-shot
+commitments are unaffected. `MinFireInterval` remains a retry-loop throttle, not
+a recurrence or spending limit.

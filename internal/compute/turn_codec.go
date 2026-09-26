@@ -175,34 +175,11 @@ func responseFromProto(p *lobslawv1.RunTurnResponse) *turn.Response {
 }
 
 func messageToProto(m turn.Message) *lobslawv1.SessionMessage {
-	out := &lobslawv1.SessionMessage{
-		Role:       m.Role,
-		Content:    m.Content,
-		ToolCallId: m.ToolCallID,
-	}
-	for _, tc := range m.ToolCalls {
-		out.ToolCalls = append(out.ToolCalls, &lobslawv1.SessionToolCall{
-			Id: tc.ID, Name: tc.Name, Arguments: tc.Arguments,
-		})
-	}
-	return out
+	return turn.MessageToProto(m)
 }
 
 func messageFromProto(m *lobslawv1.SessionMessage) turn.Message {
-	if m == nil {
-		return turn.Message{}
-	}
-	out := turn.Message{
-		Role:       m.Role,
-		Content:    m.Content,
-		ToolCallID: m.ToolCallId,
-	}
-	for _, tc := range m.ToolCalls {
-		out.ToolCalls = append(out.ToolCalls, turn.ToolCall{
-			ID: tc.Id, Name: tc.Name, Arguments: tc.Arguments,
-		})
-	}
-	return out
+	return turn.MessageFromProto(m)
 }
 
 func attachmentToProto(a types.Attachment) *lobslawv1.TurnAttachment {

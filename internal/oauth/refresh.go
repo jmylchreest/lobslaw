@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/httpbody"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
@@ -58,7 +58,7 @@ func RefreshToken(ctx context.Context, p ProviderConfig, refreshToken string) (*
 		return nil, fmt.Errorf("oauth: refresh POST: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	body, err := httpbody.Read(resp.Body, maxResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("oauth: read refresh body: %w", err)
 	}

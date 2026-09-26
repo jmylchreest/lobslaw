@@ -397,6 +397,12 @@ Threat model: an attacker with write access to the policy directory at its own U
 
 ### Hot-reload
 
+Operator loads rebuild presets from built-ins on each reload, carrying overrides
+across policy directories in order. Deleting an override restores the earlier
+directory's definition, or the built-in when no earlier override remains.
+A deleted custom preset makes dependent policies invalid; the existing rejected
+policy handling applies. Operator reloads do not mutate skill preset registrations.
+
 The `sandbox.Watcher` wraps `fsnotify` with a 250ms debounce. Start with a `*PolicySink` (satisfied by `compute.Registry`) and a `context.Context`:
 
 ```go

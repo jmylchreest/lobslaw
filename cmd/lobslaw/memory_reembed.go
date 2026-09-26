@@ -43,11 +43,11 @@ survive a restart.
 `
 
 func memoryReembedLive(args []string) error {
-	fs := flag.NewFlagSet("memory reembed", flag.ExitOnError)
+	fs := newFlagSet("memory reembed", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	limit := fs.Int("limit", 0, "process at most this many records (0 = all)")
-	fs.Usage = func() { _, _ = fmt.Fprint(fs.Output(), memoryReembedUsage) }
+	fs.Usage = func() { _, _ = fmt.Fprint(os.Stderr, memoryReembedUsage) }
 	positional, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {
 		return err

@@ -16,10 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/stripe/smokescreen/pkg/smokescreen"
 	smokeacl "github.com/stripe/smokescreen/pkg/smokescreen/acl/v1"
 	"github.com/stripe/smokescreen/pkg/smokescreen/conntrack"
+
+	"github.com/jmylchreest/lobslaw/internal/logging"
 )
 
 // roleHeader is the request header smokescreen reads to identify the
@@ -179,7 +180,7 @@ func NewSmokescreenProvider(cfg SmokescreenConfig) (*SmokescreenProvider, error)
 		clients:            make(map[string]*http.Client),
 	}
 
-	acl := buildSmokescreenACL(cfg.ACL)
+	acl := buildSmokescreenACL(cfg.ACL, logger)
 	p.activeACL.Store(acl)
 
 	scfg, err := buildSmokescreenConfig(p)
@@ -191,6 +192,7 @@ func NewSmokescreenProvider(cfg SmokescreenConfig) (*SmokescreenProvider, error)
 
 	proxy := smokescreen.BuildProxy(scfg)
 	p.server = &http.Server{
+		ErrorLog:          logging.StandardLogger(logger, slog.LevelError),
 		Handler:           proxy,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -261,7 +263,7 @@ func (p *SmokescreenProvider) For(role string) Client {
 // Existing in-flight requests keep their pre-swap decisions — only
 // new requests see the new rules.
 func (p *SmokescreenProvider) SetACL(rules Rules) {
-	p.activeACL.Store(buildSmokescreenACL(rules))
+	p.activeACL.Store(buildSmokescreenACL(rules, p.logger))
 	p.logger.Info("egress: ACL hot-reloaded", "roles", len(rules.Roles))
 }
 
@@ -486,10 +488,10 @@ func (r *aclRouter) Decide(service, host string) (smokeacl.Decision, error) {
 // Each role becomes one Rule with Policy=Enforce (deny by default,
 // allow only declared globs). Permissive roles get their own Rule
 // with an "*" glob — used for the fetch_url default-permissive case.
-func buildSmokescreenACL(rules Rules) *smokeacl.ACL {
+func buildSmokescreenACL(rules Rules, logger *slog.Logger) *smokeacl.ACL {
 	acl := &smokeacl.ACL{
 		Rules:  make(map[string]smokeacl.Rule, len(rules.Roles)),
-		Logger: logrusBridge(),
+		Logger: logrusFromSlog(logger),
 	}
 	for role, hosts := range rules.Roles {
 		acl.Rules[role] = smokeacl.Rule{
@@ -523,26 +525,6 @@ func buildSmokescreenACL(rules Rules) *smokeacl.ACL {
 		}
 	}
 	return acl
-}
-
-// logrusFromSlog and logrusBridge plumb smokescreen's logrus
-// expectations into our slog pipeline. Smokescreen logs at info/
-// warn/error; the bridge keeps every line structured-log-compatible.
-func logrusFromSlog(_ *slog.Logger) *logrus.Logger {
-	// MVP: a logrus logger discarding everything but routing fatals
-	// up. Stripping the verbose connection-tracking lines from the
-	// main log keeps node logs readable; full smokescreen logs live
-	// only when LOBSLAW_LOG_LEVEL=debug. Future work: a Hook that
-	// forwards to slog with structured fields.
-	l := logrus.New()
-	l.SetLevel(logrus.WarnLevel)
-	return l
-}
-
-func logrusBridge() *logrus.Logger {
-	l := logrus.New()
-	l.SetLevel(logrus.WarnLevel)
-	return l
 }
 
 // DialContext opens a TCP tunnel to addr through the proxy, so a

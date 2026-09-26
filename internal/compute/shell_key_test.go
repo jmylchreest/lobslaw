@@ -295,7 +295,7 @@ func TestTheSummaryShowsTheCommandEvenWhenItCannotBeGranted(t *testing.T) {
 	if !strings.Contains(summary, "git status && make") {
 		t.Errorf("summary = %q; it does not show the command", summary)
 	}
-	if !strings.Contains(summary, "asked every time") {
+	if !strings.Contains(summary, "no reusable command-specific approval") {
 		t.Errorf("summary = %q; it does not say the answer will not be remembered", summary)
 	}
 }

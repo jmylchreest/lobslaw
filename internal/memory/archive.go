@@ -29,6 +29,7 @@ type archiveKind struct {
 
 // An allowlist makes a new runtime/credential bucket non-exportable by default.
 var archiveKinds = []archiveKind{
+	{BucketSkillInstallations, "skill-installations", &lobslawv1.ShareInstallation{}},
 	{BucketArchiveMappings, "import-mappings", &lobslawv1.ArchiveMapping{}},
 	{BucketEpisodicRecords, "episodic", &lobslawv1.EpisodicRecord{}},
 	{BucketVectorRecords, "documents", &lobslawv1.VectorRecord{}},

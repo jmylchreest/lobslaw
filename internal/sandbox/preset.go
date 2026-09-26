@@ -315,9 +315,13 @@ var BuiltinPresets = []Preset{
 // Returns the resolved rules sorted by path-length descending so
 // callers can iterate in "most-specific first" order.
 func Resolve(presetNames []string, inline []PathRule) ([]PathRule, error) {
+	return resolvePresets(presetNames, inline, LookupPreset)
+}
+
+func resolvePresets(presetNames []string, inline []PathRule, lookup func(string) (Preset, bool)) ([]PathRule, error) {
 	merged := make([]PathRule, 0, len(inline)*2)
 	for _, name := range presetNames {
-		p, ok := LookupPreset(name)
+		p, ok := lookup(name)
 		if !ok {
 			return nil, fmt.Errorf("unknown preset %q", name)
 		}

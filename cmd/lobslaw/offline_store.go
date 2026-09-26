@@ -22,10 +22,11 @@ import (
 // a config file locates the data dir, an explicit path overrides it,
 // and the encryption key comes from a secret ref.
 type offlineStore struct {
-	configPath string
-	dataDir    string
-	statePath  string
-	keyRef     string
+	configPath       string
+	dataDir          string
+	statePath        string
+	keyRef           string
+	recoveryReadOnly bool
 
 	// cfg caches the loaded config so path and key resolution don't
 	// parse it twice.
@@ -36,6 +37,7 @@ type offlineStore struct {
 
 // bind registers the shared flags on fs. Call before fs.Parse.
 func (o *offlineStore) bind(fs *flag.FlagSet) {
+	fs.BoolVar(&o.recoveryReadOnly, "recovery-read-only", false, "inspect an existing recovery image read-only; refuses all writes")
 	fs.StringVar(&o.configPath, "config", envOr("LOBSLAW_CONFIG", ""),
 		"path to config.toml; supplies [cluster] data_dir and [memory.encryption] key_ref")
 	fs.StringVar(&o.dataDir, "data-dir", "",
@@ -76,7 +78,11 @@ func (o *offlineStore) open() (*memory.Store, string, error) {
 		return nil, "", err
 	}
 
-	store, err := memory.OpenStore(path, key)
+	open := memory.OpenStore
+	if o.recoveryReadOnly {
+		open = memory.OpenStoreReadOnly
+	}
+	store, err := open(path, key)
 	if err != nil {
 		return nil, "", translateOpenError(path, err)
 	}

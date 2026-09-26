@@ -20,7 +20,6 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jmylchreest/lobslaw/internal/audit"
-	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
@@ -35,6 +34,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/sharing"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/soul"
@@ -330,18 +330,18 @@ type Node struct {
 	transport *rafttransport.Transport
 	raft      *memory.RaftNode
 
-	policySvc        *policy.Service
-	memorySvc        *memory.Service
-	credentialSvc    *memory.CredentialService
-	userPrefsSvc     *memory.UserPrefsService
-	notifySvc        *notify.Service
-	oauthTracker     *oauth.Tracker
-	oauthProviders   map[string]oauth.ProviderConfig
-	clawhubInstaller *clawhub.Installer
-	planSvc          *plan.Service
-	storageSvc       *storage.Service
-	storageMgr       *storage.Manager
-	skillRegistry    *skills.Registry
+	policySvc      *policy.Service
+	memorySvc      *memory.Service
+	credentialSvc  *memory.CredentialService
+	userPrefsSvc   *memory.UserPrefsService
+	notifySvc      *notify.Service
+	oauthTracker   *oauth.Tracker
+	oauthProviders map[string]oauth.ProviderConfig
+	clawhubSource  sharing.Source
+	planSvc        *plan.Service
+	storageSvc     *storage.Service
+	storageMgr     *storage.Manager
+	skillRegistry  *skills.Registry
 	// jobDrivers maps a generation driver's name to its
 	// implementation. The name is embedded in every JobHandle the
 	// driver mints, so a handle polled after a crash takeover is
@@ -384,7 +384,8 @@ type Node struct {
 	// materialiser writes ACTIVE self-taught artefacts into this
 	// node's disposable skill cache. Nil when self-learning is off,
 	// for the same absence-not-a-flag reason the store is.
-	materialiser *skills.Materialiser
+	materialiser  *skills.Materialiser
+	materialiseMu sync.Mutex
 	// materialiseWake carries a coalesced request for a materialisation
 	// pass, sent from the FSM's self-taught change callback.
 	materialiseWake chan struct{}
@@ -487,7 +488,8 @@ type Node struct {
 	// promptRegistry, kept separately because the sweeper needs the
 	// concrete type. Nil on a gateway node that does not host raft —
 	// there, confirmations stay process-local.
-	promptStore *memory.PromptStore
+	promptStore   *memory.PromptStore
+	taskApprovals *taskApprovalServer
 
 	// leaderGate fans raft leadership transitions out to leader-pinned
 	// singleton workloads (currently just the telegram long-poller).
@@ -864,6 +866,10 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	select {
 	case err := <-errCh:
 		return err
+	case <-n.fsm.Failed():
+		return errors.Join(n.fsm.Failure(), n.Shutdown(context.Background()))
+	case <-n.store.Failed():
+		return errors.Join(n.store.Failure(), n.Shutdown(context.Background()))
 	case <-ctx.Done():
 		n.log.Info("shutdown signal received")
 		return n.Shutdown(context.Background())
@@ -1051,8 +1057,8 @@ func validateConfig(cfg Config) error {
 	if cfg.Creds == nil {
 		return errors.New("node.Config: Creds required (run `lobslaw cluster sign-node` first)")
 	}
-	if cfg.Creds.NodeID != cfg.NodeID {
-		return fmt.Errorf("node.Config: cert was signed for %q but this host resolves as %q — re-run `lobslaw cluster sign-node` on this host (or set LOBSLAW_NODE_ID to override)", cfg.Creds.NodeID, cfg.NodeID)
+	if cfg.Creds.NodeID() != cfg.NodeID {
+		return fmt.Errorf("node.Config: cert was signed for %q but this host resolves as %q — re-run `lobslaw cluster sign-node` on this host (or set LOBSLAW_NODE_ID to override)", cfg.Creds.NodeID(), cfg.NodeID)
 	}
 	if needsRaft(cfg.Functions) {
 		if cfg.DataDir == "" {

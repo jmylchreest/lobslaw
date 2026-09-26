@@ -44,7 +44,7 @@ var policyLocalOnly = map[string]func([]string) error{
 
 // policyClassify prints what the classifier makes of a command line.
 func policyClassify(args []string) error {
-	fs := flag.NewFlagSet("policy classify", flag.ExitOnError)
+	fs := newFlagSet("policy classify", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "emit JSON")
 	scratch := fs.String("scratch", "",
 		"comma-separated scratch roots, as [compute.shell_approval] scratch_paths would set")
@@ -103,7 +103,7 @@ func policyClassify(args []string) error {
 	}
 
 	if modelErr != nil {
-		fmt.Fprintf(os.Stderr, "model verdict unavailable: %v\n\n", modelErr)
+		diagnosticf("model verdict unavailable: %v\n\n", modelErr)
 	}
 	fmt.Println(commandrisk.RiskHeadline(v))
 	if len(v.Segments) > 1 {
@@ -174,7 +174,7 @@ func classifyWithModel(configPath, command string, static commandrisk.RiskVerdic
 	}
 	trust, terr := compute.ParseRiskTrust(cfg.Compute.ShellApproval.VerdictTrust)
 	if terr != nil {
-		fmt.Fprintf(os.Stderr, "%v; using %q\n", terr, trust)
+		diagnosticf("%v; using %q\n", terr, trust)
 	}
 
 	judge := compute.NewRiskJudge(client, pc.Model, trust, timeout, slog.New(slog.DiscardHandler))
@@ -182,15 +182,14 @@ func classifyWithModel(configPath, command string, static commandrisk.RiskVerdic
 	out := compute.AdjudicateWith(context.Background(), static, command, judge)
 	elapsed := time.Since(started)
 
-	fmt.Fprintf(os.Stderr, "model: provider=%s model=%s trust=%s timeout=%s took=%s\n",
+	noticef("model: provider=%s model=%s trust=%s timeout=%s took=%s\n",
 		role.Provider, pc.Model, trust, timeoutLabel(timeout), elapsed.Round(10*time.Millisecond))
 	if !out.FromModel {
 		// Said plainly, because this is the outcome that looks like
 		// success and is not: the static verdict stands and nothing
 		// says why unless somebody asks.
-		fmt.Fprintln(os.Stderr,
-			"model: verdict not used — it declined, timed out, answered outside the enum, "+
-				"was low-confidence, or agreed with the classifier")
+		noticef("model: verdict not used — it declined, timed out, answered outside the enum, " +
+			"was low-confidence, or agreed with the classifier")
 	}
 	return out, nil
 }

@@ -89,7 +89,7 @@ func LearnedToolDefs() []*types.ToolDef {
 		{
 			Name:        "learned_list",
 			Path:        compute.BuiltinScheme + "learned_list",
-			Description: "List the instructions you have written for yourself — skills and notes proposed by the post-turn review, with their state. Use when asked what you have learned, taught yourself, proposed, or what is waiting for approval; these live in their own store and are NOT visible through memory_search, memory_recent or skill_view. State is 'proposed' (written, inert, waiting for a human) or 'active' (approved and in use). You cannot approve them — say who can: the operator, with `lobslaw learned show <id>` to read one and `lobslaw learned approve <id>` to accept it.",
+			Description: "List the instructions you have written for yourself — skills and notes proposed by the post-turn review, with their state. Use when asked what you have learned, taught yourself, proposed, or what is waiting for approval; these live in their own store and are NOT visible through memory_search, memory_recent or skill_view. State is 'proposed' (written, inert, waiting for a human) or 'active' (approved and in use). You cannot approve them. In Telegram, direct the user to /learned to read full proposals and amendments and use their Approve, Deny or Later buttons. Do not run administrative shell commands to review them. Operators can also use `lobslaw learned show <id>` and `lobslaw learned approve <id>`.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},

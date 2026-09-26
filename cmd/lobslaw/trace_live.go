@@ -48,7 +48,7 @@ func traceSource(nodeID, addr string) string {
 const tracingOffNote = "tracing is OFF on this node — set [trace] enabled = true and restart"
 
 func traceListLive(args []string) error {
-	fs := flag.NewFlagSet("trace list", flag.ExitOnError)
+	fs := newFlagSet("trace list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	limit := fs.Int("limit", 20, "how many turns to list")
@@ -114,7 +114,7 @@ func traceTurnID(fs *flag.FlagSet, args []string) (string, error) {
 }
 
 func traceShowLive(args []string) error {
-	fs := flag.NewFlagSet("trace", flag.ExitOnError)
+	fs := newFlagSet("trace", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
 	turnID, err := traceTurnID(fs, args)

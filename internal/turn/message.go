@@ -1,5 +1,10 @@
 package turn
 
+import (
+	"maps"
+	"slices"
+)
+
 // Message is one turn in a conversation. Role + content match
 // OpenAI's shape; ToolCalls / ToolCallID are populated for the
 // tool-calling round-trip.
@@ -19,6 +24,36 @@ type Message struct {
 	// ToolCallID is populated on tool-result messages (role="tool")
 	// and correlates to the originating assistant ToolCall.ID.
 	ToolCallID string
+	// PreparedToolCall is trusted continuation metadata, never provider input.
+	PreparedToolCall *PreparedToolCall `json:"-"`
+}
+
+// PreparedToolCall freezes effective input while a confirmation waits.
+// Saved answers never override current policy denials or safety checks.
+type PreparedToolCall struct {
+	DispatchKind      string
+	CallID            string
+	ToolName          string
+	TurnID            string
+	OriginalArguments string
+	Params            map[string]string
+	Approvals         []PreparedApproval
+}
+
+// PreparedApproval records an answered gate for this exact prepared call only.
+type PreparedApproval struct {
+	Action   string
+	Resource string
+}
+
+func (p *PreparedToolCall) Clone() *PreparedToolCall {
+	if p == nil {
+		return nil
+	}
+	next := *p
+	next.Params = maps.Clone(p.Params)
+	next.Approvals = slices.Clone(p.Approvals)
+	return &next
 }
 
 // ToolCall is the model's request to invoke a tool. ID is the

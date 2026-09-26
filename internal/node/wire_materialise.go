@@ -163,6 +163,8 @@ func (n *Node) notifyMaterialise() {
 // materialiseOnce makes the cache and the registry match the ACTIVE
 // set.
 func (n *Node) materialiseOnce() error {
+	n.materialiseMu.Lock()
+	defer n.materialiseMu.Unlock()
 	active, err := n.selfTaught.Active(lobslawv1.SelfTaughtKind_SELF_TAUGHT_KIND_SKILL)
 	if err != nil {
 		return err

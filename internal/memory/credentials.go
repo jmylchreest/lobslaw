@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -136,9 +137,8 @@ func (s *CredentialService) List(_ context.Context) ([]*PlaintextCredential, err
 }
 
 // Put writes a credential. Encrypts tokens before raft.Apply.
-// Leader-only — followers return an error. Used by the OAuth flow
-// (initial token write + refresh rotation) and by Grant/Revoke
-// (ACL mutation only — tokens unchanged).
+// Explicit account replacement, forwarded to the leader as necessary. A new
+// generation invalidates any refresh in flight; Grant/Revoke and refresh use CAS.
 func (s *CredentialService) Put(ctx context.Context, p *PlaintextCredential) error {
 	if p == nil {
 		return errors.New("credentials: nil credential")
@@ -154,6 +154,7 @@ func (s *CredentialService) Put(ctx context.Context, p *PlaintextCredential) err
 	if err != nil {
 		return err
 	}
+	rec.Generation = ids.New()
 	entry := &lobslawv1.LogEntry{
 		Op:      lobslawv1.LogOp_LOG_OP_PUT,
 		Id:      key,
@@ -163,7 +164,7 @@ func (s *CredentialService) Put(ctx context.Context, p *PlaintextCredential) err
 	if err != nil {
 		return fmt.Errorf("credentials: marshal: %w", err)
 	}
-	if _, err := s.raft.ApplyOrForward(ctx, data, credentialApplyTimeout); err != nil {
+	if err := s.applyCredentialEntry(ctx, data); err != nil {
 		return fmt.Errorf("credentials: raft apply: %w", err)
 	}
 	return nil
@@ -190,7 +191,7 @@ func (s *CredentialService) Delete(ctx context.Context, provider, subject string
 	if err != nil {
 		return fmt.Errorf("credentials: marshal: %w", err)
 	}
-	if _, err := s.raft.ApplyOrForward(ctx, data, credentialApplyTimeout); err != nil {
+	if err := s.applyCredentialEntry(ctx, data); err != nil {
 		return fmt.Errorf("credentials: raft apply: %w", err)
 	}
 	return nil
@@ -202,39 +203,32 @@ func (s *CredentialService) Delete(ctx context.Context, provider, subject string
 // nothing equals nothing); use Revoke to remove the skill from
 // AllowedSkills entirely.
 func (s *CredentialService) Grant(ctx context.Context, provider, subject, skill string, scopes []string) error {
-	cred, err := s.Get(ctx, provider, subject)
-	if err != nil {
-		return err
-	}
-	if !slices.Contains(cred.AllowedSkills, skill) {
-		cred.AllowedSkills = append(cred.AllowedSkills, skill)
-	}
-	if cred.AllowedScopesPerSkill == nil {
-		cred.AllowedScopesPerSkill = make(map[string][]string)
-	}
-	// Verify the requested scopes are a subset of what was granted
-	// at OAuth time. A skill can't be granted scopes the credential
-	// doesn't have.
-	for _, sc := range scopes {
-		if !slices.Contains(cred.Scopes, sc) {
-			return fmt.Errorf("credentials: cannot grant scope %q — not in credential's granted scopes %v", sc, cred.Scopes)
+	return s.editCredentialACL(ctx, provider, subject, func(rec *lobslawv1.CredentialRecord) error {
+		for _, scope := range scopes {
+			if !slices.Contains(rec.Scopes, scope) {
+				return fmt.Errorf("credentials: cannot grant scope %q — not in credential scopes", scope)
+			}
 		}
-	}
-	cred.AllowedScopesPerSkill[skill] = append([]string(nil), scopes...)
-	return s.Put(ctx, cred)
+		if !slices.Contains(rec.AllowedSkills, skill) {
+			rec.AllowedSkills = append(rec.AllowedSkills, skill)
+		}
+		if rec.AllowedScopesPerSkill == nil {
+			rec.AllowedScopesPerSkill = make(map[string]*lobslawv1.AllowedScopes)
+		}
+		rec.AllowedScopesPerSkill[skill] = &lobslawv1.AllowedScopes{Scopes: append([]string(nil), scopes...)}
+		return nil
+	})
 }
 
 // Revoke removes a skill from the credential's ACL. The credential
 // itself stays — Revoke only narrows access. Use Delete to remove
 // the credential entirely.
 func (s *CredentialService) Revoke(ctx context.Context, provider, subject, skill string) error {
-	cred, err := s.Get(ctx, provider, subject)
-	if err != nil {
-		return err
-	}
-	cred.AllowedSkills = removeString(cred.AllowedSkills, skill)
-	delete(cred.AllowedScopesPerSkill, skill)
-	return s.Put(ctx, cred)
+	return s.editCredentialACL(ctx, provider, subject, func(rec *lobslawv1.CredentialRecord) error {
+		rec.AllowedSkills = removeString(rec.AllowedSkills, skill)
+		delete(rec.AllowedScopesPerSkill, skill)
+		return nil
+	})
 }
 
 // ScopesAllowedForSkill returns the scope subset a given skill may
@@ -310,41 +304,55 @@ const refreshSkew = 60 * time.Second
 // that's fatal). Callers in production wire oauth.RefreshToken so
 // rotation happens transparently.
 func (s *CredentialService) IssueForSkill(ctx context.Context, provider, subject, skill string, refresher TokenRefresher) (*SkillIssue, error) {
-	cred, err := s.Get(ctx, provider, subject)
-	if err != nil {
-		return nil, err
+	ctx, cancel := context.WithTimeout(ctx, credentialIssueTimeout)
+	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		rec, err := s.loadCredential(provider, subject)
+		if err != nil {
+			return nil, err
+		}
+		issue, err := s.credentialIssue(rec, skill)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case rec.ClaimedBy != "":
+			if rec.RefreshUncertain || rec.RefreshDeadline == nil || !rec.RefreshDeadline.AsTime().After(time.Now()) {
+				return nil, ErrCredentialRefreshUncertain
+			}
+		case refresher == nil || rec.ExpiresAt == nil || time.Until(rec.ExpiresAt.AsTime()) >= refreshSkew:
+			return issue, nil
+		default:
+			claimed := proto.Clone(rec).(*lobslawv1.CredentialRecord)
+			claimed.ClaimedBy = ids.New()
+			claimed.RefreshDeadline = timestamppb.New(time.Now().Add(credentialRefreshTimeout + credentialPersistTimeout))
+			if err := s.claimCredential(ctx, rec, claimed); err != nil {
+				if !errors.Is(err, ErrClaimConflict) {
+					return nil, err
+				}
+			} else {
+				claimed.Revision = rec.Revision + 1
+				// A caller leaving must not discard the provider's rotated token.
+				done := make(chan credentialRefreshResult, 1)
+				go func() { done <- s.refreshCredential(context.WithoutCancel(ctx), claimed, refresher) }()
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case result := <-done:
+					if result.err != nil {
+						return nil, result.err
+					}
+					return s.credentialIssue(result.record, skill)
+				}
+			}
+		}
+		if err := waitCredential(ctx); err != nil {
+			return nil, err
+		}
 	}
-	scopes := s.ScopesAllowedForSkill(cred, skill)
-	if len(scopes) == 0 {
-		return nil, fmt.Errorf("credentials: skill %q is not authorised for %s/%s (run credentials_grant first)", skill, provider, subject)
-	}
-	now := time.Now()
-	needsRefresh := !cred.ExpiresAt.IsZero() && cred.ExpiresAt.Sub(now) < refreshSkew
-	if needsRefresh && refresher != nil {
-		access, refresh, expiresIn, scope, rerr := refresher(ctx, cred.RefreshToken)
-		if rerr != nil {
-			return nil, fmt.Errorf("credentials: refresh: %w", rerr)
-		}
-		cred.AccessToken = access
-		if refresh != "" {
-			cred.RefreshToken = refresh
-		}
-		if expiresIn > 0 {
-			cred.ExpiresAt = now.Add(time.Duration(expiresIn) * time.Second)
-		}
-		if scope != "" {
-			cred.Scopes = strings.Fields(strings.ReplaceAll(scope, ",", " "))
-		}
-		cred.LastRotated = now
-		if perr := s.Put(ctx, cred); perr != nil {
-			return nil, fmt.Errorf("credentials: persist refreshed: %w", perr)
-		}
-	}
-	return &SkillIssue{
-		AccessToken: cred.AccessToken,
-		Scopes:      append([]string(nil), scopes...),
-		ExpiresAt:   cred.ExpiresAt,
-	}, nil
 }
 
 // encrypt seals AccessToken + RefreshToken with the cluster key.

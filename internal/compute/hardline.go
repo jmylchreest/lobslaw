@@ -6,6 +6,8 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/policy"
 )
 
+const sensitivePathAction = "tool:sensitive-path"
+
 // commandParams are the parameter names that carry something a shell
 // will execute. Checked by name rather than by tool, so a tool
 // registered later gets the floor for free instead of only when
