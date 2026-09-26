@@ -576,14 +576,15 @@ type ProcessMessageResponse struct {
 
 // ToolInvocation records one tool call's lifecycle within a turn.
 type ToolInvocation struct {
-	budgetPending bool
-	prepared      *PreparedToolCall
-	CallID        string
-	ToolName      string
-	Args          string
-	Output        string
-	ExitCode      int
-	Error         string
+	ExecutionStatus string
+	budgetPending   bool
+	prepared        *PreparedToolCall
+	CallID          string
+	ToolName        string
+	Args            string
+	Output          string
+	ExitCode        int
+	Error           string
 }
 
 // RunToolCallLoop processes one turn end-to-end. Steps per PLAN.md
@@ -963,7 +964,14 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{TurnStartIndex: len(msgs)}, true)
 }
 
-func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse, resuming bool) (*ProcessMessageResponse, error) {
+func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse, resuming bool) (result *ProcessMessageResponse, runErr error) {
+	defer func() {
+		if runErr != nil && TaskIDFrom(ctx) != "" {
+			resp.Messages = messages
+			resp.BudgetState = req.Budget.State()
+			result = resp
+		}
+	}()
 	// Every exit from this loop — normal, budget-exceeded, confirmation
 	// or hard-timeout — must carry whatever files the turn produced.
 	// A turn that synthesised audio and then hit its budget still
@@ -1014,10 +1022,11 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 					resumeCtx = turn.WithoutApproval(ctx)
 				}
 				inv, confirmation, err := a.runToolCallWithPrepared(resumeCtx, req, tc, messages[idx].PreparedToolCall)
+				resp.ToolCalls = append(resp.ToolCalls, inv)
 				if err != nil {
+					messages[idx] = toolResultMessage(tc, inv)
 					return nil, fmt.Errorf("resume tool call %q: %w", tc.Name, err)
 				}
-				resp.ToolCalls = append(resp.ToolCalls, inv)
 				if confirmation != nil {
 					messages[idx] = toolResultMessage(tc, inv)
 					// Still gated — a second, different question rather
@@ -1143,11 +1152,12 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 		for _, tc := range chatResp.ToolCalls {
 			toolStart := time.Now()
 			inv, confirmation, err := a.runToolCall(ctx, req, tc)
+			resp.ToolCalls = append(resp.ToolCalls, inv)
 			if err != nil {
+				messages = append(messages, toolResultMessage(tc, inv))
 				return nil, fmt.Errorf("tool call %q: %w", tc.Name, err)
 			}
 			attribution.noteTool(inv, time.Since(toolStart), toolStart)
-			resp.ToolCalls = append(resp.ToolCalls, inv)
 			if confirmation != nil {
 				resp.NeedsConfirmation = true
 				resp.ConfirmationReason = confirmation.Reason
@@ -1920,6 +1930,27 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 }
 
 func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageRequest, tc ToolCall, prepared *PreparedToolCall) (ToolInvocation, *pendingConfirmation, error) {
+	inv, pending, err := a.dispatchToolCall(ctx, req, tc, prepared)
+	inv.CallID, inv.ToolName = tc.ID, tc.Name
+	if inv.Args == "" {
+		inv.Args = tc.Arguments
+	}
+	if err != nil {
+		inv.Error = err.Error()
+	}
+	if inv.ExecutionStatus == "" {
+		inv.ExecutionStatus = turn.ReceiptRefused
+	}
+	if pending != nil {
+		inv.ExecutionStatus = turn.ReceiptApprovalRequired
+		if pending.Action == "" {
+			inv.ExecutionStatus = turn.ReceiptBudgetRequired
+		}
+	}
+	return inv, pending, err
+}
+
+func (a *Agent) dispatchToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall, prepared *PreparedToolCall) (ToolInvocation, *pendingConfirmation, error) {
 	if err := checkTaskExecution(ctx); err != nil {
 		return ToolInvocation{}, nil, err
 	}
@@ -2028,6 +2059,7 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 		invReq.approved = prepared.Approvals
 	}
 	result, err := a.cfg.Executor.Invoke(ctx, invReq)
+	invocationResult(&inv, result)
 	var staged *preparedConfirmation
 	if errors.As(err, &staged) {
 		inv.prepared = &PreparedToolCall{CallID: tc.ID, ToolName: tc.Name, TurnID: req.TurnID, OriginalArguments: tc.Arguments, Params: maps.Clone(staged.params), Approvals: staged.approvals}
@@ -2113,9 +2145,11 @@ func (a *Agent) runSkillToolCall(ctx context.Context, req ProcessMessageRequest,
 	if err != nil {
 		inv.Error = err.Error()
 		a.logToolFailure(req, tc.Name, "skill dispatch failed", -1, err.Error())
+		inv.ExecutionStatus = turn.ReceiptUnknown
 		return inv, nil, nil
 	}
 	inv.ExitCode = skillRes.ExitCode
+	inv.ExecutionStatus = turn.ReceiptExecuted
 	if skillRes.ExitCode != 0 {
 		a.logToolFailure(req, tc.Name, "skill returned a non-zero exit",
 			skillRes.ExitCode, string(skillRes.Stderr))

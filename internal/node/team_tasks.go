@@ -35,8 +35,18 @@ func (n *Node) startBotChatTask(ctx context.Context, request turn.Request) (*pb.
 	}
 	leg, cancel := context.WithTimeout(ctx, inboxExecutionTimeout)
 	defer cancel()
-	response, err := n.startTeamTask(leg, compute.ProcessMessageRequest{Bot: profile, BotID: request.BotID, Claims: request.Claims, Principal: profile.Principal(), Message: request.Message}, nil)
-	if err != nil {
+	req := compute.ProcessMessageRequest{Bot: profile, BotID: request.BotID, Claims: request.Claims, Principal: profile.Principal(), Message: request.Message, TurnID: request.TurnID}
+	if profile.IsCoordinator {
+		req.ConversationHistory = append(req.ConversationHistory, request.ConversationHistory...)
+		history, err := n.coordinatorTaskHistory(profile.Owner, profile.ID)
+		if err != nil {
+			return nil, err
+		}
+		req.ConversationHistory = append(req.ConversationHistory, history...)
+		req.ConversationSummary, req.Channel, req.ChannelID = request.ConversationSummary, request.Channel, request.ChannelID
+	}
+	response, err := n.startTask(leg, req, nil, profile.IsCoordinator)
+	if err != nil && response == nil {
 		return nil, err
 	}
 	task, err := n.taskApprovalAPI().GetTaskApproval(ctx, &pb.GetTaskApprovalRequest{Id: response.TaskID, Owner: profile.Owner})
@@ -78,7 +88,7 @@ func (n *Node) resolveTeamAuthority(ctx context.Context, owner, actor string) (c
 		return compute.TaskAuthority{}, err
 	}
 	budget.Tighten(profile.Caps)
-	return compute.TaskAuthority{Claims: &types.Claims{UserID: userID, Roles: n.resolveUserRoles(userID)}, Bot: profile.Without("ask_bot"), Caps: budget.Caps(), ValidateOriginal: func(claims *types.Claims) error { return n.validateTeamClaims(ctx, owner, claims) }}, nil
+	return compute.TaskAuthority{Claims: &types.Claims{UserID: userID, Roles: n.resolveUserRoles(userID)}, Bot: profile, Caps: budget.Caps(), ValidateOriginal: func(claims *types.Claims) error { return n.validateTeamClaims(ctx, owner, claims) }}, nil
 }
 
 func (n *Node) validateTeamClaims(ctx context.Context, owner string, claims *types.Claims) error {
@@ -100,6 +110,10 @@ func (n *Node) validateTeamClaims(ctx context.Context, owner string, claims *typ
 }
 
 func (n *Node) startTeamTask(ctx context.Context, req compute.ProcessMessageRequest, item *pb.BotInboxItem) (*compute.ProcessMessageResponse, error) {
+	return n.startTask(ctx, req, item, false)
+}
+
+func (n *Node) startTask(ctx context.Context, req compute.ProcessMessageRequest, item *pb.BotInboxItem, conversation bool) (*compute.ProcessMessageResponse, error) {
 	if n.agent == nil || n.inboxSvc == nil || req.Bot == nil || req.Claims == nil {
 		return nil, errors.New("team task runner is not wired or lacks authority")
 	}
@@ -121,11 +135,19 @@ func (n *Node) startTeamTask(ctx context.Context, req compute.ProcessMessageRequ
 		}
 	}
 	req.Budget.Tighten(live.Caps)
-	req.Bot = req.Bot.Without("ask_bot")
+	if !conversation {
+		req.Bot = req.Bot.Without("ask_bot")
+	}
 	req.Principal = req.Bot.Principal()
-	req.TurnID = ids.New()
+	if req.TurnID == "" {
+		req.TurnID = ids.New()
+	}
 	backend := n.taskApprovalAPI()
-	create := &pb.CreateTaskApprovalRequest{Owner: owner, Actor: actor, ParentId: compute.TaskIDFrom(ctx)}
+	if item == nil {
+		caller, _ := turn.IdentityFrom(ctx)
+		item = &pb.BotInboxItem{Recipient: req.BotID, Sender: caller.Principal.String(), RequestedBy: owner, Kind: pb.InboxKind_INBOX_KIND_QUESTION, Body: req.Message}
+	}
+	create := &pb.CreateTaskApprovalRequest{Owner: owner, Actor: actor, ParentId: compute.TaskIDFrom(ctx), Inbox: item, InboxMaxPending: n.inboxSvc.AdmissionLimit(), CoordinatorConversation: conversation}
 	// Each tool checks the durable task deadline, including during the initial
 	// leg. An original token expiring sooner must shorten that authority too.
 	if !claims.ExpiresAt.IsZero() && time.Until(claims.ExpiresAt) < memory.TaskApprovalTTL {
@@ -136,31 +158,36 @@ func (n *Node) startTeamTask(ctx context.Context, req compute.ProcessMessageRequ
 		return nil, err
 	}
 	task := created.Record
+	task.TurnId = req.TurnID
+	item = created.Inbox
 	if item == nil {
-		caller, _ := turn.IdentityFrom(ctx)
-		item = &pb.BotInboxItem{Recipient: req.BotID, Sender: caller.Principal.String(), RequestedBy: owner, Kind: pb.InboxKind_INBOX_KIND_QUESTION, Body: req.Message}
+		return nil, errors.New("task backend did not atomically admit work")
 	}
-	item, err = n.inboxSvc.LinkTask(ctx, item, task.Id)
-	if err != nil {
-		return nil, fmt.Errorf("link task before execution: %w", err)
-	}
-	ctx = compute.WithTaskExecution(ctx, turn.TaskScope{ID: task.Id, Owner: owner, Actor: actor, ClaimToken: task.ClaimedBy}, backend.CheckGrantTaskApproval)
+	ctx = compute.WithTaskExecution(ctx, turn.TaskScope{ID: task.Id, Owner: owner, Actor: actor, ClaimToken: task.ClaimedBy, CoordinatorConversation: task.CoordinatorConversation}, backend.CheckGrantTaskApproval)
 	response, err := n.agent.RunToolCallLoop(ctx, req)
 	if err != nil {
-		// Leave the durable execution claim alone: loss of the reply does not
-		// establish whether a tool already performed its external effect.
-		return nil, fmt.Errorf("task %s outcome may be uncertain: %w", task.Id, err)
+		if response == nil {
+			response = &compute.ProcessMessageResponse{}
+		}
+		response.TaskID = task.Id
+		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compute.TaskCommitTimeout)
+		defer cancel()
+		unknown, saveErr := compute.FinishTask(commitCtx, backend, task, response, err)
+		if saveErr == nil {
+			saveErr = n.reconcileTeamTask(commitCtx, item, unknown)
+		}
+		return response, errors.Join(fmt.Errorf("task %s outcome may be uncertain: %w", task.Id, err), saveErr)
 	}
 	response.TaskID = task.Id
 	if response.NeedsConfirmation {
 		_, err = compute.PauseTask(ctx, backend, task, req, response)
 		return response, err
 	}
-	finished, err := backend.FinishTaskApproval(ctx, &pb.FinishTaskApprovalRequest{Id: task.Id, Owner: owner, Actor: actor, Revision: task.Revision, ClaimToken: task.ClaimedBy, Result: response.Reply})
+	finished, err := compute.FinishTask(ctx, backend, task, response, nil)
 	if err != nil {
 		return nil, err
 	}
-	return response, n.reconcileTeamTask(ctx, item, finished.Record)
+	return response, n.reconcileTeamTask(ctx, item, finished)
 }
 
 // The queue is the scheduler; TaskApprovalService is the sole execution fence.
@@ -200,9 +227,19 @@ func (n *Node) resumeTeamTasks(ctx context.Context, recipient string) error {
 }
 
 func (n *Node) reconcileTeamTask(ctx context.Context, item *pb.BotInboxItem, task *pb.TaskApprovalRecord) error {
-	outcome := memory.InboxOutcome{ClaimRevision: item.Revision, Claimer: item.ClaimedBy, Result: task.Result}
+	outcome := memory.InboxOutcome{ClaimRevision: item.Revision, Claimer: item.ClaimedBy, Result: task.Result, SessionID: task.SessionId, CostUSD: task.GetBudgetSpent().GetSpendUsd()}
+	for _, receipt := range task.Receipts {
+		if receipt.ExecutionStatus == turn.ReceiptExecuted && !slices.Contains(outcome.ToolsUsed, receipt.ToolName) {
+			outcome.ToolsUsed = append(outcome.ToolsUsed, receipt.ToolName)
+		}
+	}
 	switch task.State {
 	case pb.TaskApprovalState_TASK_APPROVAL_STATE_COMPLETED:
+	case pb.TaskApprovalState_TASK_APPROVAL_STATE_OUTCOME_UNKNOWN:
+		if task.Recoverable {
+			return nil
+		}
+		outcome.Err = errors.New("execution outcome uncertain; no recoverable checkpoint, no replay; owner may close the task through cancel")
 	case pb.TaskApprovalState_TASK_APPROVAL_STATE_DENIED, pb.TaskApprovalState_TASK_APPROVAL_STATE_EXPIRED, pb.TaskApprovalState_TASK_APPROVAL_STATE_CANCELLED:
 		outcome.Err = fmt.Errorf("task %s: %s", task.Id, task.State)
 	default:

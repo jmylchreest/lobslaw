@@ -71,6 +71,7 @@ running -> waiting -> ready -> resuming -> completed
 
 lost running/resuming claim -> outcome_unknown
 outcome_unknown --explicit recovery--> waiting --fresh approval--> ready
+outcome_unknown --owner cancel/close--> cancelled (never replayed)
 ```
 
 Task authority lasts at most 24 hours. Each execution leg lasts at most 15
@@ -85,6 +86,16 @@ an uncertain outcome and removes its replayable checkpoint. Explicit recovery
 is available for a lost claim with a retained checkpoint and a live task
 lifetime. Recovery clears reusable grants and old prepared approvals; retry may
 repeat effects from the previous leg, which is why acknowledgement is required.
+
+`recoverable` tells the owner whether an uncertain task actually has a live
+checkpoint. An initial-leg failure, or a running cancellation that discarded its
+checkpoint, cannot be recovered. These tasks release their inbox capacity;
+reconciliation marks the inbox failed, preserving the uncertainty and its history.
+Calling the existing revision-checked **Cancel** operation on an uncertain task
+explicitly closes it as cancelled without executing anything. A recoverable
+uncertain task retains its reservation until recovery, expiry or explicit closure.
+Cancellation/completion frees capacity at the Raft admission check immediately,
+even if the worker has not yet projected the final state onto the inbox.
 
 ## Budget extensions
 
@@ -126,7 +137,8 @@ recycled automatically.
 The continuation codec in `internal/turn` is shared with ordinary gateway
 prompts and the remote turn transport, preserving prepared-call metadata without
 making the gateway import compute. Ordinary chat approval scope is unchanged.
-Portable archives do not export task authority or checkpoints. Full cluster
+Portable archives do not export task records, including their authority,
+checkpoints and result history. Full cluster
 snapshots retain them as operational state, with their original deadlines.
 Records are retained; this version does not add background retention deletion.
 
@@ -141,10 +153,13 @@ merged schema.
 
 ## Integration with #348
 
-`node.teamTaskRunner` is the `ask_bot` runner. `startTeamTask` is shared with
-the inbox drain and direct bot-room chat: it creates a fresh task, then commits the inbox link **before**
-calling the agent. The linked item uses `INBOX_STATUS_WAITING` while the task
-is running, awaiting approval, ready, or uncertain. This status means that the
+`node.teamTaskRunner` is the `ask_bot` runner. `startTask` is shared with
+the inbox drain and direct bot-room chat. `CreateTaskApproval` with an inbox
+performs capacity admission, bot ownership/classification checks, queue CAS and
+task creation in one Raft `TaskAdmission` entry and one encrypted Bolt transaction
+**before** calling the agent. Rejected admissions leave neither record behind.
+The linked item uses `INBOX_STATUS_WAITING` while the task
+is running, awaiting approval, ready, or recoverably uncertain. This status means that the
 task service owns execution; consult its state for the precise progress.
 Ordinary inbox claims and retries cannot execute linked work.
 
@@ -156,16 +171,25 @@ the chat stream. It never enters the conversation budget-relaxation loop. Final
 results and uncertain outcomes remain available through the task API and the
 linked inbox item. The main assistant's ordinary conversation path is separate.
 
+Coordinator rooms are deliberately different from specialist assignments. The
+stored bot's `is_coordinator` classification enables conversation mode, verified
+again during atomic admission; no tool argument can select it. Coordinators keep
+supplied conversation history/summary and their own previous task transcripts,
+can select owner memory through the normal audience rules, and retain `ask_bot`.
+Children and queued assignments get fresh isolated scopes and no second hop.
+The classification is retained for resume while current bot restrictions still
+apply. Specialists never receive prior tasks as execution context.
+
 ```mermaid
 sequenceDiagram
     participant Caller as Bot room / coordinator / inbox drain
     participant Queue as Raft inbox
     participant Tasks as TaskApprovalService
-    participant Agent as Specialist
+    participant Agent as Coordinator or specialist
     participant Owner as Authenticated owner
-    Caller->>Tasks: Create(owner, actor, parent attribution)
-    Caller->>Queue: Link task_id with revision CAS
-    Caller->>Agent: Run with fresh TaskScope and supplied context
+    Caller->>Tasks: Create(owner, actor, inbox, trusted conversation mode)
+    Tasks->>Queue: Atomic admission + task link (capacity, ownership, CAS)
+    Caller->>Agent: Run with classified TaskScope
     Agent-->>Caller: NeedsConfirmation + prepared transcript
     Caller->>Tasks: Pause(checkpoint, counters, restrictions)
     Caller-->>Owner: task_id / owner-scoped notice
@@ -174,7 +198,7 @@ sequenceDiagram
     Caller->>Queue: Poll linked waiting items
     Caller->>Tasks: Claim ready checkpoint once
     Caller->>Agent: Resume under original AND current authority
-    Agent-->>Tasks: Finish, or Pause again
+    Agent-->>Tasks: Finish/Pause with transcript and per-attempt receipts
     Caller->>Queue: Reconcile terminal task result with CAS
 ```
 
@@ -202,6 +226,16 @@ The wire additions are deliberately metadata, not another grant format:
   The task endpoints remain `/v1/task-approvals`, `/{id}`, `/{id}/decide`,
   `/{id}/cancel`, and `/{id}/recover`; no execution token is exposed.
 
+The audit corrections use high additive tags to avoid console schema collisions:
+`LogEntry.task_admission=101`; Create request `inbox=101`,
+`inbox_max_pending=102`, `coordinator_conversation=103`; Create response
+`inbox=101`. Task records add `transcript=101`, `receipts=102`,
+`coordinator_conversation=103`, `recoverable=104`, `session_id=105`,
+`transcript_start=106`. Pause/Finish carry evidence in tags 101 and above.
+`TurnToolInvocation.execution_status=101` and `ConsoleBotReply.transcript=101`,
+`receipts=102` preserve that evidence over typed transport. All voters and task
+backends must be upgraded before atomic admission is enabled.
+
 On resume the resolver checks that the bot is enabled and still belongs to the
 same human, and that the human still exists when an explicit user roster is
 configured. Original subject, scope and expiry survive; roles are intersected
@@ -217,8 +251,8 @@ is retained, and newly tighter policy still wins. Initial inline delegation also
 charges its caller's budget; an explicit subsequent task extension authorises
 only that task's continued work, not additional parent work.
 
-The queue and task writes are separate CAS transactions. A crash before linking
-has performed no agent work. A crash after linking never causes a fresh queue
+The queue and task are admitted atomically. A crash before admission
+has performed no agent work. A crash after admission never causes a fresh queue
 attempt: durable task expiry reports uncertainty. A completed task whose inbox
 result was not committed is reconciled without re-executing the agent. A lost
 initial execution with no checkpoint requires a fresh human assignment; recovery
@@ -227,6 +261,27 @@ authenticated `task_claims` fail closed instead of manufacturing caller rights.
 Portable export strips those claims; imported waiting work is cancelled, and
 linked tasks cannot be retried from a portable archive because task authority is
 not portable. Full Raft snapshots retain task records and their original leases.
+
+### Result history and receipts
+
+Pause and finish commit the complete current-turn transcript and append the leg's
+receipts in the task record. Completion clears replayable authority, not evidence.
+Runtime errors retain the observed partial transcript and fence the task uncertain.
+Receipts distinguish `executed` (the handler/process ran, not necessarily that its
+business operation succeeded), `refused`, `approval_required`, `budget_required`
+and `outcome_unknown` (not enough execution evidence). Refusals are never inferred
+to have run merely because they appeared in an assistant tool-call list.
+
+Task history is a read-only projection of this same durable record under
+`bot:<bot>.task.<task-id>`, including resumed legs and separate receipt rows. No
+second session write can be lost after task completion. Inbox reconciliation sets
+that session link and records only proven executions in `tools_used`. Bot-chat SSE
+returns the transcript, receipts, truthful tool counts and history link; the
+gateway no longer replaces this with a user/final-text-only session. Coordinator
+context uses transcripts, never the UI's receipt projection. Specialist context
+uses neither. Evidence is bounded by the task record size limit; a process crash
+can still lose observations not yet checkpointed, which remains an uncertain
+outcome rather than an invented success or automatic replay.
 
 ### Specialist task context and skills
 

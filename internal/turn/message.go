@@ -5,6 +5,14 @@ import (
 	"slices"
 )
 
+const (
+	ReceiptExecuted         = "executed"
+	ReceiptRefused          = "refused"
+	ReceiptApprovalRequired = "approval_required"
+	ReceiptBudgetRequired   = "budget_required"
+	ReceiptUnknown          = "outcome_unknown"
+)
+
 // Message is one turn in a conversation. Role + content match
 // OpenAI's shape; ToolCalls / ToolCallID are populated for the
 // tool-calling round-trip.

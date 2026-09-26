@@ -23,7 +23,8 @@ func (a *Agent) withSkillAccess(ctx context.Context, req ProcessMessageRequest) 
 }
 
 func isolatedTask(ctx context.Context, req ProcessMessageRequest) bool {
-	return req.BotID != "" && TaskIDFrom(ctx) != ""
+	scope, ok := ctx.Value(taskExecutionKey{}).(*taskExecution)
+	return req.BotID != "" && ok && !(scope.scope.CoordinatorConversation && req.Bot != nil && req.Bot.IsCoordinator)
 }
 
 func (a *Agent) pinnedForTask(ctx context.Context, req *ProcessMessageRequest) promptgen.PinnedBlocks {

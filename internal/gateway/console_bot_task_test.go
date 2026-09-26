@@ -52,7 +52,7 @@ func TestTypedBotChatReleasesStreamForDurableTaskApproval(t *testing.T) {
 			if req.Claims.UserID != "alice" || req.BotID != "worker" {
 				t.Errorf("task authority lost: %+v", req)
 			}
-			return &pb.TaskApprovalRecord{Id: "durable-task", State: pb.TaskApprovalState_TASK_APPROVAL_STATE_WAITING}, nil
+			return &pb.TaskApprovalRecord{Id: "durable-task", State: pb.TaskApprovalState_TASK_APPROVAL_STATE_WAITING, SessionId: "bot:worker.task.durable-task", Transcript: []*pb.SessionMessage{{Role: "user", Content: "work"}, {Role: "assistant", Content: "progress"}}, Receipts: []*pb.TurnToolInvocation{{ToolName: "echo", ExecutionStatus: turn.ReceiptExecuted}, {ToolName: "delete", ExecutionStatus: turn.ReceiptApprovalRequired}}}, nil
 		}
 	})
 	client := testConsoleClient(t, backend)
@@ -74,6 +74,9 @@ func TestTypedBotChatReleasesStreamForDurableTaskApproval(t *testing.T) {
 		}
 		if reply := event.GetReply(); reply != nil {
 			found = strings.Contains(reply.Text, "durable-task") && strings.Contains(reply.Text, "/approvals")
+			if len(reply.Transcript) != 2 || len(reply.Receipts) != 2 || reply.ToolCalls != 1 || len(reply.ToolsUsed) != 1 || reply.ToolsUsed[0] != "echo" || len(reply.ToolsAttempted) != 1 || reply.ToolsAttempted[0] != "delete" || reply.SessionId == "" {
+				t.Fatalf("typed chat dropped or misstated evidence: %v", reply)
+			}
 		}
 	}
 	if !found {

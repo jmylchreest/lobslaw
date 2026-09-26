@@ -81,7 +81,7 @@ func pauseTaskWithPolicy(ctx context.Context, backend TaskApprovalBackend, task 
 	wire.SpentUsd = resp.BudgetState.SpendUSD
 	wire.ToolCalls = int32(resp.BudgetState.ToolCalls)
 	wire.EgressBytes = resp.BudgetState.EgressBytes
-	out, err := backend.PauseTaskApproval(ctx, &pb.PauseTaskApprovalRequest{Id: task.Id, Owner: task.Owner, Actor: task.Actor, Revision: task.Revision, ClaimToken: task.ClaimedBy, TurnId: req.TurnID, Operation: op, Continuation: wire, BudgetPolicy: taskBudgetProto(policy), BudgetLimits: taskBudgetProto(req.Budget.Caps())})
+	out, err := backend.PauseTaskApproval(ctx, &pb.PauseTaskApprovalRequest{Id: task.Id, Owner: task.Owner, Actor: task.Actor, Revision: task.Revision, ClaimToken: task.ClaimedBy, TurnId: req.TurnID, Operation: op, Continuation: wire, BudgetPolicy: taskBudgetProto(policy), BudgetLimits: taskBudgetProto(req.Budget.Caps()), Receipts: taskReceipts(resp.ToolCalls), TranscriptStart: taskTranscriptStart(task, resp)})
 	if err != nil {
 		return nil, err
 	}
@@ -127,10 +127,8 @@ func (r *TaskRunner) Resume(ctx context.Context, q *pb.ClaimTaskApprovalRequest)
 			return nil, err
 		}
 	}
-	if authority.Bot != nil {
-		if req.BotID != authority.Bot.ID {
-			return nil, errors.New("saved task identity no longer resolves to its original owner and bot")
-		}
+	if err := validateResumedTaskBot(req, authority.Bot, task); err != nil {
+		return nil, err
 	}
 	// Keep the original subject and scope, and never gain a role merely because
 	// the owner acquired it while this task was waiting. Live policy still runs.
@@ -146,11 +144,11 @@ func (r *TaskRunner) Resume(ctx context.Context, q *pb.ClaimTaskApprovalRequest)
 	}
 	req.Claims = &claims
 	req.Tools = authority.Tools
-	req.Bot = restrictTaskBot(authority.Bot, task.Continuation)
+	req.Bot = resumedTaskBot(authority.Bot, task)
 	req.TurnID = task.TurnId
 	// Channel identity is deliberately absent: task grants never borrow the chat
 	// where a user happened to click approve.
-	scope := turn.TaskScope{ID: task.Id, Owner: task.Owner, Actor: task.Actor, ClaimToken: task.ClaimedBy}
+	scope := turn.TaskScope{ID: task.Id, Owner: task.Owner, Actor: task.Actor, ClaimToken: task.ClaimedBy, CoordinatorConversation: task.CoordinatorConversation}
 	ctx = WithTaskExecution(ctx, scope, r.Backend.CheckGrantTaskApproval)
 	ctx = context.WithValue(ctx, approvedTaskBudgetKey{}, true)
 	if task.Operation.RequiresBudgetExtension {
@@ -163,7 +161,10 @@ func (r *TaskRunner) Resume(ctx context.Context, q *pb.ClaimTaskApprovalRequest)
 	}
 	response, err := r.Agent.ResumeFromConfirmation(ctx, req, cont.Messages)
 	if err != nil {
-		return nil, fmt.Errorf("task execution outcome may be uncertain: %w", err)
+		if response == nil {
+			response = &ProcessMessageResponse{}
+		}
+		return FinishTask(ctx, r.Backend, task, response, err)
 	}
 	if response == nil {
 		return nil, errors.New("task execution returned no result")
@@ -171,11 +172,11 @@ func (r *TaskRunner) Resume(ctx context.Context, q *pb.ClaimTaskApprovalRequest)
 	if response.NeedsConfirmation {
 		return pauseTaskWithPolicy(ctx, r.Backend, task, req, response, authority.Caps)
 	}
-	out, err := r.Backend.FinishTaskApproval(ctx, &pb.FinishTaskApprovalRequest{Id: task.Id, Owner: task.Owner, Actor: task.Actor, Revision: task.Revision, ClaimToken: task.ClaimedBy, Result: response.Reply})
+	out, err := FinishTask(ctx, r.Backend, task, response, nil)
 	if err != nil {
 		return nil, fmt.Errorf("task result could not be committed; do not automatically replay: %w", err)
 	}
-	return out.Record, nil
+	return out, nil
 }
 
 func restrictTaskBot(current *BotProfile, saved *pb.Continuation) *BotProfile {
@@ -196,4 +197,22 @@ func restrictTaskBot(current *BotProfile, saved *pb.Continuation) *BotProfile {
 		}
 	}
 	return &profile
+}
+
+func resumedTaskBot(current *BotProfile, task *pb.TaskApprovalRecord) *BotProfile {
+	profile := restrictTaskBot(current, task.Continuation)
+	if !task.CoordinatorConversation {
+		profile = profile.Without("ask_bot")
+	}
+	return profile
+}
+
+func validateResumedTaskBot(req ProcessMessageRequest, current *BotProfile, task *pb.TaskApprovalRecord) error {
+	if current != nil && req.BotID != current.ID {
+		return errors.New("saved task bot changed")
+	}
+	if task.CoordinatorConversation && (current == nil || !current.IsCoordinator) {
+		return errors.New("coordinator classification changed; refusing saved owner context")
+	}
+	return nil
 }

@@ -2169,6 +2169,7 @@ message LogEntry {
     GroupRecord group = 39;
     ShareBatch share_batch = 37;
     TaskApprovalRecord task_approval = 50;
+    TaskAdmission task_admission = 101;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -2595,6 +2596,7 @@ message TurnAttachment {
 }
 
 message TurnToolInvocation {
+  string execution_status = 101;
   string call_id = 1;
   string tool_name = 2;
   string args = 3;
@@ -2974,6 +2976,8 @@ message ConsoleReply {
   ConsoleBudget budget = 7;
 }
 message ConsoleBotReply {
+  repeated SessionMessage transcript = 101;
+  repeated TurnToolInvocation receipts = 102;
   string text = 1;
   string turn_id = 2;
   repeated string tools_used = 3;
@@ -3017,7 +3021,21 @@ message TaskGrant {
   string action = 1;
   string resource = 2;
 }
+message TaskAdmission {
+  TaskApprovalRecord task = 1;
+  BotInboxItem inbox = 2;
+  uint32 max_pending = 3;
+  uint64 expected_revision = 4;
+  string expected_claimer = 5;
+}
+
 message TaskApprovalRecord {
+  repeated SessionMessage transcript = 101;
+  repeated TurnToolInvocation receipts = 102;
+  bool coordinator_conversation = 103;
+  bool recoverable = 104;
+  string session_id = 105;
+  uint32 transcript_start = 106;
   string id = 1;
   string owner = 2;
   string actor = 3;
@@ -3041,12 +3059,17 @@ message TaskApprovalRecord {
   TaskBudget budget_spent = 20;
 }
 message CreateTaskApprovalRequest {
+  BotInboxItem inbox = 101;
+  uint32 inbox_max_pending = 102;
+  bool coordinator_conversation = 103;
   string owner = 1;
   string actor = 2;
   string parent_id = 3;
   google.protobuf.Timestamp expires_at = 4;
 }
 message PauseTaskApprovalRequest {
+  repeated TurnToolInvocation receipts = 101;
+  uint32 transcript_start = 102;
   string id = 1;
   string owner = 2;
   string actor = 3;
@@ -3081,6 +3104,12 @@ message ClaimTaskApprovalRequest {
   uint64 revision = 4;
 }
 message FinishTaskApprovalRequest {
+  repeated SessionMessage transcript = 101;
+  repeated TurnToolInvocation receipts = 102;
+  uint32 transcript_start = 103;
+  TaskBudget budget_spent = 104;
+  bool outcome_unknown = 105;
+  string turn_id = 106;
   string id = 1;
   string owner = 2;
   string actor = 3;
@@ -3109,6 +3138,7 @@ message CheckGrantTaskApprovalRequest {
   string resource = 6;
 }
 message CreateTaskApprovalResponse {
+  BotInboxItem inbox = 101;
   TaskApprovalRecord record = 1;
 }
 message PauseTaskApprovalResponse {

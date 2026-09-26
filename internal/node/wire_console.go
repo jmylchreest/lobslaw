@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -60,13 +61,22 @@ func (n *Node) wireConsoleBackend() error {
 // before calling this adapter's transcript reader.
 type consoleSessionBrowser struct {
 	inner *memory.SessionService
+	store *memory.Store
 }
 
 func (a *consoleSessionBrowser) ListFiltered(ctx context.Context, channel, userID string) ([]*lobslawv1.SessionRecord, error) {
-	return a.inner.ListFiltered(ctx, channel, userID)
+	records, err := a.inner.ListFiltered(ctx, channel, userID)
+	if err != nil || a.store == nil {
+		return records, err
+	}
+	tasks, err := memory.TaskSessionRecords(a.store, channel, userID)
+	return append(records, tasks...), err
 }
 
 func (a *consoleSessionBrowser) LoadMessages(ctx context.Context, id string) ([]*lobslawv1.SessionMessage, error) {
+	if a.store != nil && strings.HasPrefix(id, "bot:") && strings.Contains(id, ".task.") {
+		return memory.TaskSessionMessages(a.store, id)
+	}
 	return a.inner.LoadMessages(ctx, id)
 }
 
@@ -76,7 +86,7 @@ func (n *Node) newSessionBrowser() gateway.SessionBrowser {
 	if n.raft == nil || n.store == nil {
 		return nil
 	}
-	return &consoleSessionBrowser{inner: memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
+	return &consoleSessionBrowser{store: n.store, inner: memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
 		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
 	})}
 }

@@ -493,8 +493,11 @@ func (s *InboxService) countPending(recipient string) (int, error) {
 		if err := proto.Unmarshal(value, &item); err != nil {
 			return fmt.Errorf("inbox: unmarshal %q: %w", key, err)
 		}
-		if item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_PENDING ||
-			item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED || item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_WAITING {
+		active, err := s.inboxConsumesSlot(&item)
+		if err != nil {
+			return err
+		}
+		if active {
 			n++
 		}
 		return nil

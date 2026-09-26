@@ -11,6 +11,8 @@ import (
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
+func (s *InboxService) AdmissionLimit() uint32 { return uint32(s.maxPending) }
+
 // LinkTask fences the ordinary queue before any external work starts. A crash
 // after this write is reconciled from the task record, never a fresh attempt.
 func (s *InboxService) LinkTask(ctx context.Context, item *pb.BotInboxItem, taskID string) (*pb.BotInboxItem, error) {

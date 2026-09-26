@@ -103,7 +103,27 @@ func TestTeamTasksPauseRestartApproveAndResume(t *testing.T) {
 			if err != nil || completed.Status != pb.InboxStatus_INBOX_STATUS_DONE || calls != 1 || forbidden != 0 {
 				t.Fatalf("completion: %v %v effects=%d forbidden=%d", completed, err, calls, forbidden)
 			}
+			assertTaskEvidence(t, n, completed)
 		})
+	}
+}
+
+func assertTaskEvidence(t *testing.T, n *Node, item *pb.BotInboxItem) {
+	t.Helper()
+	task, err := n.taskApprovalAPI().GetTaskApproval(t.Context(), &pb.GetTaskApprovalRequest{Id: item.TaskId, Owner: "user:alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := task.Record
+	if len(r.Receipts) != 3 || r.Receipts[0].ExecutionStatus != turn.ReceiptApprovalRequired || r.Receipts[1].ExecutionStatus != turn.ReceiptExecuted || r.Receipts[2].ExecutionStatus != turn.ReceiptRefused {
+		t.Fatalf("lost or dishonest receipts: %v", r.Receipts)
+	}
+	if len(r.Transcript) < 6 || len(item.ToolsUsed) != 1 || item.ToolsUsed[0] != "echo" || item.SessionId == "" {
+		t.Fatalf("missing transcript/result projection: %v %v", r, item)
+	}
+	history, err := n.newSessionBrowser().LoadMessages(t.Context(), item.SessionId)
+	if err != nil || len(history) != len(r.Transcript)+len(r.Receipts) {
+		t.Fatalf("history dropped resumed evidence: %v %v", history, err)
 	}
 }
 
@@ -149,7 +169,7 @@ func waitingTeamTask(t *testing.T, n *Node, calls int) *pb.BotInboxItem {
 	return item
 }
 
-func bootTeamTaskNode(t *testing.T, cfg Config, provider compute.LLMProvider, calls, forbidden *int) (*Node, func()) {
+func bootTeamTaskNode(t *testing.T, cfg Config, provider compute.LLMProvider, calls, forbidden *int, options ...func(*Node, *compute.AgentConfig)) (*Node, func()) {
 	t.Helper()
 	n, err := New(cfg)
 	if err != nil {
@@ -178,7 +198,11 @@ func bootTeamTaskNode(t *testing.T, cfg Config, provider compute.LLMProvider, ca
 	executor := compute.NewExecutor(n.toolRegistry, n.policyEngine, nil, compute.ExecutorConfig{}, n.log)
 	executor.SetBuiltins(n.builtinsRegistry)
 	executor.RequireApproval("echo", "effect", compute.MemoryWriteSummary)
-	n.agent, err = compute.NewAgent(compute.AgentConfig{Provider: provider, Registry: n.toolRegistry, Executor: executor, Bots: botResolverOrNil(n.botSvc)})
+	agentConfig := compute.AgentConfig{Provider: provider, Registry: n.toolRegistry, Executor: executor, Bots: botResolverOrNil(n.botSvc)}
+	for _, option := range options {
+		option(n, &agentConfig)
+	}
+	n.agent, err = compute.NewAgent(agentConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

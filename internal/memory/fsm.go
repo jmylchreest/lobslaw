@@ -265,6 +265,9 @@ func (f *FSM) Apply(l *raft.Log) any {
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
+	if p, ok := entry.Payload.(*lobslawv1.LogEntry_TaskAdmission); ok {
+		return f.applyTaskAdmission(p.TaskAdmission)
+	}
 	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ShareBatch); ok {
 		return f.applyShareBatch(p.ShareBatch)
 	}
