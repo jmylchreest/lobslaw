@@ -517,6 +517,11 @@ credentials cannot decrypt an existing backup.
    alone does not require renaming data owners: use `--owner user:alice=user:alice`
    when the data identity remains the same. If the destination identity changes,
    use its new value and configure the corresponding identity bindings and access.
+   Prefixed `owner` values and bare `user_id` values are distinct: if both occur,
+   supply both `--owner user:alice=user:alice-new` and `--owner alice=alice-new`.
+5. Configure destination trust for archived signed skills before restoring. Their
+   signatures must verify against a destination-trusted key during import, even
+   if ordinary skill signing policy is off; otherwise restore fails.
 
 For example, preview a restore using new certificates and a renamed owner:
 
@@ -525,7 +530,8 @@ lobslaw backup restore SNAPSHOT_ID --repository ./backups \
   --identity ./original-backup-key.txt \
   --addr recovered.example:7443 --ca-cert ./recovered/ca.pem \
   --node-cert ./recovered/operator.pem --node-key ./recovered/operator-key.pem \
-  --owner user:alice=user:alice-new --source-timezone Europe/London
+  --owner user:alice=user:alice-new --owner alice=alice-new \
+  --source-timezone Europe/London
 ```
 
 When connecting through a tunnel, add `--server-name` with a hostname on the
@@ -534,8 +540,7 @@ restore; use the same owner mappings when resuming an interrupted restore.
 
 After verification, recreate required credentials and grants, review skills and
 paused schedules/reminders, and disable restore mode before resuming normal
-operation. Signed skill bytes are preserved; review their trust against the
-destination configuration before activation.
+operation. Signed skill bytes are preserved exactly.
 
 ## `lobslaw memory` and `lobslaw session`
 

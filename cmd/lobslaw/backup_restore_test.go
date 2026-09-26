@@ -84,7 +84,7 @@ key = %q
 		Records: []archive.Record{
 			record("preferences", "user:alice", &lobslawv1.UserPreferences{UserId: "user:alice"}),
 			record("pinned", "notes:user:alice", &lobslawv1.PinnedMemory{Id: "notes:user:alice", Kind: "notes", UserId: "user:alice"}),
-			record("sessions", "conversation", &lobslawv1.SessionRecord{Id: "conversation", UserId: "user:alice"}),
+			record("sessions", "conversation", &lobslawv1.SessionRecord{Id: "conversation", UserId: "alice"}),
 		},
 	}
 	repo := backup.Repository{Path: filepath.Join(dir, "backups")}
@@ -107,21 +107,23 @@ key = %q
 		{"--ca-cert", source.ca},
 		{"--node-cert", source.cert, "--node-key", source.key},
 	} {
-		if err := run(append(stale, "--owner", "user:alice=user:alice-new", "--apply")...); err == nil {
-			t.Fatal("accepted the source deployment's old trust material")
-		}
+		err := run(append(stale, "--owner", "user:alice=user:alice-new", "--owner", "alice=alice-new", "--apply")...)
+		backupTestRPCError(t, err, codes.Unavailable, "tls:")
 		assertEmpty()
 	}
 	if err := run("--apply"); err == nil || !strings.Contains(err.Error(), "explicit owner mapping required") {
 		t.Fatalf("missing owner mapping: %v", err)
 	}
 	assertEmpty()
-	if err := run("--owner", "user:alice=user:alice-new"); err != nil {
+	backupTestRPCError(t, run("--owner", "user:alice=user:alice-new", "--apply"),
+		codes.InvalidArgument, `explicit owner mapping required for "alice"`)
+	assertEmpty()
+	if err := run("--owner", "user:alice=user:alice-new", "--owner", "alice=alice-new"); err != nil {
 		t.Fatalf("preview with new trust and owner: %v", err)
 	}
 	assertEmpty()
 	for i := 0; i < 2; i++ {
-		if err := run("--owner", "user:alice=user:alice-new", "--apply"); err != nil {
+		if err := run("--owner", "user:alice=user:alice-new", "--owner", "alice=alice-new", "--apply"); err != nil {
 			t.Fatalf("apply/repeat %d: %v", i, err)
 		}
 	}
@@ -132,7 +134,7 @@ key = %q
 	}{
 		{memory.BucketUserPrefs, "user:alice-new", &lobslawv1.UserPreferences{UserId: "user:alice-new"}},
 		{memory.BucketPinned, "notes:user:alice-new", &lobslawv1.PinnedMemory{Id: "notes:user:alice-new", Kind: "notes", UserId: "user:alice-new", Revision: 1}},
-		{memory.BucketSessions, "conversation", &lobslawv1.SessionRecord{Id: "conversation", UserId: "user:alice-new"}},
+		{memory.BucketSessions, "conversation", &lobslawv1.SessionRecord{Id: "conversation", UserId: "alice-new"}},
 	}
 	for _, check := range want {
 		data, err := store.Get(check.bucket, check.id)
@@ -149,8 +151,14 @@ key = %q
 			t.Fatal("left an old owner-keyed record behind")
 		}
 	}
-	if err := run("--owner", "user:alice=user:someone-else", "--apply"); err == nil {
-		t.Fatal("allowed different owner mappings to resume a restore")
+	backupTestRPCError(t, run("--owner", "user:alice=user:someone-else", "--owner", "alice=someone-else", "--apply"),
+		codes.FailedPrecondition, "requires an empty knowledge store or its own partial restore")
+}
+
+func backupTestRPCError(t *testing.T, err error, code codes.Code, message string) {
+	t.Helper()
+	if err == nil || status.Code(err) != code || !strings.Contains(err.Error(), message) {
+		t.Fatalf("expected %s containing %q, got: %v", code, message, err)
 	}
 }
 
