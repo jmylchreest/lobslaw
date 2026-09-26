@@ -105,12 +105,47 @@ export interface TaskApproval {
   revision: string;
   expiresAt?: string;
   result?: string;
+  recoverable?: boolean;
+  sessionId?: string;
+  coordinatorConversation?: boolean;
+  transcript?: TaskMessage[];
+  receipts?: ToolReceipt[];
   operation?: {
     toolName?: string; action?: string; resource?: string; summary?: string;
     grantable?: boolean; labels?: string[]; requiresBudgetExtension?: boolean;
   };
   budgetSpent?: { toolCalls?: number; spendUsd?: number; egressBytes?: string };
   budgetLimits?: { toolCalls?: number; spendUsd?: number; egressBytes?: string };
+}
+
+// Generated protobuf JSON. These are evidence, never replayable continuations.
+export interface TaskMessage {
+  seq?: string; sessionId?: string; role?: string; content?: string;
+  turnId?: string; toolCallId?: string; timestamp?: string;
+  toolCalls?: { id?: string; name?: string; arguments?: string }[];
+}
+export interface ToolReceipt {
+  callId?: string; toolName?: string; args?: string; output?: string;
+  exitCode?: number; error?: string; executionStatus?: string;
+}
+export interface BotReply {
+  text?: string; turnId?: string; sessionId?: string;
+  toolsUsed?: string[]; toolsAttempted?: string[]; toolCalls?: number;
+  tokensUsed?: string; costUsd?: number;
+  transcript?: TaskMessage[]; receipts?: ToolReceipt[];
+}
+
+// Older, non-durable bot replies used snake-case REST counters. New evidence
+// replies use generated protobuf JSON consistently, locally and over peers.
+export function botReply(data: Record<string, unknown>): BotReply {
+  return {
+    ...data,
+    toolsUsed: (data.toolsUsed ?? data.tools_used) as string[] | undefined,
+    toolsAttempted: (data.toolsAttempted ?? data.tools_attempted) as string[] | undefined,
+    tokensUsed: String(data.tokensUsed ?? data.tokens_used ?? "0"),
+    costUsd: Number(data.costUsd ?? data.cost_usd ?? 0),
+    sessionId: String(data.sessionId ?? data.session_id ?? ""),
+  };
 }
 export type TaskChoice = "once" | "operation" | "risk_labels" | "deny" | "budget_extension";
 export interface ExtraTaskBudget { tool_calls: number; spend_usd: number; egress_bytes: number }
@@ -257,6 +292,7 @@ export const api = {
       method: "POST", body: JSON.stringify({ revision: review.revision, digest: review.digest, approve }),
     }),
   taskApprovals: (after = "") => request<{ records?: TaskApproval[]; nextAfterId?: string }>(`/v1/task-approvals?after=${encodeURIComponent(after)}`),
+  taskApproval: (id: string) => request<{ record: TaskApproval }>(`/v1/task-approvals/${encodeURIComponent(id)}`),
   decideTask: (task: TaskApproval, choice: TaskChoice, extra_budget?: ExtraTaskBudget) =>
     request<{ record: TaskApproval }>(`/v1/task-approvals/${encodeURIComponent(task.id)}/decide`, {
       method: "POST", body: JSON.stringify({ revision: task.revision, choice, extra_budget }),

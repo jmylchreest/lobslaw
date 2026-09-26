@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, streamBotChat, type Bot, type InboxItem, type TranscriptMessage } from "../api";
+import { api, botReply, streamBotChat, type Bot, type InboxItem, type TranscriptMessage, type TaskMessage, type ToolReceipt } from "../api";
+import { TaskEvidence } from "../components/TaskEvidence";
 import { Markdown } from "../components/Markdown";
 import { Mascot } from "../components/Mascot";
 import { MultiSelect } from "../components/MultiSelect";
@@ -25,6 +26,7 @@ type Entry =
       kind: "said"; from: "me" | "bot"; text: string; at: number; notice?: boolean;
       // What the turn actually ran, carried alongside what it said.
       tools?: string[]; attempts?: string[]; tokens?: number; cost?: number; sessionId?: string;
+      transcript?: TaskMessage[]; receipts?: ToolReceipt[];
     }
   | { kind: "work"; item: InboxItem; at: number }
   | { kind: "sent"; item: InboxItem; at: number };
@@ -160,15 +162,14 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           setPartial((prev) => prev + String(data.text ?? ""));
         }
         if (event === "reply") {
+          const reply = botReply(data);
           setWorking(false); setAsk(null); setPartial("");
           setNotice(`${bot?.display_name || botId} replied.`);
           setSaid((p) => [...p, {
-            kind: "said", from: "bot", text: String(data.text ?? ""), at: Date.now(),
-            tools: (data.tools_used as string[]) ?? [],
-            attempts: (data.tools_attempted as string[]) ?? [],
-            tokens: Number(data.tokens_used ?? 0),
-            cost: Number(data.cost_usd ?? 0),
-            sessionId: String(data.session_id ?? ""),
+            kind: "said", from: "bot", text: reply.text ?? "", at: Date.now(),
+            tools: reply.toolsUsed ?? [], attempts: reply.toolsAttempted ?? [],
+            tokens: Number(reply.tokensUsed ?? 0), cost: reply.costUsd ?? 0,
+            sessionId: reply.sessionId, transcript: reply.transcript, receipts: reply.receipts,
           }]);
         }
         if (event === "needs_confirmation") {
@@ -257,6 +258,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
            written for it could never match. */
         <div className="thread" tabIndex={0}>
           <div className="thread-in">
+            <BotHistory key={bot.id} botId={bot.id} />
             {thread.length === 0 && !working && (
               <div className="opening">
                 <Mascot id={bot.id} size={56} />
@@ -473,7 +475,11 @@ function Said({ e, bot }: { e: Extract<Entry, { kind: "said" }>; bot: Bot }) {
         {e.notice
           ? <div className="txt notice">{e.text}</div>
           : <div className="txt"><Markdown>{e.text}</Markdown></div>}
-        {!e.notice && <Receipt tools={e.tools} attempts={e.attempts} tokens={e.tokens} cost={e.cost} />}
+        {!e.notice && <>
+          {!e.receipts?.length && <Receipt tools={e.tools} attempts={e.attempts} tokens={e.tokens} cost={e.cost} />}
+          <TaskEvidence transcript={e.transcript} receipts={e.receipts} />
+          {e.sessionId && !e.transcript?.length && <Transcript sessionId={e.sessionId} />}
+        </>}
       </div>
     </div>
   );
@@ -572,7 +578,7 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
           {item.sender === "operator" ? "you asked for this" : `asked by ${item.sender.replace(/^bot:/, "")}`}
           <span className="ev-dot">·</span>
           {when(item.created_at)}
-          {item.task_id && <Link className="ev-act" to="/approvals">Review task</Link>}
+          {item.task_id && <Link className="ev-act" to={`/approvals/${encodeURIComponent(item.task_id)}`}>Review task</Link>}
           {!item.task_id && (item.status === "failed" || item.status === "cancelled") && (
             <button className="ev-act" onClick={(e) => { e.stopPropagation(); act("retry"); }} disabled={busy}>
               Try again
@@ -735,6 +741,26 @@ function Transcript({ sessionId }: { sessionId: string }) {
       )}
     </div>
   );
+}
+
+function BotHistory({ botId }: { botId: string }) {
+  const [open, setOpen] = useState(false);
+  return <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <summary>Conversation and task history</summary>
+    {open && <BotHistoryList botId={botId} />}
+  </details>;
+}
+
+function BotHistoryList({ botId }: { botId: string }) {
+  const { data, loading, error, reload } = useLoad(() => api.botSessions(botId), [botId]);
+  return <div className="pad">
+    <button className="btn" onClick={reload}>Refresh history</button>
+    {loading && <Spinner />}{error && <Err error={error} />}
+    {!error && (data ?? []).map((session) => <section key={session.id}>
+      <p>{session.title || session.id}</p><Transcript key={`${session.id}:${session.messages}`} sessionId={session.id} />
+    </section>)}
+    {!loading && !error && data?.length === 0 && <p>No recorded history yet.</p>}
+  </div>;
 }
 
 function Settings({ bot, onSaved }: { bot: Bot; onSaved: () => void }) {

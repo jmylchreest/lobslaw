@@ -112,12 +112,13 @@ func responseToProto(resp *turn.Response) *lobslawv1.RunTurnResponse {
 	}
 	for _, tc := range resp.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, &lobslawv1.TurnToolInvocation{
-			CallId:   tc.CallID,
-			ToolName: tc.ToolName,
-			Args:     tc.Args,
-			Output:   tc.Output,
-			ExitCode: int32(tc.ExitCode),
-			Error:    tc.Error,
+			ExecutionStatus: tc.ExecutionStatus,
+			CallId:          tc.CallID,
+			ToolName:        tc.ToolName,
+			Args:            tc.Args,
+			Output:          tc.Output,
+			ExitCode:        int32(tc.ExitCode),
+			Error:           tc.Error,
 		})
 	}
 	for _, a := range resp.Attachments {
@@ -154,12 +155,13 @@ func responseFromProto(p *lobslawv1.RunTurnResponse) *turn.Response {
 	}
 	for _, tc := range p.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, turn.ToolInvocation{
-			CallID:   tc.CallId,
-			ToolName: tc.ToolName,
-			Args:     tc.Args,
-			Output:   tc.Output,
-			ExitCode: int(tc.ExitCode),
-			Error:    tc.Error,
+			ExecutionStatus: tc.ExecutionStatus,
+			CallID:          tc.CallId,
+			ToolName:        tc.ToolName,
+			Args:            tc.Args,
+			Output:          tc.Output,
+			ExitCode:        int(tc.ExitCode),
+			Error:           tc.Error,
 		})
 	}
 	for _, a := range p.Attachments {

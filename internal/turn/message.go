@@ -76,10 +76,11 @@ type ToolCall struct {
 
 // ToolInvocation records one tool call's lifecycle within a turn.
 type ToolInvocation struct {
-	CallID   string
-	ToolName string
-	Args     string
-	Output   string
-	ExitCode int
-	Error    string
+	ExecutionStatus string
+	CallID          string
+	ToolName        string
+	Args            string
+	Output          string
+	ExitCode        int
+	Error           string
 }

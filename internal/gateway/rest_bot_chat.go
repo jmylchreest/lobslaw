@@ -9,6 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/turn"
@@ -118,7 +121,7 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	// concurrent use, so one guarded emitter rather than a mutex the
 	// call sites take themselves.
 	var sseMu sync.Mutex
-	emit := func(event string, payload map[string]any) {
+	emit := func(event string, payload any) {
 		sseMu.Lock()
 		defer sseMu.Unlock()
 		sendSSE(w, flusher, event, payload)
@@ -281,9 +284,8 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	})
 }
 
-// A returned result is evidence of invocation, not of successful external
-// effects. An invocation error may be a refusal, a pending approval or a
-// failure after dispatch; none is evidence that the action completed.
+// Only runner-recorded dispatch proves execution. A tool name, output or absent
+// error alone cannot distinguish a refusal from a completed invocation.
 func invokedToolNames(calls []turn.ToolInvocation) []string {
 	return receiptToolNames(calls, false)
 }
@@ -295,7 +297,7 @@ func unconfirmedToolNames(calls []turn.ToolInvocation) []string {
 func returnedToolCount(calls []turn.ToolInvocation) int {
 	count := 0
 	for _, call := range calls {
-		if call.Error == "" {
+		if call.ExecutionStatus == turn.ReceiptExecuted {
 			count++
 		}
 	}
@@ -306,7 +308,7 @@ func receiptToolNames(calls []turn.ToolInvocation, unconfirmed bool) []string {
 	seen := make(map[string]struct{}, len(calls))
 	out := make([]string, 0, len(calls))
 	for _, c := range calls {
-		if c.ToolName == "" || (c.Error != "") != unconfirmed {
+		if c.ToolName == "" || (c.ExecutionStatus != turn.ReceiptExecuted) != unconfirmed {
 			continue
 		}
 		if _, ok := seen[c.ToolName]; ok {
@@ -327,7 +329,13 @@ func sendSSE(w http.ResponseWriter, flusher http.Flusher, event string, payload 
 		_ = sink.consoleEvent(event, payload)
 		return
 	}
-	body, err := json.Marshal(payload)
+	var body []byte
+	var err error
+	if message, ok := payload.(proto.Message); ok {
+		body, err = protojson.Marshal(message)
+	} else {
+		body, err = json.Marshal(payload)
+	}
 	if err != nil {
 		return
 	}

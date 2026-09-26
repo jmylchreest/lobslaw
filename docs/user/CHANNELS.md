@@ -67,10 +67,20 @@ button to inspect older tasks. Task approval remains available after closing the
 chat that initiated the work.
 
 An **outcome unknown** task may already have produced external effects. Recovery
-requires acknowledging possible duplicate effects, then a fresh approval.
+is offered only when a saved checkpoint is available and requires acknowledging
+possible duplicate effects, then a fresh approval. **Close without replay** closes
+an uncertain task without running it again; it cannot undo effects already made.
+If no checkpoint is available, further work needs a fresh assignment.
 Cancelling running work prevents further authorisation but cannot undo effects
 already started. Decisions are revision checked; reload a changed task before
 deciding again.
+
+Task links open that task directly, even when it is on an older list page.
+Completed tasks retain the result plus **Transcript and execution receipts**,
+including resumed work. Receipts distinguish actual dispatch from refused,
+approval-paused, budget-paused and uncertain attempts. A handler marked executed
+may still return a failure. In a bot room, **Conversation and task history** lets
+you inspect retained coordinator conversations and task transcripts.
 
 Signing out cancels all active browser streams. Images in model replies appear
 as links that you choose to open, rather than loading automatically. Tool

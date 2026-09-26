@@ -241,10 +241,13 @@ on logout and suppresses callbacks after cancellation.
 
 Model Markdown images render as explicit links, never `<img>` elements: neither
 external nor same-origin image URLs may issue requests just because a reply was
-rendered. Chat receipts distinguish tools with returned results from
-refused/pending/failed attempts. A returned result is not proof of successful
-external effects. Historical inbox tool names lack per-call outcome evidence and
-are labelled attempts rather than execution receipts.
+rendered. Durable bot replies carry typed transcripts and per-attempt receipts,
+serialised with protobuf JSON identically on local and remote SSE. Only the
+runner's `executed` status proves dispatch; it is not proof of successful external
+effects. Requested calls, refusals, approval/budget pauses and unknown outcomes
+are displayed distinctly. Historical inbox names without per-call evidence stay
+labelled attempts. Task detail links and room history expose completed resumed
+work without replacing full coordinator transcripts with summary-only messages.
 
 ---
 

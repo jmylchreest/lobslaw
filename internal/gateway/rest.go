@@ -435,12 +435,13 @@ type messageResponse struct {
 }
 
 type toolCallJSON struct {
-	CallID   string `json:"call_id"`
-	ToolName string `json:"tool_name"`
-	Args     string `json:"args,omitempty"`
-	Output   string `json:"output,omitempty"`
-	ExitCode int    `json:"exit_code,omitempty"`
-	Error    string `json:"error,omitempty"`
+	ExecutionStatus string `json:"execution_status,omitempty"`
+	CallID          string `json:"call_id"`
+	ToolName        string `json:"tool_name"`
+	Args            string `json:"args,omitempty"`
+	Output          string `json:"output,omitempty"`
+	ExitCode        int    `json:"exit_code,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 type budgetStateJSON struct {
@@ -738,12 +739,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, tc := range resp.ToolCalls {
 		out.ToolCalls = append(out.ToolCalls, toolCallJSON{
-			CallID:   tc.CallID,
-			ToolName: tc.ToolName,
-			Args:     tc.Args,
-			Output:   tc.Output,
-			ExitCode: tc.ExitCode,
-			Error:    tc.Error,
+			ExecutionStatus: tc.ExecutionStatus,
+			CallID:          tc.CallID,
+			ToolName:        tc.ToolName,
+			Args:            tc.Args,
+			Output:          tc.Output,
+			ExitCode:        tc.ExitCode,
+			Error:           tc.Error,
 		})
 	}
 

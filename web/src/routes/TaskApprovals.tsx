@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { api, type TaskApproval, type TaskChoice } from "../api";
 import { Err, Spinner, useLoad } from "../components/ui";
+import { TaskEvidence } from "../components/TaskEvidence";
 
 const refreshIntervalMS = 5000;
 const statePrefix = "TASK_APPROVAL_STATE_";
@@ -9,20 +11,23 @@ export function taskState(task: TaskApproval): string {
 }
 
 export function TaskApprovals() {
+  const { taskId } = useParams();
   const [after, setAfter] = useState("");
-  const { data, loading, error, reload } = useLoad(() => api.taskApprovals(after), [after]);
+  const { data, loading, error, reload } = useLoad<{ records?: TaskApproval[]; nextAfterId?: string }>(
+    () => taskId ? api.taskApproval(taskId).then(({ record }) => ({ records: [record] })) : api.taskApprovals(after), [after, taskId]);
   useEffect(() => {
     const timer = setInterval(reload, refreshIntervalMS);
     return () => clearInterval(timer);
   }, [reload]);
   return <div className="wrap">
     <h1>Task approvals</h1>
+    {taskId && <Link to="/approvals">All tasks</Link>}
     <p>Decisions apply to this task and actor only. Approving queues the saved task for its worker; it does not mean the action has run.</p>
     {error && <Err error={error} />}
     {loading && !data && <Spinner />}
     {data && !(data.records?.length) && <p>No tasks on this page.</p>}
-    {(data?.records ?? []).map((task) => <TaskCard key={`${task.id}:${task.revision}`} task={task} reload={reload} />)}
-    <button className="btn" onClick={() => { setAfter(""); reload(); }}>Refresh from start</button>
+    {!error && (!taskId || !loading) && (data?.records ?? []).map((task) => <TaskCard key={`${task.id}:${task.revision}:${task.state}:${task.recoverable}`} task={task} reload={reload} />)}
+    <button className="btn" onClick={() => { setAfter(""); reload(); }}>{taskId ? "Refresh task" : "Refresh from start"}</button>
     {data?.nextAfterId && <button className="btn" onClick={() => setAfter(data.nextAfterId!)}>Next page</button>}
   </div>;
 }
@@ -56,6 +61,8 @@ export function TaskCard({ task, reload }: { task: TaskApproval; reload: () => v
     {task.budgetSpent && <p>Consumed: {task.budgetSpent.toolCalls ?? 0} calls · ${task.budgetSpent.spendUsd ?? 0} · {task.budgetSpent.egressBytes ?? "0"} egress bytes</p>}
     {task.budgetLimits && <p>Current limits: {task.budgetLimits.toolCalls ?? 0} calls · ${task.budgetLimits.spendUsd ?? 0} · {task.budgetLimits.egressBytes ?? "0"} egress bytes (zero means uncapped)</p>}
     {task.result && <pre>{task.result}</pre>}
+    {task.sessionId && <p>History: <code>{task.sessionId}</code></p>}
+    <TaskEvidence transcript={task.transcript} receipts={task.receipts} />
     {error && <><Err error={error} /><button className="btn" onClick={reload}>Reload current task state</button></>}
     {state === "waiting" && <fieldset disabled={busy}>
       <legend>Owner decision</legend>
@@ -74,9 +81,13 @@ export function TaskCard({ task, reload }: { task: TaskApproval; reload: () => v
     </fieldset>}
     {state === "outcome_unknown" && <fieldset disabled={busy}>
       <legend>Outcome uncertain</legend>
-      <p>The previous action may have run. Recovery requires a new approval before resuming.</p>
-      <label><input type="checkbox" checked={acknowledge} onChange={(e) => setAcknowledge(e.target.checked)} /> I acknowledge retrying may duplicate external effects.</label>
-      <button className="btn" disabled={!acknowledge} onClick={() => void act(() => api.recoverTask(task, acknowledge))}>Recover for fresh approval</button>
+      <p>The previous action may have run. Closing this task does not undo external effects.</p>
+      {task.recoverable === true ? <>
+        <p>A saved checkpoint is available. Recovery requires a new approval before resuming.</p>
+        <label><input type="checkbox" checked={acknowledge} onChange={(e) => setAcknowledge(e.target.checked)} /> I acknowledge retrying may duplicate external effects.</label>
+        <button className="btn" disabled={!acknowledge} onClick={() => void act(() => api.recoverTask(task, acknowledge))}>Recover for fresh approval</button>
+      </> : <p>No recoverable checkpoint is available. Close this task; any further work requires a fresh assignment.</p>}
+      <button className="btn" onClick={() => void act(() => api.cancelTask(task))}>Close without replay</button>
     </fieldset>}
     {["waiting", "ready", "running", "resuming"].includes(state) && <>
       {["running", "resuming"].includes(state) && <p>Cancellation stops further authorisation; it cannot undo an action already started.</p>}

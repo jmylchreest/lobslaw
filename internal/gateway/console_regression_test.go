@@ -41,7 +41,7 @@ func (r *approvalConsoleRunner) Resume(ctx context.Context, req turn.Request, _ 
 		return nil, status.Error(codes.PermissionDenied, "approval binding lost")
 	}
 	r.resumed <- req
-	return &turn.Response{Reply: "done", ToolCalls: []turn.ToolInvocation{{ToolName: "write_file", Output: "written"}}}, nil
+	return &turn.Response{Reply: "done", ToolCalls: []turn.ToolInvocation{{ToolName: "write_file", Output: "written", ExecutionStatus: turn.ReceiptExecuted}}}, nil
 }
 
 func TestTypedChatApprovalRetainsActorClaimsAndAttemptEvidence(t *testing.T) {
@@ -234,8 +234,8 @@ func TestReceiptDoesNotCallRefusedOrPendingToolsExecuted(t *testing.T) {
 	calls := []turn.ToolInvocation{
 		{ToolName: "write_file", Error: "policy denied"},
 		{ToolName: "shell_command", Error: "requires confirmation"},
-		{ToolName: "read_file"},
-		{ToolName: "shell_command", ExitCode: 1, Output: "process failed"},
+		{ToolName: "read_file", ExecutionStatus: turn.ReceiptExecuted},
+		{ToolName: "shell_command", ExecutionStatus: turn.ReceiptExecuted, ExitCode: 1, Output: "process failed"},
 	}
 	if got := invokedToolNames(calls); !reflect.DeepEqual(got, []string{"read_file", "shell_command"}) {
 		t.Fatalf("executed = %v", got)

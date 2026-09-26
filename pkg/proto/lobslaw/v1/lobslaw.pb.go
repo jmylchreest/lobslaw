@@ -19661,15 +19661,16 @@ func (x *ConsoleLearnedDecisionResult) GetMessage() string {
 }
 
 type ConsoleToolCall struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CallId        string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
-	ToolName      string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	Args          string                 `protobuf:"bytes,3,opt,name=args,proto3" json:"args,omitempty"`
-	Output        string                 `protobuf:"bytes,4,opt,name=output,proto3" json:"output,omitempty"`
-	ExitCode      int32                  `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ExecutionStatus string                 `protobuf:"bytes,101,opt,name=execution_status,json=executionStatus,proto3" json:"execution_status,omitempty"`
+	CallId          string                 `protobuf:"bytes,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
+	ToolName        string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Args            string                 `protobuf:"bytes,3,opt,name=args,proto3" json:"args,omitempty"`
+	Output          string                 `protobuf:"bytes,4,opt,name=output,proto3" json:"output,omitempty"`
+	ExitCode        int32                  `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Error           string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ConsoleToolCall) Reset() {
@@ -19700,6 +19701,13 @@ func (x *ConsoleToolCall) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ConsoleToolCall.ProtoReflect.Descriptor instead.
 func (*ConsoleToolCall) Descriptor() ([]byte, []int) {
 	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{243}
+}
+
+func (x *ConsoleToolCall) GetExecutionStatus() string {
+	if x != nil {
+		return x.ExecutionStatus
+	}
+	return ""
 }
 
 func (x *ConsoleToolCall) GetCallId() string {
@@ -23669,8 +23677,9 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x06digest\x18\x03 \x01(\tR\x06digest\x12\x18\n" +
 	"\aapprove\x18\x04 \x01(\bR\aapprove\"8\n" +
 	"\x1cConsoleLearnedDecisionResult\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\"\xa6\x01\n" +
-	"\x0fConsoleToolCall\x12\x17\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\"\xd1\x01\n" +
+	"\x0fConsoleToolCall\x12)\n" +
+	"\x10execution_status\x18e \x01(\tR\x0fexecutionStatus\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\tR\x06callId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x12\n" +
 	"\x04args\x18\x03 \x01(\tR\x04args\x12\x16\n" +

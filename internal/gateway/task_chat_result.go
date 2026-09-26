@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -9,11 +10,11 @@ import (
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
-func taskChatReply(task *pb.TaskApprovalRecord, turnID string) map[string]any {
+func taskChatReply(task *pb.TaskApprovalRecord, turnID string) *pb.ConsoleBotReply {
 	text := task.Result
 	if task.State != pb.TaskApprovalState_TASK_APPROVAL_STATE_COMPLETED {
 		state := strings.ToLower(strings.TrimPrefix(task.State.String(), "TASK_APPROVAL_STATE_"))
-		text = fmt.Sprintf("Task `%s`: %s. [Review task approvals](/approvals).", task.Id, strings.ReplaceAll(state, "_", " "))
+		text = fmt.Sprintf("Task `%s`: %s. [Review task approvals](/approvals/%s).", task.Id, strings.ReplaceAll(state, "_", " "), url.PathEscape(task.Id))
 	}
 	used, attempted := []string{}, []string{}
 	executed := 0
@@ -27,5 +28,5 @@ func taskChatReply(task *pb.TaskApprovalRecord, turnID string) map[string]any {
 			attempted = append(attempted, receipt.ToolName)
 		}
 	}
-	return map[string]any{"text": text, "turn_id": turnID, "tools_used": used, "tools_attempted": attempted, "tool_calls": executed, "cost_usd": task.GetBudgetSpent().GetSpendUsd(), "session_id": task.SessionId, "transcript": task.Transcript, "receipts": task.Receipts}
+	return &pb.ConsoleBotReply{Text: text, TurnId: turnID, ToolsUsed: used, ToolsAttempted: attempted, ToolCalls: int32(executed), CostUsd: task.GetBudgetSpent().GetSpendUsd(), SessionId: task.SessionId, Transcript: task.Transcript, Receipts: task.Receipts}
 }

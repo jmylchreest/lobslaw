@@ -186,6 +186,7 @@ function Shell() {
           <Route path="/coordinator" element={<Landing bots={bots} />} />
           <Route path="/config" element={<Config />} />
           <Route path="/approvals" element={<TaskApprovals />} />
+          <Route path="/approvals/:taskId" element={<TaskApprovals />} />
           <Route path="/learned" element={<LearnedReviews />} />
           <Route path="/bots/new" element={<NewBot group={current} onCreated={refresh} />} />
           <Route path="/bots/:botId" element={<BotRoom onChanged={refresh} />} />

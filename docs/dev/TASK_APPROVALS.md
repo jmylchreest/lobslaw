@@ -335,6 +335,28 @@ budget, cancellation and explicit duplicate-risk recovery. Approval means ready
 for a worker, not execution complete. Pagination and polling keep waiting,
 denied, expired and uncertain records discoverable independently of a chat stream.
 
+The console offers recovery only when the owner API returns `recoverable=true`.
+Every uncertain task also offers **Close without replay**, using the existing
+revision-checked Cancel operation; this removes replay authority without claiming
+to undo external effects. A missing/false recoverable field does not permit
+recovery. Direct links at `/approvals/<task-id>` fetch the owner-visible record
+independently of list pagination and retain completed results, transcripts and
+per-attempt receipts across resumed legs.
+
+Bot chat evidence replies use generated protobuf JSON on both local SSE and the
+remote console's SSE translation: `sessionId`, `toolsUsed`, `toolsAttempted`,
+`transcript[].toolCalls`, and `receipts[].executionStatus` retain their generated
+names; uint64 sequence values remain decimal strings. The browser still accepts
+legacy snake-case summary counters for non-durable replies. No receipt is inferred
+to be executed from an empty error or a tool name. The compute/turn and remote
+AgentService adapters preserve `execution_status` as well.
+
+The room's **Conversation and task history** reads the stored session projections,
+including coordinator and resumed task transcripts. The task detail and live reply
+show requested tool calls separately from per-attempt receipts. These views do
+not manufacture user/final-only replacements and are never passed back as agent
+context; coordinator context remains the durable transcript path described above.
+
 `/v1/task-approvals` accepts authenticated browser sessions with the same unsafe
 method Origin check as chat, as well as bearer authentication. Anonymous access
 is refused even when normal REST chat permits it. The owner comes from the
@@ -366,6 +388,15 @@ sequenceDiagram
   Worker->>Approval: Claim ready checkpoint through shared runner
   Worker->>Worker: Recheck current authority and resume saved operation
   Owner->>Web: Refresh task state independently of chat
+  Approval-->>Owner: Result, transcript, receipts and recoverable flag
+  alt outcome unknown with recoverable checkpoint
+    Owner->>Web: Acknowledge duplicate risk and recover
+    Web->>Approval: Typed Recover (revision checked)
+  else owner chooses closure
+    Owner->>Web: Close without replay
+    Web->>Approval: Typed Cancel (revision checked)
+    Approval-->>Owner: Cancelled; historical evidence retained
+  end
 ```
 
 ## Verification
@@ -373,6 +404,8 @@ sequenceDiagram
 `npm run test:browser` in `web/` exercises the production build in Chromium
 against deterministic API fixtures: bounded extension, revision-bearing decisions,
 explicit uncertain-outcome recovery, and no automatic model-image requests.
+It also checks closure with and without a checkpoint, completed resumed evidence,
+direct task links, generated bot-reply JSON and coordinator room history.
 Run `npm run build` first; `CHROME_BIN` overrides `/usr/bin/google-chrome`.
 The Go integration tests separately exercise the real agent, Raft queue, task
 service and typed console transport, including restart and interrupted batches.

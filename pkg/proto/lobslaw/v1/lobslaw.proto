@@ -2995,6 +2995,7 @@ message ConsoleLearnedDecisionResult {
   string message = 1;
 }
 message ConsoleToolCall {
+  string execution_status = 101;
   string call_id = 1;
   string tool_name = 2;
   string args = 3;

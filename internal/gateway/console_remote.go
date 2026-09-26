@@ -586,7 +586,14 @@ func (w *consoleEvents) consoleEvent(name string, payload any) error {
 		w.cancel()
 		return w.sendErr
 	}
-	if err := consoleConvert(payload, m.Mutable(f).Message().Interface()); err != nil {
+	target := m.Mutable(f).Message().Interface()
+	var err error
+	if typed, ok := payload.(proto.Message); ok && typed.ProtoReflect().Descriptor() == target.ProtoReflect().Descriptor() {
+		proto.Merge(target, typed)
+	} else {
+		err = consoleConvert(payload, target)
+	}
+	if err != nil {
 		w.sendErr = err
 		w.cancel()
 		return err
@@ -640,7 +647,14 @@ func (s *Server) remoteConsoleChat(w http.ResponseWriter, r *http.Request, ident
 			respondJSON(w, http.StatusAccepted, map[string]string{"error": part.GetAccepted().Message})
 			return
 		}
-		payload := consolePublicValue(m.Get(f).Message())
+		var payload any
+		if reply := part.GetReply(); reply != nil {
+			// Task evidence uses protobuf JSON on both local and remote SSE:
+			// exact uint64 strings, timestamps and nested message field names.
+			payload = reply
+		} else {
+			payload = consolePublicValue(m.Get(f).Message())
+		}
 		if !streaming {
 			if part.GetFinal() != nil {
 				respondJSON(w, http.StatusOK, payload)

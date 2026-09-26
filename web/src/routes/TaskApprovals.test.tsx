@@ -3,8 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TaskCard } from "./TaskApprovals";
 import type { TaskApproval } from "../api";
 
-function render(state: string, operation?: TaskApproval["operation"]) {
-  return renderToStaticMarkup(<TaskCard task={{ id: "task", actor: "bot:worker", revision: "1", state: `TASK_APPROVAL_STATE_${state}`, operation }} reload={() => {}} />);
+function render(state: string, operation?: TaskApproval["operation"], recoverable?: boolean) {
+  return renderToStaticMarkup(<TaskCard task={{ id: "task", actor: "bot:worker", revision: "1", state: `TASK_APPROVAL_STATE_${state}`, operation, recoverable }} reload={() => {}} />);
 }
 
 describe("owner task approval states", () => {
@@ -22,10 +22,19 @@ describe("owner task approval states", () => {
   });
 
   it("requires explicit duplicate-effect acknowledgement for unknown outcomes", () => {
-    const html = render("OUTCOME_UNKNOWN");
+    const html = render("OUTCOME_UNKNOWN", undefined, true);
     expect(html).toContain("may duplicate external effects");
     expect(html).toContain("disabled=\"\">Recover for fresh approval");
     expect(html).not.toContain("Approve once");
+    expect(html).toContain("Close without replay");
+  });
+
+  it.each([false, undefined])("only offers closure when recoverable is %s", (recoverable) => {
+    const html = render("OUTCOME_UNKNOWN", undefined, recoverable);
+    expect(html).toContain("No recoverable checkpoint");
+    expect(html).toContain("Close without replay");
+    expect(html).not.toContain("Recover for fresh approval");
+    expect(html).not.toContain("checkbox");
   });
 
   it.each(["DENIED", "EXPIRED", "COMPLETED", "CANCELLED"])("does not offer stale decisions on %s", (state) => {
