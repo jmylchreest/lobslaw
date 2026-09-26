@@ -27,7 +27,7 @@ resource    = "soul_*"
 | `description` | no | string | Free text |
 | `priority` | yes | int | Higher = wins; see priority table |
 | `effect` | yes | enum | `allow`, `deny`, `require_confirmation` |
-| `subject` | yes | string | `kind:value` form — `scope:owner`, `user:alice`, `channel:telegram`, `subject:google:1234567890` |
+| `subject` | yes | string | `kind:value` form: `scope:owner`, `user:alice`, `role:admin`, or `*` for everyone |
 | `action` | yes | string | `tool:exec`, `shell:run`, `memory:write`, `credentials:read`, `credentials:grant`, `oauth:start`, `clawhub:install` |
 | `resource` | yes | string | Glob — `*` matches everything; `soul_*` prefix; `*.send` suffix |
 
@@ -36,7 +36,7 @@ resource    = "soul_*"
 | Range | Use |
 |---|---|
 | 1 | Default-allow seeds (built-in tools) — auto-seeded, don't write yourself |
-| 10 | Default-deny seeds (sensitive built-ins) — auto-seeded |
+| 10 | Reserved; no rule is auto-seeded here today, and sensitive built-ins get no seed at all |
 | 20–99 | Operator-declared allow rules |
 | 100+ | Overrides + `require_confirmation` for risky tools |
 | 1000+ | Hard denies (revoked subjects, emergency stop) |
@@ -45,21 +45,16 @@ Higher number wins on conflict. Within the same priority, the engine sorts by id
 
 ## Subject matching
 
-`kind:value` — bare strings (e.g. `owner` instead of `scope:owner`) match nothing. Available kinds:
+`kind:value`; bare strings (e.g. `owner` instead of `scope:owner`) match nothing. A node refuses to
+boot if a rule's subject kind is not one of these; see [Security → Policy engine](/security/policy-engine)
+for why. Available kinds:
 
 | Kind | Source | Example |
 |---|---|---|
 | `scope` | `Claims.Scope` from gateway auth | `scope:owner`, `scope:public` |
 | `user` | `Claims.UserID` | `user:alice` |
-| `channel` | originating channel type | `channel:telegram`, `channel:rest` |
-| `subject` | `Claims.Subject` (OAuth) | `subject:google:1234567890` |
+| `role` | `Claims.Roles` | `role:admin` |
 | `*` | matches anything | `*` |
-
-The engine also supports comma-separated alternation in `subject`:
-
-```toml
-subject = "scope:owner,user:alice"   # owner OR user alice
-```
 
 ## Resource glob
 

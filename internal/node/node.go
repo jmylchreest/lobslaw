@@ -1044,6 +1044,16 @@ func validateConfig(cfg Config) error {
 		return errors.New("node.Config: memory-enabled nodes without seeds must configure memory.snapshot.target " +
 			"(a single-node cluster with no off-cluster backup risks total data loss on disk failure)")
 	}
+	// A [[policy.rules]] subject the engine cannot match is a rule that
+	// looks like it works and does nothing: subjectMatches fails closed
+	// on an unknown kind, so a deny never applies and an allow never
+	// grants. Rejected here rather than seeded and silently ignored;
+	// see policy.ValidateSubject.
+	for _, r := range cfg.Policy.Rules {
+		if err := policy.ValidateSubject(r.Subject); err != nil {
+			return fmt.Errorf("node.Config: [[policy.rules]] %q: %w", r.ID, err)
+		}
+	}
 	return nil
 }
 
