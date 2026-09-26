@@ -8470,6 +8470,7 @@ func (x *ChannelStateRecord) GetUpdatedAt() *timestamppb.Timestamp {
 
 type GetSoulTuneRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	BotId         string                 `protobuf:"bytes,1,opt,name=bot_id,json=botId,proto3" json:"bot_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8502,6 +8503,13 @@ func (x *GetSoulTuneRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetSoulTuneRequest.ProtoReflect.Descriptor instead.
 func (*GetSoulTuneRequest) Descriptor() ([]byte, []int) {
 	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{122}
+}
+
+func (x *GetSoulTuneRequest) GetBotId() string {
+	if x != nil {
+		return x.BotId
+	}
+	return ""
 }
 
 type GetSoulTuneResponse struct {
@@ -8552,6 +8560,7 @@ type PutSoulTuneRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	State            *SoulTuneState         `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	ExpectedRevision uint64                 `protobuf:"varint,2,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	BotId            string                 `protobuf:"bytes,3,opt,name=bot_id,json=botId,proto3" json:"bot_id,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -8598,6 +8607,13 @@ func (x *PutSoulTuneRequest) GetExpectedRevision() uint64 {
 		return x.ExpectedRevision
 	}
 	return 0
+}
+
+func (x *PutSoulTuneRequest) GetBotId() string {
+	if x != nil {
+		return x.BotId
+	}
+	return ""
 }
 
 type PutSoulTuneResponse struct {
@@ -8647,6 +8663,7 @@ func (x *PutSoulTuneResponse) GetRecord() *SoulTuneRecord {
 type RollbackSoulTuneRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Steps         uint32                 `protobuf:"varint,1,opt,name=steps,proto3" json:"steps,omitempty"`
+	BotId         string                 `protobuf:"bytes,2,opt,name=bot_id,json=botId,proto3" json:"bot_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8686,6 +8703,13 @@ func (x *RollbackSoulTuneRequest) GetSteps() uint32 {
 		return x.Steps
 	}
 	return 0
+}
+
+func (x *RollbackSoulTuneRequest) GetBotId() string {
+	if x != nil {
+		return x.BotId
+	}
+	return ""
 }
 
 type RollbackSoulTuneResponse struct {
@@ -9015,7 +9039,10 @@ type BotRecord struct {
 	GroupId string `protobuf:"bytes,16,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`
 	// owner is the human principal this bot belongs to — "user:alice".
 	// Empty means nobody: the record is inaccessible, never public.
-	Owner         string `protobuf:"bytes,17,opt,name=owner,proto3" json:"owner,omitempty"`
+	Owner string `protobuf:"bytes,17,opt,name=owner,proto3" json:"owner,omitempty"`
+	// Deleted identities remain reserved because inbox, soul and memory records
+	// retain this principal. Tombstones travel with portable bot archives.
+	Deleted       bool `protobuf:"varint,18,opt,name=deleted,proto3" json:"deleted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9167,6 +9194,13 @@ func (x *BotRecord) GetOwner() string {
 		return x.Owner
 	}
 	return ""
+}
+
+func (x *BotRecord) GetDeleted() bool {
+	if x != nil {
+		return x.Deleted
+	}
+	return false
 }
 
 // BotBudget caps one of this bot's turns. Zero on a field takes the
@@ -12712,10 +12746,14 @@ type LogEntry struct {
 	// behaviour what a caller gets by forgetting the field — the same
 	// shape as the scopeFilter="" bug that memory.Audience exists to
 	// prevent. LOG_OP_CLAIM requires it and is rejected without it;
-	// PUT / DELETE ignore it, since a create has no prior revision.
+	// PUT ignores it. Inbox retention DELETE checks it when supplied, so
+	// pruning a stale terminal version cannot remove concurrently retried work.
 	ExpectedRevision *uint64 `protobuf:"varint,24,opt,name=expected_revision,json=expectedRevision,proto3,oneof" json:"expected_revision,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Capacity at proposal time, checked deterministically when an inbox write
+	// adds outstanding work. Zero preserves replay of older entries.
+	InboxMaxPending uint32 `protobuf:"varint,52,opt,name=inbox_max_pending,json=inboxMaxPending,proto3" json:"inbox_max_pending,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *LogEntry) Reset() {
@@ -13049,6 +13087,13 @@ func (x *LogEntry) GetExpectedClaimer() string {
 func (x *LogEntry) GetExpectedRevision() uint64 {
 	if x != nil && x.ExpectedRevision != nil {
 		return *x.ExpectedRevision
+	}
+	return 0
+}
+
+func (x *LogEntry) GetInboxMaxPending() uint32 {
+	if x != nil {
+		return x.InboxMaxPending
 	}
 	return 0
 }
@@ -17774,17 +17819,20 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x03 \x01(\fR\x05value\x129\n" +
 	"\n" +
-	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x14\n" +
-	"\x12GetSoulTuneRequest\"I\n" +
+	"updated_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"+\n" +
+	"\x12GetSoulTuneRequest\x12\x15\n" +
+	"\x06bot_id\x18\x01 \x01(\tR\x05botId\"I\n" +
 	"\x13GetSoulTuneResponse\x122\n" +
-	"\x06record\x18\x01 \x01(\v2\x1a.lobslaw.v1.SoulTuneRecordR\x06record\"r\n" +
+	"\x06record\x18\x01 \x01(\v2\x1a.lobslaw.v1.SoulTuneRecordR\x06record\"\x89\x01\n" +
 	"\x12PutSoulTuneRequest\x12/\n" +
 	"\x05state\x18\x01 \x01(\v2\x19.lobslaw.v1.SoulTuneStateR\x05state\x12+\n" +
-	"\x11expected_revision\x18\x02 \x01(\x04R\x10expectedRevision\"I\n" +
+	"\x11expected_revision\x18\x02 \x01(\x04R\x10expectedRevision\x12\x15\n" +
+	"\x06bot_id\x18\x03 \x01(\tR\x05botId\"I\n" +
 	"\x13PutSoulTuneResponse\x122\n" +
-	"\x06record\x18\x01 \x01(\v2\x1a.lobslaw.v1.SoulTuneRecordR\x06record\"/\n" +
+	"\x06record\x18\x01 \x01(\v2\x1a.lobslaw.v1.SoulTuneRecordR\x06record\"F\n" +
 	"\x17RollbackSoulTuneRequest\x12\x14\n" +
-	"\x05steps\x18\x01 \x01(\rR\x05steps\"N\n" +
+	"\x05steps\x18\x01 \x01(\rR\x05steps\x12\x15\n" +
+	"\x06bot_id\x18\x02 \x01(\tR\x05botId\"N\n" +
 	"\x18RollbackSoulTuneResponse\x122\n" +
 	"\x06record\x18\x01 \x01(\v2\x1a.lobslaw.v1.SoulTuneRecordR\x06record\"\xb5\x01\n" +
 	"\x0eSoulTuneRecord\x123\n" +
@@ -17822,7 +17870,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"\b_sarcasmB\b\n" +
 	"\x06_humorB\x0e\n" +
-	"\f_emoji_usage\"\xcb\x04\n" +
+	"\f_emoji_usage\"\xe5\x04\n" +
 	"\tBotRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
@@ -17847,7 +17895,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"created_by\x18\x0f \x01(\tR\tcreatedBy\x12\x19\n" +
 	"\bgroup_id\x18\x10 \x01(\tR\agroupId\x12\x14\n" +
-	"\x05owner\x18\x11 \x01(\tR\x05owner\"\x7f\n" +
+	"\x05owner\x18\x11 \x01(\tR\x05owner\x12\x18\n" +
+	"\adeleted\x18\x12 \x01(\bR\adeleted\"\x7f\n" +
 	"\tBotBudget\x12$\n" +
 	"\x0emax_tool_calls\x18\x01 \x01(\x05R\fmaxToolCalls\x12\"\n" +
 	"\rmax_spend_usd\x18\x02 \x01(\x01R\vmaxSpendUsd\x12(\n" +
@@ -18173,7 +18222,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"claimed_by\x18\x02 \x01(\tR\tclaimedBy\x12D\n" +
 	"\x10claim_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x17\n" +
 	"\aturn_id\x18\x04 \x01(\tR\x06turnId\x12\x1a\n" +
-	"\brevision\x18\x05 \x01(\x04R\brevision\"\x91\x10\n" +
+	"\brevision\x18\x05 \x01(\x04R\brevision\"\xbd\x10\n" +
 	"\bLogEntry\x12!\n" +
 	"\x02op\x18\x01 \x01(\x0e2\x11.lobslaw.v1.LogOpR\x02op\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x129\n" +
@@ -18219,7 +18268,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"shareBatch\x12E\n" +
 	"\rtask_approval\x182 \x01(\v2\x1e.lobslaw.v1.TaskApprovalRecordH\x00R\ftaskApproval\x12)\n" +
 	"\x10expected_claimer\x18\x14 \x01(\tR\x0fexpectedClaimer\x120\n" +
-	"\x11expected_revision\x18\x18 \x01(\x04H\x01R\x10expectedRevision\x88\x01\x01B\t\n" +
+	"\x11expected_revision\x18\x18 \x01(\x04H\x01R\x10expectedRevision\x88\x01\x01\x12*\n" +
+	"\x11inbox_max_pending\x184 \x01(\rR\x0finboxMaxPendingB\t\n" +
 	"\apayloadB\x14\n" +
 	"\x12_expected_revision\"\x16\n" +
 	"\x14ExportArchiveRequest\"+\n" +

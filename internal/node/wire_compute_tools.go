@@ -942,6 +942,7 @@ func (n *Node) wireSoulTools(builtins *tools.Builtins) error {
 	}
 	if err := tools.RegisterSoulBuiltins(builtins, tools.SoulBuiltinsConfig{
 		Mutator: n.soulAdjuster,
+		ForBot:  func(id string) (tools.SoulMutator, error) { return n.soulAdjuster.ForBot(id) },
 	}); err != nil {
 		return fmt.Errorf("register soul builtins: %w", err)
 	}

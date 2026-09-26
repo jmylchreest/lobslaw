@@ -74,11 +74,11 @@ type Identity struct {
 	// is an input to a rule, and the rule is what allows or denies.
 	Roles []string
 
-	// BotOwner is the human a bot turn serves, when the turn runs as a
-	// bot. A bot reads its own records AND this principal's, so a
-	// specialist can recall what its owner told the assistant. Empty
-	// for a turn that is not a bot's.
+	// BotOwner attributes the human a bot serves; it grants specialists
+	// no saved-memory access. Only the coordinator may select owner context.
 	BotOwner identity.Principal
+	// Specialist uses only its task transcript as working memory.
+	Specialist bool
 
 	// TurnID identifies this turn. Carried so a builtin can bound a
 	// per-turn budget — the pinned-memory tools cap consecutive

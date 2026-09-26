@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/soul"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -32,6 +33,7 @@ type SoulMutator interface {
 // SoulBuiltinsConfig wires the soul_* builtins. Mutator is required.
 type SoulBuiltinsConfig struct {
 	Mutator SoulMutator
+	ForBot  func(string) (SoulMutator, error)
 }
 
 // RegisterSoulBuiltins installs soul_get / soul_tune /
@@ -48,22 +50,40 @@ func RegisterSoulBuiltins(b *Builtins, cfg SoulBuiltinsConfig) error {
 	if cfg.Mutator == nil {
 		return errors.New("soul: Mutator required")
 	}
-	if err := b.Register("soul_get", soulGetHandler(cfg.Mutator)); err != nil {
+	if err := b.Register("soul_get", scopedSoulHandler(cfg, soulGetHandler)); err != nil {
 		return err
 	}
-	if err := b.Register("soul_tune", soulTuneHandler(cfg.Mutator)); err != nil {
+	if err := b.Register("soul_tune", scopedSoulHandler(cfg, soulTuneHandler)); err != nil {
 		return err
 	}
-	if err := b.Register("soul_fragment_add", soulFragmentAddHandler(cfg.Mutator)); err != nil {
+	if err := b.Register("soul_fragment_add", scopedSoulHandler(cfg, soulFragmentAddHandler)); err != nil {
 		return err
 	}
-	if err := b.Register("soul_fragment_remove", soulFragmentRemoveHandler(cfg.Mutator)); err != nil {
+	if err := b.Register("soul_fragment_remove", scopedSoulHandler(cfg, soulFragmentRemoveHandler)); err != nil {
 		return err
 	}
-	if err := b.Register("soul_reset", soulResetHandler(cfg.Mutator)); err != nil {
+	if err := b.Register("soul_reset", scopedSoulHandler(cfg, soulResetHandler)); err != nil {
 		return err
 	}
-	return b.Register("soul_history_rollback", soulHistoryRollbackHandler(cfg.Mutator))
+	return b.Register("soul_history_rollback", scopedSoulHandler(cfg, soulHistoryRollbackHandler))
+}
+
+func scopedSoulHandler(cfg SoulBuiltinsConfig, handler func(SoulMutator) compute.BuiltinFunc) compute.BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		m := cfg.Mutator
+		id, _ := turn.IdentityFrom(ctx)
+		if id.BotID != "" {
+			if cfg.ForBot == nil {
+				return nil, 1, errors.New("soul: per-bot tuning is unavailable")
+			}
+			var err error
+			m, err = cfg.ForBot(id.BotID)
+			if err != nil {
+				return nil, 1, err
+			}
+		}
+		return handler(m)(ctx, args)
+	}
 }
 
 // SoulToolDefs is the tool def list registered alongside the

@@ -708,7 +708,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 				skillIndex = a.cfg.SkillsProvider()
 			}
 			var pinned promptgen.PinnedBlocks
-			if a.cfg.PinnedProvider != nil {
+			if a.cfg.PinnedProvider != nil && !req.Bot.IsSpecialist() {
 				pinned = a.cfg.PinnedProvider(sessionKeyFor(req), userIDFor(req))
 			}
 			var proposals int
@@ -736,6 +736,11 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 	if req.SystemPrompt == "" && guidance != "" {
 		req.SystemPrompt = guidance
 	}
+	a.recallContext(ctx, req)
+	return nil
+}
+
+func (a *Agent) recallContext(ctx context.Context, req *ProcessMessageRequest) {
 	// Recall is carried on the request rather than folded into the
 	// system prompt. Recalled episodes are untrusted — ingest stores
 	// user messages verbatim, and fetched pages can be summarised into
@@ -743,7 +748,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 	// the request, is the wrong place for them. seedMessages puts them
 	// in a user-role message, which is the position promptgen's
 	// deliberate no-escaping decision reasoned about.
-	if a.cfg.ContextEngine != nil {
+	if a.cfg.ContextEngine != nil && !req.Bot.IsSpecialist() {
 		assembly := a.cfg.ContextEngine.Assemble(ctx, req.Message)
 		if rendered := assembly.Rendered(); rendered != "" {
 			req.RecalledContext = rendered
@@ -752,7 +757,6 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 				"recall_count", len(assembly.RecallIDs))
 		}
 	}
-	return nil
 }
 
 // maybeIngestTurn fires the configured EpisodicIngester after a
@@ -773,7 +777,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 // turn is preferable to dropping the user's reply for a backend
 // hiccup.
 func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string, calls []ToolInvocation) {
-	if a.cfg.EpisodicIngester == nil || reply == "" {
+	if a.cfg.EpisodicIngester == nil || reply == "" || req.Bot.IsSpecialist() {
 		return
 	}
 	// Channel and ChatID come from the request, which is where they
@@ -1789,12 +1793,13 @@ func IsRetryableProviderError(ctx context.Context, err error) bool {
 // work is being done for (see Node.schedulerClaims), not of a chat.
 func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	t := turn.Identity{
-		TurnID:    req.TurnID,
-		Channel:   req.Channel,
-		ChannelID: req.ChannelID,
-		Shared:    req.SharedConversation,
-		Timezone:  req.UserTimezone,
-		BotID:     req.BotID,
+		TurnID:     req.TurnID,
+		Channel:    req.Channel,
+		ChannelID:  req.ChannelID,
+		Shared:     req.SharedConversation,
+		Timezone:   req.UserTimezone,
+		BotID:      req.BotID,
+		Specialist: req.Bot.IsSpecialist(),
 	}
 	if req.Claims != nil {
 		t.UserID = req.Claims.UserID

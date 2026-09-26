@@ -467,7 +467,11 @@ func (s *InboxService) PruneTerminal(ctx context.Context, age time.Duration) (in
 	}
 	pruned := 0
 	for _, item := range stale {
-		if err := s.apply(ctx, lobslawv1.LogOp_LOG_OP_DELETE, item, nil, ""); err != nil {
+		revision := item.GetRevision()
+		if err := s.apply(ctx, lobslawv1.LogOp_LOG_OP_DELETE, item, &revision, item.GetClaimedBy()); err != nil {
+			if errors.Is(err, ErrClaimConflict) {
+				continue
+			}
 			return pruned, err
 		}
 		pruned++
@@ -504,6 +508,7 @@ func (s *InboxService) apply(ctx context.Context, op lobslawv1.LogOp, item *lobs
 		Id:               inboxKey(item.GetRecipient(), item.GetId()),
 		ExpectedRevision: expectedRevision,
 		ExpectedClaimer:  expectedClaimer,
+		InboxMaxPending:  uint32(s.maxPending),
 		Payload:          &lobslawv1.LogEntry_BotInbox{BotInbox: item},
 	})
 	if err != nil {

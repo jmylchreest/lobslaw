@@ -1245,19 +1245,23 @@ service SoulTuneService {
   rpc RollbackSoulTune(RollbackSoulTuneRequest) returns (RollbackSoulTuneResponse);
 }
 
-message GetSoulTuneRequest {}
+message GetSoulTuneRequest {
+  string bot_id = 1;
+}
 message GetSoulTuneResponse {
   SoulTuneRecord record = 1;
 }
 message PutSoulTuneRequest {
   SoulTuneState state = 1;
   uint64 expected_revision = 2;
+  string bot_id = 3;
 }
 message PutSoulTuneResponse {
   SoulTuneRecord record = 1;
 }
 message RollbackSoulTuneRequest {
   uint32 steps = 1;
+  string bot_id = 2;
 }
 message RollbackSoulTuneResponse {
   SoulTuneRecord record = 1;
@@ -1335,6 +1339,9 @@ message BotRecord {
   // owner is the human principal this bot belongs to — "user:alice".
   // Empty means nobody: the record is inaccessible, never public.
   string owner = 17;
+  // Deleted identities remain reserved because inbox, soul and memory records
+  // retain this principal. Tombstones travel with portable bot archives.
+  bool deleted = 18;
 }
 
 // BotBudget caps one of this bot's turns. Zero on a field takes the
@@ -2174,8 +2181,12 @@ message LogEntry {
   // behaviour what a caller gets by forgetting the field — the same
   // shape as the scopeFilter="" bug that memory.Audience exists to
   // prevent. LOG_OP_CLAIM requires it and is rejected without it;
-  // PUT / DELETE ignore it, since a create has no prior revision.
+  // PUT ignores it. Inbox retention DELETE checks it when supplied, so
+  // pruning a stale terminal version cannot remove concurrently retried work.
   optional uint64 expected_revision = 24;
+  // Capacity at proposal time, checked deterministically when an inbox write
+  // adds outstanding work. Zero preserves replay of older entries.
+  uint32 inbox_max_pending = 52;
 }
 
 // ArchiveBatch is bounded by the importer and applied in one store transaction.
