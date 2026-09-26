@@ -53,9 +53,9 @@ regexes = ['''^onepassword$''']
 
 [[allowlists]]
 description = """
-Historical browser routine rejection test uses a literal example.test URL with
-placeholder credentials to prove credential-bearing navigation is refused.
-Restrict this exception to the exact fixture URI and test file.
+The workforce browser rejection test deliberately supplies a credential-shaped
+URL at example.test to verify it cannot be stored. This exact URL is a dummy
+fixture, not a service credential. Full-history scans include its feature branch.
 """
 condition = "AND"
 regexTarget = "match"

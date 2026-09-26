@@ -36,6 +36,10 @@ Other channels and operators can continue using `lobslaw learned pending --all`,
 
 ## Anatomy
 
+To distribute a selected skill and optional recurring schedules, see
+[Portable skill sharing](./skill-sharing.md). Local-file publishing, signing,
+staged installation and explicit activation are available through `lobslaw skills`.
+
 A skill is:
 
 ```

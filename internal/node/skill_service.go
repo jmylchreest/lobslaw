@@ -27,7 +27,9 @@ import (
 // skillService serves the skill store over gRPC.
 type skillService struct {
 	lobslawv1.UnimplementedSkillServiceServer
-	store *memory.SkillStore
+	store          *memory.SkillStore
+	sharing        *memory.SharingStore
+	authorizeShare func(context.Context, string, string) (string, error)
 	// policy and verifier are the node's signing stance, applied to an
 	// import the same way the mount importer applies it. An unsigned
 	// skill pushed into a SigningRequire cluster is refused HERE

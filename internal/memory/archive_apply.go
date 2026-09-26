@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/archive"
+	"github.com/jmylchreest/lobslaw/internal/sharing"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -201,6 +202,9 @@ func archiveImportGroups(records []archive.Record) ([][]archive.Record, error) {
 			}
 			mapping := msg.(*lobslawv1.ArchiveMapping)
 			key = "2/" + mapping.Kind + "/" + mapping.DestinationId
+			if mapping.Kind == "skill-installations" {
+				key = "3/" + mapping.DestinationId
+			}
 			if mapping.Kind == "skill-blobs" {
 				key = "0/" + mapping.DestinationId
 			}
@@ -215,6 +219,8 @@ func archiveImportGroups(records []archive.Record) ([][]archive.Record, error) {
 				}
 				key = "1/" + mapping.DestinationId[:split]
 			}
+		case "skill-installations":
+			key = "3/" + record.ID
 		case "skill-blobs":
 			key = "0/" + record.ID
 		case "sessions":
@@ -300,6 +306,13 @@ func prepareArchiveBatch(ctx context.Context, store *Store, id string, records [
 func archiveDependencies(msg proto.Message) []archiveRecordKey {
 	var out []archiveRecordKey
 	switch rec := msg.(type) {
+	case *lobslawv1.ShareInstallation:
+		if a, err := sharing.Decode(rec.Artifact); err == nil {
+			out = append(out, archiveRecordKey{"skills", SkillKey(a.Package().Name, a.Package().Version)})
+		}
+		for _, id := range rec.ScheduleIds {
+			out = append(out, archiveRecordKey{"scheduled-tasks", id})
+		}
 	case *lobslawv1.SkillRecord:
 		for _, digest := range rec.Files {
 			out = append(out, archiveRecordKey{"skill-blobs", digest})

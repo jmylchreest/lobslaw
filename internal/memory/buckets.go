@@ -3,6 +3,7 @@ package memory
 // Bucket names inside state.db. Each record type lives in its own
 // top-level bbolt bucket, keyed by record ID.
 const (
+	BucketSkillInstallations = "skill_installations"
 	// BucketArchiveImports holds encrypted receipts, excluded from portable exports.
 	BucketArchiveMappings = "archive_mappings"
 	BucketArchiveImports  = "archive_imports"
@@ -73,7 +74,8 @@ const (
 	// than per-process so an approval tapped on one node resolves a
 	// prompt issued by another, and so a restart does not lose the
 	// turn the user was answering. See R2.
-	BucketPrompts = "prompts"
+	BucketPrompts       = "prompts"
+	BucketTaskApprovals = "task_approvals"
 
 	// BucketConsolidations holds Dream's adjudication log: what it
 	// decided about each cluster of near-duplicate memories and why.
@@ -163,6 +165,7 @@ const SoulTuneRecordID = "soul:tune"
 
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
+	BucketSkillInstallations,
 	BucketArchiveImports,
 	BucketArchiveMappings,
 	BucketRaftMeta,
@@ -181,6 +184,7 @@ var allBuckets = []string{
 	BucketSessionMessages,
 	BucketSessionLeases,
 	BucketPrompts,
+	BucketTaskApprovals,
 	BucketConsolidations,
 	BucketDisputes,
 	BucketPinned,

@@ -262,6 +262,9 @@ func (f *FSM) Apply(l *raft.Log) any {
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
+	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ShareBatch); ok {
+		return f.applyShareBatch(p.ShareBatch)
+	}
 	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ArchiveBatch); ok {
 		return f.applyArchiveBatch(p.ArchiveBatch)
 	}
@@ -366,6 +369,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 		return p.Revision, true
 	case *lobslawv1.SelfTaughtRecord:
 		return p.Revision, true
+	case *lobslawv1.TaskApprovalRecord:
+		return p.Revision, true
 	case *lobslawv1.SessionGrant:
 		return p.Revision, true
 	case *lobslawv1.SkillRecord:
@@ -394,6 +399,8 @@ func setRevision(m proto.Message, rev uint64) {
 	case *lobslawv1.PinnedMemory:
 		p.Revision = rev
 	case *lobslawv1.SelfTaughtRecord:
+		p.Revision = rev
+	case *lobslawv1.TaskApprovalRecord:
 		p.Revision = rev
 	case *lobslawv1.SessionGrant:
 		p.Revision = rev
@@ -665,6 +672,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketTaskApprovals:
+		var r lobslawv1.TaskApprovalRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	case BucketPrompts:
 		var r lobslawv1.PromptRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -712,7 +725,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
+	case BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
 		return true
 	default:
@@ -765,6 +778,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSessions, p.Session, nil
 	case *lobslawv1.LogEntry_SessionLease:
 		return BucketSessionLeases, p.SessionLease, nil
+	case *lobslawv1.LogEntry_TaskApproval:
+		return BucketTaskApprovals, p.TaskApproval, nil
 	case *lobslawv1.LogEntry_Prompt:
 		return BucketPrompts, p.Prompt, nil
 	case *lobslawv1.LogEntry_Consolidation:

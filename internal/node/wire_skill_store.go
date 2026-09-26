@@ -38,7 +38,7 @@ func (n *Node) skillSigning() (skills.SigningPolicy, *skills.Verifier, error) {
 	if n.cfg.Skills.SigningPolicy == "" && n.cfg.Skills.RequireSigned {
 		policy = skills.SigningRequire
 	}
-	if policy == skills.SigningOff {
+	if policy == skills.SigningOff && n.cfg.Skills.TrustedPublishers == "" {
 		return policy, nil, nil
 	}
 
@@ -206,6 +206,7 @@ func (n *Node) wireSkillStore() error {
 	if n.server != nil {
 		lobslawv1.RegisterSkillServiceServer(n.server, &skillService{
 			store: n.skillStore, policy: policy, verifier: verifier,
+			sharing: memory.NewSharingStore(n.raft, n.store), authorizeShare: n.authorizeSharing,
 		})
 	}
 	return nil

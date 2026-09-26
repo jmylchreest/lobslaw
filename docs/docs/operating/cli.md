@@ -34,6 +34,12 @@ lobslaw skills             # skills held in the cluster store
   skills list              # what is installed
   skills import <path>     # add one
   skills remove <name>     # take one out
+  skills fetch clawhub:<slug> --to file:<path> # retrieve for review
+  skills publish --dir <path> --to file:<path> # create a portable release
+  skills inspect file:<path> # inspect without connecting to a node
+  skills sign file:<path> --key <key> --publisher <name> --to file:<path>
+  skills install <file:path|clawhub:slug> --owner user:<id> # preview staged installation
+  skills activate-install <id> --owner user:<id> # preview activation
 lobslaw learned            # what the agent taught itself
   learned list             # artefacts it wrote for itself
   learned pending          # refinements awaiting a decision
@@ -261,17 +267,16 @@ on production.
 ## `lobslaw plugin install <bundle>`
 
 ```bash
-# from clawhub
-lobslaw plugin install clawhub:gws-workspace@1.0.0
+# ClawHub: same reviewed cluster staging as skills install.
+lobslaw plugin install clawhub:gws-workspace@1.0.0 --context home --owner user:alice
 
-# from local directory
-lobslaw plugin install file:///path/to/manifest-dir/
-
-# from a git repo (planned)
-lobslaw plugin install git://github.com/owner/skill@v1.0.0
+# Local plugin directory (separate local-plugin flow).
+lobslaw plugin install /path/to/plugin-dir/
 ```
 
-Honours `[security] clawhub_signing_policy`.
+For ClawHub, preview first and repeat with `--apply --expected-plan <digest>`.
+Activation is separate via `skills activate-install`. The old ClawHub `--root`
+and `--yes` options are rejected. See [ClawHub](../features/clawhub.md).
 
 ## `lobslaw audit`
 

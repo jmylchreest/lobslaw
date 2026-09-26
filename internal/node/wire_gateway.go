@@ -117,6 +117,8 @@ func (n *Node) wireGateway() error {
 		Slack:            sl,
 		Webhooks:         webhooks,
 		Prompts:          n.promptRegistry,
+		TaskApprovals:    n.taskApprovalAPI(),
+		TaskIdentity:     n.identityResolver(),
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
 		Plan:             planServiceOrNil(n.planSvc),
 		Sessions:         n.newSessionStore(),

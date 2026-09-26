@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	"github.com/robfig/cron/v3"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -528,4 +529,101 @@ func TestSchedulerConcurrentClaimOnlyOneWins(t *testing.T) {
 	cancel()
 	<-aDone
 	<-bDone
+}
+
+func TestAgentTaskScheduleValidation(t *testing.T) {
+	t.Parallel()
+	// An hourly task is valid even one second before its first firing.
+	now := time.Date(2026, 9, 20, 12, 59, 59, 0, time.UTC)
+	for _, tc := range []struct {
+		expr  string
+		valid bool
+	}{
+		{"* * * * *", true},
+		{"0 * * * *", true},
+		{"CRON_TZ=Europe/London 0 9 * * *", true},
+		{"@hourly", true},
+		{"@every 1m", true},
+		{"@every 90s", true},
+		{"@every 59s", false},
+		{"CRON_TZ=UTC @every 1s", false},
+		{"@every 0s", false},
+		{"@every -1s", false},
+		{"* * * * * *", false},
+		{"61 * * * *", false},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			s := &Scheduler{cronParser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)}
+			task := &lobslawv1.ScheduledTaskRecord{HandlerRef: "agent:turn", Schedule: tc.expr, CreatedAt: timestamppb.New(now)}
+			for _, cached := range []bool{false, true} {
+				if cached {
+					task.NextRun = timestamppb.New(now.Add(time.Second))
+				}
+				got, err := s.taskNextRun(task, now)
+				if (err == nil) != tc.valid {
+					t.Fatalf("cached=%v: error = %v, valid = %v", cached, err, tc.valid)
+				}
+				if tc.valid && (cached || tc.expr == "0 * * * *") && !got.Equal(now.Add(time.Second)) {
+					t.Fatalf("next run = %v, want %v", got, now.Add(time.Second))
+				}
+			}
+		})
+	}
+}
+
+func TestSchedulerSkipsSubMinuteAgentTasks(t *testing.T) {
+	t.Parallel()
+	node, store := singleNodeRaft(t, "interval-test")
+	reg := NewHandlerRegistry()
+	fired := make(chan string, 3)
+	handler := func(_ context.Context, task *lobslawv1.ScheduledTaskRecord) error { fired <- task.Id; return nil }
+	if err := reg.RegisterTask("agent:turn", handler); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RegisterTask("maintenance", handler); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewScheduler(Config{NodeID: "interval-test"}, node, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, tc := range []struct {
+		id, ref string
+		cached  bool
+	}{
+		{"agent", "agent:turn", false},
+		{"agent-cached", "agent:turn", true},
+		{"maintenance", "maintenance", true},
+	} {
+		task := &lobslawv1.ScheduledTaskRecord{Id: tc.id, HandlerRef: tc.ref, Schedule: "@every 1s", Enabled: true, CreatedAt: timestamppb.New(now.Add(-time.Minute))}
+		if tc.cached {
+			task.NextRun = timestamppb.New(now.Add(-time.Second))
+		}
+		seedTask(t, node, task)
+	}
+	s.fireDue(context.Background(), now)
+	for _, id := range []string{"agent", "agent-cached"} {
+		task := loadTask(t, store, id)
+		if task.ClaimedBy != "" || task.LastRun != nil {
+			t.Errorf("invalid task %s was claimed or run: %v", id, task)
+		}
+	}
+	select {
+	case id := <-fired:
+		if id != "maintenance" {
+			t.Fatalf("fired %s, want maintenance", id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("maintenance task did not fire")
+	}
+	// Wait for the asynchronous completion write before shutting down Raft.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if loadTask(t, store, "maintenance").LastRun != nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("maintenance task did not complete")
 }
