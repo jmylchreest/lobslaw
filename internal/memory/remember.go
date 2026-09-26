@@ -65,7 +65,7 @@ func Remember(ctx context.Context, raft RaftApplier, embedder Embedder, timeout 
 	if rec.Importance == 0 {
 		// Dream scores by importance × recency, so zero would exclude
 		// the record from consolidation rather than rank it low.
-		rec.Importance = 5
+		rec.Importance = DefaultImportance
 	}
 	if rec.Retention == lobslawv1.Retention_RETENTION_UNSPECIFIED {
 		rec.Retention = lobslawv1.Retention_RETENTION_EPISODIC

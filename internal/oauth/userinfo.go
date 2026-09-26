@@ -61,7 +61,7 @@ func FetchSubject(ctx context.Context, p ProviderConfig, tok *TokenResponse) (st
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("oauth: userinfo HTTP %d: %s",
-			resp.StatusCode, textutil.Truncate(string(body), "…", 256))
+			resp.StatusCode, textutil.Truncate(string(body), "…", maxErrorPreviewRunes))
 	}
 	var fields map[string]any
 	if err := json.Unmarshal(body, &fields); err != nil {

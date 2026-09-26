@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -96,7 +95,7 @@ func RegisterVisionBuiltin(b *Builtins, cfgs ...VisionConfig) error {
 		}
 		client := cfg.HTTPClient
 		if client == nil {
-			client = &http.Client{Timeout: 60 * time.Second}
+			client = &http.Client{Timeout: compute.DefaultVisionTimeout}
 		}
 		handlers = append(handlers, compute.FailoverHandler{Label: cfg.Label, Tier: cfg.TrustTier, Fn: newReadImageHandler(cfg, client)})
 	}

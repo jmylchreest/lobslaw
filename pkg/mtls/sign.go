@@ -86,7 +86,7 @@ func SignNodeCert(caCert *x509.Certificate, caKey ed25519.PrivateKey, opts SignO
 		return nil, nil, errors.New("NodeID required")
 	}
 	if opts.ValidFor == 0 {
-		opts.ValidFor = 365 * 24 * time.Hour
+		opts.ValidFor = DefaultNodeCertValidity
 	}
 	now := opts.Now
 	if now.IsZero() {
@@ -194,7 +194,7 @@ func SignOperatorCert(caCert *x509.Certificate, caKey ed25519.PrivateKey, opts S
 		// Shorter than a node's year by default. A person's credential
 		// lives on a laptop that travels; a node's lives on a host
 		// somebody controls.
-		opts.ValidFor = 90 * 24 * time.Hour
+		opts.ValidFor = DefaultOperatorCertValidity
 	}
 	now := opts.Now
 	if now.IsZero() {

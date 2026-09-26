@@ -15,8 +15,12 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/audit"
+	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 )
 
@@ -196,7 +200,7 @@ func runInit(ans initAnswers) error {
 
 	// 32 random bytes, base64-std. Matches what memory.Key expects
 	// from env:LOBSLAW_MEMORY_KEY resolution.
-	keyBytes := make([]byte, 32)
+	keyBytes := make([]byte, crypto.KeySize)
 	if _, err := rand.Read(keyBytes); err != nil {
 		return fmt.Errorf("generate memory key: %w", err)
 	}
@@ -206,7 +210,7 @@ func runInit(ans initAnswers) error {
 	// `cluster ca-init` defaults.
 	caCertPEM, caKeyPEM, err := mtls.GenerateCA(mtls.CAOpts{
 		CommonName: "Lobslaw Cluster CA",
-		ValidFor:   10 * 365 * 24 * time.Hour,
+		ValidFor:   mtls.DefaultCAValidity,
 	})
 	if err != nil {
 		return fmt.Errorf("generate CA: %w", err)
@@ -224,7 +228,7 @@ func runInit(ans initAnswers) error {
 	nodeCertPEM, nodeKeyPEM, err := mtls.SignNodeCert(caCert, caKey, mtls.SignOpts{
 		NodeID:   derivedNodeID(),
 		IPs:      mtls.LoopbackIPs(),
-		ValidFor: 365 * 24 * time.Hour,
+		ValidFor: mtls.DefaultNodeCertValidity,
 	})
 	if err != nil {
 		return fmt.Errorf("sign node cert: %w", err)
@@ -401,15 +405,13 @@ api_key_ref = "env:{{.ProviderKeyVar}}"
 trust_tier  = "public"
 capabilities = ["function-calling"]
 
-[compute.budgets]
-max_tool_calls_per_turn   = 30
-max_spend_usd_per_turn    = 0.50
-max_egress_bytes_per_turn = 10000000
+[compute.limits]
+max_tool_calls_per_turn = {{.MaxToolCallsPerTurn}}
 
 [gateway]
 enabled              = true
 http_port            = {{.GatewayHTTPPort}}
-confirmation_timeout = "5m"
+confirmation_timeout = "{{.ConfirmationTimeout}}"
 
 [[gateway.channels]]
 type = "rest"
@@ -421,8 +423,8 @@ scope = "default"
 [audit.local]
 enabled     = true
 path        = "{{.AuditDir}}/audit.jsonl"
-max_size_mb = 100
-max_files   = 10
+max_size_mb = {{.AuditMaxSizeMB}}
+max_files   = {{.AuditMaxFiles}}
 
 [audit.raft]
 enabled = true
@@ -488,8 +490,12 @@ func writeConfigTOML(path string, ans initAnswers, dataDir, auditDir, caCert, no
 		// address on purpose — a generated dev config wants every
 		// interface — but the PORT is the default, and a second copy of
 		// it is a node that starts, looks healthy, and is unreachable.
-		"ClusterPort":     portOf(config.DefaultClusterListenAddr),
-		"GatewayHTTPPort": strconv.Itoa(config.DefaultGatewayHTTPPort),
+		"ClusterPort":         portOf(config.DefaultClusterListenAddr),
+		"GatewayHTTPPort":     strconv.Itoa(config.DefaultGatewayHTTPPort),
+		"MaxToolCallsPerTurn": strconv.Itoa(compute.DefaultMaxToolCallsPerTurn),
+		"ConfirmationTimeout": gateway.DefaultPromptTTL.String(),
+		"AuditMaxSizeMB":      strconv.Itoa(audit.DefaultMaxSizeMB),
+		"AuditMaxFiles":       strconv.Itoa(audit.DefaultMaxFiles),
 	}); err != nil {
 		return fmt.Errorf("write %q: %w", path, err)
 	}

@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"slices"
 	"syscall"
-	"time"
 
 	seccomp "github.com/elastic/go-seccomp-bpf"
 	"github.com/elastic/go-seccomp-bpf/arch"
@@ -282,7 +281,7 @@ func installNetfilter(p *Policy) error {
 		AllowDNS:      p.NetworkAllowDNS,
 		AllowCIDRs:    p.NetworkAllowCIDR,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
 	return netfilter.Apply(ctx, rs)
 }

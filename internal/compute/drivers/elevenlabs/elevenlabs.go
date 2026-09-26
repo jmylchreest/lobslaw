@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
@@ -80,7 +79,7 @@ func New(cfg Config) (*Driver, error) {
 	}
 	c := cfg.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 3 * time.Minute}
+		c = &http.Client{Timeout: compute.DefaultSpeakTimeout}
 	}
 	return &Driver{cfg: cfg, client: c}, nil
 }
@@ -143,10 +142,10 @@ func (d *Driver) Speak(ctx context.Context, req compute.SpeakRequest) (*compute.
 	if readErr != nil {
 		return nil, compute.Transient(fmt.Errorf("elevenlabs: read: %w", readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("elevenlabs: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
+			Err:   fmt.Errorf("elevenlabs: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)),
 		}
 	}
 	if len(raw) == 0 {

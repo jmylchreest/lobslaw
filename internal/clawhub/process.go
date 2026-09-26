@@ -113,10 +113,10 @@ func ProcessBundle(bundle []byte, stagingDir string) (*ProcessResult, error) {
 // catalogs (the actual clawhub.ai serves zip; signed lobslaw-native
 // bundles use tar.gz). Detection is by magic bytes only.
 func extractAny(bundle []byte, dst string) error {
-	if len(bundle) >= 2 && bundle[0] == 0x1f && bundle[1] == 0x8b {
+	if len(bundle) >= len(gzipMagic) && string(bundle[:len(gzipMagic)]) == gzipMagic {
 		return extractTarGzBytes(bundle, dst)
 	}
-	if len(bundle) >= 4 && bundle[0] == 0x50 && bundle[1] == 0x4b && (bundle[2] == 0x03 || bundle[2] == 0x05 || bundle[2] == 0x07) {
+	if len(bundle) >= zipSignatureBytes && string(bundle[:len(zipMagicPrefix)]) == zipMagicPrefix && (bundle[len(zipMagicPrefix)] == zipLocalFileMarker || bundle[len(zipMagicPrefix)] == zipEmptyArchiveMarker || bundle[len(zipMagicPrefix)] == zipSpannedArchiveMarker) {
 		return extractZipBytes(bundle, dst)
 	}
 	return errors.New("clawhub: bundle is neither tar.gz nor zip")

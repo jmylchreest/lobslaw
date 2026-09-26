@@ -77,7 +77,7 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 		cfg.Logger = slog.Default()
 	}
 	if cfg.ApplyTimeout <= 0 {
-		cfg.ApplyTimeout = 5 * time.Second
+		cfg.ApplyTimeout = DefaultApplyTimeout
 	}
 	return &Service{
 		raft:         cfg.Raft,

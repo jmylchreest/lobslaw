@@ -1093,7 +1093,7 @@ func (n *Node) seedSessionPruneTask(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("marshal session prune task: %w", err)
 	}
-	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+	if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 		return fmt.Errorf("apply session prune task: %w", err)
 	}
 	n.log.Info("memory: seeded session prune task", "id", taskID, "schedule", schedule)
@@ -1141,7 +1141,7 @@ func (n *Node) runResearchCommitment(ctx context.Context, c *lobslawv1.AgentComm
 	if question == "" {
 		return fmt.Errorf("research: commitment %q missing question", c.Id)
 	}
-	depth := 3
+	depth := research.DefaultDepth
 	if d := c.Params["depth"]; d != "" {
 		if n, err := strconv.Atoi(d); err == nil {
 			depth = n
@@ -1213,7 +1213,7 @@ func (a *researchMemoryAdapter) WriteEpisodic(ctx context.Context, content strin
 		Event:      "research-finding",
 		Context:    content,
 		Tags:       tags,
-		Importance: 7, // research output ranks above default-5
+		Importance: researchFindingImportance, // research output ranks above default-5
 	}
 	resp, err := a.svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec})
 	if err != nil {

@@ -66,8 +66,7 @@ CONTAINERFILE="${LOBSLAW_CONTAINERFILE:-$REPO_ROOT/Dockerfile}"
 EMBED_MODEL="${LOBSLAW_EMBED_MODEL-all-MiniLM-L6-v2}"
 EMBED_MODEL_URL="${LOBSLAW_EMBED_MODEL_URL:-https://github.com/jmylchreest/lobslaw/releases/download/models-all-MiniLM-L6-v2}"
 
-UID_IN_IMAGE=65532
-GID_IN_IMAGE=65532
+source "$REPO_ROOT/deploy/image-defaults.env"
 
 die()  { printf '%s: %s\n' "${0##*/}" "$*" >&2; exit 1; }
 info() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -235,17 +234,18 @@ cmd_build() {
   # /dev/net/tun with it, and pasta cannot set up a tap device without
   # one. Harmless on a healthy host.
   podman run --name "$ctr" --network=host --user 0:0 \
+    -e "UID_IN_IMAGE=$UID_IN_IMAGE" -e "GID_IN_IMAGE=$GID_IN_IMAGE" \
     docker.io/library/debian:12-slim bash -c '
       set -e
       apt-get update -qq
       DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
         ca-certificates tzdata curl procps file git
       rm -rf /var/lib/apt/lists/*
-      groupadd --system --gid 65532 nonroot
-      useradd --system --uid 65532 --gid 65532 \
+      groupadd --system --gid "$GID_IN_IMAGE" nonroot
+      useradd --system --uid "$UID_IN_IMAGE" --gid "$GID_IN_IMAGE" \
         --home-dir /lobslaw --create-home --shell /usr/sbin/nologin nonroot
       mkdir -p /lobslaw/usr/local/bin
-      chown -R 65532:65532 /lobslaw
+      chown -R "$UID_IN_IMAGE:$GID_IN_IMAGE" /lobslaw
     ' >/dev/null
 
   podman cp "$bin" "$ctr:/usr/local/bin/lobslaw"

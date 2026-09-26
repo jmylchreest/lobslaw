@@ -288,7 +288,7 @@ func (f *auditFilterFlags) bind(fs *flag.FlagSet) {
 	fs.StringVar(&f.target, "target", "", "match target exactly")
 	fs.StringVar(&f.since, "since", "", "RFC3339 timestamp, or a duration like 24h")
 	fs.StringVar(&f.until, "until", "", "RFC3339 timestamp, or a duration like 1h")
-	fs.IntVar(&f.limit, "limit", 50, "maximum entries (0 for no limit)")
+	fs.IntVar(&f.limit, "limit", defaultAuditListLimit, "maximum entries (0 for no limit)")
 }
 
 func (f *auditFilterFlags) resolve() (types.AuditFilter, error) {

@@ -249,7 +249,7 @@ func newSessionSearchHandler(cfg SessionToolConfig) compute.BuiltinFunc {
 
 func newSessionListHandler(cfg SessionToolConfig) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
-		limit := clampArg(args["limit"], 10, 50)
+		limit := clampArg(args["limit"], defaultSessionListLimit, maxSessionListLimit)
 		visible := sessionVisibility(ctx)
 		infos, err := cfg.Browser.Recent(ctx, limit, visible)
 		if err != nil {
@@ -422,13 +422,13 @@ func SessionToolDefs() []*types.ToolDef {
 			Name:        "session_list",
 			Path:        compute.BuiltinScheme + "session_list",
 			Description: "List stored conversations, most recently active first, with their titles and message counts. Use when the user asks what you've been talking about, or to find a thread by topic before reading it with session_read. Covers this user's own conversations plus the current one; other people's threads on this node are not listed.",
-			ParametersSchema: []byte(`{
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
-					"limit": {"type": "integer", "description": "Max conversations to list. Default 10."}
+					"limit": {"type": "integer", "description": "Max conversations to list. Default %d."}
 				},
 				"additionalProperties": false
-			}`),
+			}`, defaultSessionListLimit)),
 			RiskTier: types.RiskReversible,
 		},
 		{

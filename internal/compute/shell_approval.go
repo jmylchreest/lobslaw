@@ -59,7 +59,7 @@ const UnclassifiedResource = "!unclassified"
 // allow that outranks it, and it appears wherever rules appear rather
 // than being invisible behaviour.
 //
-// Priority is the lowest the type allows. A default that could outrank
+// Priority is deliberately below ordinary operator rules. A default that could outrank
 // an operator's rule would not be a default.
 func ShellApprovalDefault() types.PolicyRule {
 	return types.PolicyRule{
@@ -68,7 +68,7 @@ func ShellApprovalDefault() types.PolicyRule {
 		Action:   ShellAction,
 		Resource: "*",
 		Effect:   types.EffectRequireConfirmation,
-		Priority: -1 << 30,
+		Priority: defaultApprovalPriority,
 	}
 }
 

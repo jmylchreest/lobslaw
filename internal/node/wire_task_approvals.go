@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"slices"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -61,7 +60,7 @@ func (s *taskApprovalServer) backend(ctx context.Context) (pb.TaskApprovalServic
 }
 
 func (s *taskApprovalServer) CreateTaskApproval(ctx context.Context, q *pb.CreateTaskApprovalRequest) (*pb.CreateTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -79,7 +78,7 @@ func (s *taskApprovalServer) CreateTaskApproval(ctx context.Context, q *pb.Creat
 }
 
 func (s *taskApprovalServer) PauseTaskApproval(ctx context.Context, q *pb.PauseTaskApprovalRequest) (*pb.PauseTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -97,7 +96,7 @@ func (s *taskApprovalServer) PauseTaskApproval(ctx context.Context, q *pb.PauseT
 }
 
 func (s *taskApprovalServer) GetTaskApproval(ctx context.Context, q *pb.GetTaskApprovalRequest) (*pb.GetTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -115,7 +114,7 @@ func (s *taskApprovalServer) GetTaskApproval(ctx context.Context, q *pb.GetTaskA
 }
 
 func (s *taskApprovalServer) ListTaskApproval(ctx context.Context, q *pb.ListTaskApprovalRequest) (*pb.ListTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -133,7 +132,7 @@ func (s *taskApprovalServer) ListTaskApproval(ctx context.Context, q *pb.ListTas
 }
 
 func (s *taskApprovalServer) DecideTaskApproval(ctx context.Context, q *pb.DecideTaskApprovalRequest) (*pb.DecideTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -151,7 +150,7 @@ func (s *taskApprovalServer) DecideTaskApproval(ctx context.Context, q *pb.Decid
 }
 
 func (s *taskApprovalServer) ClaimTaskApproval(ctx context.Context, q *pb.ClaimTaskApprovalRequest) (*pb.ClaimTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -169,7 +168,7 @@ func (s *taskApprovalServer) ClaimTaskApproval(ctx context.Context, q *pb.ClaimT
 }
 
 func (s *taskApprovalServer) FinishTaskApproval(ctx context.Context, q *pb.FinishTaskApprovalRequest) (*pb.FinishTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -187,7 +186,7 @@ func (s *taskApprovalServer) FinishTaskApproval(ctx context.Context, q *pb.Finis
 }
 
 func (s *taskApprovalServer) CancelTaskApproval(ctx context.Context, q *pb.CancelTaskApprovalRequest) (*pb.CancelTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -205,7 +204,7 @@ func (s *taskApprovalServer) CancelTaskApproval(ctx context.Context, q *pb.Cance
 }
 
 func (s *taskApprovalServer) RecoverTaskApproval(ctx context.Context, q *pb.RecoverTaskApprovalRequest) (*pb.RecoverTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {
@@ -223,7 +222,7 @@ func (s *taskApprovalServer) RecoverTaskApproval(ctx context.Context, q *pb.Reco
 }
 
 func (s *taskApprovalServer) CheckGrantTaskApproval(ctx context.Context, q *pb.CheckGrantTaskApprovalRequest) (*pb.CheckGrantTaskApprovalResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, taskApprovalRPCTimeout)
 	defer cancel()
 	client, closeConn, err := s.backend(ctx)
 	if err != nil {

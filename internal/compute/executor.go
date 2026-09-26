@@ -131,10 +131,10 @@ func (e *Executor) SetSessionApprovals(a *SessionApprovals) { e.approvals = a }
 // which case Invoke returns codes.Unimplemented-equivalent errors.
 func NewExecutor(r ToolCatalogue, p *policy.Engine, h *hooks.Dispatcher, cfg ExecutorConfig, logger *slog.Logger) *Executor {
 	if cfg.MaxOutputBytes <= 0 {
-		cfg.MaxOutputBytes = 10 * 1024 * 1024
+		cfg.MaxOutputBytes = DefaultExecutorMaxOutputBytes
 	}
 	if cfg.DefaultTimeout <= 0 {
-		cfg.DefaultTimeout = 30 * time.Second
+		cfg.DefaultTimeout = DefaultExecutorTimeout
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = os.TempDir()
@@ -355,7 +355,7 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	// WaitDelay force-closes stdio after context cancel so a child
 	// process that inherited our pipes (e.g. sleep inside a shell)
 	// can't stall Wait().
-	cmd.WaitDelay = 500 * time.Millisecond
+	cmd.WaitDelay = executorWaitDelay
 
 	if err := sandbox.Apply(cmd, sbPolicy); err != nil {
 		return nil, fmt.Errorf("sandbox: %w", err)

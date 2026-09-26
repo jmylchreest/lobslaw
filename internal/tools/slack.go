@@ -72,7 +72,7 @@ func newSlackReadHandler(r SlackReader) compute.BuiltinFunc {
 		if channel == "" {
 			return nil, 2, errors.New("channel is required (a channel id like C0123ABC, or #name)")
 		}
-		limit := clampArg(args["limit"], 50, 200)
+		limit := clampArg(args["limit"], defaultSlackReadLimit, maxSlackReadLimit)
 
 		var (
 			msgs []SlackTranscriptMessage
@@ -102,7 +102,7 @@ func newSlackSearchHandler(r SlackReader) compute.BuiltinFunc {
 		if query == "" {
 			return nil, 2, errors.New("query is required")
 		}
-		limit := clampArg(args["limit"], 10, 25)
+		limit := clampArg(args["limit"], defaultSlackSearchLimit, maxSlackSearchLimit)
 
 		var refs []string
 		if raw := strings.TrimSpace(args["channels"]); raw != "" {
@@ -144,32 +144,32 @@ func SlackToolDefs() []*types.ToolDef {
 			Name:        "slack_read_channel",
 			Path:        compute.BuiltinScheme + "slack_read_channel",
 			Description: "Read recent messages from a Slack conversation the operator has allowed. Pass channel as a channel id (C0123ABC) or #name. Set thread_ts to read one thread instead of the channel. Returns messages oldest-first with their ts, which you can pass back as thread_ts to read a thread. Only conversations in the operator's allowed_channels can be read; anything else is refused.",
-			ParametersSchema: []byte(`{
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
 					"channel": {"type": "string", "description": "Channel id (C0123ABC) or #name."},
 					"thread_ts": {"type": "string", "description": "Optional. Read this thread instead of the channel."},
-					"limit": {"type": "integer", "description": "Messages to return (1-200). Default 50."}
+					"limit": {"type": "integer", "description": "Messages to return (1-%d). Default %d."}
 				},
 				"required": ["channel"],
 				"additionalProperties": false
-			}`),
+			}`, maxSlackReadLimit, defaultSlackReadLimit)),
 			RiskTier: types.RiskCommunicating,
 		},
 		{
 			Name:        "slack_search",
 			Path:        compute.BuiltinScheme + "slack_search",
 			Description: "Search recent Slack history for a phrase. Case-insensitive substring match over the last few hundred messages of each conversation — NOT a full-workspace search, so treat a miss as \"not in recent history\" rather than \"never said\". Pass channels as a comma-separated list of ids or #names; omit it only when the operator has listed explicit channels. Each hit reports its channel and ts, which you can pass to slack_read_channel to read the surrounding thread.",
-			ParametersSchema: []byte(`{
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
 					"query": {"type": "string", "description": "Phrase to look for."},
 					"channels": {"type": "string", "description": "Comma-separated channel ids or #names to search. Omit to search every conversation the operator listed."},
-					"limit": {"type": "integer", "description": "Hits to return (1-25). Default 10."}
+					"limit": {"type": "integer", "description": "Hits to return (1-%d). Default %d."}
 				},
 				"required": ["query"],
 				"additionalProperties": false
-			}`),
+			}`, maxSlackSearchLimit, defaultSlackSearchLimit)),
 			RiskTier: types.RiskCommunicating,
 		},
 	}

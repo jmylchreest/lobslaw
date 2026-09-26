@@ -49,7 +49,7 @@ type raftApplier interface {
 // consensus; zero picks 5 seconds.
 func NewService(raft *memory.RaftNode, applyTimeout time.Duration) *Service {
 	if applyTimeout <= 0 {
-		applyTimeout = 5 * time.Second
+		applyTimeout = DefaultApplyTimeout
 	}
 	return &Service{
 		raft:         raft,

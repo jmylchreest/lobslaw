@@ -147,11 +147,11 @@ func (d *kagiSearchDriver) Search(ctx context.Context, req SearchRequest) ([]Sea
 	if readErr != nil {
 		return nil, Transient(fmt.Errorf("kagi search: read: %w", readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(body)),
 			Err: fmt.Errorf("kagi search: HTTP %d: %s",
-				resp.StatusCode, TruncateBodyFor(body, 512)),
+				resp.StatusCode, TruncateBodyFor(body, DiagnosticExcerptMaxBytes)),
 		}
 	}
 

@@ -318,7 +318,7 @@ func MemoryWriteSummary(_ context.Context, params map[string]string) string {
 // mint an allow that outranks it, and it shows up wherever rules show
 // up rather than being invisible behaviour.
 //
-// Priority is deliberately the lowest the type allows. A default that
+// Priority is deliberately below ordinary operator rules. A default that
 // could outrank an operator's rule would not be a default.
 func MemoryWriteApprovalDefault() types.PolicyRule {
 	return types.PolicyRule{
@@ -327,7 +327,7 @@ func MemoryWriteApprovalDefault() types.PolicyRule {
 		Action:   MemoryWriteAction,
 		Resource: "*",
 		Effect:   types.EffectRequireConfirmation,
-		Priority: -1 << 30,
+		Priority: defaultApprovalPriority,
 	}
 }
 

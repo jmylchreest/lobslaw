@@ -255,7 +255,7 @@ func (a *ApprovalRules) apply(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("approval rule: marshal: %w", err)
 	}
-	res, err := a.raft.Apply(data, 5*time.Second)
+	res, err := a.raft.Apply(data, policyApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("approval rule: raft apply: %w", err)
 	}

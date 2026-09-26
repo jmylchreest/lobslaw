@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"filippo.io/age"
 
@@ -91,9 +90,8 @@ func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOption
 
 func archiveImport(args []string, requireEmpty bool) error {
 	fs := newFlagSet("archive import", flag.ContinueOnError)
-	var node liveNode
+	node := liveNode{timeout: defaultRestoreTimeout}
 	node.bind(fs)
-	node.timeout = 30 * time.Minute
 	var opts memory.ArchiveImportOptions
 	bindArchiveImportOptions(fs, &opts)
 	identity := fs.String("identity", "", "age identity file")

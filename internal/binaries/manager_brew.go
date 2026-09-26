@@ -76,7 +76,7 @@ func (m brewManager) Bootstrap(ctx context.Context, satisfier *Satisfier) error 
 			repoDir,
 		}, nil)
 		if err != nil {
-			return fmt.Errorf("brew bootstrap: git clone: %w (output: %s)", err, textutil.Truncate(out, "…", 512))
+			return fmt.Errorf("brew bootstrap: git clone: %w (output: %s)", err, textutil.Truncate(out, "…", maxErrorOutputRunes))
 		}
 	}
 

@@ -143,11 +143,11 @@ func (d *ImageDriver) Generate(ctx context.Context, req compute.ImageRequest) (*
 	if readErr != nil {
 		return nil, compute.Transient(fmt.Errorf("dashscope image: read: %w", readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
 			Err: fmt.Errorf("dashscope image: HTTP %d: %s",
-				resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
+				resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)),
 		}
 	}
 

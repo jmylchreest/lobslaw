@@ -307,7 +307,7 @@ func memoryConsolidationsLive(args []string) error {
 	owner := fs.String("owner", "", "restrict to one principal (e.g. user:alice)")
 	verdict := fs.String("verdict", "", "restrict to merge | keep_distinct | conflict | supersedes")
 	since := fs.Duration("since", 0, "only entries newer than this (e.g. 168h)")
-	limit := fs.Int("limit", 50, "maximum entries to show; 0 for all")
+	limit := fs.Int("limit", defaultConsolidationListLimit, "maximum entries to show; 0 for all")
 	full := fs.Bool("full", false, "show every source record id rather than a sample")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	if err := fs.Parse(args); err != nil {

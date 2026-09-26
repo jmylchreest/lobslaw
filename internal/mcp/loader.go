@@ -346,7 +346,7 @@ func (l *Loader) runInstall(ctx context.Context, name string, install []string, 
 	if len(install) == 0 {
 		return nil
 	}
-	installCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	installCtx, cancel := context.WithTimeout(ctx, dependencyInstallTimeout)
 	defer cancel()
 
 	env = append(env, l.proxyEnv("mcp/"+name)...)

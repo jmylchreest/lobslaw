@@ -88,7 +88,7 @@ func New(cfg Config) (*Driver, error) {
 	}
 	c := cfg.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 60 * time.Second}
+		c = &http.Client{Timeout: compute.DefaultJobRequestTimeout}
 	}
 	return &Driver{cfg: cfg, client: c}, nil
 }
@@ -280,10 +280,10 @@ func (d *Driver) do(ctx context.Context, req *http.Request, what string) ([]byte
 	if readErr != nil {
 		return nil, compute.Transient(fmt.Errorf("dashscope: %s: read: %w", what, readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("dashscope: %s: HTTP %d: %s", what, resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
+			Err:   fmt.Errorf("dashscope: %s: HTTP %d: %s", what, resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)),
 		}
 	}
 	return raw, nil

@@ -20,6 +20,10 @@ import json, os, re, statistics, sys, time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+MAX_COMPLETION_TOKENS = 2048
+REQUEST_TIMEOUT_SECONDS = 120
+MAX_WORKERS = 8
+
 QWEN_KEY = os.environ["LOBSLAW_QWEN_API_KEY"]
 MINIMAX_KEY = os.environ["LOBSLAW_MINIMAX_API_KEY"]
 
@@ -134,7 +138,7 @@ def extract(content):
 def call(model, command):
     url, key = PLAN[model]
     body = json.dumps({
-        "model": model, "temperature": 0, "max_tokens": 2048,
+        "model": model, "temperature": 0, "max_tokens": MAX_COMPLETION_TOKENS,
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": command}],
     }).encode()
@@ -142,7 +146,7 @@ def call(model, command):
         "Content-Type": "application/json", "Authorization": f"Bearer {key}"})
     t0 = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as r:
             d = json.loads(r.read())
     except Exception as e:
         return {"ok": False, "secs": time.monotonic() - t0, "err": type(e).__name__}
@@ -165,7 +169,7 @@ def bench(model):
 
 if __name__ == "__main__":
     results = {}
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         for model, rows in ex.map(bench, MODELS):
             results[model] = rows
             done = sum(1 for r in rows if r["ok"])

@@ -60,7 +60,7 @@ func (f *pinnedFailures) record(turnID string) int {
 		f.n = map[string]int{}
 	}
 	f.n[turnID]++
-	if len(f.n) > 512 {
+	if len(f.n) > maxTrackedPinnedFailures {
 		// A turn id never repeats, so anything still here is from a
 		// turn that ended. Cheapest correct eviction is to drop the
 		// lot: the only thing lost is a count for turns in flight,

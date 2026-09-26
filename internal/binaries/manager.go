@@ -126,9 +126,9 @@ func runManagerCmdEnv(ctx context.Context, runner ProcessRunner, log *slog.Logge
 	if err != nil {
 		log.Error("binaries: install failed",
 			"manager", managerName, "err", err, "output", out)
-		return fmt.Errorf("%s install: %w (output: %s)", managerName, err, textutil.Truncate(out, "…", 512))
+		return fmt.Errorf("%s install: %w (output: %s)", managerName, err, textutil.Truncate(out, "…", maxErrorOutputRunes))
 	}
-	log.Info("binaries: install ok", "manager", managerName, "output", textutil.Truncate(out, "…", 256))
+	log.Info("binaries: install ok", "manager", managerName, "output", textutil.Truncate(out, "…", maxLogOutputRunes))
 	return nil
 }
 
@@ -138,7 +138,7 @@ func runManagerCmdEnv(ctx context.Context, runner ProcessRunner, log *slog.Logge
 func ensureSudoAllowed(ctx context.Context, runner ProcessRunner) error {
 	out, err := runner.Run(ctx, "sudo", []string{"-n", "true"}, nil)
 	if err != nil {
-		return fmt.Errorf("%w: sudo -n probe: %v (output: %s)", errSudoNotAllowed, err, textutil.Truncate(out, "…", 256))
+		return fmt.Errorf("%w: sudo -n probe: %v (output: %s)", errSudoNotAllowed, err, textutil.Truncate(out, "…", maxLogOutputRunes))
 	}
 	return nil
 }

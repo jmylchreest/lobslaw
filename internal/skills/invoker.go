@@ -188,7 +188,7 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 		cfg.Runner = CmdBuilder{}
 	}
 	if cfg.DefaultTimeout <= 0 {
-		cfg.DefaultTimeout = 30 * time.Second
+		cfg.DefaultTimeout = DefaultInvocationTimeout
 	}
 	inv := &Invoker{
 		reg:            cfg.Registry,
@@ -335,8 +335,8 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	stdout := &cappedBuffer{cap: 1 << 20}
-	stderr := &cappedBuffer{cap: 64 << 10}
+	stdout := &cappedBuffer{cap: maxInvocationStdoutBytes}
+	stderr := &cappedBuffer{cap: maxInvocationStderrBytes}
 
 	started := time.Now()
 	exitCode, err := i.runner.Run(runCtx, RunSpec{

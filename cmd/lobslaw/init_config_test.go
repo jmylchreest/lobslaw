@@ -9,9 +9,40 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/audit"
+	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
+
+// Explicit generated settings must not freeze old copies of runtime defaults.
+func TestInitConfigUsesRuntimeNumericDefaults(t *testing.T) {
+	t.Parallel()
+	_, path := renderInitConfig(t)
+	cfg, err := config.Load(config.LoadOptions{Path: path, SkipEnv: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Compute.Limits.MaxToolCallsPerTurn != compute.DefaultMaxToolCallsPerTurn {
+		t.Errorf("tool-call limit = %d, want %d", cfg.Compute.Limits.MaxToolCallsPerTurn, compute.DefaultMaxToolCallsPerTurn)
+	}
+	if cfg.Gateway.ConfirmationTimeout != gateway.DefaultPromptTTL {
+		t.Errorf("confirmation timeout = %s, want %s", cfg.Gateway.ConfirmationTimeout, gateway.DefaultPromptTTL)
+	}
+	if cfg.Audit.Local.MaxSizeMB != audit.DefaultMaxSizeMB || cfg.Audit.Local.MaxFiles != audit.DefaultMaxFiles {
+		t.Errorf("audit rotation = %d MB/%d files, want %d/%d", cfg.Audit.Local.MaxSizeMB, cfg.Audit.Local.MaxFiles, audit.DefaultMaxSizeMB, audit.DefaultMaxFiles)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deprecated := range []string{"[compute.budgets]", "max_spend_usd_per_turn", "max_egress_bytes_per_turn"} {
+		if strings.Contains(string(raw), deprecated) {
+			t.Errorf("generated config contains deprecated setting %q", deprecated)
+		}
+	}
+}
 
 // renderInitConfig writes the template the way lobslaw init does.
 func renderInitConfig(t *testing.T) (dir, path string) {

@@ -298,7 +298,7 @@ func (e *EnrolmentStore) apply(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("enrolment: marshal: %w", err)
 	}
-	res, err := e.raft.Apply(data, 5*time.Second)
+	res, err := e.raft.Apply(data, enrolmentApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("enrolment: raft apply: %w", err)
 	}

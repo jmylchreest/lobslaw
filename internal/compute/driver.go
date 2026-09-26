@@ -189,7 +189,7 @@ func ClassifyHTTPStatus(status int, body string) FailureClass {
 		// key. Not transient either — retrying this one cannot help,
 		// because nothing about the credential changes by waiting.
 		return FailureCredential
-	case status >= 500:
+	case status >= http.StatusInternalServerError:
 		return FailureTransient
 	case status == http.StatusRequestTimeout:
 		return FailureTransient

@@ -114,16 +114,16 @@ func (m curlShManager) Install(ctx context.Context, spec InstallSpec, runner Pro
 		}
 		out, err := runner.Run(ctx, "sudo", append([]string{"-n", "/bin/sh"}, args...), env)
 		if err != nil {
-			return fmt.Errorf("curl-sh: sudo sh: %w (output: %s)", err, textutil.Truncate(out, "…", 512))
+			return fmt.Errorf("curl-sh: sudo sh: %w (output: %s)", err, textutil.Truncate(out, "…", maxErrorOutputRunes))
 		}
-		log.Info("binaries: curl-sh ok", "output", textutil.Truncate(out, "…", 256))
+		log.Info("binaries: curl-sh ok", "output", textutil.Truncate(out, "…", maxLogOutputRunes))
 		return nil
 	}
 	out, err := runner.Run(ctx, "/bin/sh", args, env)
 	if err != nil {
-		return fmt.Errorf("curl-sh: sh: %w (output: %s)", err, textutil.Truncate(out, "…", 512))
+		return fmt.Errorf("curl-sh: sh: %w (output: %s)", err, textutil.Truncate(out, "…", maxErrorOutputRunes))
 	}
-	log.Info("binaries: curl-sh ok", "output", textutil.Truncate(out, "…", 256))
+	log.Info("binaries: curl-sh ok", "output", textutil.Truncate(out, "…", maxLogOutputRunes))
 	return nil
 }
 
