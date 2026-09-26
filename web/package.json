@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:browser": "node tests/approvals.browser.mjs",
+    "test:browser": "node tests/approvals.browser.mjs && node tests/learned.browser.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

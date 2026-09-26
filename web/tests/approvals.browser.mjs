@@ -38,6 +38,7 @@ try {
     else if (path === "/v1/groups") json = { groups: [] };
     else if (path === "/v1/activity") json = { items: [] };
     else if (path === "/v1/task-approvals") json = { records: [task] };
+    else if (path === "/v1/learned-reviews") json = { reviews: [] };
     else if (path.endsWith("/decide")) {
       decision = request.postDataJSON();
       task = { ...task, state: "TASK_APPROVAL_STATE_READY", revision: "4" };

@@ -35,7 +35,7 @@ func reviewNode(t *testing.T) *Node {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := &Node{selfTaught: st, policyEngine: policy.NewEngine(store, slog.Default()), log: slog.Default(), materialiser: mat, skillRegistry: skills.NewRegistry(slog.Default())}
+	n := &Node{store: store, selfTaught: st, policyEngine: policy.NewEngine(store, slog.Default()), log: slog.Default(), materialiser: mat, skillRegistry: skills.NewRegistry(slog.Default())}
 	seedRule(t, store, &lobslawv1.PolicyRule{Id: "learned-alice", Subject: "user:alice", Action: "command:exec", Resource: "learned", Effect: "allow", Priority: 50})
 	return n
 }

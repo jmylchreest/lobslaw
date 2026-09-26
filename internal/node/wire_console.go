@@ -40,7 +40,8 @@ func (n *Node) wireConsoleBackend() error {
 		TeamRouter: n.teamRouterOrNil(), Tools: n.toolCatalogueOrNil(),
 		Sessions: n.newSessionStore(), Compactor: n.newSessionCompactor(), Conversation: n.conversationConfig(),
 		Transcripts: n.newSessionBrowser(), Routines: n.newRoutineLister(), Memory: n.newMemoryLister(),
-		Plan: planServiceOrNil(n.planSvc),
+		Plan:    planServiceOrNil(n.planSvc),
+		Learned: n.learnedReviews(), Notices: n.notices,
 	}, compute.Adapt(n.agent))
 	lobslawv1.RegisterConsoleServiceServer(n.server, server)
 	return nil

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ func (n *Node) learnedReviews() gateway.LearnedReviews {
 
 func (r learnedReviews) authorise(ctx context.Context, claims *types.Claims) (string, error) {
 	if claims == nil || claims.UserID == "" || !commandAuthorizer(r).AllowsCommand(ctx, claims, "learned") {
-		return "", fmt.Errorf("not authorised to review learned skills")
+		return "", gateway.ErrLearnedReviewForbidden
 	}
 	return r.n.identityResolver().Resolve(claims.UserID).String(), nil
 }
@@ -70,10 +71,10 @@ func (r learnedReviews) Get(ctx context.Context, claims *types.Claims, id string
 	}
 	rec, err := r.n.selfTaught.Get(id)
 	if err != nil || !r.owns(ctx, owner, rec.Owner) {
-		return gateway.LearnedReview{}, fmt.Errorf("proposal not found for this user")
+		return gateway.LearnedReview{}, gateway.ErrLearnedReviewNotFound
 	}
 	if rec.State != lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED && rec.Pending == nil {
-		return gateway.LearnedReview{}, fmt.Errorf("this proposal has already been decided")
+		return gateway.LearnedReview{}, gateway.ErrLearnedReviewConflict
 	}
 	return learnedReviewView(rec), nil
 }
@@ -85,9 +86,12 @@ func (r learnedReviews) Decide(ctx context.Context, claims *types.Claims, id str
 	}
 	proposal, err := r.n.selfTaught.Get(id)
 	if err != nil || !r.owns(ctx, owner, proposal.GetOwner()) {
-		return "", fmt.Errorf("proposal not found for this user")
+		return "", gateway.ErrLearnedReviewNotFound
 	}
 	rec, err := r.n.selfTaught.DecideReviewed(ctx, id, revision, digest, proposal.Owner, approve)
+	if errors.Is(err, memory.ErrClaimConflict) || errors.Is(err, memory.ErrNotProposed) {
+		return "", gateway.ErrLearnedReviewConflict
+	}
 	if err != nil {
 		return "", err
 	}
@@ -114,7 +118,7 @@ func (r learnedReviews) Decide(ctx context.Context, claims *types.Claims, id str
 }
 
 func learnedReviewView(rec *lobslawv1.SelfTaughtRecord) gateway.LearnedReview {
-	out := gateway.LearnedReview{ID: rec.Id, Name: rec.Name, Description: rec.Description, Body: rec.Body, Files: rec.Files, Revision: rec.Revision, Digest: memory.SelfTaughtReviewDigest(rec), TurnID: rec.TurnId, Active: rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE}
+	out := gateway.LearnedReview{ID: rec.Id, Author: rec.Owner, Name: rec.Name, Description: rec.Description, Body: rec.Body, Files: rec.Files, Revision: rec.Revision, Digest: memory.SelfTaughtReviewDigest(rec), TurnID: rec.TurnId, Active: rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE}
 	if p := rec.Pending; p != nil {
 		out.Pending = &gateway.LearnedChange{Description: p.Description, Body: p.Body, Files: p.Files, Rationale: p.Rationale, TurnID: p.TurnId}
 	}

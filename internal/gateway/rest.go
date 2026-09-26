@@ -139,6 +139,7 @@ type RESTConfig struct {
 	// as plain text like Phase 6e).
 	Prompts       Prompts
 	TaskApprovals TaskApprovalAPI
+	Learned       LearnedReviews
 	// Named bot chats are fresh durable tasks, including their budget approvals.
 	StartBotTask func(context.Context, turn.Request) (*lobslawv1.TaskApprovalRecord, error)
 	TaskIdentity *identity.Resolver
@@ -268,6 +269,8 @@ func (s *Server) Start(ctx context.Context) error {
 		mux.HandleFunc("/v1/task-approvals", s.handleTaskApprovals)
 		mux.HandleFunc("/v1/task-approvals/", s.handleTaskApprovals)
 	}
+	mux.HandleFunc("/v1/learned-reviews", s.handleLearnedReviews)
+	mux.HandleFunc("/v1/learned-reviews/", s.handleLearnedReviews)
 	mux.HandleFunc("/v1/uploads", s.handleUpload)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)

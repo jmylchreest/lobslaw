@@ -11,6 +11,7 @@ import { Company } from "./routes/Company";
 import { Config } from "./routes/Config";
 import { NewBot } from "./routes/NewBot";
 import { TaskApprovals } from "./routes/TaskApprovals";
+import { LearnedReviews, LearnedReviewNotice } from "./routes/LearnedReviews";
 
 export function App() {
   return <LoginGate><Console /></LoginGate>;
@@ -30,7 +31,10 @@ function Console() {
   if (!caps.data) return null;
 
   if (!caps.data["compute-teams"].enabled) {
-    return <SingleChat computeOn={caps.data.compute.available} />;
+    return <Routes>
+      <Route path="/learned" element={<Frame><LearnedReviews /></Frame>} />
+      <Route path="*" element={<SingleChat computeOn={caps.data.compute.available} />} />
+    </Routes>;
   }
   return <Shell />;
 }
@@ -157,6 +161,7 @@ function Shell() {
         </div>
 
         <div className="side-foot">
+          <LearnedReviewNotice />
           <NavLink to="/approvals">Task approvals</NavLink>
           <NavLink to="/config">Config</NavLink>
           <Signed />
@@ -181,6 +186,7 @@ function Shell() {
           <Route path="/coordinator" element={<Landing bots={bots} />} />
           <Route path="/config" element={<Config />} />
           <Route path="/approvals" element={<TaskApprovals />} />
+          <Route path="/learned" element={<LearnedReviews />} />
           <Route path="/bots/new" element={<NewBot group={current} onCreated={refresh} />} />
           <Route path="/bots/:botId" element={<BotRoom onChanged={refresh} />} />
           <Route path="*" element={<div className="empty"><b>Nothing here</b><span>That page does not exist.</span></div>} />
@@ -351,7 +357,10 @@ function Frame({ children }: { children: ReactNode }) {
           lobslaw
         </div>
       </aside>
-      <main className="main" id="main" tabIndex={-1}>{children}</main>
+      <main className="main" id="main" tabIndex={-1}>
+        <nav className="pad" aria-label="Assistant navigation"><NavLink to="/">Chat</NavLink> · <LearnedReviewNotice /></nav>
+        {children}
+      </main>
     </div>
   );
 }
