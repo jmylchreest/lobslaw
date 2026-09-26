@@ -24,7 +24,7 @@ type recordingStore struct {
 	failWith error
 }
 
-func (s *recordingStore) Existing(string) ([]ArtefactSummary, error) {
+func (s *recordingStore) Existing(string, string) ([]ArtefactSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.existing, nil

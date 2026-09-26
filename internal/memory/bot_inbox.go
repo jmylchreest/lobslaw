@@ -123,6 +123,7 @@ func (s *InboxService) Post(ctx context.Context, item *lobslawv1.BotInboxItem) (
 	item.Result = ""
 	item.Error = ""
 	item.CompletedAt = nil
+	item.TaskId = ""
 
 	if err := s.apply(ctx, lobslawv1.LogOp_LOG_OP_PUT, item, nil, ""); err != nil {
 		return nil, err
@@ -291,7 +292,7 @@ func (s *InboxService) Resolve(ctx context.Context, recipient, id string, outcom
 		return nil, err
 	}
 	if outcome.ClaimRevision != 0 {
-		if item.GetRevision() != outcome.ClaimRevision || item.GetClaimedBy() != outcome.Claimer || item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED {
+		if item.GetRevision() != outcome.ClaimRevision || item.GetClaimedBy() != outcome.Claimer || (item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED && item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_WAITING) {
 			return nil, ErrClaimConflict
 		}
 	} else if item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_PENDING {
@@ -358,6 +359,9 @@ func (s *InboxService) Cancel(ctx context.Context, recipient, id string) (*lobsl
 	if err != nil {
 		return nil, err
 	}
+	if item.TaskId != "" {
+		return nil, errors.New("inbox: cancel linked work through the task approval API")
+	}
 	if item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED && !claimExpired(item, time.Now()) {
 		return nil, fmt.Errorf("inbox: %q is being worked by %q right now; cancelling would lose the record, not stop the work",
 			id, item.GetClaimedBy())
@@ -389,6 +393,9 @@ func (s *InboxService) Retry(ctx context.Context, recipient, id string) (*lobsla
 	item, err := s.Get(ctx, recipient, id)
 	if err != nil {
 		return nil, err
+	}
+	if item.TaskId != "" {
+		return nil, errors.New("inbox: recover linked work through the task approval API")
 	}
 	if item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_FAILED &&
 		item.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_CANCELLED {
@@ -483,7 +490,7 @@ func (s *InboxService) countPending(recipient string) (int, error) {
 			return fmt.Errorf("inbox: unmarshal %q: %w", key, err)
 		}
 		if item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_PENDING ||
-			item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED {
+			item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED || item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_WAITING {
 			n++
 		}
 		return nil

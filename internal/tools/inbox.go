@@ -271,6 +271,7 @@ func newInboxPostHandler(svc InboxService, bots compute.BotResolver) compute.Bui
 			// same reason — a requester the model can name is one it
 			// can invent.
 			RequestedBy: requesterLabel(turnIdentity),
+			TaskClaims:  turn.ClaimsToProto(claimsFromTurn(turnIdentity)),
 			Kind:        kind,
 			Subject:     args["subject"],
 			Body:        body,

@@ -9,9 +9,11 @@ import (
 
 	"github.com/hashicorp/raft"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/skills"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -82,6 +84,12 @@ func TestLearnedReviewsScopeAndActivation(t *testing.T) {
 	}
 	if _, err := n.skillRegistry.Get("mine"); err != nil {
 		t.Fatal(err)
+	}
+	for _, principal := range []string{"user:alice", "user:bob", "bot:worker", ""} {
+		ctx := turn.WithIdentity(t.Context(), turn.Identity{Principal: identity.Principal(principal)})
+		if got := n.skillAllowed(ctx, "mine"); got != (principal == "user:alice") {
+			t.Fatalf("learned skill authority for %q = %v", principal, got)
+		}
 	}
 }
 

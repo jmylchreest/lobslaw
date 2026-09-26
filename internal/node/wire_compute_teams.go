@@ -52,7 +52,7 @@ func (n *Node) wireTeamTools() error {
 	if err := tools.RegisterBotBuiltins(n.builtinsRegistry, tools.BotConfig{
 		Registry: n.botSvc,
 		Resolver: botResolverOrNil(n.botSvc),
-		Runner:   n.agent,
+		Runner:   teamTaskRunner{n: n},
 		Inbox:    n.inboxAPI,
 	}); err != nil {
 		return err

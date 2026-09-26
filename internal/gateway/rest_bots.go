@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -53,6 +54,7 @@ type botJSON struct {
 }
 
 type inboxItemJSON struct {
+	TaskID        string `json:"task_id,omitempty"`
 	ID            string `json:"id"`
 	Recipient     string `json:"recipient"`
 	Sender        string `json:"sender"`
@@ -112,6 +114,7 @@ func botToJSON(rec *lobslawv1.BotRecord) botJSON {
 
 func inboxToJSON(item *lobslawv1.BotInboxItem, withBody bool) inboxItemJSON {
 	out := inboxItemJSON{
+		TaskID:        item.GetTaskId(),
 		ID:            item.GetId(),
 		Recipient:     item.GetRecipient(),
 		Sender:        item.GetSender(),
@@ -476,11 +479,17 @@ func (s *Server) handleBotInbox(w http.ResponseWriter, r *http.Request, botID st
 		// never be taken. Two ways of asking the same question is how
 		// they come to disagree.
 		requester := s.principalOf(r)
+		authn, err := s.authenticateRequest(r)
+		if err != nil {
+			s.jsonErr(w, http.StatusUnauthorized, err.Error())
+			return
+		}
 		item, err := s.cfg.Inbox.Post(r.Context(), &lobslawv1.BotInboxItem{
 			Recipient: botID,
 			// An operator assigning work from the GUI is the sender.
 			Sender:      "operator",
 			RequestedBy: requester,
+			TaskClaims:  turn.ClaimsToProto(authn.Claims),
 			Kind:        kind,
 			Subject:     body.Subject,
 			Body:        body.Body,
@@ -664,6 +673,8 @@ func parseRESTInboxStatus(s string) (lobslawv1.InboxStatus, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "pending":
 		return lobslawv1.InboxStatus_INBOX_STATUS_PENDING, true
+	case "waiting":
+		return lobslawv1.InboxStatus_INBOX_STATUS_WAITING, true
 	case "claimed":
 		return lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED, true
 	case "done":

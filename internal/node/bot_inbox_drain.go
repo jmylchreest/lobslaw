@@ -3,11 +3,10 @@ package node
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
@@ -103,6 +102,9 @@ func (n *Node) drainBotInboxes(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if err := n.resumeTeamTasks(ctx, recipient); err != nil {
+			n.log.Warn("inbox: resume failed", "bot", recipient, "err", err)
+		}
 		if err := n.drainOneInboxItem(ctx, recipient); err != nil {
 			// One bot's queue failing must not stop the others being
 			// worked. Logged and stepped over; the item itself already
@@ -148,73 +150,36 @@ func (n *Node) drainOneInboxItem(ctx context.Context, recipient string) error {
 		"kind", memory.InboxKindName(item.GetKind()),
 		"attempt", item.GetAttempts())
 
-	claims, botID, principal := schedulerIdentity("bot:" + recipient)
+	profile, err := botResolverOrNil(n.botSvc).ResolveBot(ctx, recipient)
+	if err != nil {
+		_, resolveErr := n.inboxSvc.Resolve(ctx, recipient, item.Id, memory.InboxOutcome{ClaimRevision: item.Revision, Claimer: item.ClaimedBy, Err: err})
+		return errors.Join(err, resolveErr)
+	}
+	if item.RequestedBy == "" || item.RequestedBy != profile.Owner {
+		_, err := n.inboxSvc.Resolve(ctx, recipient, item.Id, memory.InboxOutcome{ClaimRevision: item.Revision, Claimer: item.ClaimedBy, Err: errors.New("inbox owner does not match current bot owner")})
+		return err
+	}
 	workCtx, cancel := context.WithTimeout(ctx, inboxExecutionTimeout)
 	defer cancel()
-	resp, runErr := n.agent.Run(workCtx, turn.Request{
-		BotID:     botID,
-		Claims:    claims,
-		Principal: principal,
+	_, runErr := n.startTeamTask(workCtx, compute.ProcessMessageRequest{
+		BotID:     recipient,
+		Bot:       profile,
+		Claims:    turn.ClaimsFromProto(item.TaskClaims),
+		Principal: identity.Bot(recipient),
 		Message:   inboxPrompt(item),
-		Channel:   "",
-		ChannelID: recipient + ".inbox." + item.GetId(),
-	})
-	needsApproval := runErr == nil && resp.NeedsConfirmation
-	if needsApproval {
-		runErr = errors.New("inbox task requires confirmation; ask the bot directly to approve the operation")
+	}, item)
+	if runErr != nil {
+		current, err := n.inboxSvc.Get(ctx, recipient, item.Id)
+		if err == nil && current.TaskId == "" {
+			_, err = n.inboxSvc.Resolve(ctx, recipient, item.Id, memory.InboxOutcome{ClaimRevision: item.Revision, Claimer: item.ClaimedBy, Err: runErr})
+		}
+		return errors.Join(runErr, err)
 	}
-	interrupted := workCtx.Err() != nil
-	if interrupted {
-		runErr = fmt.Errorf("inbox execution interrupted: %w", workCtx.Err())
-	}
-
-	// A disabled or deleted bot will never succeed, so retrying it
-	// burns a provider call per pass forever against a queue nobody is
-	// coming back to. Fail it now, visibly, with the reason on the
-	// record.
-	maxAttempts := memory.DefaultInboxMaxAttempts
-	if interrupted || needsApproval || errors.Is(runErr, compute.ErrBotDisabled) || errors.Is(runErr, memory.ErrBotNotFound) {
-		maxAttempts = 0
-	}
-
-	outcome := memory.InboxOutcome{Err: runErr, MaxAttempts: maxAttempts, ClaimRevision: item.GetRevision(), Claimer: item.GetClaimedBy()}
-	if resp != nil {
-		outcome.Result = inboxResultFromTurn(resp)
-		outcome.CostUSD = resp.BudgetState.SpendUSD
-	}
-	resolved, err := n.inboxSvc.Resolve(ctx, recipient, item.GetId(), outcome)
-	if err != nil {
-		return fmt.Errorf("resolve %q: %w", item.GetId(), err)
-	}
-
-	n.log.Info("inbox: item resolved",
-		"bot", recipient,
-		"item", item.GetId(),
-		"status", memory.InboxStatusName(resolved.GetStatus()))
-	return nil
+	return runErr
 }
 
-// inboxPrompt renders an item as the turn's instruction.
-//
-// The kind is stated because a bot that cannot tell "do this" from
-// "here is what happened when you asked me to do that" answers both
-// inboxResult is what the item records as its outcome.
-//
-// An empty reply gets an honest description instead — see
-// compute.DescribeSilentTurn, which ask_bot uses for the same reason.
-// Deliberately not a retry: the tools already ran, and running them
-// again to obtain a nicer summary would repeat their side effects.
-func inboxResultFromTurn(resp *turn.Response) string {
-	if resp == nil {
-		return "the turn produced no reply"
-	}
-	if strings.TrimSpace(resp.Reply) != "" {
-		return strings.TrimSpace(resp.Reply)
-	}
-	return "the turn produced no reply"
-}
-
-// the same way — it starts doing the work described in a result it
+// inboxPrompt distinguishes a task from the result of work already done:
+// otherwise the recipient starts doing the work described in a result it
 // merely received. The sender is stated for the same reason a person
 // wants to know who asked.
 func inboxPrompt(item *lobslawv1.BotInboxItem) string {

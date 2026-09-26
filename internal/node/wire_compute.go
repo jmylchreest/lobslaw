@@ -560,6 +560,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		}),
 		Skills:            skillDispatcherOrNil(n.skillAdapter),
 		SkillsProvider:    n.skillIndexProvider(),
+		SkillAllowed:      n.skillAllowed,
 		PinnedProvider:    n.pinnedProvider(),
 		ProposalsProvider: n.proposalsProvider(),
 		// Populated after this stage by wire-review-fork, which needs
