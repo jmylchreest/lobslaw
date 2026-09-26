@@ -237,7 +237,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
 
       {/* What a screen reader is told, and the only thing on this
           screen that is live.
-          
+
           Not the thread itself: `partial` grows a token at a time, and
           a live transcript would read every prefix of the reply aloud.
           So the region carries ONE short sentence per event — replied,
