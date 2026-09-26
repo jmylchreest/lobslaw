@@ -258,10 +258,11 @@ func mapArchiveOwner(id string, msg proto.Message, owners map[string]string) (st
 func pauseArchiveRecord(kind string, msg proto.Message, timezone string) (bool, error) {
 	switch rec := msg.(type) {
 	case *lobslawv1.BotInboxItem:
-		if rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_PENDING || rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED {
+		rec.TaskClaims = nil
+		if rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_PENDING || rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED || rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_WAITING {
 			rec.Status = lobslawv1.InboxStatus_INBOX_STATUS_CANCELLED
 			rec.ClaimedBy, rec.ClaimExpiresAt = "", nil
-			rec.Error = "paused by archive import; retry explicitly to resume"
+			rec.Error = "paused by archive import; assign new work with fresh authority after reviewing possible prior effects"
 			return true, nil
 		}
 	case *lobslawv1.ShareInstallation:

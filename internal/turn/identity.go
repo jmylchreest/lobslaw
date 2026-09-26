@@ -46,6 +46,9 @@ import (
 // context value cannot be reached from inside the model's output at
 // all, which makes the guarantee structural rather than procedural.
 type Identity struct {
+	// Claims retains expiry and subject provenance when delegating or queuing.
+	// It is supplied by the runner, never tool arguments.
+	OriginalClaims *types.Claims
 	// UserID is the caller as this channel names them — "tg-@alice", a
 	// REST subject. Kept for audit and display, where what the user
 	// actually arrived as is what matters. Empty for an anonymous turn.

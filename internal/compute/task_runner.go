@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -30,6 +33,10 @@ type TaskAuthority struct {
 	Claims *types.Claims
 	Tools  []Tool
 	Caps   BudgetCaps
+	Bot    *BotProfile
+	// ValidateOriginal resolves the original caller, including bot callers,
+	// against current ownership without replacing its claims with the owner's.
+	ValidateOriginal func(*types.Claims) error
 }
 type TaskRunner struct {
 	Backend TaskApprovalBackend
@@ -95,7 +102,11 @@ func (r *TaskRunner) Resume(ctx context.Context, q *pb.ClaimTaskApprovalRequest)
 	if authority.Claims == nil {
 		return nil, errors.New("task owner no longer has execution authority")
 	}
-	if id := r.Agent.TurnIdentityFor(ProcessMessageRequest{Claims: authority.Claims}); id.Principal.String() != q.Actor {
+	principal := identity.Principal("")
+	if authority.Bot != nil {
+		principal = authority.Bot.Principal()
+	}
+	if id := r.Agent.TurnIdentityFor(ProcessMessageRequest{Claims: authority.Claims, Principal: principal}); id.Principal.String() != q.Actor {
 		return nil, errors.New("resolved task actor does not match saved actor")
 	}
 	claimed, err := r.Backend.ClaimTaskApproval(ctx, q)
@@ -111,13 +122,37 @@ func (r *TaskRunner) Resume(ctx context.Context, q *pb.ClaimTaskApprovalRequest)
 		return nil, err
 	}
 	req := cont.Request
-	req.Claims = authority.Claims
+	if authority.ValidateOriginal != nil {
+		if err := authority.ValidateOriginal(req.Claims); err != nil {
+			return nil, err
+		}
+	}
+	if authority.Bot != nil {
+		if req.BotID != authority.Bot.ID {
+			return nil, errors.New("saved task identity no longer resolves to its original owner and bot")
+		}
+	}
+	// Keep the original subject and scope, and never gain a role merely because
+	// the owner acquired it while this task was waiting. Live policy still runs.
+	if req.Claims == nil || (!req.Claims.ExpiresAt.IsZero() && time.Now().After(req.Claims.ExpiresAt)) {
+		return nil, errors.New("original task authority is missing or expired")
+	}
+	claims := *req.Claims
+	claims.Roles = nil
+	for _, role := range req.Claims.Roles {
+		if slices.Contains(authority.Claims.Roles, role) {
+			claims.Roles = append(claims.Roles, role)
+		}
+	}
+	req.Claims = &claims
 	req.Tools = authority.Tools
+	req.Bot = restrictTaskBot(authority.Bot, task.Continuation)
 	req.TurnID = task.TurnId
 	// Channel identity is deliberately absent: task grants never borrow the chat
 	// where a user happened to click approve.
 	scope := turn.TaskScope{ID: task.Id, Owner: task.Owner, Actor: task.Actor, ClaimToken: task.ClaimedBy}
 	ctx = WithTaskExecution(ctx, scope, r.Backend.CheckGrantTaskApproval)
+	ctx = context.WithValue(ctx, approvedTaskBudgetKey{}, true)
 	if task.Operation.RequiresBudgetExtension {
 		if decision := req.Budget.Check(); decision.Exceeded {
 			response := &ProcessMessageResponse{NeedsConfirmation: true, ConfirmationReason: "current budget policy requires a fresh extension", Messages: cont.Messages, BudgetState: req.Budget.State()}
@@ -141,4 +176,24 @@ func (r *TaskRunner) Resume(ctx context.Context, q *pb.ClaimTaskApprovalRequest)
 		return nil, fmt.Errorf("task result could not be committed; do not automatically replay: %w", err)
 	}
 	return out.Record, nil
+}
+
+func restrictTaskBot(current *BotProfile, saved *pb.Continuation) *BotProfile {
+	if current == nil {
+		return nil
+	}
+	profile := *current
+	profile.Denied = append(append([]string(nil), profile.Denied...), saved.BotDenied...)
+	if len(saved.BotTools) > 0 {
+		if len(profile.Tools) == 0 {
+			profile.Tools = append([]string(nil), saved.BotTools...)
+		} else {
+			for _, name := range profile.Tools {
+				if !slices.Contains(saved.BotTools, name) {
+					profile.Denied = append(profile.Denied, name)
+				}
+			}
+		}
+	}
+	return &profile
 }

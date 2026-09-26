@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
@@ -368,7 +369,7 @@ func newAskBotHandler(runner AskRunner, bots compute.BotResolver, inbox InboxSer
 			Budget:    childBudget,
 			Claims:    claimsFromTurn(identity),
 			Principal: botPrincipal(target),
-			TurnID:    identity.TurnID,
+			TurnID:    ids.New(),
 			Message: me + " asks:\n\n" + promptgen.WrapContext([]promptgen.ContextBlock{{
 				Source:  "ask_bot:" + me,
 				Trust:   promptgen.TrustUntrusted,
@@ -379,7 +380,11 @@ func newAskBotHandler(runner AskRunner, bots compute.BotResolver, inbox InboxSer
 			return nil, 1, fmt.Errorf("ask_bot: %q could not answer: %w", target, err)
 		}
 		if resp.NeedsConfirmation {
-			return nil, 1, fmt.Errorf("ask_bot: %q is blocked awaiting confirmation; ask it directly to approve the operation", target)
+			if resp.TaskID == "" {
+				return nil, 1, errors.New("ask_bot: runner did not persist the waiting task")
+			}
+			body, err := json.Marshal(map[string]string{"bot": target, "task_id": resp.TaskID, "status": "waiting", "reason": resp.ConfirmationReason})
+			return body, 0, err
 		}
 
 		// Never hand back an empty answer. A caller cannot tell "" from
@@ -461,6 +466,7 @@ func newTellBotHandler(inbox InboxService, bots compute.BotResolver) compute.Bui
 			Recipient:   target,
 			Sender:      "bot:" + me,
 			RequestedBy: requesterLabel(turnIdentity),
+			TaskClaims:  turn.ClaimsToProto(claimsFromTurn(turnIdentity)),
 			Kind:        lobslawv1.InboxKind_INBOX_KIND_TASK,
 			Body:        body,
 		})
@@ -478,6 +484,9 @@ func newTellBotHandler(inbox InboxService, bots compute.BotResolver) compute.Bui
 }
 
 func requesterLabel(id turn.Identity) string {
+	if !id.BotOwner.IsZero() {
+		return id.BotOwner.String()
+	}
 	if p := id.Principal.String(); p != "" {
 		return p
 	}
@@ -494,6 +503,11 @@ func botPrincipal(id string) identity.Principal { return identity.Bot(id) }
 // claimsFromTurn reconstitutes the caller's claims from the turn
 // identity, so a delegated child is authorised as the asker.
 func claimsFromTurn(id turn.Identity) *types.Claims {
+	if id.OriginalClaims != nil {
+		claims := *id.OriginalClaims
+		claims.Roles = append([]string(nil), id.OriginalClaims.Roles...)
+		return &claims
+	}
 	if id.UserID == "" && id.Scope == "" && len(id.Roles) == 0 {
 		return nil
 	}

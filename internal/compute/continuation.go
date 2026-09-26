@@ -24,7 +24,12 @@ func EncodeContinuation(c *TaskContinuation) *lobslawv1.Continuation {
 	if c.Request.Budget != nil {
 		req.Spent = c.Request.Budget.State()
 	}
-	return turn.EncodeContinuation(&turn.Continuation{Request: req, Messages: c.Messages})
+	wire := turn.EncodeContinuation(&turn.Continuation{Request: req, Messages: c.Messages})
+	if c.Request.Bot != nil {
+		wire.BotTools = append([]string(nil), c.Request.Bot.Tools...)
+		wire.BotDenied = append([]string(nil), c.Request.Bot.Denied...)
+	}
+	return wire
 }
 
 func DecodeContinuation(p *lobslawv1.Continuation, caps BudgetCaps) (*TaskContinuation, error) {

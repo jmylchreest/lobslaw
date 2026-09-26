@@ -6,9 +6,9 @@ before resuming it. The main integration points are the typed
 `TaskApprovalService`, `compute.PauseTask`, `compute.TaskRunner` and
 `compute.WithTaskExecution`.
 
-This feature supplies the shared mechanism for PR #348. It does not include
-that PR's team registry, console or inbox runner, and those runners must adopt
-this contract before their delegated approvals work.
+The team registry's delegated and inbox runners use this mechanism. Their
+queue linkage and specialist context rules are described below. Console task
+decisions use the same owner-facing API rather than conversation prompt grants.
 
 ## Approved architecture
 
@@ -140,6 +140,103 @@ Pre-merge #348 Raft logs using tag 37 for bots are not wire-compatible with this
 merged schema.
 
 ## Integration with #348
+
+`node.teamTaskRunner` is the `ask_bot` runner. `startTeamTask` is shared with
+the inbox drain: it creates a fresh task, then commits the inbox link **before**
+calling the agent. The linked item uses `INBOX_STATUS_WAITING` while the task
+is running, awaiting approval, ready, or uncertain. This status means that the
+task service owns execution; consult its state for the precise progress.
+Ordinary inbox claims and retries cannot execute linked work.
+
+```mermaid
+sequenceDiagram
+    participant Caller as Coordinator / inbox drain
+    participant Queue as Raft inbox
+    participant Tasks as TaskApprovalService
+    participant Agent as Specialist
+    participant Owner as Authenticated owner
+    Caller->>Tasks: Create(owner, actor, parent attribution)
+    Caller->>Queue: Link task_id with revision CAS
+    Caller->>Agent: Run with fresh TaskScope and supplied context
+    Agent-->>Caller: NeedsConfirmation + prepared transcript
+    Caller->>Tasks: Pause(checkpoint, counters, restrictions)
+    Caller-->>Owner: task_id / owner-scoped notice
+    Note over Caller,Owner: Release worker; owner list/get survives restart
+    Owner->>Tasks: Decide(revision, choice, bounded extra budget)
+    Caller->>Queue: Poll linked waiting items
+    Caller->>Tasks: Claim ready checkpoint once
+    Caller->>Agent: Resume under original AND current authority
+    Agent-->>Tasks: Finish, or Pause again
+    Caller->>Queue: Reconcile terminal task result with CAS
+```
+
+The normal inbox tick (30 seconds) resumes ready tasks; no HTTP stream waits for
+the human. `ask_bot` returns structured `status=waiting` and `task_id` to its
+caller. Waiting/uncertain work also supplies an owner-scoped notice through the
+existing opt-in notice subsystem. Notification delivery is not required to
+find or approve the task. Immediate Telegram escalation remains separate.
+
+The wire additions are deliberately metadata, not another grant format:
+
+- `BotInboxItem.task_id = 23` links the queue and shared approval record;
+  `task_claims = 24` retains authenticated enqueue authority, including expiry.
+- `INBOX_STATUS_WAITING = 6` prevents ordinary queue replay.
+- `Continuation.bot_tools = 16` and `bot_denied = 17` preserve the original
+  restrictions without persisting stale tool definitions.
+- REST inbox JSON exposes `task_id`, and its status filter accepts `waiting`.
+  The task endpoints remain `/v1/task-approvals`, `/{id}`, `/{id}/decide`,
+  `/{id}/cancel`, and `/{id}/recover`; no execution token is exposed.
+
+On resume the resolver checks that the bot is enabled and still belongs to the
+same human, and that the human still exists when an explicit user roster is
+configured. Original subject, scope and expiry survive; roles are intersected
+with current operator-declared roles. New roles cannot expand a waiting task.
+Original and current tool restrictions are intersected, and the one-hop
+`ask_bot` denial survives restart. Tool execution rechecks live policy and the
+task claim. Binding a child scope masks inherited one-shot/prepared approvals.
+
+The task runner computes approved budget limits against the current bot/node
+policy once. The agent must not tighten those limits back to the unchanged bot
+cap during resume; doing so caused approval to immediately reprompt. Consumption
+is retained, and newly tighter policy still wins. Initial inline delegation also
+charges its caller's budget; an explicit subsequent task extension authorises
+only that task's continued work, not additional parent work.
+
+The queue and task writes are separate CAS transactions. A crash before linking
+has performed no agent work. A crash after linking never causes a fresh queue
+attempt: durable task expiry reports uncertainty. A completed task whose inbox
+result was not committed is reconciled without re-executing the agent. A lost
+initial execution with no checkpoint requires a fresh human assignment; recovery
+cannot reconstruct an unsaved transcript. Legacy/imported queue records lacking
+authenticated `task_claims` fail closed instead of manufacturing caller rights.
+Portable export strips those claims; imported waiting work is cancelled, and
+linked tasks cannot be retried from a portable archive because task authority is
+not portable. Full Raft snapshots retain task records and their original leases.
+
+### Specialist task context and skills
+
+Each delegated/queued task starts with only supplied task context; no conversation
+history is loaded. Automatic recall and pinned memory are disabled for these
+turns, as are explicit `memory_*`, `session_*`, `pinned_*` and `dream_recap` tools.
+Task turns are not ingested into persistent episodic memory. Checkpoint transcripts
+remain durable operational state for the same task, not working memory for the
+next task. The coordinator selects and passes any relevant owner memories.
+
+Skills use one exposure/execution rule: operator/signed installed skills are
+shared capabilities, while active self-taught skills are private to their
+authoring principal. Bot tool allowlists apply to skill names as well as builtin
+names, including the index and `skill_view`; reading a skill requires both
+`skill_view` and that skill to be permitted. The documentation handler checks
+again after hooks rewrite its arguments. Execution still goes through policy,
+approval, digest verification and sandbox enforcement.
+
+Specialist review runs on procedural tool volume even when the turn has no
+channel. It does not accumulate the human-memory review axis. Learned proposals
+are owned by `bot:<id>`, not by the human whose claims paid for the work. Review
+sees only that author's existing proposals and cannot refine another author's
+skill. `mode=off/propose/auto` keeps its existing meaning; activation approval is
+separate from task execution approval. Human review surfaces must include owned
+bots' proposals under their existing operator-authorised learned-review path.
 
 - Create a fresh scope for each delegated/inbox task, even for the same bot.
 - Supply current owner authority and bot tool restrictions through the runner's

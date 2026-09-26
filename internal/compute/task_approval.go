@@ -9,6 +9,15 @@ import (
 )
 
 type taskExecutionKey struct{}
+type approvedTaskBudgetKey struct{}
+
+func TaskIDFrom(ctx context.Context) string {
+	if task, ok := ctx.Value(taskExecutionKey{}).(*taskExecution); ok {
+		return task.scope.ID
+	}
+	return ""
+}
+
 type taskExecution struct {
 	scope turn.TaskScope
 	check func(context.Context, *pb.CheckGrantTaskApprovalRequest) (*pb.CheckGrantTaskApprovalResponse, error)
@@ -19,6 +28,8 @@ type taskExecution struct {
 // check deliberately blocks execution. Callers must replace the scope for each
 // child task rather than pass its parent's execution context as authority.
 func WithTaskExecution(ctx context.Context, scope turn.TaskScope, check func(context.Context, *pb.CheckGrantTaskApprovalRequest) (*pb.CheckGrantTaskApprovalResponse, error)) context.Context {
+	ctx = turn.WithoutApproval(ctx)
+	ctx, _ = withInvocationApprovals(ctx, nil)
 	return context.WithValue(ctx, taskExecutionKey{}, &taskExecution{scope: scope, check: check})
 }
 func taskGrant(ctx context.Context, action, resource string) (bool, bool, error) {

@@ -675,6 +675,7 @@ func (f *FSM) putInboxResult(key string, raw []byte, item *lobslawv1.BotInboxIte
 		Sender: "bot:" + item.GetRecipient(), Kind: lobslawv1.InboxKind_INBOX_KIND_ANSWER,
 		Subject: item.GetSubject(), Body: body, Result: body, Error: item.GetError(),
 		CorrelationId: item.GetId(), Status: item.GetStatus(),
+		TaskId: item.GetTaskId(), RequestedBy: item.GetRequestedBy(),
 		CreatedAt: item.GetCompletedAt(), CompletedAt: item.GetCompletedAt(), Revision: 1,
 	}
 	resultRaw, err := proto.Marshal(result)

@@ -1390,6 +1390,7 @@ enum InboxStatus {
   INBOX_STATUS_DONE = 3;
   INBOX_STATUS_FAILED = 4;
   INBOX_STATUS_CANCELLED = 5;
+  INBOX_STATUS_WAITING = 6;
 }
 
 // BotInboxItem is one unit of a bot's durable work queue.
@@ -1418,6 +1419,10 @@ message BotInboxItem {
   double cost_usd = 21;
   // requested_by is the person this work traces back to.
   string requested_by = 22;
+  // Once linked, only the durable task runner may execute this item.
+  string task_id = 23;
+  // Original caller authority, stamped by the authenticated enqueue path.
+  Claims task_claims = 24;
 }
 
 // CredentialRecord holds an OAuth (or other-provider) credential
@@ -2416,6 +2421,9 @@ message Continuation {
   int64 egress_bytes = 13;
   string bot_id = 14;
   string principal = 15;
+  // Restrictions, not tool definitions: intersect with current bot policy.
+  repeated string bot_tools = 16;
+  repeated string bot_denied = 17;
 }
 
 // PromptRecord is one pending confirmation, in Raft rather than in a

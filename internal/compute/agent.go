@@ -244,6 +244,8 @@ type AgentConfig struct {
 	// is what it did, so a skill could only ever be invoked by a model
 	// that guessed its name.
 	SkillsProvider func() []promptgen.SkillInfo
+	// SkillAllowed applies the same ownership rule to index, docs and execution.
+	SkillAllowed func(context.Context, string) bool
 
 	// ProposalsProvider counts the self-taught artefacts awaiting this
 	// owner's approval, for the Installed Skills section.
@@ -501,6 +503,8 @@ type ProcessMessageRequest struct {
 
 // ProcessMessageResponse is the per-turn output.
 type ProcessMessageResponse struct {
+	// TaskID identifies durable delegated work, including a waiting continuation.
+	TaskID string
 	// Reply is the assistant's final text response. Populated for
 	// normal turns; empty when NeedsConfirmation is true.
 	Reply string
@@ -612,6 +616,7 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// needs to know whose memories it may read. Getting this order wrong
 	// is how the recall came to be unscoped in the first place.
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	ctx = a.withSkillAccess(ctx, req)
 	ctx = WithBudget(ctx, req.Budget)
 	// Attached once, at the top, so anything downstream can emit a
 	// span without every intermediate signature growing a parameter.
@@ -657,9 +662,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
 	}
-	if req.Bot != nil {
-		req.Tools = req.Bot.FilterTools(req.Tools)
-	}
+	req.Tools = visibleTaskTools(ctx, *req)
 	guidance := botGuidance(req.Bot)
 	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil || a.cfg.SoulSnapshotFor != nil) {
 		var config *types.SoulConfig
@@ -706,14 +709,12 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			var skillIndex []promptgen.SkillInfo
 			if a.cfg.SkillsProvider != nil {
 				skillIndex = a.cfg.SkillsProvider()
+				skillIndex = a.visibleSkills(ctx, *req, skillIndex)
 			}
-			var pinned promptgen.PinnedBlocks
-			if a.cfg.PinnedProvider != nil && !req.Bot.IsSpecialist() {
-				pinned = a.cfg.PinnedProvider(sessionKeyFor(req), userIDFor(req))
-			}
+			pinned := a.pinnedForTask(ctx, req)
 			var proposals int
 			if a.cfg.ProposalsProvider != nil {
-				proposals = a.cfg.ProposalsProvider(userIDFor(req))
+				proposals = a.cfg.ProposalsProvider(a.TurnIdentityFor(*req).Principal.String())
 			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
 				Soul:           &turnConfig,
@@ -748,7 +749,7 @@ func (a *Agent) recallContext(ctx context.Context, req *ProcessMessageRequest) {
 	// the request, is the wrong place for them. seedMessages puts them
 	// in a user-role message, which is the position promptgen's
 	// deliberate no-escaping decision reasoned about.
-	if a.cfg.ContextEngine != nil && !req.Bot.IsSpecialist() {
+	if a.cfg.ContextEngine != nil && !req.Bot.IsSpecialist() && !isolatedTask(ctx, *req) {
 		assembly := a.cfg.ContextEngine.Assemble(ctx, req.Message)
 		if rendered := assembly.Rendered(); rendered != "" {
 			req.RecalledContext = rendered
@@ -777,7 +778,7 @@ func (a *Agent) recallContext(ctx context.Context, req *ProcessMessageRequest) {
 // turn is preferable to dropping the user's reply for a backend
 // hiccup.
 func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string, calls []ToolInvocation) {
-	if a.cfg.EpisodicIngester == nil || reply == "" || req.Bot.IsSpecialist() {
+	if a.cfg.EpisodicIngester == nil || reply == "" || req.Bot.IsSpecialist() || isolatedTask(ctx, req) {
 		return
 	}
 	// Channel and ChatID come from the request, which is where they
@@ -932,10 +933,11 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if err := a.resolveBot(ctx, &req); err != nil {
 		return nil, err
 	}
-	if req.Bot != nil {
+	if req.Bot != nil && ctx.Value(approvedTaskBudgetKey{}) != true {
 		req.Budget.Tighten(req.Bot.Caps)
 	}
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	ctx = a.withSkillAccess(ctx, req)
 	ctx = WithBudget(ctx, req.Budget)
 	// This is the same turn. Its system prompt is already part of the
 	// continuation; refreshing the soul here would assemble an unused prompt
@@ -1793,13 +1795,14 @@ func IsRetryableProviderError(ctx context.Context, err error) bool {
 // work is being done for (see Node.schedulerClaims), not of a chat.
 func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	t := turn.Identity{
-		TurnID:     req.TurnID,
-		Channel:    req.Channel,
-		ChannelID:  req.ChannelID,
-		Shared:     req.SharedConversation,
-		Timezone:   req.UserTimezone,
-		BotID:      req.BotID,
-		Specialist: req.Bot.IsSpecialist(),
+		Specialist:     req.Bot.IsSpecialist(),
+		OriginalClaims: req.Claims,
+		TurnID:         req.TurnID,
+		Channel:        req.Channel,
+		ChannelID:      req.ChannelID,
+		Shared:         req.SharedConversation,
+		Timezone:       req.UserTimezone,
+		BotID:          req.BotID,
 	}
 	if req.Claims != nil {
 		t.UserID = req.Claims.UserID
@@ -1922,8 +1925,8 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: "budget exceeded"},
 			&pendingConfirmation{Reason: fmt.Sprintf("budget exceeded on %s", dec.ExceededOn)}, nil
 	}
-	if req.Bot != nil && len(req.Bot.FilterTools([]Tool{{Name: tc.Name}})) == 0 {
-		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: "tool is excluded by bot tool restrictions"}, nil, nil
+	if reason := taskToolRestriction(ctx, req, tc.Name); reason != "" {
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: reason}, nil, nil
 	}
 	budgetDec := req.Budget.RecordToolCall()
 	if budgetDec.Exceeded {
@@ -1971,6 +1974,9 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	if prepared != nil {
 		params = maps.Clone(prepared.Params)
 	}
+	if tc.Name == "skill_view" && !a.skillAllowed(ctx, req, strings.TrimSpace(params["name"])) {
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Error: "skill is outside this actor's allowed set"}, nil, nil
+	}
 	inv := ToolInvocation{
 		CallID:   tc.ID,
 		ToolName: tc.Name,
@@ -1988,6 +1994,10 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	// dispatch uses internally, so allow rules behave
 	// identically across all dispatch paths.
 	if a.cfg.Skills != nil && a.cfg.Skills.Has(tc.Name) {
+		if !a.skillAllowed(ctx, req, tc.Name) {
+			inv.Error = "skill is outside this actor's allowed set"
+			return inv, nil, nil
+		}
 		return a.runSkillToolCall(ctx, req, tc, prepared, params, inv)
 	}
 

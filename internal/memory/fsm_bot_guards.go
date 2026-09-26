@@ -64,5 +64,5 @@ func (f *FSM) checkInboxCapacity(entry *lobslawv1.LogEntry) error {
 }
 
 func outstandingInbox(status lobslawv1.InboxStatus) bool {
-	return status == lobslawv1.InboxStatus_INBOX_STATUS_PENDING || status == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED
+	return status == lobslawv1.InboxStatus_INBOX_STATUS_PENDING || status == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED || status == lobslawv1.InboxStatus_INBOX_STATUS_WAITING
 }
