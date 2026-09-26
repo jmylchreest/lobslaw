@@ -143,6 +143,7 @@ func (n *Node) wireGateway() error {
 		Webhooks:         webhooks,
 		Prompts:          n.promptRegistry,
 		TaskApprovals:    n.taskApprovalAPI(),
+		StartBotTask:     n.botTaskStarter(),
 		TaskIdentity:     n.identityResolver(),
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
 		Plan:             planServiceOrNil(n.planSvc),

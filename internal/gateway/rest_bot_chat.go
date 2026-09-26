@@ -12,6 +12,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/turn"
+	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
 // handleBotChat serves POST /v1/bots/{id}/messages.
@@ -168,6 +169,20 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		ConversationSummary: prior.Summary,
 	}
 
+	if s.cfg.StartBotTask != nil {
+		task, err := s.cfg.StartBotTask(ctx, req)
+		if err != nil {
+			emit("error", map[string]any{"message": err.Error()})
+			return
+		}
+		text := task.Result
+		if task.State != pb.TaskApprovalState_TASK_APPROVAL_STATE_COMPLETED {
+			text = fmt.Sprintf("Task `%s` is waiting for your approval. [Review task approvals](/approvals).", task.Id)
+		}
+		s.conv.Append(ctx, sessionRef, turnID, []turn.Message{{Role: "user", Content: body.Message}, {Role: "assistant", Content: text}})
+		emit("reply", map[string]any{"text": text, "turn_id": turnID})
+		return
+	}
 	resp, err := s.runner.Run(ctx, req)
 	if err != nil {
 		// The error goes down the STREAM, not as a status: the 200 and

@@ -26,7 +26,7 @@ func TestTaskUsesSuppliedContextWithoutPinnedOrMemoryTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pinnedReads != 0 || len(response.ToolCalls) != 1 || !strings.Contains(response.ToolCalls[0].Error, "isolated") {
+	if pinnedReads != 0 || len(response.ToolCalls) != 1 || (!strings.Contains(response.ToolCalls[0].Error, "isolated") && !strings.Contains(response.ToolCalls[0].Error, "bot tool restrictions")) {
 		t.Fatalf("task reached saved context: pins=%d response=%+v", pinnedReads, response)
 	}
 }

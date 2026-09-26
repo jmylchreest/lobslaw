@@ -20,7 +20,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
-	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/logging"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
@@ -140,7 +139,9 @@ type RESTConfig struct {
 	// as plain text like Phase 6e).
 	Prompts       Prompts
 	TaskApprovals TaskApprovalAPI
-	TaskIdentity  *identity.Resolver
+	// Named bot chats are fresh durable tasks, including their budget approvals.
+	StartBotTask func(context.Context, turn.Request) (*lobslawv1.TaskApprovalRecord, error)
+	TaskIdentity *identity.Resolver
 
 	// ConfirmationTTL is how long a pending prompt waits before
 	// auto-denying on timeout. 0 → 5 minutes default.
@@ -503,33 +504,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cap body size to avoid clients streaming megabytes. The actual
-	// useful message is usually under a few KB; 1MB covers rare long
-	// copy-paste scenarios.
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
 	var req messageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
+	if !s.decodeMessageRequest(w, r, &req) {
 		return
-	}
-	if len(req.UploadIDs) > restMessageMaxUploads {
-		s.jsonErr(w, http.StatusBadRequest, fmt.Sprintf("at most %d uploads per message", restMessageMaxUploads))
-		return
-	}
-	if strings.TrimSpace(req.Message) == "" && len(req.UploadIDs) == 0 {
-		s.jsonErr(w, http.StatusBadRequest, "message is required")
-		return
-	}
-	// A turn with no id is a turn with no trace. The Telegram path
-	// always mints one; this one passed through whatever the caller
-	// sent, so a REST turn from a client that supplied none recorded
-	// its spans under the empty id and `trace list` came back empty —
-	// tracing looked switched OFF on a node where it was switched on.
-	// Returned in the response too: an id the caller cannot see is an
-	// id they cannot look the turn up by.
-	if req.TurnID == "" {
-		req.TurnID = "rest-" + ids.New()
 	}
 
 	authn, authErr := s.authenticateRequest(r)
@@ -542,7 +519,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := authn.Claims
-	if len(req.UploadIDs) > 0 && (claims == nil || claims.UserID == "" || claims.UserID == "anon") {
+	if len(req.UploadIDs) > 0 && !authenticatedUploadClaims(claims) {
 		s.jsonErr(w, http.StatusUnauthorized, "authentication required for uploads")
 		return
 	}
@@ -579,7 +556,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		// Telegram path does: Load → run → Append is not atomic, and
 		// each request is its own goroutine. Only sessioned requests
 		// need it — a session-less call has no transcript to corrupt.
-		lease, disposition := s.gate.acquire(r.Context(), cacheKey(sessionRef), req.TurnID, req.Message, len(attachments) > 0)
+		lease, disposition := s.gate.acquire(reqCtx, cacheKey(sessionRef), req.TurnID, req.Message, len(attachments) > 0)
 		switch disposition {
 		case Folded:
 			// Another in-flight turn absorbed this message and will

@@ -12388,8 +12388,10 @@ type SessionMessage struct {
 	// Server-owned prepared input for a paused executor call. Only continuation
 	// messages carry this; never populated from LLM output or sent to a provider.
 	PreparedToolCall *PreparedToolCall `protobuf:"bytes,9,opt,name=prepared_tool_call,json=preparedToolCall,proto3" json:"prepared_tool_call,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Trusted runner metadata: this call has not executed because of budget.
+	BudgetPending bool `protobuf:"varint,10,opt,name=budget_pending,json=budgetPending,proto3" json:"budget_pending,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SessionMessage) Reset() {
@@ -12483,6 +12485,13 @@ func (x *SessionMessage) GetPreparedToolCall() *PreparedToolCall {
 		return x.PreparedToolCall
 	}
 	return nil
+}
+
+func (x *SessionMessage) GetBudgetPending() bool {
+	if x != nil {
+		return x.BudgetPending
+	}
+	return false
 }
 
 // SessionToolCall mirrors the tool-call shape on the LLM wire.
@@ -16840,6 +16849,7 @@ type ConsoleInboxItem struct {
 	CostUsd       float64                `protobuf:"fixed64,17,opt,name=cost_usd,json=costUsd,proto3" json:"cost_usd,omitempty"`
 	CreatedAt     string                 `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	CompletedAt   string                 `protobuf:"bytes,19,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	TaskId        string                 `protobuf:"bytes,20,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -17003,6 +17013,13 @@ func (x *ConsoleInboxItem) GetCreatedAt() string {
 func (x *ConsoleInboxItem) GetCompletedAt() string {
 	if x != nil {
 		return x.CompletedAt
+	}
+	return ""
+}
+
+func (x *ConsoleInboxItem) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
 	}
 	return ""
 }
@@ -22289,7 +22306,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\asummary\x18\n" +
 	" \x01(\tR\asummary\x12.\n" +
 	"\x13summary_through_seq\x18\v \x01(\x04R\x11summaryThroughSeq\x12H\n" +
-	"\x12summary_updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x10summaryUpdatedAt\"\xec\x02\n" +
+	"\x12summary_updated_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x10summaryUpdatedAt\"\x93\x03\n" +
 	"\x0eSessionMessage\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x10\n" +
@@ -22302,7 +22319,9 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"toolCallId\x12\x17\n" +
 	"\aturn_id\x18\a \x01(\tR\x06turnId\x128\n" +
 	"\ttimestamp\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12J\n" +
-	"\x12prepared_tool_call\x18\t \x01(\v2\x1c.lobslaw.v1.PreparedToolCallR\x10preparedToolCall\"S\n" +
+	"\x12prepared_tool_call\x18\t \x01(\v2\x1c.lobslaw.v1.PreparedToolCallR\x10preparedToolCall\x12%\n" +
+	"\x0ebudget_pending\x18\n" +
+	" \x01(\bR\rbudgetPending\"S\n" +
 	"\x0fSessionToolCall\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
@@ -22686,7 +22705,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\brevision\x18\b \x01(\x04R\brevision\x12\x12\n" +
 	"\x04bots\x18\t \x01(\x05R\x04bots\"A\n" +
 	"\rConsoleGroups\x120\n" +
-	"\x06groups\x18\x01 \x03(\v2\x18.lobslaw.v1.ConsoleGroupR\x06groups\"\x9e\x04\n" +
+	"\x06groups\x18\x01 \x03(\v2\x18.lobslaw.v1.ConsoleGroupR\x06groups\"\xb7\x04\n" +
 	"\x10ConsoleInboxItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\trecipient\x18\x02 \x01(\tR\trecipient\x12\x16\n" +
@@ -22711,7 +22730,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\bcost_usd\x18\x11 \x01(\x01R\acostUsd\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x12 \x01(\tR\tcreatedAt\x12!\n" +
-	"\fcompleted_at\x18\x13 \x01(\tR\vcompletedAt\"T\n" +
+	"\fcompleted_at\x18\x13 \x01(\tR\vcompletedAt\x12\x17\n" +
+	"\atask_id\x18\x14 \x01(\tR\x06taskId\"T\n" +
 	"\fConsoleInbox\x12\x10\n" +
 	"\x03bot\x18\x01 \x01(\tR\x03bot\x122\n" +
 	"\x05items\x18\x02 \x03(\v2\x1c.lobslaw.v1.ConsoleInboxItemR\x05items\"\xc3\x01\n" +

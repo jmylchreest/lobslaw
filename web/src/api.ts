@@ -4,7 +4,7 @@
 // calls, and a generator would be a build-step dependency plus a schema
 // to keep in step, for types a person can read in one screen.
 
-export type BotStatus = "pending" | "claimed" | "done" | "failed" | "cancelled";
+export type BotStatus = "pending" | "claimed" | "waiting" | "done" | "failed" | "cancelled";
 export type InboxKind = "task" | "question" | "answer" | "result" | "fyi";
 
 export interface Bot {
@@ -60,6 +60,7 @@ export interface MemoryRecord {
 }
 
 export interface InboxItem {
+  task_id?: string;
   id: string;
   recipient: string;
   sender: string;
@@ -506,6 +507,7 @@ async function readSSE(
 export const statusPalette: Record<BotStatus, string> = {
   pending: "gray",
   claimed: "blue",
+  waiting: "orange",
   done: "green",
   failed: "red",
   cancelled: "orange",

@@ -576,13 +576,14 @@ type ProcessMessageResponse struct {
 
 // ToolInvocation records one tool call's lifecycle within a turn.
 type ToolInvocation struct {
-	prepared *PreparedToolCall
-	CallID   string
-	ToolName string
-	Args     string
-	Output   string
-	ExitCode int
-	Error    string
+	budgetPending bool
+	prepared      *PreparedToolCall
+	CallID        string
+	ToolName      string
+	Args          string
+	Output        string
+	ExitCode      int
+	Error         string
 }
 
 // RunToolCallLoop processes one turn end-to-end. Steps per PLAN.md
@@ -994,44 +995,49 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	// refusal instead. So the approval was recorded, the gate would
 	// have passed, and the command still never ran.
 	//
-	// Gated on the turn approval, not on `resuming` alone. A BUDGET
-	// confirmation also resumes, and its transcript tail is the last
-	// SUCCESSFUL tool result rather than a refusal — so a document or
-	// web page containing the sentinel phrase could steer the sentinel
-	// scan onto a completed call and have it run a second time.
-	// Approving a spend increase must not re-run anything.
-	if resuming && turnApprovalPending(ctx) {
+	// Budget resumption requires trusted BudgetPending metadata. Text in a
+	// successful tool result must never turn a spend increase into replay.
+	// A pending batch also retains its untouched suffix: dropping those calls
+	// would hand the provider a transcript missing requested tool results.
+	if resuming && resumePendingInvocation(ctx, messages) {
 		if tc, idx, ok := pendingToolCall(messages); ok {
-			resumeCtx := ctx
-			// Old continuations have no prepared input. When hooks are configured,
-			// prepare afresh and ask again rather than apply an old answer to a rewrite.
-			if messages[idx].PreparedToolCall == nil && a.cfg.Executor != nil && a.cfg.Executor.hasPreHooks(tc.Name, req.TurnID, req.Claims) && (a.cfg.Skills == nil || !a.cfg.Skills.Has(tc.Name)) {
-				resumeCtx = turn.WithoutApproval(ctx)
-			}
-			inv, confirmation, err := a.runToolCallWithPrepared(resumeCtx, req, tc, messages[idx].PreparedToolCall)
-			if err != nil {
-				return nil, fmt.Errorf("resume tool call %q: %w", tc.Name, err)
-			}
-			resp.ToolCalls = append(resp.ToolCalls, inv)
-			if confirmation != nil {
+			pending := append([]ToolCall{tc}, unansweredToolCalls(messages, idx)...)
+			for callIndex, tc := range pending {
+				if callIndex > 0 {
+					idx = len(messages)
+					messages = append(messages, Message{})
+				}
+				resumeCtx := ctx
+				// Old continuations have no prepared input. When hooks are configured,
+				// prepare afresh and ask again rather than apply an old answer to a rewrite.
+				if messages[idx].PreparedToolCall == nil && a.cfg.Executor != nil && a.cfg.Executor.hasPreHooks(tc.Name, req.TurnID, req.Claims) && (a.cfg.Skills == nil || !a.cfg.Skills.Has(tc.Name)) {
+					resumeCtx = turn.WithoutApproval(ctx)
+				}
+				inv, confirmation, err := a.runToolCallWithPrepared(resumeCtx, req, tc, messages[idx].PreparedToolCall)
+				if err != nil {
+					return nil, fmt.Errorf("resume tool call %q: %w", tc.Name, err)
+				}
+				resp.ToolCalls = append(resp.ToolCalls, inv)
+				if confirmation != nil {
+					messages[idx] = toolResultMessage(tc, inv)
+					// Still gated — a second, different question rather
+					// than the one just answered. Hand it back up so the
+					// channel can ask it, instead of looping here.
+					resp.NeedsConfirmation = true
+					resp.ConfirmationReason = confirmation.Reason
+					resp.ConfirmationAction = confirmation.Action
+					resp.ConfirmationResource = confirmation.Resource
+					resp.ConfirmationGrantable = confirmation.Grantable
+					resp.ConfirmationLabels = confirmation.Labels
+					resp.BudgetState = req.Budget.State()
+					resp.Messages = messages
+					return resp, nil
+				}
+				// In place: the model must see the RESULT where it last saw
+				// the refusal. Appending instead would leave both, and the
+				// refusal is the more emphatic of the two.
 				messages[idx] = toolResultMessage(tc, inv)
-				// Still gated — a second, different question rather
-				// than the one just answered. Hand it back up so the
-				// channel can ask it, instead of looping here.
-				resp.NeedsConfirmation = true
-				resp.ConfirmationReason = confirmation.Reason
-				resp.ConfirmationAction = confirmation.Action
-				resp.ConfirmationResource = confirmation.Resource
-				resp.ConfirmationGrantable = confirmation.Grantable
-				resp.ConfirmationLabels = confirmation.Labels
-				resp.BudgetState = req.Budget.State()
-				resp.Messages = messages
-				return resp, nil
 			}
-			// In place: the model must see the RESULT where it last saw
-			// the refusal. Appending instead would leave both, and the
-			// refusal is the more emphatic of the two.
-			messages[idx] = toolResultMessage(tc, inv)
 		}
 	}
 
@@ -1922,7 +1928,7 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	}
 
 	if dec := req.Budget.Check(); dec.Exceeded {
-		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: "budget exceeded"},
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: "budget exceeded", budgetPending: true, prepared: prepared},
 			&pendingConfirmation{Reason: fmt.Sprintf("budget exceeded on %s", dec.ExceededOn)}, nil
 	}
 	if reason := taskToolRestriction(ctx, req, tc.Name); reason != "" {
@@ -1931,10 +1937,12 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	budgetDec := req.Budget.RecordToolCall()
 	if budgetDec.Exceeded {
 		return ToolInvocation{
-			CallID:   tc.ID,
-			ToolName: tc.Name,
-			Args:     tc.Arguments,
-			Error:    "budget exceeded",
+			CallID:        tc.ID,
+			ToolName:      tc.Name,
+			Args:          tc.Arguments,
+			Error:         "budget exceeded",
+			budgetPending: true,
+			prepared:      prepared,
 		}, &pendingConfirmation{Reason: fmt.Sprintf("budget exceeded on %s", budgetDec.ExceededOn)}, nil
 	}
 
@@ -2218,7 +2226,7 @@ func pendingToolCall(msgs []Message) (ToolCall, int, bool) {
 		if msgs[i].Role != "tool" {
 			continue
 		}
-		if !strings.Contains(msgs[i].Content, ErrRequireConfirm.Error()) {
+		if !msgs[i].BudgetPending && !strings.Contains(msgs[i].Content, ErrRequireConfirm.Error()) {
 			// A tool result that is not a refusal means the tail has
 			// already been answered; stop rather than reaching further
 			// back into the turn.
@@ -2284,6 +2292,7 @@ func toolResultMessage(tc ToolCall, inv ToolInvocation) Message {
 		Content:          content,
 		ToolCallID:       tc.ID,
 		PreparedToolCall: inv.prepared.Clone(),
+		BudgetPending:    inv.budgetPending,
 	}
 }
 

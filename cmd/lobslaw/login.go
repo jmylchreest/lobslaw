@@ -23,7 +23,7 @@ func dispatchLogin(args []string) bool {
 }
 
 func lobslawLogin(args []string) {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	fs := newFlagSet("login", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml")
 	user := fs.String("user", "", "[[user]] id; must match the token's enrolled user")
 	token := fs.String("token", os.Getenv("LOBSLAW_LOGIN_TOKEN"), "Bearer JWT for the enrolled user (or LOBSLAW_LOGIN_TOKEN)")

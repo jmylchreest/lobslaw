@@ -142,15 +142,23 @@ merged schema.
 ## Integration with #348
 
 `node.teamTaskRunner` is the `ask_bot` runner. `startTeamTask` is shared with
-the inbox drain: it creates a fresh task, then commits the inbox link **before**
+the inbox drain and direct bot-room chat: it creates a fresh task, then commits the inbox link **before**
 calling the agent. The linked item uses `INBOX_STATUS_WAITING` while the task
 is running, awaiting approval, ready, or uncertain. This status means that the
 task service owns execution; consult its state for the precise progress.
 Ordinary inbox claims and retries cannot execute linked work.
 
+Named bot-room messages enter through `RESTConfig.StartBotTask`, wired on both
+the public gateway and compute-only console backend. Each message is a fresh
+task: previous room messages remain visible to the human but are not loaded as
+specialist working memory. A pending task returns an `/approvals` link and closes
+the chat stream. It never enters the conversation budget-relaxation loop. Final
+results and uncertain outcomes remain available through the task API and the
+linked inbox item. The main assistant's ordinary conversation path is separate.
+
 ```mermaid
 sequenceDiagram
-    participant Caller as Coordinator / inbox drain
+    participant Caller as Bot room / coordinator / inbox drain
     participant Queue as Raft inbox
     participant Tasks as TaskApprovalService
     participant Agent as Specialist
@@ -183,6 +191,13 @@ The wire additions are deliberately metadata, not another grant format:
 - `INBOX_STATUS_WAITING = 6` prevents ordinary queue replay.
 - `Continuation.bot_tools = 16` and `bot_denied = 17` preserve the original
   restrictions without persisting stale tool definitions.
+- `SessionMessage.budget_pending = 10` records that a call was stopped before
+  dispatch. It is trusted runner metadata, not model/tool text. On extension the
+  pending invocation and untouched batch suffix run through current guards;
+  already completed calls are never replayed.
+- `ConsoleInboxItem.task_id = 20` carries the link through typed console RPCs.
+  Typed enqueue stamps `task_claims` from verified peer-asserted browser identity,
+  never from a browser-supplied claims field.
 - REST inbox JSON exposes `task_id`, and its status filter accepts `waiting`.
   The task endpoints remain `/v1/task-approvals`, `/{id}`, `/{id}/decide`,
   `/{id}/cancel`, and `/{id}/recover`; no execution token is exposed.
@@ -237,6 +252,12 @@ sees only that author's existing proposals and cannot refine another author's
 skill. `mode=off/propose/auto` keeps its existing meaning; activation approval is
 separate from task execution approval. Human review surfaces must include owned
 bots' proposals under their existing operator-authorised learned-review path.
+
+The existing learned-review adapter and notices now include proposals belonging
+to the caller's non-deleted bots. Listing, reading and deciding still require the
+`learned` command permission, and approval is revision/digest checked against the
+bot-owned record. A different human cannot read or decide it. This does not turn
+task approval into skill activation approval.
 
 - Create a fresh scope for each delegated/inbox task, even for the same bot.
 - Supply current owner authority and bot tool restrictions through the runner's
@@ -293,6 +314,13 @@ sequenceDiagram
 ```
 
 ## Verification
+
+`npm run test:browser` in `web/` exercises the production build in Chromium
+against deterministic API fixtures: bounded extension, revision-bearing decisions,
+explicit uncertain-outcome recovery, and no automatic model-image requests.
+Run `npm run build` first; `CHROME_BIN` overrides `/usr/bin/google-chrome`.
+The Go integration tests separately exercise the real agent, Raft queue, task
+service and typed console transport, including restart and interrupted batches.
 
 Coverage includes real-Raft concurrent decisions and claims, lost-claim recovery,
 expiry without sweep, child isolation, write failures, owner-only HTTP, peer-only

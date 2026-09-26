@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
@@ -18,6 +20,31 @@ import (
 )
 
 type teamTaskRunner struct{ n *Node }
+
+func (n *Node) botTaskStarter() func(context.Context, turn.Request) (*pb.TaskApprovalRecord, error) {
+	if !gateComputeTeams(n.cfg) || n.agent == nil || n.inboxSvc == nil {
+		return nil
+	}
+	return n.startBotChatTask
+}
+
+func (n *Node) startBotChatTask(ctx context.Context, request turn.Request) (*pb.TaskApprovalRecord, error) {
+	profile, err := botResolverOrNil(n.botSvc).ResolveBot(ctx, request.BotID)
+	if err != nil {
+		return nil, err
+	}
+	leg, cancel := context.WithTimeout(ctx, inboxExecutionTimeout)
+	defer cancel()
+	response, err := n.startTeamTask(leg, compute.ProcessMessageRequest{Bot: profile, BotID: request.BotID, Claims: request.Claims, Principal: profile.Principal(), Message: request.Message}, nil)
+	if err != nil {
+		return nil, err
+	}
+	task, err := n.taskApprovalAPI().GetTaskApproval(ctx, &pb.GetTaskApprovalRequest{Id: response.TaskID, Owner: profile.Owner})
+	if err != nil {
+		return nil, err
+	}
+	return task.Record, nil
+}
 
 func (r teamTaskRunner) RunToolCallLoop(ctx context.Context, req compute.ProcessMessageRequest) (*compute.ProcessMessageResponse, error) {
 	return r.n.startTeamTask(ctx, req, nil)
@@ -98,7 +125,13 @@ func (n *Node) startTeamTask(ctx context.Context, req compute.ProcessMessageRequ
 	req.Principal = req.Bot.Principal()
 	req.TurnID = ids.New()
 	backend := n.taskApprovalAPI()
-	created, err := backend.CreateTaskApproval(ctx, &pb.CreateTaskApprovalRequest{Owner: owner, Actor: actor, ParentId: compute.TaskIDFrom(ctx)})
+	create := &pb.CreateTaskApprovalRequest{Owner: owner, Actor: actor, ParentId: compute.TaskIDFrom(ctx)}
+	// Each tool checks the durable task deadline, including during the initial
+	// leg. An original token expiring sooner must shorten that authority too.
+	if !claims.ExpiresAt.IsZero() && time.Until(claims.ExpiresAt) < memory.TaskApprovalTTL {
+		create.ExpiresAt = timestamppb.New(claims.ExpiresAt)
+	}
+	created, err := backend.CreateTaskApproval(ctx, create)
 	if err != nil {
 		return nil, err
 	}

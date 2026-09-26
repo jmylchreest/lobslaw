@@ -43,7 +43,7 @@ export function Avatar({ id, name, size = 30, dim }: {
 }
 
 const LABEL: Record<BotStatus, string> = {
-  pending: "Queued", claimed: "Working", done: "Done",
+  pending: "Queued", claimed: "Working", waiting: "Tracked task", done: "Done",
   failed: "Failed", cancelled: "Cancelled",
 };
 

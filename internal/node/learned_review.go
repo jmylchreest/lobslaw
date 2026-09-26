@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -27,7 +28,21 @@ func (r learnedReviews) authorise(ctx context.Context, claims *types.Claims) (st
 	if claims == nil || claims.UserID == "" || !commandAuthorizer(r).AllowsCommand(ctx, claims, "learned") {
 		return "", fmt.Errorf("not authorised to review learned skills")
 	}
-	return "user:" + claims.UserID, nil
+	return r.n.identityResolver().Resolve(claims.UserID).String(), nil
+}
+
+func (r learnedReviews) owns(ctx context.Context, human, author string) bool {
+	if human == "" || author == "" {
+		return false
+	}
+	if human == author {
+		return true
+	}
+	if !strings.HasPrefix(author, "bot:") || r.n.botSvc == nil {
+		return false
+	}
+	bot, err := r.n.botSvc.Get(ctx, strings.TrimPrefix(author, "bot:"))
+	return err == nil && !bot.Deleted && bot.Owner == human
 }
 
 func (r learnedReviews) List(ctx context.Context, claims *types.Claims) ([]gateway.LearnedReview, error) {
@@ -35,13 +50,13 @@ func (r learnedReviews) List(ctx context.Context, claims *types.Claims) ([]gatew
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.n.selfTaught.List(memory.SelfTaughtQuery{Owner: owner})
+	rows, err := r.n.selfTaught.List(memory.SelfTaughtQuery{})
 	if err != nil {
 		return nil, err
 	}
 	var out []gateway.LearnedReview
 	for _, rec := range rows {
-		if rec.Owner == owner && (rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED || rec.Pending != nil) {
+		if r.owns(ctx, owner, rec.Owner) && (rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED || rec.Pending != nil) {
 			out = append(out, learnedReviewView(rec))
 		}
 	}
@@ -54,7 +69,7 @@ func (r learnedReviews) Get(ctx context.Context, claims *types.Claims, id string
 		return gateway.LearnedReview{}, err
 	}
 	rec, err := r.n.selfTaught.Get(id)
-	if err != nil || rec.Owner != owner {
+	if err != nil || !r.owns(ctx, owner, rec.Owner) {
 		return gateway.LearnedReview{}, fmt.Errorf("proposal not found for this user")
 	}
 	if rec.State != lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED && rec.Pending == nil {
@@ -68,7 +83,11 @@ func (r learnedReviews) Decide(ctx context.Context, claims *types.Claims, id str
 	if err != nil {
 		return "", err
 	}
-	rec, err := r.n.selfTaught.DecideReviewed(ctx, id, revision, digest, owner, approve)
+	proposal, err := r.n.selfTaught.Get(id)
+	if err != nil || !r.owns(ctx, owner, proposal.GetOwner()) {
+		return "", fmt.Errorf("proposal not found for this user")
+	}
+	rec, err := r.n.selfTaught.DecideReviewed(ctx, id, revision, digest, proposal.Owner, approve)
 	if err != nil {
 		return "", err
 	}

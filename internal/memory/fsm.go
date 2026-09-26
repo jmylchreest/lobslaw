@@ -735,23 +735,11 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 		}
 		return &r, nil
 	case BucketBots:
-		var r lobslawv1.BotRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.BotRecord{})
 	case BucketGroups:
-		var r lobslawv1.GroupRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.GroupRecord{})
 	case BucketBotInbox:
-		var r lobslawv1.BotInboxItem
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.BotInboxItem{})
 
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
@@ -871,12 +859,6 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketChannelState, p.ChannelState, nil
 	case *lobslawv1.LogEntry_SoulTune:
 		return BucketSoulTune, p.SoulTune, nil
-	case *lobslawv1.LogEntry_Bot:
-		return BucketBots, p.Bot, nil
-	case *lobslawv1.LogEntry_Group:
-		return BucketGroups, p.Group, nil
-	case *lobslawv1.LogEntry_BotInbox:
-		return BucketBotInbox, p.BotInbox, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:
@@ -922,6 +904,29 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketEnrolments, p.Enrolment, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
+	default:
+		return teamBucketAndPayload(entry)
+	}
+}
+
+func decodeClaimRecord(raw []byte, record interface {
+	proto.Message
+	claimable
+}) (claimable, error) {
+	if err := proto.Unmarshal(raw, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func teamBucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) {
+	switch p := entry.Payload.(type) {
+	case *lobslawv1.LogEntry_Bot:
+		return BucketBots, p.Bot, nil
+	case *lobslawv1.LogEntry_Group:
+		return BucketGroups, p.Group, nil
+	case *lobslawv1.LogEntry_BotInbox:
+		return BucketBotInbox, p.BotInbox, nil
 	default:
 		return "", nil, fmt.Errorf("unknown log entry payload type: %T", p)
 	}

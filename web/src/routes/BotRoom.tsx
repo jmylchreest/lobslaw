@@ -572,7 +572,8 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
           {item.sender === "operator" ? "you asked for this" : `asked by ${item.sender.replace(/^bot:/, "")}`}
           <span className="ev-dot">·</span>
           {when(item.created_at)}
-          {(item.status === "failed" || item.status === "cancelled") && (
+          {item.task_id && <Link className="ev-act" to="/approvals">Review task</Link>}
+          {!item.task_id && (item.status === "failed" || item.status === "cancelled") && (
             <button className="ev-act" onClick={(e) => { e.stopPropagation(); act("retry"); }} disabled={busy}>
               Try again
             </button>

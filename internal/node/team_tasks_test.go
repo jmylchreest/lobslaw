@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
@@ -194,6 +195,7 @@ func bootTeamTaskNode(t *testing.T, cfg Config, provider compute.LLMProvider, ca
 			if err := <-done; err != nil {
 				t.Error(err)
 			}
+			egress.SetActiveProvider(nil)
 		})
 	}
 	t.Cleanup(stop)

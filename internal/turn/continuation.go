@@ -121,9 +121,10 @@ func DecodeContinuation(p *lobslawv1.Continuation, caps BudgetCaps) (*Continuati
 
 func MessageToProto(m Message) *lobslawv1.SessionMessage {
 	out := &lobslawv1.SessionMessage{
-		Role:       m.Role,
-		Content:    m.Content,
-		ToolCallId: m.ToolCallID,
+		Role:          m.Role,
+		Content:       m.Content,
+		ToolCallId:    m.ToolCallID,
+		BudgetPending: m.BudgetPending,
 	}
 	if p := m.PreparedToolCall; p != nil {
 		out.PreparedToolCall = &lobslawv1.PreparedToolCall{CallId: p.CallID, ToolName: p.ToolName, TurnId: p.TurnID, OriginalArguments: p.OriginalArguments, Params: maps.Clone(p.Params), DispatchKind: p.DispatchKind}
@@ -144,9 +145,10 @@ func MessageFromProto(m *lobslawv1.SessionMessage) Message {
 		return Message{}
 	}
 	out := Message{
-		Role:       m.Role,
-		Content:    m.Content,
-		ToolCallID: m.ToolCallId,
+		Role:          m.Role,
+		Content:       m.Content,
+		ToolCallID:    m.ToolCallId,
+		BudgetPending: m.BudgetPending,
 	}
 	if p := m.PreparedToolCall; p != nil {
 		out.PreparedToolCall = &PreparedToolCall{CallID: p.CallId, ToolName: p.ToolName, TurnID: p.TurnId, OriginalArguments: p.OriginalArguments, Params: maps.Clone(p.Params), DispatchKind: p.DispatchKind}

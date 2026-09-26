@@ -2051,6 +2051,8 @@ message SessionMessage {
   // Server-owned prepared input for a paused executor call. Only continuation
   // messages carry this; never populated from LLM output or sent to a provider.
   PreparedToolCall prepared_tool_call = 9;
+  // Trusted runner metadata: this call has not executed because of budget.
+  bool budget_pending = 10;
 }
 
 // SessionToolCall mirrors the tool-call shape on the LLM wire.
@@ -2771,6 +2773,7 @@ message ConsoleInboxItem {
   double cost_usd = 17;
   string created_at = 18;
   string completed_at = 19;
+  string task_id = 20;
 }
 message ConsoleInbox {
   string bot = 1;

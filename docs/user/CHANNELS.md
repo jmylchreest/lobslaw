@@ -56,9 +56,9 @@ Loopback connections do not bypass authentication: a reverse proxy can make a re
 
 If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
 
-When compute-teams is off (the default), you get a single-assistant chat. Both chat views display approval buttons when an operation requires confirmation. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
+When compute-teams is off (the default), you get a single-assistant chat with inline approval buttons. Named bot rooms start fresh tasks and link to **Task approvals** when an operation or budget needs your decision; the chat stream closes while the task waits. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
 
-In the team console, open **Task approvals** for delegated work waiting on you.
+In the team console, open **Task approvals** for bot-room, delegated or queued work waiting on you.
 The page shows the task's actor, pending operation, state, expiry and budget
 consumption. You can approve once, grant an offered operation/category for that
 task, deny, or add a bounded budget allowance. Approval queues the saved task for

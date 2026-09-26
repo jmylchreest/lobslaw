@@ -20,7 +20,7 @@ import (
 func (n *Node) wireNotices() error {
 	var review gateway.NoticeSource
 	if n.selfTaught != nil {
-		review = pendingReviewSource{store: n.selfTaught}
+		review = pendingReviewSource{store: n.selfTaught, owns: (learnedReviews{n: n}).owns}
 	}
 	var challenges gateway.NoticeSource
 	if n.store != nil {

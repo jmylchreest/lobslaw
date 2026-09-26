@@ -26,6 +26,7 @@ type Message struct {
 	ToolCallID string
 	// PreparedToolCall is trusted continuation metadata, never provider input.
 	PreparedToolCall *PreparedToolCall `json:"-"`
+	BudgetPending    bool              `json:"-"`
 }
 
 // PreparedToolCall freezes effective input while a confirmation waits.

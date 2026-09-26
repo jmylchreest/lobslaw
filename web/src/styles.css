@@ -240,6 +240,7 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .st.done    { --c: var(--ok); }
 .st.failed  { --c: var(--bad); }
 .st.cancelled { --c: var(--warn); }
+.st.waiting { --c: var(--warn); }
 .st.claimed i { animation: pulse 1.5s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
 
