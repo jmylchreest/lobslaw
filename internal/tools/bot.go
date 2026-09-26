@@ -240,7 +240,7 @@ func newBotCreateHandler(reg BotRegistry) compute.BuiltinFunc {
 			"id":           created.GetId(),
 			"display_name": created.GetDisplayName(),
 			"enabled":      created.GetEnabled(),
-			"note":         "created; it has its own memory, its own inbox and its own personality overlay",
+			"note":         "created; it has its own inbox and personality overlay, with fresh working memory per task. Pass any relevant saved context explicitly in its task brief",
 		})
 		return body, 0, err
 	}

@@ -95,11 +95,15 @@ type TuneStore interface {
 // MemoryTuneStore and the compute-node's remote store both satisfy
 // TuneStore today, and widening it would make every implementation
 // carry a per-bot path whether or not its deployment has bots. A store
-// that does not implement this serves the chief's overlay to every
-// bot, which is the behaviour a single-assistant deployment already
-// has.
+// that does not implement this may serve only the chief's overlay.
 type BotTuneStore interface {
 	GetFor(ctx context.Context, botID string) (*TuneState, error)
+}
+
+type BotTuneWriter interface {
+	BotTuneStore
+	PutFor(ctx context.Context, botID string, state *TuneState) error
+	RollbackFor(ctx context.Context, botID string, steps int) (*TuneState, error)
 }
 
 // MemoryTuneStore is the in-process implementation used by tests. Keeps a ring of past versions so

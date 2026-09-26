@@ -123,10 +123,7 @@ func TestTuningTheChiefDoesNotRetuneOtherBots(t *testing.T) {
 	}
 }
 
-// A store predating bots keeps working: every turn gets the overlay it
-// always got, so an upgrade changes nothing for a deployment that
-// never creates a bot.
-func TestStoreWithoutPerBotSupportFallsBackToTheChiefOverlay(t *testing.T) {
+func TestStoreWithoutPerBotSupportCannotLeakChiefOverlay(t *testing.T) {
 	t.Parallel()
 	plain := &MemoryTuneStore{}
 	if err := plain.Put(context.Background(), &TuneState{Humor: overlayPtr(8)}); err != nil {
@@ -134,7 +131,10 @@ func TestStoreWithoutPerBotSupportFallsBackToTheChiefOverlay(t *testing.T) {
 	}
 	a := newBotAdjuster(t, plain)
 
-	got, err := a.SnapshotFor(context.Background(), "anything")
+	if _, err := a.SnapshotFor(context.Background(), "anything"); err == nil {
+		t.Fatal("specialist fell back to chief overlay")
+	}
+	got, err := a.SnapshotFor(context.Background(), "chief")
 	if err != nil {
 		t.Fatalf("SnapshotFor: %v", err)
 	}

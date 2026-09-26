@@ -65,6 +65,50 @@ does not fall into another person's team.
 
 Team tools receive the curated builtin default grants; operators can narrow them with policy. Their handlers independently enforce record ownership. Restore mode pauses the drain. Inbox execution is bounded below the claim lease, and completion must supply the original claim revision and holder. A stale worker cannot overwrite a successor. Terminal completion and the correlated sender receipt commit atomically; read results with `inbox_list` status `all`. Synchronous exchange journals are inserted directly as terminal records, never runnable intermediate work.
 
+Queue admission is checked in the serialized Raft apply path for both posts and
+terminal-to-pending retries. Claimed work still occupies its slot. A local count
+alone cannot enforce capacity when two callers race for the last slot. Pruning
+carries the scanned revision and checks that the current record is terminal;
+a retry that wins the race makes that prune a conflict, not a deletion.
+
+```mermaid
+sequenceDiagram
+  participant Scan as Retention scan
+  participant User as Owner retry
+  participant FSM as Raft FSM
+  Scan->>FSM: Read terminal item at revision N
+  User->>FSM: Retry expected revision N
+  FSM->>FSM: Check capacity, commit pending at N+1
+  Scan->>FSM: Delete expected revision N
+  FSM-->>Scan: Conflict; keep retried work
+```
+
+## Specialist working memory
+
+The coordinator chooses relevant saved memories and passes them in the task
+text. Specialists receive no automatic saved-memory recall or pinned-memory
+blocks, even when executing with the owner's operator claims. The saved-memory,
+pinned-memory, dream, and transcript-search tool families are excluded at both
+advertisement and dispatch. This also prevents a task from writing a persistent
+bot diary; successful specialist turns are not automatically ingested.
+
+Working memory is the task's message/tool-result transcript. A new delegated or
+queued task starts with a fresh transcript. An approval continuation retains that
+same task's transcript; it does not grant access to saved memory. Results remain
+in the task journal for the coordinator to select and pass to later work, rather
+than being silently recalled or consolidated as a specialist's long-term memory.
+
+```mermaid
+flowchart LR
+  Saved[Owner saved memory] --> Main[Coordinator selects context]
+  Main -->|explicit task text| Task[Fresh specialist transcript]
+  Task -->|tool results| Task
+  Task -->|pause and resume same task| Continuation[Shared task approval continuation]
+  Continuation --> Task
+  Task --> Result[Result returned to coordinator / journal]
+  Main -->|next assignment| Next[New specialist transcript]
+```
+
 ---
 
 ## The shape
@@ -135,6 +179,11 @@ On boot, unowned records are adopted onto the unique `[[user]]` with
 `role:operator`. None or more than one operator leaves them
 inaccessible (logged). Owner, once set, is preserved across updates.
 
+Roster reads never adopt unowned legacy bots, including an unowned chief. They
+may attach already-owned orphan bots to their owner's team. A user's new default
+team gets a stable owner-derived ID, so a second user cannot collide with the
+first user's default team or borrow its coordinator.
+
 ---
 
 ## Personality overlay
@@ -154,13 +203,21 @@ flowchart TD
   ChiefKey --> ChiefTurn
   Baseline --> EngTurn[bot:engineering]
   EngKey --> EngTurn
+  EngTurn -->|soul tools select trusted BotID| EngKey
+  ChiefTurn -->|soul tools| ChiefKey
   ChiefKey -.->|"must not leak"| EngTurn
 ```
 
 `SoulTuneRecordIDFor("")` and `SoulTuneRecordIDFor(ChiefBotID)` both
 return `SoulTuneRecordID`. A store that does not implement
-`BotTuneStore` falls back to the chief overlay, so a deployment that
-never creates a bot is unchanged.
+`BotTuneStore` can serve the chief, but refuses specialist snapshots rather
+than leaking chief fragments. A deployment that never creates a bot is unchanged.
+
+Tool mutations require a per-bot writer and fail closed if unavailable. Reads,
+tuning, fragments, reset and history rollback all bind to the active turn's
+trusted BotID, never a model-supplied argument. Compute-only peers carry that ID
+in the typed soul RPCs. Each tool gets a fresh bound adjuster over the current
+operator baseline, avoiding a shared mutable current-bot selector.
 
 ---
 
@@ -171,8 +228,12 @@ soul tune. `BucketBots`, `BucketGroups` and `BucketBotInbox` are in
 `archiveKinds`; credentials and browser sessions are not. Restore mode
 pauses the inbox drain. Inbox archive identities include both recipient and item ID. Imported pending/claimed inbox work is cancelled with an import-pause reason and requires an explicit retry; old leases are never resumed automatically.
 
-Deleting a bot does not cascade the records it owned. Recreating the
-same id restores the principal.
+Deleting a bot retains a disabled tombstone in `BucketBots`; it disappears from
+normal reads and rosters, but its ID can never be reused. Inbox, soul, session,
+and memory records retain bot principals, so physically deleting just the
+registry record would let a later owner inherit private records. The tombstone
+travels in bot archives and Raft snapshots. Choose a new ID when creating a
+replacement bot.
 
 ---
 

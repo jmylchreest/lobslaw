@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -226,9 +228,6 @@ func groupOfBot(rec *lobslawv1.BotRecord) string {
 	return strings.TrimSpace(rec.GetGroupId())
 }
 
-// defaultGroupID is the id of the caller's own starting team.
-const defaultGroupID = memory.DefaultGroupID
-
 func (s *Server) groupErr(w http.ResponseWriter, err error) {
 	switch {
 	case strings.Contains(err.Error(), "groups: not found"):
@@ -305,15 +304,21 @@ func (s *Server) ensureOwnersTeam(ctx context.Context, principal string) (string
 		}
 	}
 	if team == nil {
+		// A global default slug belongs to the first user who created it.
+		// A stable per-owner slug also makes concurrent first use converge.
+		id := fmt.Sprintf("team-%x", sha256.Sum256([]byte(principal)))[:teamIDLength]
 		team, err = s.cfg.Groups.Put(ctx, &lobslawv1.GroupRecord{
-			Id:        defaultGroupID,
+			Id:        id,
 			Name:      "Your team",
 			IsDefault: true,
 			Owner:     principal,
 			CreatedBy: principal,
 		}, 0)
 		if err != nil {
-			return "", err
+			team, err = s.cfg.Groups.Get(ctx, id)
+			if err != nil || !groupMayModify(team, principal) {
+				return "", errors.New("could not establish the owner's team")
+			}
 		}
 	}
 	// Bots created before they inherited a team (or by a tool that did
@@ -330,10 +335,8 @@ func (s *Server) ensureOwnersTeam(ctx context.Context, principal string) (string
 
 // adoptOrphanBots puts the caller's team-less bots into their team.
 //
-// Only bots that are already theirs, or that nobody owns, are touched:
-// a bot owned by somebody else is left exactly where it is. An unowned
-// bot becomes the caller's, which is the same rule startup adoption
-// uses for the unique operator.
+// This may run during a roster read. It must never establish ownership;
+// only explicitly owned bots may be attached to the owner's team.
 func (s *Server) adoptOrphanBots(ctx context.Context, principal, teamID string) {
 	if s.cfg.Bots == nil || strings.TrimSpace(principal) == "" || strings.TrimSpace(teamID) == "" {
 		return
@@ -347,13 +350,10 @@ func (s *Server) adoptOrphanBots(ctx context.Context, principal, teamID string) 
 			continue
 		}
 		owner := strings.TrimSpace(b.GetOwner())
-		if owner != "" && owner != principal {
+		if owner != principal {
 			continue
 		}
 		b.GroupId = teamID
-		if owner == "" {
-			b.Owner = principal
-		}
 		if _, err := s.cfg.Bots.Put(ctx, b, b.GetRevision()); err != nil {
 			s.log.Warn("rest: adopt orphan bot", "bot", b.GetId(), "err", err)
 		}
@@ -380,7 +380,7 @@ func (s *Server) ensureTeamCoordinator(ctx context.Context, principal string, te
 	rec, err := s.cfg.Bots.Get(ctx, coordID)
 	if err == nil && rec != nil {
 		owner := strings.TrimSpace(rec.GetOwner())
-		if owner != "" && owner != principal {
+		if owner != principal {
 			// The coordinator is somebody else's. This team needs its
 			// own rather than borrowing another person's bot.
 			coordID = team.GetId() + "-lead"
@@ -419,6 +419,9 @@ func (s *Server) ensureTeamCoordinator(ctx context.Context, principal string, te
 // key derives from it.
 const coordinatorName = "Coordinator"
 
+// Leave room for the coordinator's "-lead" suffix within the bot ID limit.
+const teamIDLength = 45
+
 // syncCoordinator keeps the coordinator able to reach every bot in its
 // team: its may_message list is the team's roster.
 //
@@ -435,6 +438,9 @@ func (s *Server) syncCoordinator(ctx context.Context, coord *lobslawv1.BotRecord
 	}
 	want := make([]string, 0, len(bots))
 	for _, b := range bots {
+		if b.GetOwner() != coord.GetOwner() || b.GetOwner() == "" {
+			continue
+		}
 		if b.GetId() == coord.GetId() {
 			continue
 		}

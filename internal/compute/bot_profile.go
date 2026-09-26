@@ -39,6 +39,15 @@ func (p *BotProfile) Principal() identity.Principal {
 	return identity.Bot(p.ID)
 }
 
+func (p *BotProfile) IsSpecialist() bool { return p != nil && !p.IsCoordinator }
+
+// Specialists work from the supplied task transcript, not a saved diary.
+// Enforced by FilterTools at both advertisement and dispatch boundaries.
+func specialistMemoryTool(name string) bool {
+	return strings.HasPrefix(name, "memory_") || strings.HasPrefix(name, "pinned_") ||
+		strings.HasPrefix(name, "dream_") || strings.HasPrefix(name, "session_")
+}
+
 // MayMessageBot reports whether this bot has a declared edge to another.
 func (p *BotProfile) MayMessageBot(target string) bool {
 	if p == nil {
@@ -69,12 +78,12 @@ func (p *BotProfile) FilterTools(all []Tool) []Tool {
 		}
 		out = kept
 	}
-	if len(p.Denied) == 0 {
+	if len(p.Denied) == 0 && !p.IsSpecialist() {
 		return out
 	}
 	kept := make([]Tool, 0, len(out))
 	for _, t := range out {
-		if !slices.Contains(p.Denied, t.Name) {
+		if !slices.Contains(p.Denied, t.Name) && !(p.IsSpecialist() && specialistMemoryTool(t.Name)) {
 			kept = append(kept, t)
 		}
 	}

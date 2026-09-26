@@ -81,6 +81,9 @@ func (s *BotService) Get(_ context.Context, id string) (*lobslawv1.BotRecord, er
 	if err := proto.Unmarshal(raw, &rec); err != nil {
 		return nil, fmt.Errorf("bots: unmarshal %q: %w", id, err)
 	}
+	if rec.GetDeleted() {
+		return nil, fmt.Errorf("%w: %q is retired", ErrBotNotFound, id)
+	}
 	return &rec, nil
 }
 
@@ -95,7 +98,9 @@ func (s *BotService) List(_ context.Context) ([]*lobslawv1.BotRecord, error) {
 		if err := proto.Unmarshal(value, &rec); err != nil {
 			return fmt.Errorf("bots: unmarshal %q: %w", key, err)
 		}
-		out = append(out, &rec)
+		if !rec.GetDeleted() {
+			out = append(out, &rec)
+		}
 		return nil
 	})
 	if err != nil {
@@ -167,7 +172,8 @@ func (s *BotService) Put(ctx context.Context, rec *lobslawv1.BotRecord, expected
 	return rec, nil
 }
 
-// Delete removes a bot. Records the bot owned are NOT cascaded.
+// Delete retires an identity permanently. Its retained records must never
+// become another human's records through reuse of the principal.
 func (s *BotService) Delete(ctx context.Context, id string) error {
 	if s.raft == nil {
 		return errors.New("bots: raft not wired")
@@ -176,10 +182,12 @@ func (s *BotService) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	rec.Deleted = true
+	rec.Enabled = false
+	revision := rec.GetRevision()
 	data, err := proto.Marshal(&lobslawv1.LogEntry{
-		Op:      lobslawv1.LogOp_LOG_OP_DELETE,
-		Id:      rec.GetId(),
-		Payload: &lobslawv1.LogEntry_Bot{Bot: &lobslawv1.BotRecord{Id: rec.GetId()}},
+		Op: lobslawv1.LogOp_LOG_OP_CLAIM, Id: rec.GetId(), ExpectedRevision: &revision,
+		Payload: &lobslawv1.LogEntry_Bot{Bot: rec},
 	})
 	if err != nil {
 		return err

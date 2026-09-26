@@ -127,8 +127,8 @@ func TestEnsureOwnersTeamCreatesOnceAndReuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first != defaultGroupID {
-		t.Fatalf("team id = %q, want %q", first, defaultGroupID)
+	if first == "" {
+		t.Fatal("team id is empty")
 	}
 	if len(groups.recs) != 1 || groups.recs[0].GetOwner() != "user:chief" || !groups.recs[0].GetIsDefault() {
 		t.Fatalf("created team is not owned by the caller: %+v", groups.recs)

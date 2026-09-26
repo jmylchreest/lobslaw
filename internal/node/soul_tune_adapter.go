@@ -43,10 +43,14 @@ func (s *raftSoulTuneStore) GetFor(ctx context.Context, botID string) (*soul.Tun
 }
 
 func (s *raftSoulTuneStore) Put(ctx context.Context, state *soul.TuneState) error {
+	return s.PutFor(ctx, memory.ChiefBotID, state)
+}
+
+func (s *raftSoulTuneStore) PutFor(ctx context.Context, botID string, state *soul.TuneState) error {
 	if state == nil {
 		return errors.New("soul tune: state nil")
 	}
-	rec, err := s.svc.Put(ctx, tuneStateToProto(state), state.Revision)
+	rec, err := s.svc.PutFor(ctx, botID, tuneStateToProto(state), state.Revision)
 	if err == nil {
 		state.Revision = rec.Revision
 	}
@@ -54,7 +58,11 @@ func (s *raftSoulTuneStore) Put(ctx context.Context, state *soul.TuneState) erro
 }
 
 func (s *raftSoulTuneStore) Rollback(ctx context.Context, steps int) (*soul.TuneState, error) {
-	picked, err := s.svc.Rollback(ctx, steps)
+	return s.RollbackFor(ctx, memory.ChiefBotID, steps)
+}
+
+func (s *raftSoulTuneStore) RollbackFor(ctx context.Context, botID string, steps int) (*soul.TuneState, error) {
+	picked, err := s.svc.RollbackFor(ctx, botID, steps)
 	if err != nil {
 		return nil, err
 	}

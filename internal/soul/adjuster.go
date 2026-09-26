@@ -385,12 +385,15 @@ func (a *Adjuster) Snapshot(ctx context.Context) (Soul, error) {
 // baseline, which is the right default: the operator's SOUL.md is the
 // house style every bot should share.
 //
-// Falls back to Snapshot when the store has no per-bot path, so a
-// deployment whose store predates bots keeps working unchanged.
+// A store without per-bot support may serve only the chief. Falling back
+// for a specialist would leak chief fragments into the specialist prompt.
 func (a *Adjuster) SnapshotFor(ctx context.Context, botID string) (Soul, error) {
-	botStore, ok := a.store.(BotTuneStore)
-	if !ok || botID == "" {
+	if botID == "" || botID == "chief" {
 		return a.Snapshot(ctx)
+	}
+	botStore, ok := a.store.(BotTuneStore)
+	if !ok {
+		return Soul{}, errors.New("soul: per-bot snapshot is unavailable")
 	}
 	tune, err := botStore.GetFor(ctx, botID)
 	if err != nil {

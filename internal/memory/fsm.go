@@ -283,6 +283,12 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	if entry.Id == "" {
 		return fmt.Errorf("PUT %s: empty id", bucket)
 	}
+	if err := f.checkBotWrite(bucket, entry.Id, payload); err != nil {
+		return err
+	}
+	if err := f.checkInboxCapacity(entry); err != nil {
+		return err
+	}
 	// Derived state is computed here rather than at each producer, so a
 	// new write path can't forget it. Deterministic: same embedding, same
 	// float ops in the same order, same result on every replica.
@@ -452,6 +458,19 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 	if entry.Id == "" {
 		return fmt.Errorf("DELETE %s: empty id", bucket)
 	}
+	if bucket == BucketBotInbox && entry.ExpectedRevision != nil {
+		raw, err := f.store.Get(bucket, entry.Id)
+		if err != nil {
+			return ErrClaimConflict
+		}
+		var item lobslawv1.BotInboxItem
+		if err := proto.Unmarshal(raw, &item); err != nil {
+			return err
+		}
+		if item.GetRevision() != entry.GetExpectedRevision() || !isTerminalInbox(item.GetStatus()) {
+			return ErrClaimConflict
+		}
+	}
 	// Deleting a session must also drop its transcript, else the
 	// message records are orphaned in their bucket forever — nothing
 	// else knows the key range. The prefix scan reads only committed
@@ -618,6 +637,12 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 		}
 	}
 
+	if err := f.checkBotWrite(bucket, entry.Id, newPayload); err != nil {
+		return err
+	}
+	if err := f.checkInboxCapacity(entry); err != nil {
+		return err
+	}
 	// The claimer's payload is written wholesale, which is only safe
 	// because the revision check above proved it was built from the
 	// current record.
