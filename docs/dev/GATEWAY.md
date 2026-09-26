@@ -126,6 +126,59 @@ invokes its shared `TaskApprovalAPI`, so the worker retains responsibility for
 scheduling ready tasks. Legacy `ConsoleForward` clients are no longer supported;
 upgrade the web node and its console backend together.
 
+Learned-content review is a separate typed console operation set:
+`QueryConsole.learned_reviews`, `QueryConsole.learned_review` and
+`MutateConsole.decide_learned_review`. Local REST and remote console backends
+both call `node.learnedReviews`, the same human-review service as Telegram.
+`GET /v1/learned-reviews`, `GET /v1/learned-reviews/{id}` and
+`POST /v1/learned-reviews/{id}/decide` require authentication; cookie decisions
+also require the normal Origin check. The service checks `command:exec learned`
+policy and explicit authorship/ownership on every call. A human may review their
+own records and proposals authored by their own live bots; an operator role does
+not grant cross-owner review.
+
+The inspection response includes full current and pending content, reference
+files, rationale, source turns, revision and digest. Decisions carry only the
+inspected revision/digest and explicit approve/reject choice; identity never
+comes from the body. This API uses generated protobuf JSON names and decimal
+string revisions like task approvals. Digest/revision conflicts return 409 and
+require fresh inspection. The response preserves the review service's actual
+activation result, including pending materialisation and activation failures.
+Approving a task is not approval to activate a learned skill.
+
+The console's Learned proposals link polls this policy-filtered list and displays
+the awaiting-review count in both team and single-assistant layouts. It remains
+reachable if the review service is unavailable. Configured outbound notices also
+name the console review page; compute-only console backends receive the notice
+service as well as the learned-review service.
+
+```mermaid
+sequenceDiagram
+  participant Human as Human owner
+  participant Web as Console HTTP
+  participant Peer as Typed ConsoleService
+  participant Review as node.learnedReviews
+  participant Store as SelfTaughtStore / Raft
+  participant Skills as Materialiser / registry
+  Human->>Web: List and inspect learned proposal (authenticated)
+  Web->>Peer: learned_reviews / learned_review (verified identity)
+  Peer->>Review: List / Get with human claims
+  Review->>Review: Check learned policy and author or bot ownership
+  Review-->>Human: Complete content, files, revision and digest
+  Human->>Web: Explicit approve/reject of inspected content
+  Web->>Peer: decide_learned_review (revision, digest, choice)
+  Peer->>Review: Decide with verified human claims
+  Review->>Store: DecideReviewed (revision + digest + author CAS)
+  alt conflict
+    Store-->>Human: 409; reload and inspect again
+  else approved skill
+    Review->>Skills: Materialise and check installed reviewed content
+    Review-->>Human: Actual active / pending / failed activation receipt
+  else rejected
+    Review-->>Human: Archived proposal or unchanged approved version
+  end
+```
+
 `AgentService` remains the remote `turn.Runner` transport. Both RPC services reject operator certificates and unidentified callers: only node peers may assert a user. Remote resume transfers the exact action/resource approval once, consuming the local context grant and reconstructing its one-shot counterpart on the compute node.
 
 ### Web console

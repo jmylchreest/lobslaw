@@ -79,6 +79,27 @@ paused or failed; a returned result alone does not prove the requested external
 effect succeeded. Older inbox records show tool attempts because they lack
 per-call execution evidence.
 
+### Reviewing learned proposals
+
+Open **Learned proposals** (`/learned`) in either console layout. Its notification
+count shows proposals and amendments awaiting your review, including proposals
+authored by bots you own. Your account also needs policy permission for
+`command:exec` on `learned`, as it does for Telegram's `/learned` command. Being
+an operator does not give access to somebody else's proposals.
+
+Choose **Inspect** to see all instructions, current and proposed reference files,
+the amendment rationale and source turn. After inspecting the content, confirm
+the checkbox and choose **Approve reviewed proposal** or **Reject reviewed
+proposal**. An amendment rejection leaves the existing approved version intact.
+The receipt reports whether activation actually succeeded, is pending on a
+compute node, or failed; recorded approval alone is not proof of activation.
+
+If the revision or content changed during inspection, the decision returns a
+conflict. Use **Reload proposal**, inspect the new content and confirm again.
+The console never automatically retries a decision or approves newer content
+using an older inspection. **Task approvals** remain separate: allowing a task
+to continue does not approve a learned skill for activation.
+
 ## Telegram
 
 lobslaw supports two transports for Telegram: **poll** (outbound-only long-polling, right for personal deployments) and **webhook** (inbound HTTPS, right for cloud deployments with a stable public URL).

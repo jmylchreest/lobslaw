@@ -2704,6 +2704,8 @@ message QueryConsoleRequest {
     string plan_window = 16;
     ListTaskApprovalRequest task_approvals = 17;
     GetTaskApprovalRequest task_approval = 18;
+    ConsoleEmpty learned_reviews = 19;
+    ConsoleTarget learned_review = 20;
   }
 }
 message ConsoleCapability {
@@ -2875,6 +2877,8 @@ message QueryConsoleResponse {
     ConsolePlan plan = 14;
     ListTaskApprovalResponse task_approvals = 15;
     GetTaskApprovalResponse task_approval = 16;
+    ConsoleLearnedReviews learned_reviews = 17;
+    ConsoleLearnedReview learned_review = 18;
   }
 }
 message ConsoleStrings {
@@ -2926,6 +2930,7 @@ message MutateConsoleRequest {
     DecideTaskApprovalRequest decide_task_approval = 12;
     CancelTaskApprovalRequest cancel_task_approval = 13;
     RecoverTaskApprovalRequest recover_task_approval = 14;
+    ConsoleLearnedDecision decide_learned_review = 15;
   }
 }
 message ConsoleDecision {
@@ -2943,6 +2948,7 @@ message MutateConsoleResponse {
     DecideTaskApprovalResponse task_decision = 6;
     CancelTaskApprovalResponse task_cancel = 7;
     RecoverTaskApprovalResponse task_recovery = 8;
+    ConsoleLearnedDecisionResult learned_decision = 9;
   }
 }
 message ChatConsoleRequest {
@@ -2952,6 +2958,41 @@ message ChatConsoleRequest {
   string session_id = 4;
   string turn_id = 5;
   string model = 6;
+}
+
+// Human review is separate from task execution approval. The digest pins all
+// inspected instructions and reference files, including pending amendments.
+message ConsoleLearnedChange {
+  string description = 1;
+  string body = 2;
+  map<string, string> files = 3;
+  string rationale = 4;
+  string turn_id = 5;
+}
+message ConsoleLearnedReview {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string body = 4;
+  map<string, string> files = 5;
+  uint64 revision = 6;
+  string digest = 7;
+  string turn_id = 8;
+  bool active = 9;
+  ConsoleLearnedChange pending = 10;
+  string author = 11;
+}
+message ConsoleLearnedReviews {
+  repeated ConsoleLearnedReview reviews = 1;
+}
+message ConsoleLearnedDecision {
+  string id = 1;
+  uint64 revision = 2;
+  string digest = 3;
+  bool approve = 4;
+}
+message ConsoleLearnedDecisionResult {
+  string message = 1;
 }
 message ConsoleToolCall {
   string call_id = 1;

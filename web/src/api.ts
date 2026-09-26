@@ -86,6 +86,15 @@ export interface SessionInfo {
   user_id: string;
 }
 
+export interface LearnedChange {
+  description?: string; body?: string; files?: Record<string, string>;
+  rationale?: string; turnId?: string;
+}
+export interface LearnedReview extends LearnedChange {
+  id: string; name: string; revision: string; digest: string; author?: string;
+  active?: boolean; pending?: LearnedChange;
+}
+
 // The shared TaskApprovalService uses protobuf JSON names and string revisions.
 // Keep revisions as strings: converting them to JS numbers loses CAS precision.
 export interface TaskApproval {
@@ -241,6 +250,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  learnedReviews: () => request<{ reviews?: LearnedReview[] }>("/v1/learned-reviews").then((r) => r.reviews ?? []),
+  learnedReview: (id: string) => request<LearnedReview>(`/v1/learned-reviews/${encodeURIComponent(id)}`),
+  decideLearnedReview: (review: LearnedReview, approve: boolean) =>
+    request<{ message: string }>(`/v1/learned-reviews/${encodeURIComponent(review.id)}/decide`, {
+      method: "POST", body: JSON.stringify({ revision: review.revision, digest: review.digest, approve }),
+    }),
   taskApprovals: (after = "") => request<{ records?: TaskApproval[]; nextAfterId?: string }>(`/v1/task-approvals?after=${encodeURIComponent(after)}`),
   decideTask: (task: TaskApproval, choice: TaskChoice, extra_budget?: ExtraTaskBudget) =>
     request<{ record: TaskApproval }>(`/v1/task-approvals/${encodeURIComponent(task.id)}/decide`, {

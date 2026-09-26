@@ -98,6 +98,9 @@ func (s *Server) QueryConsole(ctx context.Context, in *pb.QueryConsoleRequest) (
 	if in.GetTaskApprovals() != nil || in.GetTaskApproval() != nil {
 		return s.queryConsoleTask(ctx, in)
 	}
+	if in.GetLearnedReviews() != nil || in.GetLearnedReview() != nil {
+		return s.queryConsoleLearned(ctx, in)
+	}
 	out := new(pb.QueryConsoleResponse)
 	err = s.consoleOperation(ctx, in, out, consoleQueries, "query")
 	return out, err
@@ -110,6 +113,9 @@ func (s *Server) MutateConsole(ctx context.Context, in *pb.MutateConsoleRequest)
 	}
 	if in.GetDecideTaskApproval() != nil || in.GetCancelTaskApproval() != nil || in.GetRecoverTaskApproval() != nil {
 		return s.mutateConsoleTask(ctx, in)
+	}
+	if in.GetDecideLearnedReview() != nil {
+		return s.decideConsoleLearned(ctx, in)
 	}
 	out := new(pb.MutateConsoleResponse)
 	err = s.consoleOperation(ctx, in, out, consoleMutations, "operation")
