@@ -58,6 +58,21 @@ func TestPolicyApprovalsGoesLiveByDefault(t *testing.T) {
 	}
 }
 
+// Without --offline, `rules` must try to reach a node too, and it
+// carries no approval-provenance filter of its own: filtering the
+// complete set is exactly the thing this subcommand exists to skip.
+func TestPolicyRulesGoesLiveByDefault(t *testing.T) {
+	noAmbientCluster(t)
+
+	err := policyRulesLive(nil)
+	if err == nil {
+		t.Fatal("rules with no connection details succeeded")
+	}
+	if strings.Contains(err.Error(), "state.db") {
+		t.Errorf("the live path went looking for a local store: %v", err)
+	}
+}
+
 // --- what counts as an approval-minted rule ----------------------------
 
 func mintedRule(id string) *lobslawv1.PolicyRule {
@@ -129,6 +144,52 @@ func TestTheListingShowsWhatTheGrantAllows(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("listing is missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// --- the complete rule listing ------------------------------------------
+
+func TestAnEmptyRulesListNamesItsSource(t *testing.T) {
+	var buf bytes.Buffer
+	if err := renderPolicyRules(&buf, nil, "prod.example:9090", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "prod.example:9090") {
+		t.Errorf("an empty list does not say where it looked:\n%s", buf.String())
+	}
+}
+
+// Every column the plan promises, including priority and created_by,
+// which approvals never shows because it has already filtered to one
+// provenance.
+func TestTheRulesListingShowsEveryColumn(t *testing.T) {
+	var buf bytes.Buffer
+	rule := &lobslawv1.PolicyRule{
+		Id: "operator-1", Subject: "role:admin", Action: "tool:exec",
+		Resource: "*", Effect: "deny", Priority: 42, CreatedBy: "lobslaw-builtin-tools",
+	}
+	if err := renderPolicyRules(&buf, []*lobslawv1.PolicyRule{rule}, "prod:9090", false); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{"operator-1", "role:admin", "tool:exec", "*", "deny", "42", "lobslaw-builtin-tools"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("listing is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// An operator-authored rule's created_by is empty. The column must
+// still be visibly present, not skipped, or a blank cell reads as a
+// rendering bug rather than as "nobody minted this".
+func TestAnOperatorRuleRendersWithNoCreatedBy(t *testing.T) {
+	var buf bytes.Buffer
+	rule := &lobslawv1.PolicyRule{Id: "operator-1", Subject: "*", Action: "*", Resource: "*", Effect: "allow"}
+	if err := renderPolicyRules(&buf, []*lobslawv1.PolicyRule{rule}, "prod:9090", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "operator-1") {
+		t.Errorf("an operator rule with no created_by was dropped entirely:\n%s", buf.String())
 	}
 }
 

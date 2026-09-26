@@ -32,6 +32,9 @@ const policyUsage = `lobslaw policy — see and undo the grants an "always" appr
 subcommands:
   approvals          list the rules minted by "always" approvals
   revoke-approvals   delete them, all or by id
+  rules              list every rule this node enforces (not just
+                     approval-minted ones), filtered by --subject
+                     (exact match) or --created-by (prefix match)
   classify           show what the shell classifier makes of a command,
                      and what each approval mode would do with it
 
@@ -43,7 +46,12 @@ start.
 
 revoke-approvals is DRY RUN unless --apply is given, and refuses to
 touch any rule an operator wrote — only approval-minted ones. That
-refusal is enforced by the NODE, not by this command.`
+refusal is enforced by the NODE, not by this command.
+
+rules --offline reads state.db directly, so it misses the engine's
+in-memory defaults (config-derived fallback rules that are never
+written to the store). The live form includes them, because SyncRules
+calls the same loadRules() the engine evaluates against.`
 
 // policyForms pairs each subcommand's live and offline implementation.
 //
@@ -54,6 +62,7 @@ refusal is enforced by the NODE, not by this command.`
 var policyForms = map[string]struct{ live, offline func([]string) error }{
 	"approvals":        {live: policyApprovalsLive, offline: policyApprovals},
 	"revoke-approvals": {live: policyRevokeLive, offline: policyRevokeApprovals},
+	"rules":            {live: policyRulesLive, offline: policyRules},
 }
 
 // policyRoute returns the implementation for a subcommand, or nil if
@@ -137,6 +146,42 @@ func policyApprovalsLive(args []string) error {
 		return err
 	}
 	return renderApprovals(os.Stdout, approvalRulesFrom(res.GetRules()), node.addr, *asJSON)
+}
+
+// policyRulesLive lists every rule this node enforces, unfiltered by
+// provenance.
+//
+// approvalRulesFrom exists because the operator asked for one
+// provenance; this asks for none. Reusing the same SyncRules call
+// means no new RPC, and no new authorization question: whatever
+// credential already lets an operator run `policy approvals` lets
+// them run this.
+func policyRulesLive(args []string) error {
+	fs := newFlagSet("policy rules", flag.ExitOnError)
+	var node liveNode
+	node.bind(fs)
+	subject := fs.String("subject", "", "keep only rules whose subject matches exactly")
+	createdBy := fs.String("created-by", "", "keep only rules whose created_by starts with this")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	client, closeConn, err := policyClient(&node)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	ctx, cancel := node.ctx()
+	defer cancel()
+	res, err := client.SyncRules(ctx, &lobslawv1.SyncRulesRequest{})
+	if err != nil {
+		return err
+	}
+	rules := filterPolicyRules(res.GetRules(), *subject, *createdBy)
+	sortPolicyRules(rules)
+	return renderPolicyRules(os.Stdout, rules, node.addr, *asJSON)
 }
 
 // policyRevokeLive revokes on a running node.
@@ -254,6 +299,87 @@ func renderApprovals(w io.Writer, rules []*lobslawv1.PolicyRule, source string, 
 	return nil
 }
 
+// filterPolicyRules keeps rules matching an exact --subject and/or a
+// --created-by prefix. Empty filters match everything, so a filter
+// argument only ever narrows the set: it never widens it.
+func filterPolicyRules(rules []*lobslawv1.PolicyRule, subject, createdByPrefix string) []*lobslawv1.PolicyRule {
+	if subject == "" && createdByPrefix == "" {
+		return rules
+	}
+	out := make([]*lobslawv1.PolicyRule, 0, len(rules))
+	for _, r := range rules {
+		if subject != "" && r.GetSubject() != subject {
+			continue
+		}
+		if createdByPrefix != "" && !strings.HasPrefix(r.GetCreatedBy(), createdByPrefix) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// sortPolicyRules orders rules the way an operator reads them: highest
+// priority first, id-tiebroken so the same set prints in the same
+// order between runs. It does not reproduce the engine's evaluation
+// order, since the engine appends in-memory defaults after this same
+// sort (see Engine.loadRules), so a default's priority does not
+// compete with a stored rule's. This is a listing, not the
+// enforcement path.
+func sortPolicyRules(rules []*lobslawv1.PolicyRule) {
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].GetPriority() != rules[j].GetPriority() {
+			return rules[i].GetPriority() > rules[j].GetPriority()
+		}
+		return rules[i].GetId() < rules[j].GetId()
+	})
+}
+
+// renderPolicyRules prints the complete rule set, in the same style as
+// renderApprovals plus the two columns approvals never needs: priority,
+// which governs evaluation order among stored rules (see
+// sortPolicyRules for the one exception, in-memory defaults), and
+// created_by, because an operator-authored rule (empty) and an
+// approval-minted one are the two things this listing exists to tell
+// apart from anything else that could have written a rule.
+func renderPolicyRules(w io.Writer, rules []*lobslawv1.PolicyRule, source string, asJSON bool) error {
+	if asJSON {
+		out := make([]map[string]any, 0, len(rules))
+		for _, r := range rules {
+			out = append(out, policyRuleJSON(r))
+		}
+		return emitJSON(map[string]any{"source": source, "rules": out})
+	}
+
+	_, _ = fmt.Fprintf(w, "%s\n", source)
+	if len(rules) == 0 {
+		_, _ = fmt.Fprintln(w, "no rules.")
+		return nil
+	}
+	for _, r := range rules {
+		createdBy := r.GetCreatedBy()
+		if createdBy == "" {
+			createdBy = "-"
+		}
+		_, _ = fmt.Fprintf(w, "  %-30s %-18s %-20s -> %-20s %-6s pri=%-4d %s\n",
+			r.GetId(), r.GetSubject(), r.GetAction(), r.GetResource(), r.GetEffect(), r.GetPriority(), createdBy)
+	}
+	_, _ = fmt.Fprintf(w, "\n%d rule(s).\n", len(rules))
+	return nil
+}
+
+func policyRuleJSON(r *lobslawv1.PolicyRule) map[string]any {
+	return map[string]any{
+		"id":         r.GetId(),
+		"subject":    r.GetSubject(),
+		"action":     r.GetAction(),
+		"resource":   r.GetResource(),
+		"effect":     r.GetEffect(),
+		"priority":   r.GetPriority(),
+		"created_by": r.GetCreatedBy(),
+	}
+}
+
 // renderRevocation reports what happened, keeping protected rules and
 // unknown ids apart: one is a rule somebody wrote deliberately, the
 // other is a typo, and "not revoked" without saying which leaves the
@@ -324,6 +450,38 @@ func policyApprovals(args []string) error {
 	}
 	fmt.Printf("\n%d rule(s). Revoke with: lobslaw policy revoke-approvals [<id>...] --apply\n", len(rules))
 	return nil
+}
+
+// policyRules lists every rule in state.db, unfiltered by provenance.
+//
+// Cannot include the engine's in-memory defaults: they are
+// config-derived and never written to the store, so there is nothing
+// here for this form to read. Documented in policyUsage rather than
+// re-explained on every run.
+func policyRules(args []string) error {
+	fs := newFlagSet("policy rules", flag.ExitOnError)
+	var store offlineStore
+	store.bind(fs)
+	subject := fs.String("subject", "", "keep only rules whose subject matches exactly")
+	createdBy := fs.String("created-by", "", "keep only rules whose created_by starts with this")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	s, path, err := store.open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	rules, err := policyReadAllRules(s)
+	if err != nil {
+		return err
+	}
+	rules = filterPolicyRules(rules, *subject, *createdBy)
+	sortPolicyRules(rules)
+	return renderPolicyRules(os.Stdout, rules, path, *asJSON)
 }
 
 func policyRevokeApprovals(args []string) error {
@@ -427,6 +585,24 @@ func approvalMintedRules(s *memory.Store) ([]*lobslawv1.PolicyRule, error) {
 		return nil, fmt.Errorf("read policy rules: %w", err)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Id < out[j].Id })
+	return out, nil
+}
+
+// policyReadAllRules reads every rule in the bucket, no provenance
+// filter: the offline counterpart to SyncRules.
+func policyReadAllRules(s *memory.Store) ([]*lobslawv1.PolicyRule, error) {
+	var out []*lobslawv1.PolicyRule
+	err := s.ForEach(memory.BucketPolicyRules, func(_ string, raw []byte) error {
+		var rule lobslawv1.PolicyRule
+		if err := proto.Unmarshal(raw, &rule); err != nil {
+			return nil //nolint:nilerr // one unreadable rule should not hide the rest
+		}
+		out = append(out, &rule)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read policy rules: %w", err)
+	}
 	return out, nil
 }
 
