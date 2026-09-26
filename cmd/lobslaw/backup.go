@@ -25,7 +25,7 @@ func dispatchBackup(args []string) bool {
 	if i < 0 {
 		return false
 	}
-	if err := runBackup(args[i+1:]); err != nil {
+	if err := runBackup(args[i+1:]); err != nil && !errors.Is(err, flag.ErrHelp) {
 		diagnosticf("backup: %v\n", err)
 		os.Exit(1)
 	}
@@ -114,13 +114,30 @@ func backupCreate(args []string) error {
 	return json.NewEncoder(os.Stdout).Encode(generation)
 }
 
+const backupRestoreHelp = `Usage: lobslaw backup restore SNAPSHOT_ID --repository PATH --identity FILE [flags]
+
+Restore uses the destination's current certificates, which may differ from the
+source. Select them with --context, or --addr, --ca-cert (destination cluster CA),
+--node-cert and --node-key (destination operator credential). --server-name sets
+the expected server certificate hostname when using a tunnel.
+
+--identity decrypts the backup using its original age key; it is not an mTLS key.
+Certificates, credentials and policy grants are not restored. Bootstrap destination
+trust and authorize archive:import before restoring into an empty knowledge store.
+Start the destination with [memory] restore_mode = true.
+Map every nonempty data owner with --owner old=new, including unchanged identities.
+Preview first; repeat with --apply and identical owner mappings to write or resume.
+
+Flags:
+`
+
 func backupRestore(args []string) error {
 	fs := newFlagSet("backup restore", flag.ContinueOnError)
+	setFlagUsage(fs, os.Stderr, backupRestoreHelp)
 	var node liveNode
-	node.bind(fs)
-	node.timeout = 30 * time.Minute
+	node.bindWithTimeout(fs, defaultArchiveImportTimeout)
 	var opts memory.ArchiveImportOptions
-	bindArchiveImportOptions(fs, &opts)
+	bindArchiveRestoreOptions(fs, &opts)
 	path := fs.String("repository", "", "local backup repository directory")
 	identityPath := fs.String("identity", "", "age identity file")
 	apply := fs.Bool("apply", false, "restore into an empty knowledge store through Raft")

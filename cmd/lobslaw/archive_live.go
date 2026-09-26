@@ -18,6 +18,8 @@ import (
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
+const defaultArchiveImportTimeout = 30 * time.Minute
+
 func readArchiveFile(path, identityPath string) (archive.Snapshot, error) {
 	var identities []age.Identity
 	if identityPath != "" {
@@ -40,7 +42,8 @@ func readArchiveFile(path, identityPath string) (archive.Snapshot, error) {
 }
 
 func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOptions) {
-	fs.StringVar(&opts.SourceID, "source-id", "", "stable source identity (required for alongside on older archives)")
+	bindArchiveRestoreOptions(fs, opts)
+	fs.BoolVar(&opts.KeepExisting, "keep-existing", false, "explicitly skip conflicting destination records")
 	fs.Func("skip", "keep the destination and skip source kind/id (repeatable; sessions include their messages)", func(value string) error {
 		kind, id, ok := strings.Cut(value, "/")
 		if !ok || kind == "" || id == "" {
@@ -73,9 +76,13 @@ func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOption
 		opts.ReplaceOriginal = append(opts.ReplaceOriginal, memory.ArchiveRecordRef{Kind: kind, ID: id})
 		return nil
 	})
+}
+
+// bindArchiveRestoreOptions exposes only options supported by an empty-store restore.
+func bindArchiveRestoreOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOptions) {
+	fs.StringVar(&opts.SourceID, "source-id", "", "stable source identity (must match the archive when present)")
 	opts.Owners = make(map[string]string)
 	fs.StringVar(&opts.SourceTimezone, "source-timezone", "", "source cron timezone, e.g. Europe/London")
-	fs.BoolVar(&opts.KeepExisting, "keep-existing", false, "explicitly skip conflicting destination records")
 	fs.Func("owner", "explicit source=destination identity mapping (repeatable, including unchanged identities)", func(value string) error {
 		from, to, ok := strings.Cut(value, "=")
 		if !ok || strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" {
@@ -92,8 +99,7 @@ func bindArchiveImportOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOption
 func archiveImport(args []string, requireEmpty bool) error {
 	fs := newFlagSet("archive import", flag.ContinueOnError)
 	var node liveNode
-	node.bind(fs)
-	node.timeout = 30 * time.Minute
+	node.bindWithTimeout(fs, defaultArchiveImportTimeout)
 	var opts memory.ArchiveImportOptions
 	bindArchiveImportOptions(fs, &opts)
 	identity := fs.String("identity", "", "age identity file")
