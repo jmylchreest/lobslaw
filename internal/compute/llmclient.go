@@ -17,9 +17,9 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
-// DefaultLLMTimeout is the HTTP deadline the client applies to each
-// Chat() round-trip when the caller's context doesn't already carry
-// a shorter one. Generous — LLM calls with long outputs can legitimately
+// DefaultLLMTimeout is the deadline the client applies to each
+// Chat() round-trip when the caller's context has no deadline.
+// Generous — LLM calls with long outputs can legitimately
 // take 60+ seconds at the provider side.
 const DefaultLLMTimeout = 120 * time.Second
 
@@ -56,6 +56,7 @@ type LLMClient struct {
 	model       string // default model when ChatRequest.Model is empty
 	serverTools []ServerTool
 	httpClient  *http.Client
+	timeout     time.Duration
 	log         *slog.Logger
 }
 
@@ -78,12 +79,13 @@ type LLMClientConfig struct {
 	// Typically comes from ProviderConfig.Model.
 	Model string
 
-	// Timeout overrides DefaultLLMTimeout. Zero → default.
+	// Timeout overrides DefaultLLMTimeout for calls without a context
+	// deadline. Zero → default. Explicit caller deadlines take precedence.
 	Timeout time.Duration
 
 	// HTTPClient lets callers inject a pre-configured client (for
 	// proxies, keep-alive tuning, test doubles). Zero → a new client
-	// with Timeout applied.
+	// using context deadlines. An injected client's own Timeout is retained.
 	HTTPClient *http.Client
 
 	// ServerTools is the static set of provider-side tools
@@ -151,11 +153,7 @@ func NewLLMClient(cfg LLMClientConfig) (*LLMClient, error) {
 		// used today, available for future fine-grained restriction.
 		base := egress.For("llm").HTTPClient()
 		wrapped := *base
-		timeout := cfg.Timeout
-		if timeout <= 0 {
-			timeout = DefaultLLMTimeout
-		}
-		wrapped.Timeout = timeout
+		wrapped.Timeout = 0
 		hc = &wrapped
 	}
 	logger := cfg.Logger
@@ -168,6 +166,7 @@ func NewLLMClient(cfg LLMClientConfig) (*LLMClient, error) {
 		model:       cfg.Model,
 		serverTools: cfg.ServerTools,
 		httpClient:  hc,
+		timeout:     orDefault(cfg.Timeout, DefaultLLMTimeout),
 		log:         logger,
 	}, nil
 }
@@ -188,6 +187,9 @@ func NewLLMClientFromProvider(p config.ProviderConfig, apiKey string) (*LLMClien
 // JSON, POSTs to the endpoint, unmarshals the response, surfaces
 // errors via the ErrLLM* sentinels where callers may want to branch.
 func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	ctx, cancel := WithDefaultLLMTimeout(ctx, c.timeout)
+	defer cancel()
+
 	model := req.Model
 	if model == "" {
 		model = c.model

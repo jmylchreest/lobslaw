@@ -631,7 +631,7 @@ func (n *Node) attachDreamSummarizer() {
 			break
 		}
 	}
-	s := compute.NewDreamSummarizer(n.roleMap.For(compute.RoleSummariser), model, n.log, n.embedder)
+	s := compute.NewDreamSummarizer(n.roleMap.ForWithTimeout(compute.RoleSummariser), model, n.log, n.embedder)
 	if s == nil {
 		return
 	}
@@ -642,7 +642,7 @@ func (n *Node) attachDreamSummarizer() {
 	// own would be a config field nobody sets, which is how the
 	// reranker came to be advertised and never called; when the two
 	// jobs want different models, that is the moment to split them.
-	if a := compute.NewDreamAdjudicator(n.roleMap.For(compute.RoleSummariser), model, n.log); a != nil {
+	if a := compute.NewDreamAdjudicator(n.roleMap.ForWithTimeout(compute.RoleSummariser), model, n.log); a != nil {
 		runner.SetAdjudicator(a, n.embedder)
 		n.log.Info("dream: near-duplicate adjudication enabled", "provider", label, "model", model)
 	}
