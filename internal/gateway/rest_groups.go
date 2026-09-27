@@ -109,14 +109,7 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 	// One pass over the bots to count membership, rather than a query
 	// per group: the switcher needs every count at once and the
 	// registry is small.
-	counts := map[string]int{}
-	if s.cfg.Bots != nil {
-		if bots, berr := s.cfg.Bots.List(r.Context()); berr == nil {
-			for _, b := range bots {
-				counts[groupOfBot(b)]++
-			}
-		}
-	}
+	counts := s.groupBotCounts(r.Context())
 	out := make([]groupJSON, 0, len(groups))
 	for _, g := range groups {
 		if groupMayModify(g, s.principalOf(r)) {
@@ -124,6 +117,18 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"groups": out})
+}
+
+func (s *Server) groupBotCounts(ctx context.Context) map[string]int {
+	counts := map[string]int{}
+	if s.cfg.Bots != nil {
+		if bots, berr := s.cfg.Bots.List(ctx); berr == nil {
+			for _, b := range bots {
+				counts[groupOfBot(b)]++
+			}
+		}
+	}
+	return counts
 }
 
 func (s *Server) getGroup(w http.ResponseWriter, r *http.Request, id string) {
@@ -136,7 +141,7 @@ func (s *Server) getGroup(w http.ResponseWriter, r *http.Request, id string) {
 		s.jsonErr(w, http.StatusForbidden, "that team belongs to somebody else")
 		return
 	}
-	respondJSON(w, http.StatusOK, groupToJSON(rec, 0, s.principalOf(r)))
+	respondJSON(w, http.StatusOK, groupToJSON(rec, s.groupBotCounts(r.Context())[rec.GetId()], s.principalOf(r)))
 }
 
 type groupBody struct {
@@ -208,7 +213,7 @@ func (s *Server) patchGroup(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	s.auditRegistry(r, "group:update", id, rec.GetName())
-	respondJSON(w, http.StatusOK, groupToJSON(rec, 0, s.principalOf(r)))
+	respondJSON(w, http.StatusOK, groupToJSON(rec, s.groupBotCounts(r.Context())[rec.GetId()], s.principalOf(r)))
 }
 
 func firstNonEmpty(a, b string) string {

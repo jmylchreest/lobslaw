@@ -800,6 +800,29 @@ can no longer be unblocked, found by the garbage collector's reachability
 analysis. Nothing registers it here — `pprof.Index` looks profiles up when the
 request arrives, so profiles a newer Go adds appear on their own.
 
+## `[compute-teams]`
+
+Off by default. Enable explicitly with `--compute-teams` or this section;
+`--all` does not enable it.
+
+```toml
+[compute-teams]
+enabled = true
+```
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `enabled` | `false` | Enable team coordinators, specialist delegation and durable bot inbox processing. Implies local `compute`. |
+
+Ordinary `compute` runs the single assistant without team tools, team seeding or
+inbox draining. Teams remain disabled during restore mode. Team ownership is
+explicit: an unowned team is inaccessible, and channel routing uses an explicit
+binding or the caller's own coordinator.
+
+This gate is independent of `[ui-web]`: enabling teams does not enable the browser
+console. For a web-only node, enable teams on its configured compute backend;
+the backend's gate controls availability of the remote team console.
+
 ## `[ui-web]`
 
 Off by default. `--all` does not enable it. Enabling it does not imply local compute.
