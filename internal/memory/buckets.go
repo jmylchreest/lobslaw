@@ -227,6 +227,7 @@ var allBuckets = []string{
 	BucketSessionLeases,
 	BucketPrompts,
 	BucketTaskApprovals,
+	bucketTaskHistory,
 	BucketConsolidations,
 	BucketDisputes,
 	BucketPinned,
