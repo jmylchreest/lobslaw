@@ -93,7 +93,17 @@ Identity is never taken from the JSON body. JWT `sub` is resolved through `ident
 
 Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (`lobslaw_login`). There is no self-signup: `POST /v1/session` requires the JWT subject to match an operator-declared `[[user]]`. Web login copies `[[user]].roles` onto the session and **does not** grant `role:operator` from the JWT. Cookie-authenticated unsafe methods also check `Origin` against the request host. `DELETE /v1/session` drops the cookie and cancels any in-flight REST streams bound to it. Login sessions are in-memory; a restart means presenting the JWT again.
 
-One-time codes are another enrollment credential. `POST /v1/session/code` requires a valid enrolled Bearer JWT and only mints for that same account. `console_code` can mint for an operator already authenticated through a channel. No HTTP login path trusts `RemoteAddr` as a user identity. Code redemption has a global bounded attempt window, so rotating source addresses or forwarded headers cannot multiply the guessing allowance. Minting replaces the user's previous code and removes expired codes.
+One-time codes are another enrollment credential. `POST /v1/session/code` requires a valid enrolled Bearer JWT and only mints for that same account. There is no agent-callable minting API or `console_code` tool: inherited operator roles are not human enrollment proof, and credentials must not enter model context. Turn identities are refused at the HTTP minting boundary; retired tool calls are excluded from model tool exposure and dispatch, including coordinator tasks and resumed turns. No HTTP login path trusts `RemoteAddr` as a user identity. Code redemption has a global bounded attempt window, so rotating source addresses or forwarded headers cannot multiply the guessing allowance. Minting replaces the user's previous code and removes expired codes.
+
+```mermaid
+flowchart LR
+    Human[Human CLI with enrolled JWT] --> Mint[POST /v1/session/code]
+    Mint --> Verify[Validate JWT and bind enrolled account]
+    Verify --> Code[Return one-time code to human]
+    Code --> Browser[Browser code redemption]
+    Browser --> Cookie[HttpOnly login cookie]
+    Agent[Agent or task with inherited roles] --> Deny[No credential tool or minting API]
+```
 
 Bot data and chat routes check the bot's explicit human owner; listing filters inaccessible records. Transcript reads authorize the stored session participant, or the owning bot for bot-channel sessions. Settings PATCH requires the editor's `revision` and returns 409 on a stale form. Bot chat holds the conversation gate across Load → Run → approval/resume → Append; heartbeat shutdown is joined before the handler returns.
 

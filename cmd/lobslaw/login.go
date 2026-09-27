@@ -29,7 +29,7 @@ func lobslawLogin(args []string) {
 	token := fs.String("token", os.Getenv("LOBSLAW_LOGIN_TOKEN"), "Bearer JWT for the enrolled user (or LOBSLAW_LOGIN_TOKEN)")
 	_ = fs.Parse(args)
 	if strings.TrimSpace(*token) == "" {
-		exitWith("login: --token or LOBSLAW_LOGIN_TOKEN is required; alternatively ask the assistant for console_code")
+		exitWith("login: --token or LOBSLAW_LOGIN_TOKEN containing an enrolled JWT is required")
 	}
 	if *cfgPath == "" {
 		exitWith("login: --config (or LOBSLAW_CONFIG) required")
