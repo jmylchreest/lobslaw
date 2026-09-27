@@ -83,6 +83,35 @@ sequenceDiagram
   FSM-->>Scan: Conflict; keep retried work
 ```
 
+### Activity timeline reads
+
+`GET /v1/activity` lists the caller's owned bots from the roster and calls
+`InboxService.Recent` for each. It does not discover recipients by scanning the
+inbox bucket. `Recent` seeks to the end of the existing `recipient:` key prefix
+and walks backwards, returning arrival IDs newest first regardless of priority.
+The execution queue's `List` ordering remains priority descending, then FIFO.
+
+The HTTP limit defaults to 100 (also for zero) and accepts at most 1,000;
+negative, malformed, overflowing and oversized limits return 400. The production
+read requires a positive limit no larger than `MaxInboxRecentItems` (1,000).
+Only those newest rows are decrypted and decoded. Each ciphertext is checked
+against `MaxInboxRecentRecordBytes` (64 KiB) before decryption, bounding input to
+at most 64 MiB per recipient. An oversized or corrupt row within the requested
+window fails the read explicitly; rows outside the window are never decoded.
+The gateway retains only the global newest K between batches of at most 2K.
+Local and remote consoles use this same backend read path.
+
+```mermaid
+flowchart LR
+  Request[Authenticated activity request] --> Roster[Bot roster]
+  Roster --> Owner[Select caller-owned bots]
+  Owner --> Recent[Reverse recipient prefix cursor]
+  Recent --> Bounds[Count and ciphertext byte checks]
+  Bounds --> Decode[Decrypt and decode newest window]
+  Decode --> Merge[Bounded global top-K merge]
+  Merge --> Response[Newest-first activity]
+```
+
 ## Specialist working memory
 
 The coordinator chooses relevant saved memories and passes them in the task

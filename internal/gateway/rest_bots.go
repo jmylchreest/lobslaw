@@ -28,11 +28,11 @@ type BotAPI interface {
 // InboxAPI is the same for the queues.
 type InboxAPI interface {
 	List(ctx context.Context, recipient string, f memory.InboxFilter) ([]*lobslawv1.BotInboxItem, error)
+	Recent(ctx context.Context, recipient string, limit int) ([]*lobslawv1.BotInboxItem, error)
 	Post(ctx context.Context, item *lobslawv1.BotInboxItem) (*lobslawv1.BotInboxItem, error)
 	Get(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
 	Cancel(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
 	Retry(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
-	Recipients(ctx context.Context) ([]string, error)
 }
 
 // botJSON is the wire shape.
@@ -576,7 +576,7 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 
 const (
 	defaultActivityLimit int = 100
-	maxActivityLimit     int = 1000
+	maxActivityLimit     int = memory.MaxInboxRecentItems
 )
 
 func activityLimit(raw string) (int, error) {
@@ -618,17 +618,23 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recipients, err := s.cfg.Inbox.Recipients(r.Context())
+	if s.cfg.Bots == nil {
+		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the bot registry")
+		return
+	}
+	// The roster bounds discovery by bot count, not by historical inbox rows.
+	bots, err := s.cfg.Bots.List(r.Context())
 	if err != nil {
 		s.jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := make([]inboxItemJSON, 0, 2*limit)
-	for _, recipient := range recipients {
-		if !s.mayModifyBot(r, recipient) {
+	principal := s.principalOf(r)
+	for _, bot := range bots {
+		if !memory.MayModify(bot, principal) {
 			continue
 		}
-		items, err := s.cfg.Inbox.List(r.Context(), recipient, memory.InboxFilter{Limit: limit})
+		items, err := s.cfg.Inbox.Recent(r.Context(), bot.GetId(), limit)
 		if err != nil {
 			s.jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
