@@ -60,6 +60,10 @@ export interface MemoryRecord {
 }
 
 export interface InboxItem {
+  /** Activity is a bounded projection; detail retains complete evidence/links. */
+  revision?: number;
+  truncated_fields?: string[];
+  detail_path?: string;
   task_id?: string;
   id: string;
   recipient: string;

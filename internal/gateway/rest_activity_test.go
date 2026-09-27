@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -23,7 +24,7 @@ type activityTestInbox struct {
 	limits chan int
 }
 
-func (s activityTestInbox) Recent(_ context.Context, recipient string, limit int) ([]*pb.BotInboxItem, error) {
+func (s activityTestInbox) Recent(_ context.Context, recipient string, limit int) ([]*pb.ConsoleInboxItem, error) {
 	select {
 	case s.limits <- limit:
 	default:
@@ -39,9 +40,9 @@ func (s activityTestInbox) Recent(_ context.Context, recipient string, limit int
 	if recipient == "second" {
 		ids = []string{"03", "01", "05"}
 	}
-	out := make([]*pb.BotInboxItem, 0, len(ids))
+	out := make([]*pb.ConsoleInboxItem, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, &pb.BotInboxItem{Id: id, Recipient: recipient})
+		out = append(out, &pb.ConsoleInboxItem{Id: id, Recipient: recipient})
 	}
 	return out, nil
 }
@@ -125,10 +126,10 @@ func TestActivityCollectionBoundsAcrossQueues(t *testing.T) {
 	out := make([]inboxItemJSON, 0, 2*limit)
 	var all []string
 	for queue := range 40 {
-		var items []*pb.BotInboxItem
+		var items []*pb.ConsoleInboxItem
 		for i := range 17 {
 			id := fmt.Sprintf("%04d", i*40+queue)
-			items = append(items, &pb.BotInboxItem{Id: id})
+			items = append(items, &pb.ConsoleInboxItem{Id: id})
 			all = append(all, id)
 		}
 		out = collectActivity(out, items, limit)
@@ -152,13 +153,8 @@ func TestActivityUsesRealNewestInboxWindowLocalAndRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	// Corrupt old rows and a foreign recipient must not be decoded just to
-	// discover recipients or retrieve the latest arrivals of our two bots.
-	for _, key := range []string{"first:00", "second:00", "private:99", "unregistered:99"} {
-		if err := store.Put(memory.BucketBotInbox, key, []byte{0xff}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// Production projection writes are exercised here. Corrupt source/projection
+	// isolation is tested inside memory, where raw bbolt fixtures are available.
 	for _, row := range []struct {
 		recipient, id string
 		priority      int32
@@ -203,6 +199,73 @@ func TestActivityUsesRealNewestInboxWindowLocalAndRemote(t *testing.T) {
 					t.Fatalf("priority queue used for activity: %v", body.Items)
 				}
 			}
+		}
+	}
+}
+
+func TestActivityLargeRecordsPreserveDetailAndRemoteMetadata(t *testing.T) {
+	t.Parallel()
+	store, err := memory.OpenStore(filepath.Join(t.TempDir(), "state.db"), crypto.Key{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	item := &pb.BotInboxItem{Id: "item", Recipient: "worker", Revision: 17, Status: pb.InboxStatus_INBOX_STATUS_FAILED,
+		Error: strings.Repeat("error", 14<<10), Body: "private body", Result: strings.Repeat("result", 3000),
+		TaskClaims: &pb.Claims{UserId: strings.Repeat("claims", 20000)},
+		ToolsUsed:  slices.Repeat([]string{strings.Repeat("tool", 1000)}, 100),
+		SessionId:  strings.Repeat("session", 10000), CorrelationId: "correlation", TaskId: "task",
+	}
+	raw, err := proto.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(memory.BucketBotInbox, "worker:item", raw); err != nil {
+		t.Fatal(err)
+	}
+	backend := startWebREST(t, nil, func(c *RESTConfig) {
+		c.Inbox = memory.NewInboxService(nil, store, 0)
+		c.Bots = &memBots{recs: map[string]*pb.BotRecord{"worker": {Id: "worker", Owner: "user:alice"}}}
+	})
+	front := startWebREST(t, nil, func(c *RESTConfig) { c.RemoteConsole = testConsoleClient(t, backend) })
+	auth := http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}}
+	for _, srv := range []*Server{backend, front} {
+		response := doJSON(t, http.MethodGet, webBaseURL(srv)+"/v1/activity?limit=500", "", auth)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("activity status=%d", response.StatusCode)
+		}
+		var body struct {
+			Items []inboxItemJSON `json:"items"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Items) != 1 {
+			t.Fatal("missing activity")
+		}
+		summary := body.Items[0]
+		if summary.Revision != item.Revision || summary.DetailPath != "/v1/inbox/worker/item" || summary.TaskID != "task" || summary.CorrelationID != "correlation" || summary.SessionID != "" || summary.Body != "" || len(summary.Error) != memory.InboxActivityTextBytes {
+			t.Fatalf("incorrect summary: %+v", summary)
+		}
+		for _, field := range []string{"error", "result", "tools_used", "session_id"} {
+			if !slices.Contains(summary.TruncatedFields, field) {
+				t.Fatalf("lost truncation %s", field)
+			}
+		}
+		response = doJSON(t, http.MethodGet, webBaseURL(srv)+summary.DetailPath, "", auth)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("detail status=%d", response.StatusCode)
+		}
+		var detail inboxItemJSON
+		if err := json.NewDecoder(response.Body).Decode(&detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.Error != item.Error || detail.Result != item.Result || detail.SessionID != item.SessionId || detail.Body != item.Body || !slices.Equal(detail.ToolsUsed, item.ToolsUsed) || len(detail.TruncatedFields) != 0 {
+			t.Fatal("detail was truncated")
+		}
+		response = doJSON(t, http.MethodGet, webBaseURL(srv)+summary.DetailPath, "", http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "bob", nil)}})
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("cross-owner detail status=%d", response.StatusCode)
 		}
 	}
 }

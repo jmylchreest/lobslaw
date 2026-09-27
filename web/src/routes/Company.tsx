@@ -2,6 +2,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { api, type Bot, type Group, type InboxItem } from "../api";
 import { Mascot } from "../components/Mascot";
+import { InboxSummaryNotice } from "../components/InboxSummaryNotice";
 import { Err, Spinner, useLoad, when } from "../components/ui";
 import { botVars } from "../theme";
 
@@ -198,6 +199,7 @@ function Person({ bot, work, names, lead }: {
           {latest?.result && !active && (
             <div className="person-last">{latest.result}</div>
           )}
+          {(active ?? latest)?.truncated_fields?.length ? <span className="meta">Shortened summary — open bot for full details</span> : null}
           {bot.may_message.length > 0 && (
             // The reporting line, drawn from the message graph rather
             // than a second structure that could disagree with it.
@@ -241,33 +243,36 @@ function Ledger({ items, names }: { items: InboxItem[]; names: Map<string, strin
       <div className="lbl">Recent work</div>
       <div className="col" style={{ marginTop: 10 }}>
         {done.map((i) => (
-          <Link key={i.id} to={`/bots/${i.recipient}`}>
-            <div className={`led ${i.status}`} style={botVars(i.recipient)}>
-              {/* A node on the rail, in the bot's colour. The mascot
-                  was doing avatar duty in a list where the only
-                  question is "who and when" — the colour answers it
-                  in a ninth of the space. */}
-              <span className="led-node" aria-hidden="true" />
-              <div className="grow">
-                <div className="led-top">
-                  <b>{names.get(i.recipient) ?? i.recipient}</b>
-                  {/* Where the work came FROM is the delegation story.
-                      An item posted by another bot is a handoff, and
-                      showing it is the difference between a team and
-                      five things you talk to separately. */}
-                  {i.sender.startsWith("bot:") && (
-                    <span className="from">← {names.get(i.sender.slice(4)) ?? i.sender.slice(4)}</span>
+          <div key={i.id}>
+            <Link to={`/bots/${i.recipient}`}>
+              <div className={`led ${i.status}`} style={botVars(i.recipient)}>
+                {/* A node on the rail, in the bot's colour. The mascot
+                    was doing avatar duty in a list where the only
+                    question is "who and when" — the colour answers it
+                    in a ninth of the space. */}
+                <span className="led-node" aria-hidden="true" />
+                <div className="grow">
+                  <div className="led-top">
+                    <b>{names.get(i.recipient) ?? i.recipient}</b>
+                    {/* Where the work came FROM is the delegation story.
+                        An item posted by another bot is a handoff, and
+                        showing it is the difference between a team and
+                        five things you talk to separately. */}
+                    {i.sender.startsWith("bot:") && (
+                      <span className="from">← {names.get(i.sender.slice(4)) ?? i.sender.slice(4)}</span>
+                    )}
+                    <span className="grow" />
+                    <span className="meta">{when(i.completed_at ?? i.created_at)}</span>
+                  </div>
+                  <div className="led-sub">{i.subject}</div>
+                  {(i.result || i.error) && (
+                    <div className={`led-res${i.error ? " bad" : ""}`}>{i.error || i.result}</div>
                   )}
-                  <span className="grow" />
-                  <span className="meta">{when(i.completed_at ?? i.created_at)}</span>
                 </div>
-                <div className="led-sub">{i.subject}</div>
-                {(i.result || i.error) && (
-                  <div className={`led-res${i.error ? " bad" : ""}`}>{i.error || i.result}</div>
-                )}
               </div>
-            </div>
-          </Link>
+            </Link>
+            <InboxSummaryNotice item={i} />
+          </div>
         ))}
       </div>
     </aside>

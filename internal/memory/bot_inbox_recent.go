@@ -17,15 +17,14 @@ const (
 	// MaxInboxRecentItems bounds a timeline read independently of queue size.
 	MaxInboxRecentItems int = 1000
 	// MaxInboxRecentRecordBytes includes encryption overhead. Together with the
-	// item cap this bounds decrypted input to at most 64 MiB per recipient.
-	// Legacy oversized records fail explicitly rather than allocating on read.
-	MaxInboxRecentRecordBytes int = 64 << 10
+	// item cap this bounds projection input to at most 16 MiB per recipient.
+	// Full records have no new read or write limit.
+	MaxInboxRecentRecordBytes int = 16 << 10
 )
 
-// Recent reads the newest arrivals, regardless of priority or execution status.
-// Unlike List (the execution queue), it stops at the key window before decrypting
-// or decoding older records. No secondary index or write-time migration is needed.
-func (s *InboxService) Recent(ctx context.Context, recipient string, limit int) ([]*pb.BotInboxItem, error) {
+// Recent reads bounded display projections of the newest arrivals, regardless of
+// execution priority. Full inbox evidence is never decrypted on this read path.
+func (s *InboxService) Recent(ctx context.Context, recipient string, limit int) ([]*pb.ConsoleInboxItem, error) {
 	if s.store == nil {
 		return nil, errors.New("inbox: store not wired")
 	}
@@ -36,14 +35,14 @@ func (s *InboxService) Recent(ctx context.Context, recipient string, limit int) 
 	if limit <= 0 || limit > MaxInboxRecentItems {
 		return nil, fmt.Errorf("inbox: recent limit must be between 1 and %d", MaxInboxRecentItems)
 	}
-	out := make([]*pb.BotInboxItem, 0, limit)
+	out := make([]*pb.ConsoleInboxItem, 0, limit)
 	err := s.store.loadDB().View(func(tx *bolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		bucket := tx.Bucket([]byte(BucketBotInbox))
+		bucket := tx.Bucket([]byte(bucketInboxActivity))
 		if bucket == nil {
-			return errors.New("inbox: bucket unavailable")
+			return errors.New("inbox: activity projection unavailable; reopen writable store to rebuild")
 		}
 		prefix := []byte(recipient + ":")
 		// The final ':' has a successor, giving an exclusive prefix upper bound.
@@ -70,7 +69,7 @@ func (s *InboxService) Recent(ctx context.Context, recipient string, limit int) 
 				return fmt.Errorf("inbox: decrypt recent %q: %w", key, err)
 			}
 			buf = raw
-			item := new(pb.BotInboxItem)
+			item := new(pb.ConsoleInboxItem)
 			if err := proto.Unmarshal(raw, item); err != nil {
 				return fmt.Errorf("inbox: unmarshal recent %q: %w", key, err)
 			}

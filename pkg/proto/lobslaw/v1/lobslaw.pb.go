@@ -16885,29 +16885,32 @@ func (x *ConsoleGroups) GetGroups() []*ConsoleGroup {
 }
 
 type ConsoleInboxItem struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Recipient     string                 `protobuf:"bytes,2,opt,name=recipient,proto3" json:"recipient,omitempty"`
-	Sender        string                 `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
-	Kind          string                 `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`
-	Subject       string                 `protobuf:"bytes,5,opt,name=subject,proto3" json:"subject,omitempty"`
-	Body          string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
-	Priority      int32                  `protobuf:"varint,7,opt,name=priority,proto3" json:"priority,omitempty"`
-	Status        string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
-	Result        string                 `protobuf:"bytes,9,opt,name=result,proto3" json:"result,omitempty"`
-	Error         string                 `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
-	Attempts      int32                  `protobuf:"varint,11,opt,name=attempts,proto3" json:"attempts,omitempty"`
-	CorrelationId string                 `protobuf:"bytes,12,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
-	SessionId     string                 `protobuf:"bytes,13,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	RequestedBy   string                 `protobuf:"bytes,14,opt,name=requested_by,json=requestedBy,proto3" json:"requested_by,omitempty"`
-	ToolsUsed     []string               `protobuf:"bytes,15,rep,name=tools_used,json=toolsUsed,proto3" json:"tools_used,omitempty"`
-	TokensUsed    uint64                 `protobuf:"varint,16,opt,name=tokens_used,json=tokensUsed,proto3" json:"tokens_used,omitempty"`
-	CostUsd       float64                `protobuf:"fixed64,17,opt,name=cost_usd,json=costUsd,proto3" json:"cost_usd,omitempty"`
-	CreatedAt     string                 `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	CompletedAt   string                 `protobuf:"bytes,19,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
-	TaskId        string                 `protobuf:"bytes,20,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Recipient       string                 `protobuf:"bytes,2,opt,name=recipient,proto3" json:"recipient,omitempty"`
+	Sender          string                 `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`
+	Kind            string                 `protobuf:"bytes,4,opt,name=kind,proto3" json:"kind,omitempty"`
+	Subject         string                 `protobuf:"bytes,5,opt,name=subject,proto3" json:"subject,omitempty"`
+	Body            string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
+	Priority        int32                  `protobuf:"varint,7,opt,name=priority,proto3" json:"priority,omitempty"`
+	Status          string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	Result          string                 `protobuf:"bytes,9,opt,name=result,proto3" json:"result,omitempty"`
+	Error           string                 `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
+	Attempts        int32                  `protobuf:"varint,11,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	CorrelationId   string                 `protobuf:"bytes,12,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
+	SessionId       string                 `protobuf:"bytes,13,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	RequestedBy     string                 `protobuf:"bytes,14,opt,name=requested_by,json=requestedBy,proto3" json:"requested_by,omitempty"`
+	ToolsUsed       []string               `protobuf:"bytes,15,rep,name=tools_used,json=toolsUsed,proto3" json:"tools_used,omitempty"`
+	TokensUsed      uint64                 `protobuf:"varint,16,opt,name=tokens_used,json=tokensUsed,proto3" json:"tokens_used,omitempty"`
+	CostUsd         float64                `protobuf:"fixed64,17,opt,name=cost_usd,json=costUsd,proto3" json:"cost_usd,omitempty"`
+	CreatedAt       string                 `protobuf:"bytes,18,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CompletedAt     string                 `protobuf:"bytes,19,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	TaskId          string                 `protobuf:"bytes,20,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Revision        uint64                 `protobuf:"varint,100,opt,name=revision,proto3" json:"revision,omitempty"`
+	TruncatedFields []string               `protobuf:"bytes,101,rep,name=truncated_fields,json=truncatedFields,proto3" json:"truncated_fields,omitempty"`
+	DetailPath      string                 `protobuf:"bytes,102,opt,name=detail_path,json=detailPath,proto3" json:"detail_path,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ConsoleInboxItem) Reset() {
@@ -17076,6 +17079,27 @@ func (x *ConsoleInboxItem) GetCompletedAt() string {
 func (x *ConsoleInboxItem) GetTaskId() string {
 	if x != nil {
 		return x.TaskId
+	}
+	return ""
+}
+
+func (x *ConsoleInboxItem) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ConsoleInboxItem) GetTruncatedFields() []string {
+	if x != nil {
+		return x.TruncatedFields
+	}
+	return nil
+}
+
+func (x *ConsoleInboxItem) GetDetailPath() string {
+	if x != nil {
+		return x.DetailPath
 	}
 	return ""
 }
@@ -23431,7 +23455,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\brevision\x18\b \x01(\x04R\brevision\x12\x12\n" +
 	"\x04bots\x18\t \x01(\x05R\x04bots\"A\n" +
 	"\rConsoleGroups\x120\n" +
-	"\x06groups\x18\x01 \x03(\v2\x18.lobslaw.v1.ConsoleGroupR\x06groups\"\xb7\x04\n" +
+	"\x06groups\x18\x01 \x03(\v2\x18.lobslaw.v1.ConsoleGroupR\x06groups\"\x9f\x05\n" +
 	"\x10ConsoleInboxItem\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\trecipient\x18\x02 \x01(\tR\trecipient\x12\x16\n" +
@@ -23457,7 +23481,11 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x12 \x01(\tR\tcreatedAt\x12!\n" +
 	"\fcompleted_at\x18\x13 \x01(\tR\vcompletedAt\x12\x17\n" +
-	"\atask_id\x18\x14 \x01(\tR\x06taskId\"T\n" +
+	"\atask_id\x18\x14 \x01(\tR\x06taskId\x12\x1a\n" +
+	"\brevision\x18d \x01(\x04R\brevision\x12)\n" +
+	"\x10truncated_fields\x18e \x03(\tR\x0ftruncatedFields\x12\x1f\n" +
+	"\vdetail_path\x18f \x01(\tR\n" +
+	"detailPath\"T\n" +
 	"\fConsoleInbox\x12\x10\n" +
 	"\x03bot\x18\x01 \x01(\tR\x03bot\x122\n" +
 	"\x05items\x18\x02 \x03(\v2\x1c.lobslaw.v1.ConsoleInboxItemR\x05items\"\xc3\x01\n" +

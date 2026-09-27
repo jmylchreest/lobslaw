@@ -694,6 +694,12 @@ func (f *FSM) putInboxResult(key string, raw []byte, item *lobslawv1.BotInboxIte
 		return fmt.Errorf("seal inbox result: %w", err)
 	}
 	return f.store.loadDB().Update(func(tx *bolt.Tx) error {
+		if err := f.store.updateInboxActivity(tx, key, raw); err != nil {
+			return err
+		}
+		if err := f.store.updateInboxActivity(tx, inboxKey(result.GetRecipient(), result.GetId()), resultRaw); err != nil {
+			return err
+		}
 		bucket := tx.Bucket([]byte(BucketBotInbox))
 		if bucket == nil {
 			return errors.New("inbox bucket missing")

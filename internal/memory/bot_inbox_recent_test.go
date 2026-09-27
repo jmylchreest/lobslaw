@@ -77,7 +77,7 @@ func TestInboxRecentDoesNotDecryptOrDecodeOutsideWindow(t *testing.T) {
 					}
 				}
 				for i := range rows {
-					if err := tx.Bucket([]byte(BucketBotInbox)).Put([]byte(inboxKey("worker", fmt.Sprintf("%04d", i))), bad); err != nil {
+					if err := tx.Bucket([]byte(bucketInboxActivity)).Put([]byte(inboxKey("worker", fmt.Sprintf("%04d", i))), bad); err != nil {
 						return err
 					}
 				}
@@ -106,7 +106,7 @@ func TestInboxRecentLimitsBeforeDecryption(t *testing.T) {
 	store, _ := newTestStore(t)
 	svc := NewInboxService(nil, store, 0)
 	err := store.loadDB().Update(func(tx *bolt.Tx) error {
-		return tx.Bucket([]byte(BucketBotInbox)).Put([]byte(inboxKey("worker", "01")), bytes.Repeat([]byte("x"), MaxInboxRecentRecordBytes+1))
+		return tx.Bucket([]byte(bucketInboxActivity)).Put([]byte(inboxKey("worker", "01")), bytes.Repeat([]byte("x"), MaxInboxRecentRecordBytes+1))
 	})
 	if err != nil {
 		t.Fatal(err)

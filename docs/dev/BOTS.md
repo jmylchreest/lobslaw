@@ -87,17 +87,41 @@ sequenceDiagram
 
 `GET /v1/activity` lists the caller's owned bots from the roster and calls
 `InboxService.Recent` for each. It does not discover recipients by scanning the
-inbox bucket. `Recent` seeks to the end of the existing `recipient:` key prefix
-and walks backwards, returning arrival IDs newest first regardless of priority.
+inbox bucket. `Recent` seeks to the end of the `recipient:` prefix in the encrypted
+`inbox_activity_v1` derived bucket and walks backwards, returning arrival IDs
+newest first regardless of priority.
 The execution queue's `List` ordering remains priority descending, then FIFO.
 
 The HTTP limit defaults to 100 (also for zero) and accepts at most 1,000;
 negative, malformed, overflowing and oversized limits return 400. The production
 read requires a positive limit no larger than `MaxInboxRecentItems` (1,000).
-Only those newest rows are decrypted and decoded. Each ciphertext is checked
-against `MaxInboxRecentRecordBytes` (64 KiB) before decryption, bounding input to
-at most 64 MiB per recipient. An oversized or corrupt row within the requested
-window fails the read explicitly; rows outside the window are never decoded.
+Only those newest summaries are decrypted and decoded. Each summary ciphertext
+is checked against `MaxInboxRecentRecordBytes` (16 KiB) before decryption, bounding
+input to at most 16 MiB per recipient. Full records have no new size restriction:
+large errors, claims and tool lists remain readable through the owner-authorized
+`/v1/inbox/{recipient}/{id}` detail route.
+
+The projection contains no prompt body or task claims. Result/error excerpts are
+at most 2,048 UTF-8 bytes each; subject is at most 200 bytes. At most 32 tool names
+of up to 128 bytes are included; oversized names are omitted rather than turned
+into misleading identifiers. Optional identity/link fields (sender, requester,
+task, session, correlation) longer than 256 bytes are omitted, never shortened
+into a different identifier. Normal links, status, revision, timestamps and usage
+are preserved. `truncated_fields` names every abbreviated or omitted field, and
+`detail_path` points to the full record. The console labels incomplete summaries,
+offers full detail, and does not interpret an omitted task link as an unlinked task.
+
+Recipient IDs obey the existing 63-byte lowercase bot-ID contract. Item IDs are
+ULIDs, with optional result suffixes; the projection accepts up to 128 URL-safe
+alphanumeric/hyphen/underscore bytes. Malformed or mismatched identities fail
+explicitly, rather than aliasing another item's detail route.
+
+Inbox puts, successful CAS updates, completion plus receipt writes, task
+admission and archive mutations update the projection in the same bbolt
+transaction. Delete removes both records. Startup and snapshot restore rebuild
+the projection from authoritative inbox records before publishing the store,
+including when an older binary left a stale projection. Rebuild work is a
+one-record-at-a-time scan, not a fallback performed by activity requests.
 The gateway retains only the global newest K between batches of at most 2K.
 Local and remote consoles use this same backend read path.
 
@@ -107,9 +131,13 @@ flowchart LR
   Roster --> Owner[Select caller-owned bots]
   Owner --> Recent[Reverse recipient prefix cursor]
   Recent --> Bounds[Count and ciphertext byte checks]
-  Bounds --> Decode[Decrypt and decode newest window]
+  Bounds --> Decode[Decrypt and decode bounded summaries]
   Decode --> Merge[Bounded global top-K merge]
   Merge --> Response[Newest-first activity]
+  Write[Authoritative inbox mutation] --> Tx[Same transaction: inbox plus encrypted summary]
+  Tx --> Recent
+  Rebuild[Startup or snapshot restore] --> Tx
+  Response --> Detail[Owner-authorized full detail on demand]
 ```
 
 ## Specialist working memory

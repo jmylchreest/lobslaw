@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, botReply, streamBotChat, type Bot, type InboxItem, type TranscriptMessage, type TaskMessage, type ToolReceipt } from "../api";
+import { InboxSummaryNotice } from "../components/InboxSummaryNotice";
 import { TaskEvidence } from "../components/TaskEvidence";
 import { Markdown } from "../components/Markdown";
 import { Mascot } from "../components/Mascot";
@@ -578,8 +579,8 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
           {item.sender === "operator" ? "you asked for this" : `asked by ${item.sender.replace(/^bot:/, "")}`}
           <span className="ev-dot">·</span>
           {when(item.created_at)}
-          {item.task_id && <Link className="ev-act" to={`/approvals/${encodeURIComponent(item.task_id)}`}>Review task</Link>}
-          {!item.task_id && (item.status === "failed" || item.status === "cancelled") && (
+          {d.task_id && <Link className="ev-act" to={`/approvals/${encodeURIComponent(d.task_id)}`}>Review task</Link>}
+          {!d.task_id && !d.truncated_fields?.includes("task_id") && (item.status === "failed" || item.status === "cancelled") && (
             <button className="ev-act" onClick={(e) => { e.stopPropagation(); act("retry"); }} disabled={busy}>
               Try again
             </button>
@@ -590,9 +591,10 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
             </button>
           )}
         </div>
+        <InboxSummaryNotice item={d} />
         {item.result && !open && <div className="ev-body"><Markdown>{item.result}</Markdown></div>}
         {item.status === "done" && (
-          <Receipt attempts={item.tools_used} tokens={item.tokens_used} cost={item.cost_usd} />
+          <Receipt attempts={d.tools_used} tokens={d.tokens_used} cost={d.cost_usd} />
         )}
         {/* A failed item keeps its error, visibly. A task that vanished
             quietly is the failure the queue exists to prevent. */}

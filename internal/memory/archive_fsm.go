@@ -67,6 +67,11 @@ func (f *FSM) applyArchiveBatch(batch *lobslawv1.ArchiveBatch) error {
 }
 
 func putArchiveValue(tx *bolt.Tx, store *Store, bucket, key string, raw []byte) error {
+	if bucket == BucketBotInbox {
+		if err := store.updateInboxActivity(tx, key, raw); err != nil {
+			return err
+		}
+	}
 	sealed, err := store.cipher.Seal(raw)
 	if err != nil {
 		return err
@@ -125,6 +130,11 @@ func (f *FSM) applyArchiveMutation(tx *bolt.Tx, mutation *lobslawv1.ArchiveMutat
 		}
 	}
 	if mutation.Delete {
+		if kind.bucket == BucketBotInbox {
+			if err := f.store.updateInboxActivity(tx, mutation.Id, nil); err != nil {
+				return "", err
+			}
+		}
 		return kind.bucket, bucket.Delete([]byte(mutation.Id))
 	}
 	msg := proto.Clone(kind.message)

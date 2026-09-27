@@ -166,6 +166,13 @@ func (f *FSM) putTaskAdmission(task *pb.TaskApprovalRecord, item *pb.BotInboxIte
 		if err := f.store.updateTaskHistory(tx, task.Id, raw); err != nil {
 			return err
 		}
+		inboxRaw, err := proto.Marshal(item)
+		if err != nil {
+			return err
+		}
+		if err := f.store.updateInboxActivity(tx, key, inboxRaw); err != nil {
+			return err
+		}
 		for i, rec := range records {
 			b := tx.Bucket([]byte(rec.bucket))
 			if b == nil {

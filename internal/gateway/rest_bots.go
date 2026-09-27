@@ -28,7 +28,7 @@ type BotAPI interface {
 // InboxAPI is the same for the queues.
 type InboxAPI interface {
 	List(ctx context.Context, recipient string, f memory.InboxFilter) ([]*lobslawv1.BotInboxItem, error)
-	Recent(ctx context.Context, recipient string, limit int) ([]*lobslawv1.BotInboxItem, error)
+	Recent(ctx context.Context, recipient string, limit int) ([]*lobslawv1.ConsoleInboxItem, error)
 	Post(ctx context.Context, item *lobslawv1.BotInboxItem) (*lobslawv1.BotInboxItem, error)
 	Get(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
 	Cancel(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
@@ -57,20 +57,23 @@ type botJSON struct {
 }
 
 type inboxItemJSON struct {
-	TaskID        string `json:"task_id,omitempty"`
-	ID            string `json:"id"`
-	Recipient     string `json:"recipient"`
-	Sender        string `json:"sender"`
-	Kind          string `json:"kind"`
-	Subject       string `json:"subject"`
-	Body          string `json:"body,omitempty"`
-	Priority      int32  `json:"priority"`
-	Status        string `json:"status"`
-	Result        string `json:"result,omitempty"`
-	Error         string `json:"error,omitempty"`
-	Attempts      int32  `json:"attempts"`
-	CorrelationID string `json:"correlation_id,omitempty"`
-	SessionID     string `json:"session_id,omitempty"`
+	Revision        uint64   `json:"revision"`
+	TruncatedFields []string `json:"truncated_fields,omitempty"`
+	DetailPath      string   `json:"detail_path,omitempty"`
+	TaskID          string   `json:"task_id,omitempty"`
+	ID              string   `json:"id"`
+	Recipient       string   `json:"recipient"`
+	Sender          string   `json:"sender"`
+	Kind            string   `json:"kind"`
+	Subject         string   `json:"subject"`
+	Body            string   `json:"body,omitempty"`
+	Priority        int32    `json:"priority"`
+	Status          string   `json:"status"`
+	Result          string   `json:"result,omitempty"`
+	Error           string   `json:"error,omitempty"`
+	Attempts        int32    `json:"attempts"`
+	CorrelationID   string   `json:"correlation_id,omitempty"`
+	SessionID       string   `json:"session_id,omitempty"`
 	// Who asked for this, as against who put it in the queue.
 	RequestedBy string `json:"requested_by,omitempty"`
 	// What the turn actually did, as against what its result claims.
@@ -117,6 +120,7 @@ func botToJSON(rec *lobslawv1.BotRecord) botJSON {
 
 func inboxToJSON(item *lobslawv1.BotInboxItem, withBody bool) inboxItemJSON {
 	out := inboxItemJSON{
+		Revision:      item.GetRevision(),
 		TaskID:        item.GetTaskId(),
 		ID:            item.GetId(),
 		Recipient:     item.GetRecipient(),
@@ -657,11 +661,11 @@ func sortInboxDescending(items []inboxItemJSON) {
 
 // Keep only the newest candidates between bounded batches, including when an
 // InboxAPI implementation returns more than the requested per-bot limit.
-func collectActivity(out []inboxItemJSON, items []*lobslawv1.BotInboxItem, limit int) []inboxItemJSON {
+func collectActivity(out []inboxItemJSON, items []*lobslawv1.ConsoleInboxItem, limit int) []inboxItemJSON {
 	for len(items) > 0 {
 		n := min(limit, len(items))
 		for _, item := range items[:n] {
-			out = append(out, inboxToJSON(item, false))
+			out = append(out, inboxSummaryToJSON(item))
 		}
 		sortInboxDescending(out)
 		if len(out) > limit {
@@ -671,6 +675,19 @@ func collectActivity(out []inboxItemJSON, items []*lobslawv1.BotInboxItem, limit
 		items = items[n:]
 	}
 	return out
+}
+
+func inboxSummaryToJSON(item *lobslawv1.ConsoleInboxItem) inboxItemJSON {
+	return inboxItemJSON{
+		ID: item.GetId(), Recipient: item.GetRecipient(), Sender: item.GetSender(),
+		Kind: item.GetKind(), Subject: item.GetSubject(), Priority: item.GetPriority(),
+		Status: item.GetStatus(), Result: item.GetResult(), Error: item.GetError(),
+		Attempts: item.GetAttempts(), CorrelationID: item.GetCorrelationId(),
+		SessionID: item.GetSessionId(), TaskID: item.GetTaskId(), RequestedBy: item.GetRequestedBy(),
+		ToolsUsed: item.GetToolsUsed(), TokensUsed: item.GetTokensUsed(), CostUSD: item.GetCostUsd(),
+		CreatedAt: item.GetCreatedAt(), CompletedAt: item.GetCompletedAt(),
+		Revision: item.GetRevision(), TruncatedFields: item.GetTruncatedFields(), DetailPath: item.GetDetailPath(),
+	}
 }
 
 func respondJSON(w http.ResponseWriter, status int, body any) {

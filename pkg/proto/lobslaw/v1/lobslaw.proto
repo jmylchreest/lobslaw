@@ -2778,6 +2778,9 @@ message ConsoleInboxItem {
   string created_at = 18;
   string completed_at = 19;
   string task_id = 20;
+  uint64 revision = 100;
+  repeated string truncated_fields = 101;
+  string detail_path = 102;
 }
 message ConsoleInbox {
   string bot = 1;

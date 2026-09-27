@@ -130,8 +130,8 @@ func (s *Store) restoreSnapshot(r io.Reader, ops snapshotRestoreOps) (out snapsh
 			_ = fresh.Close()
 		}
 	}()
-	if err := fresh.Update(s.rebuildTaskHistory); err != nil {
-		return out, fmt.Errorf("rebuild snapshot task history: %w", err)
+	if err := fresh.Update(s.rebuildDerived); err != nil {
+		return out, fmt.Errorf("rebuild snapshot derived records: %w", err)
 	}
 	backup := tmp + ".previous"
 	if err := ops.link(s.path, backup); err != nil {
