@@ -443,6 +443,14 @@ func consoleRequestFields(w http.ResponseWriter, r *http.Request, targets map[st
 		}
 	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if r.URL.Path == "/v1/activity" {
+			limit, err := activityLimit(raw)
+			if err != nil {
+				return nil, status.Error(codes.InvalidArgument, err.Error())
+			}
+			body["limit"] = limit
+			return body, nil
+		}
 		n, err := strconv.ParseInt(raw, 10, 32)
 		if err != nil || n < 0 {
 			return nil, status.Error(codes.InvalidArgument, "invalid limit")

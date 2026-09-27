@@ -1,10 +1,13 @@
 package gateway
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -571,6 +574,25 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const (
+	defaultActivityLimit int = 100
+	maxActivityLimit     int = 1000
+)
+
+func activityLimit(raw string) (int, error) {
+	if raw == "" {
+		return defaultActivityLimit, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 || n > maxActivityLimit {
+		return 0, fmt.Errorf("activity limit must be between 0 and %d", maxActivityLimit)
+	}
+	if n == 0 {
+		return defaultActivityLimit, nil
+	}
+	return n, nil
+}
+
 // handleActivity is the cross-bot timeline: every queue, newest first.
 //
 // The GUI's front page. Built from the inbox rather than from sessions
@@ -590,11 +612,10 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET")
 		return
 	}
-	limit := 100
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
-		}
+	limit, err := activityLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		s.jsonErr(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	recipients, err := s.cfg.Inbox.Recipients(r.Context())
@@ -602,7 +623,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := make([]inboxItemJSON, 0, limit)
+	out := make([]inboxItemJSON, 0, 2*limit)
 	for _, recipient := range recipients {
 		if !s.mayModifyBot(r, recipient) {
 			continue
@@ -612,9 +633,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 			s.jsonErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		for _, item := range items {
-			out = append(out, inboxToJSON(item, false))
-		}
+		out = collectActivity(out, items, limit)
 	}
 	// Newest first across every queue. Ids are ULIDs, so descending id
 	// is descending time without reading a clock or a timestamp that
@@ -627,11 +646,25 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 }
 
 func sortInboxDescending(items []inboxItemJSON) {
-	for i := 1; i < len(items); i++ {
-		for j := i; j > 0 && items[j].ID > items[j-1].ID; j-- {
-			items[j], items[j-1] = items[j-1], items[j]
+	slices.SortFunc(items, func(a, b inboxItemJSON) int { return cmp.Compare(b.ID, a.ID) })
+}
+
+// Keep only the newest candidates between bounded batches, including when an
+// InboxAPI implementation returns more than the requested per-bot limit.
+func collectActivity(out []inboxItemJSON, items []*lobslawv1.BotInboxItem, limit int) []inboxItemJSON {
+	for len(items) > 0 {
+		n := min(limit, len(items))
+		for _, item := range items[:n] {
+			out = append(out, inboxToJSON(item, false))
 		}
+		sortInboxDescending(out)
+		if len(out) > limit {
+			clear(out[limit:])
+			out = out[:limit]
+		}
+		items = items[n:]
 	}
+	return out
 }
 
 func respondJSON(w http.ResponseWriter, status int, body any) {
