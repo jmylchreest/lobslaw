@@ -283,6 +283,57 @@ uses neither. Evidence is bounded by the task record size limit; a process crash
 can still lose observations not yet checkpointed, which remains an uncertain
 outcome rather than an invented success or automatic replay.
 
+#### Bounded coordinator context index
+
+A 100-message prompt target alone does not bound work: scanning task approvals
+decrypts every owner's checkpoints and receipts before selecting that window.
+`task_history_v1` is a derived bbolt index of empty markers keyed by
+`hex(owner)/hex(actor)/task-id`. Only tasks admitted as coordinator conversations
+with nonempty transcripts qualify. Hex encoding prevents delimiter collisions;
+keys expose routing metadata, but no transcript or receipt bytes. Evidence stays
+encrypted in `task_approvals` and is never pruned by context selection.
+
+```mermaid
+flowchart LR
+    Log[Committed task PUT / CAS / admission / delete] --> Tx[One bbolt transaction]
+    Tx --> Evidence[Encrypted task evidence]
+    Tx --> Index[Owner + actor + task ID markers]
+    Read[Coordinator turn] --> Seek[Reverse prefix seek]
+    Index --> Seek
+    Seek --> Bound[Check task count and ciphertext bytes]
+    Evidence --> Bound
+    Bound --> Decode[Decode whole task transcripts]
+    Decode --> Order[Reverse selected tasks into chronological ID order]
+    Legacy[Startup / prepared snapshot] --> Rebuild[Rebuild markers from evidence before publication]
+    Rebuild --> Index
+```
+
+The read uses one consistent transaction and seeks only the exact owner/actor
+range. Named limits are 100 tasks, 8 MiB of ciphertext decrypted per read, and
+65,536 returned messages. Selection stops after reaching the soft 100-message
+target, retaining the entire last selected task, including tool-call/result
+batches. Byte or hard-message limits stop at whole-task boundaries. If the newest
+task alone exceeds a hard limit, retrieval fails explicitly rather than silently
+answering from older context. Ordering remains task-ID chronology, including for
+resumed tasks; each selected task always supplies its latest committed transcript.
+Current bot classification and terminal task state do not erase historical
+coordinator evidence. Specialist turns still do not consume this index.
+
+The index is updated synchronously in the same transaction as every task write
+or deletion, including atomic inbox/task admission. No cache or second proposal
+can hide a just-committed pause/completion. Writable startup and snapshot restore
+rebuild markers in a single transaction, streaming one task at a time, before
+publishing the store. They rebuild even an existing index because a downgraded
+binary may have left it stale. This is an O(total task evidence) startup/restore
+cost, never a per-turn fallback. A corrupt task aborts rebuild; a failed candidate
+snapshot leaves the previous store live. Read-only recovery inspection does not
+migrate an image; indexed reads require a rebuilt index.
+
+This adds only a derived database bucket: no protobuf change or operator migration
+command is required. Existing task records and older snapshots are backfilled;
+Raft replay maintains the index through the same task transactions. Rebuilding
+changes no durable task evidence or audit history.
+
 ### Specialist task context and skills
 
 Each delegated/queued task starts with only supplied task context; no conversation

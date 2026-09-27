@@ -84,6 +84,12 @@ func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
 	}
 	s := &Store{key: key, cipher: c, path: path, readOnly: readOnly, failed: make(chan struct{})}
 	s.db.Store(db)
+	if !readOnly {
+		if err := db.Update(s.rebuildTaskHistory); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("rebuild task history: %w", err)
+		}
+	}
 	return s, nil
 }
 
@@ -116,6 +122,11 @@ func (s *Store) Put(bucket, key string, value []byte) error {
 		return fmt.Errorf("seal %s/%s: %w", bucket, key, err)
 	}
 	return s.loadDB().Update(func(tx *bolt.Tx) error {
+		if bucket == BucketTaskApprovals {
+			if err := s.updateTaskHistory(tx, key, value); err != nil {
+				return err
+			}
+		}
 		b := tx.Bucket([]byte(bucket))
 		if b == nil {
 			return fmt.Errorf("bucket %q not found", bucket)
@@ -154,6 +165,11 @@ func (s *Store) Get(bucket, key string) ([]byte, error) {
 // replay semantics: re-applying a delete entry must not fail.
 func (s *Store) Delete(bucket, key string) error {
 	return s.loadDB().Update(func(tx *bolt.Tx) error {
+		if bucket == BucketTaskApprovals {
+			if err := s.updateTaskHistory(tx, key, nil); err != nil {
+				return err
+			}
+		}
 		b := tx.Bucket([]byte(bucket))
 		if b == nil {
 			return fmt.Errorf("bucket %q not found", bucket)

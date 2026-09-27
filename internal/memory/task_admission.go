@@ -159,6 +159,13 @@ func (f *FSM) putTaskAdmission(task *pb.TaskApprovalRecord, item *pb.BotInboxIte
 		}
 	}
 	return f.store.loadDB().Update(func(tx *bolt.Tx) error {
+		raw, err := proto.Marshal(task)
+		if err != nil {
+			return err
+		}
+		if err := f.store.updateTaskHistory(tx, task.Id, raw); err != nil {
+			return err
+		}
 		for i, rec := range records {
 			b := tx.Bucket([]byte(rec.bucket))
 			if b == nil {
