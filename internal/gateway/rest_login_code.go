@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
@@ -13,8 +12,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
@@ -22,6 +21,12 @@ import (
 func (s *Server) handleSessionCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Inherited turn claims are execution authority, never enrollment proof.
+	// Codes go directly to a human client, not into an agent transcript.
+	if _, ok := turn.IdentityFrom(r.Context()); ok {
+		s.jsonErr(w, http.StatusForbidden, "agent turns cannot mint sign-in credentials")
 		return
 	}
 	token := auth.ExtractBearer(r.Header.Get("Authorization"))
@@ -77,40 +82,6 @@ func (s *Server) loginWithJWT(w http.ResponseWriter, r *http.Request, token stri
 	s.issueLoginCookie(w, r, user, claims.Scope)
 }
 
-// MintLoginCode issues a one-time console sign-in code for the account
-// a principal names. Exposed so the agent can hand the operator a code
-// from a channel they are already talking to; the caller must have
-// checked that the asker is an operator.
-func (s *Server) MintLoginCode(ctx context.Context, principal string) (string, string, int, error) {
-	if !s.consoleEnabled() {
-		return "", "", 0, errors.New("the web console is not enabled on this node")
-	}
-	if s.cfg.JWTValidator == nil {
-		return "", "", 0, errors.New("console sign-in is not configured on this node")
-	}
-	p := strings.TrimSpace(principal)
-	// A turn run as a bot asks on behalf of its human. The code belongs
-	// to the owner, not the bot — a bot has no console account.
-	if strings.HasPrefix(p, identity.KindBot+":") && s.cfg.Bots != nil {
-		if rec, err := s.cfg.Bots.Get(ctx, strings.TrimPrefix(p, identity.KindBot+":")); err == nil && rec != nil {
-			p = strings.TrimSpace(rec.GetOwner())
-		}
-	}
-	id := strings.TrimPrefix(p, identity.KindUser+":")
-	if id == "" {
-		return "", "", 0, errors.New("an enrolled human principal is required")
-	}
-	user, ok := s.loginUser(id)
-	if !ok {
-		return "", "", 0, errors.New("no enrolled user matches this account")
-	}
-	code, err := s.logins.issueCode(user, s.cfg.DefaultScope, LoginCodeTTL)
-	if err != nil {
-		return "", "", 0, err
-	}
-	return code, user.ID, int(LoginCodeTTL.Seconds()), nil
-}
-
 func (s *Server) loginWithCode(w http.ResponseWriter, r *http.Request, code string) {
 	if !s.logins.allowCodeAttempt(time.Now()) {
 		s.jsonErr(w, http.StatusTooManyRequests, "too many sign-in attempts; try again later")
@@ -159,34 +130,6 @@ func (s *Server) issueLoginCookie(w http.ResponseWriter, r *http.Request, user c
 	http.SetCookie(w, s.loginCookie(r, sess))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"user_id": user.ID})
-}
-
-func (s *Server) loginUser(want string) (config.UserConfig, bool) {
-	want = strings.TrimSpace(want)
-	if want != "" {
-		for _, u := range s.cfg.Users {
-			if strings.EqualFold(u.ID, want) {
-				return u, true
-			}
-		}
-		return config.UserConfig{}, false
-	}
-	if len(s.cfg.Users) == 1 {
-		return s.cfg.Users[0], true
-	}
-	var operators []config.UserConfig
-	for _, u := range s.cfg.Users {
-		for _, role := range u.Roles {
-			if strings.EqualFold(role, "operator") {
-				operators = append(operators, u)
-				break
-			}
-		}
-	}
-	if len(operators) == 1 {
-		return operators[0], true
-	}
-	return config.UserConfig{}, false
 }
 
 func (s *loginStore) issueCode(user config.UserConfig, scope string, ttl time.Duration) (string, error) {

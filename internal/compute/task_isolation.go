@@ -10,6 +10,8 @@ import (
 
 type skillAccessKey struct{}
 
+const retiredConsoleCodeTool string = "console_code"
+
 // SkillAccessAllowed is checked by skill_view after hook parameter rewriting.
 func SkillAccessAllowed(ctx context.Context, name string) bool {
 	if check, ok := ctx.Value(skillAccessKey{}).(func(string) bool); ok {
@@ -39,6 +41,11 @@ func taskMemoryTool(name string) bool {
 }
 
 func taskToolRestriction(ctx context.Context, req ProcessMessageRequest, name string) string {
+	// Old continuations may still advertise this retired tool. Credentials must
+	// never enter model context, including ordinary and coordinator turns.
+	if name == retiredConsoleCodeTool {
+		return "sign-in credentials are only available through authenticated human login"
+	}
 	if req.Bot != nil && len(req.Bot.FilterTools([]Tool{{Name: name}})) == 0 {
 		return "tool is excluded by bot tool restrictions"
 	}
@@ -57,6 +64,9 @@ func (a *Agent) visibleSkills(ctx context.Context, req ProcessMessageRequest, in
 }
 
 func (a *Agent) skillAllowed(ctx context.Context, req ProcessMessageRequest, name string) bool {
+	if name == retiredConsoleCodeTool {
+		return false
+	}
 	if req.Bot != nil && len(req.Bot.FilterTools([]Tool{{Name: name}})) == 0 {
 		return false
 	}

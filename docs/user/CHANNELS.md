@@ -50,7 +50,7 @@ enabled = true
 require_auth = true
 ```
 
-Then open the gateway HTTP port in a browser (8443 by default). Sign in with an enrolled JWT, or ask the assistant for a console sign-in code from an authenticated operator conversation. To obtain a code from the CLI, set `LOBSLAW_LOGIN_TOKEN` to your enrolled JWT and run `lobslaw login --config <path>` (or supply `--token`). Type the six-digit code in the browser. Codes expire after five minutes and work once; guessing is limited to ten attempts per minute per web node. There is no self-signup: the person must already be in `[[user]]`.
+Then open the gateway HTTP port in a browser (8443 by default). Sign in with an enrolled JWT. To obtain a code from the CLI, set `LOBSLAW_LOGIN_TOKEN` to your enrolled JWT and run `lobslaw login --config <path>` (or supply `--token`). Type the six-digit code in the browser. Codes expire after five minutes and work once; guessing is limited to ten attempts per minute per web node. There is no self-signup: the person must already be in `[[user]]`. Assistants cannot mint sign-in codes, even in an operator's direct chat; use the CLI or browser so credentials never enter model context.
 
 Loopback connections do not bypass authentication: a reverse proxy can make a remote browser appear to connect from localhost. The old **Continue on this computer** shortcut is no longer offered.
 
