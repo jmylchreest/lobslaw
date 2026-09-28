@@ -59,7 +59,7 @@ func (s *soulTuneServer) GetSoulTune(ctx context.Context, req *lobslawv1.GetSoul
 	if err := s.n.raft.Raft.VerifyLeader().Error(); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
-	rec, err := s.n.soulTuneSvc.Get(ctx)
+	rec, err := s.n.soulTuneSvc.GetFor(ctx, req.GetBotId())
 	if err != nil {
 		return nil, soulRPCError(err)
 	}
@@ -80,7 +80,7 @@ func (s *soulTuneServer) PutSoulTune(ctx context.Context, req *lobslawv1.PutSoul
 	if client != nil {
 		return client.PutSoulTune(ctx, req)
 	}
-	rec, err := s.n.soulTuneSvc.Put(ctx, req.State, req.ExpectedRevision)
+	rec, err := s.n.soulTuneSvc.PutFor(ctx, req.GetBotId(), req.State, req.ExpectedRevision)
 	if err != nil {
 		return nil, soulRPCError(err)
 	}
@@ -101,7 +101,7 @@ func (s *soulTuneServer) RollbackSoulTune(ctx context.Context, req *lobslawv1.Ro
 	if client != nil {
 		return client.RollbackSoulTune(ctx, req)
 	}
-	rec, err := s.n.soulTuneSvc.Rollback(ctx, int(req.Steps))
+	rec, err := s.n.soulTuneSvc.RollbackFor(ctx, req.GetBotId(), int(req.Steps))
 	if err != nil {
 		return nil, soulRPCError(err)
 	}
@@ -176,13 +176,17 @@ func tuneFromRecord(rec *lobslawv1.SoulTuneRecord) *soul.TuneState {
 }
 
 func (s *remoteSoulTuneStore) Get(ctx context.Context) (*soul.TuneState, error) {
+	return s.GetFor(ctx, memory.ChiefBotID)
+}
+
+func (s *remoteSoulTuneStore) GetFor(ctx context.Context, botID string) (*soul.TuneState, error) {
 	// A standalone node can use its file baseline. Mutations still fail.
 	if len(s.candidates()) == 0 && !s.seen.Load() {
 		return nil, nil
 	}
 	var state *soul.TuneState
 	err := s.call(ctx, true, func(ctx context.Context, c lobslawv1.SoulTuneServiceClient) error {
-		r, err := c.GetSoulTune(ctx, &lobslawv1.GetSoulTuneRequest{})
+		r, err := c.GetSoulTune(ctx, &lobslawv1.GetSoulTuneRequest{BotId: botID})
 		if err == nil {
 			state = tuneFromRecord(r.Record)
 		}
@@ -192,11 +196,15 @@ func (s *remoteSoulTuneStore) Get(ctx context.Context) (*soul.TuneState, error) 
 }
 
 func (s *remoteSoulTuneStore) Put(ctx context.Context, state *soul.TuneState) error {
+	return s.PutFor(ctx, memory.ChiefBotID, state)
+}
+
+func (s *remoteSoulTuneStore) PutFor(ctx context.Context, botID string, state *soul.TuneState) error {
 	if state == nil {
 		return errors.New("soul tune: state required")
 	}
 	return s.call(ctx, false, func(ctx context.Context, c lobslawv1.SoulTuneServiceClient) error {
-		r, err := c.PutSoulTune(ctx, &lobslawv1.PutSoulTuneRequest{State: tuneStateToProto(state), ExpectedRevision: state.Revision})
+		r, err := c.PutSoulTune(ctx, &lobslawv1.PutSoulTuneRequest{State: tuneStateToProto(state), ExpectedRevision: state.Revision, BotId: botID})
 		if err == nil {
 			*state = *tuneFromRecord(r.Record)
 		}
@@ -205,12 +213,16 @@ func (s *remoteSoulTuneStore) Put(ctx context.Context, state *soul.TuneState) er
 }
 
 func (s *remoteSoulTuneStore) Rollback(ctx context.Context, steps int) (*soul.TuneState, error) {
+	return s.RollbackFor(ctx, memory.ChiefBotID, steps)
+}
+
+func (s *remoteSoulTuneStore) RollbackFor(ctx context.Context, botID string, steps int) (*soul.TuneState, error) {
 	if steps < 1 || steps > memory.MaxSoulTuneHistory {
 		return nil, fmt.Errorf("soul tune: invalid rollback steps %d", steps)
 	}
 	var state *soul.TuneState
 	err := s.call(ctx, false, func(ctx context.Context, c lobslawv1.SoulTuneServiceClient) error {
-		r, err := c.RollbackSoulTune(ctx, &lobslawv1.RollbackSoulTuneRequest{Steps: uint32(steps)})
+		r, err := c.RollbackSoulTune(ctx, &lobslawv1.RollbackSoulTuneRequest{Steps: uint32(steps), BotId: botID})
 		if err == nil {
 			state = tuneFromRecord(r.Record)
 		}

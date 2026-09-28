@@ -8,8 +8,8 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -28,11 +28,11 @@ type RaftPrompts struct {
 	// paused turn is rebuilt. Read from config rather than from the
 	// record, so an operator lowering a limit is not overridden by a
 	// turn that started before the change.
-	caps compute.BudgetCaps
+	caps turn.BudgetCaps
 }
 
 // NewRaftPrompts wraps a raft-backed store as the gateway registry.
-func NewRaftPrompts(store *memory.PromptStore, nodeID string, caps compute.BudgetCaps) *RaftPrompts {
+func NewRaftPrompts(store *memory.PromptStore, nodeID string, caps turn.BudgetCaps) *RaftPrompts {
 	return &RaftPrompts{store: store, nodeID: nodeID, caps: caps}
 }
 

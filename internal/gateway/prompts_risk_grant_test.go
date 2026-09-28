@@ -26,18 +26,13 @@ import (
 
 func raiseRiskConfirmation(t *testing.T, h *tgPromptHarness, resource string, grantable bool, labels []commandrisk.RiskLabel) {
 	t.Helper()
-	budget, err := compute.NewTurnBudget(compute.BudgetCaps{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	h.handler.sendConfirmationKeyboard(
 		99,
-		compute.ProcessMessageRequest{
+		turn.Request{
 			TurnID: "turn-1",
-			Budget: budget,
 			Claims: &types.Claims{UserID: "tg-@alice"},
 		},
-		&compute.ProcessMessageResponse{
+		&turn.Response{
 			ConfirmationReason:    "run the thing?",
 			ConfirmationAction:    compute.ShellAction,
 			ConfirmationResource:  resource,

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // A turn that needs approving twice must still be approvable the
@@ -32,11 +32,10 @@ func TestTelegramResumedTurnRaisesAnAnswerableConfirmation(t *testing.T) {
 		t.Fatalf("resumed session UserID = %q; want the user the first question was asked of", session.UserID)
 	}
 
-	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
 	h.handler.sendConfirmationKeyboard(
 		555,
-		compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
-		&compute.ProcessMessageResponse{ConfirmationReason: "and now this one?"},
+		turn.Request{TurnID: "turn-42"},
+		&turn.Response{ConfirmationReason: "and now this one?"},
 		session,
 	)
 

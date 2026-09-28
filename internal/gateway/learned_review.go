@@ -2,11 +2,18 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
+)
+
+var (
+	ErrLearnedReviewForbidden = errors.New("not authorised to review learned skills")
+	ErrLearnedReviewNotFound  = errors.New("proposal not found for this user")
+	ErrLearnedReviewConflict  = errors.New("proposal changed or already decided; reload before reviewing again")
 )
 
 // LearnedReviews is the human review surface. It is deliberately separate
@@ -27,6 +34,7 @@ type LearnedChange struct {
 
 type LearnedReview struct {
 	ID          string
+	Author      string
 	Name        string
 	Description string
 	Body        string

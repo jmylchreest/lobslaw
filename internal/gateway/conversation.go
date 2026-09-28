@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // chatHistoryDefaults chosen so a chatty user gets several rounds of
@@ -50,7 +50,7 @@ type SessionStore interface {
 	// that follow it, capped at n verbatim messages (0 = all). An
 	// absent conversation returns an empty transcript and no error.
 	LoadTranscript(ctx context.Context, ref SessionRef, n int) (Transcript, error)
-	Append(ctx context.Context, ref SessionRef, turnID string, msgs []compute.Message) error
+	Append(ctx context.Context, ref SessionRef, turnID string, msgs []turn.Message) error
 	Forget(ctx context.Context, ref SessionRef) error
 }
 
@@ -60,7 +60,7 @@ type Transcript struct {
 	// Empty until the thread is long enough to need compacting.
 	Summary string
 	// Messages are the verbatim tail, oldest first.
-	Messages []compute.Message
+	Messages []turn.Message
 }
 
 // SessionCompactor folds aged-out conversation into the running
@@ -142,7 +142,7 @@ func (c *conversationLog) Load(ctx context.Context, ref SessionRef) Transcript {
 // Append records a turn in both tiers. Never returns an error: losing
 // history is bad, but failing a turn the agent already completed —
 // after tools ran and the user got a reply — is worse.
-func (c *conversationLog) Append(ctx context.Context, ref SessionRef, turnID string, msgs []compute.Message) {
+func (c *conversationLog) Append(ctx context.Context, ref SessionRef, turnID string, msgs []turn.Message) {
 	if len(msgs) == 0 {
 		return
 	}
@@ -215,7 +215,7 @@ type chatHistory struct {
 }
 
 type historyBucket struct {
-	messages []compute.Message
+	messages []turn.Message
 	lastUsed time.Time
 }
 
@@ -236,7 +236,7 @@ func newChatHistory(maxMessages int, ttl time.Duration) *chatHistory {
 // Load returns a defensive copy of the conversation's history, or nil
 // when the bucket is missing or stale. Loading also refreshes lastUsed
 // so active conversations stay warm.
-func (h *chatHistory) Load(key string) []compute.Message {
+func (h *chatHistory) Load(key string) []turn.Message {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.evictStaleLocked()
@@ -245,7 +245,7 @@ func (h *chatHistory) Load(key string) []compute.Message {
 		return nil
 	}
 	b.lastUsed = time.Now()
-	out := make([]compute.Message, len(b.messages))
+	out := make([]turn.Message, len(b.messages))
 	copy(out, b.messages)
 	return out
 }
@@ -254,7 +254,7 @@ func (h *chatHistory) Load(key string) []compute.Message {
 // entries once the total exceeds maxMessages. Safe to call with any
 // number of messages — a single turn commonly produces user+assistant
 // +tool triples.
-func (h *chatHistory) Append(key string, msgs ...compute.Message) {
+func (h *chatHistory) Append(key string, msgs ...turn.Message) {
 	if len(msgs) == 0 {
 		return
 	}
@@ -306,11 +306,11 @@ func (h *chatHistory) evictStaleLocked() {
 //
 // Out-of-range indices yield nil rather than panicking — a wrong
 // answer here costs a lost turn, not a crashed gateway.
-func newTurnMessages(all []compute.Message, turnStart int) []compute.Message {
+func newTurnMessages(all []turn.Message, turnStart int) []turn.Message {
 	if turnStart < 0 || turnStart >= len(all) {
 		return nil
 	}
-	out := make([]compute.Message, len(all)-turnStart)
+	out := make([]turn.Message, len(all)-turnStart)
 	copy(out, all[turnStart:])
 	return out
 }

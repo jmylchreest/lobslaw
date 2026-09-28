@@ -46,6 +46,9 @@ var archiveKinds = []archiveKind{
 	{BucketUserPrefs, "preferences", &lobslawv1.UserPreferences{}},
 	{BucketScheduledTasks, "scheduled-tasks", &lobslawv1.ScheduledTaskRecord{}},
 	{BucketCommitments, "commitments", &lobslawv1.AgentCommitment{}},
+	{BucketBots, "bots", &lobslawv1.BotRecord{}},
+	{BucketGroups, "groups", &lobslawv1.GroupRecord{}},
+	{BucketBotInbox, "inbox", &lobslawv1.BotInboxItem{}},
 }
 
 // ReadArchiveRecords opens an EXISTING database read-only, unlike OpenStore,
@@ -140,7 +143,7 @@ func portableMessage(msg protoreflect.Message) error {
 	if len(msg.GetUnknown()) > 0 {
 		return errors.New("source contains unknown protobuf fields; export with a newer binary")
 	}
-	for _, name := range []protoreflect.Name{"embedding", "norm", "embedding_model", "claimed_by", "claim_expires_at", "revision"} {
+	for _, name := range []protoreflect.Name{"embedding", "norm", "embedding_model", "claimed_by", "claim_expires_at", "revision", "task_claims"} {
 		if f := msg.Descriptor().Fields().ByName(name); f != nil {
 			msg.Clear(f)
 		}

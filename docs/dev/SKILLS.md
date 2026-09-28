@@ -612,6 +612,16 @@ that error reads as a misconfiguration, and this is not one.
 
 ## Materialising the self-taught store
 
+Human review is exposed in Telegram and the console's **Learned proposals**
+page through the same `node.learnedReviews` service. The console has typed
+list/read/decision operations and displays both current and proposed content,
+including reference files removed by an amendment. A human owner's policy must
+permit `command:exec` on `learned`; owning a bot permits review of that bot's
+proposals but does not transfer their authorship to the human. Operator roles do
+not bypass ownership. Decisions pin revision and content digest and call
+`SelfTaughtStore.DecideReviewed`; task execution approvals never substitute for
+this activation review. See [the console flow](GATEWAY.md#capabilities).
+
 The store is the authority for what the agent has taught itself; the
 filesystem is where a skill can actually be read. The materialiser is
 the **one-way** bridge between them.

@@ -50,6 +50,12 @@ func TestGatewayStillWiresAfterNormalisation(t *testing.T) {
 			enabled: false,
 			want:    false,
 		},
+		{
+			name:    "ui-web wires the HTTP surface without compute",
+			fns:     []types.NodeFunction{types.FunctionUIWeb},
+			enabled: false,
+			want:    true,
+		},
 	}
 
 	for _, tc := range cases {

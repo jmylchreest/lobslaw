@@ -1,0 +1,7 @@
+The web console build lands here. `make web` runs the Vite build in
+web/ and writes its output into this directory; `go:embed all:dist`
+then compiles it into the binary.
+
+Checked in empty so `go build` works on a clean checkout. A binary
+built without running `make web` has no index.html, and ui.Handler
+returns ErrNotBuilt rather than serving blank pages.

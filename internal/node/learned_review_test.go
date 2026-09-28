@@ -9,9 +9,11 @@ import (
 
 	"github.com/hashicorp/raft"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/skills"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -33,7 +35,7 @@ func reviewNode(t *testing.T) *Node {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := &Node{selfTaught: st, policyEngine: policy.NewEngine(store, slog.Default()), log: slog.Default(), materialiser: mat, skillRegistry: skills.NewRegistry(slog.Default())}
+	n := &Node{store: store, selfTaught: st, policyEngine: policy.NewEngine(store, slog.Default()), log: slog.Default(), materialiser: mat, skillRegistry: skills.NewRegistry(slog.Default())}
 	seedRule(t, store, &lobslawv1.PolicyRule{Id: "learned-alice", Subject: "user:alice", Action: "command:exec", Resource: "learned", Effect: "allow", Priority: 50})
 	return n
 }
@@ -82,6 +84,12 @@ func TestLearnedReviewsScopeAndActivation(t *testing.T) {
 	}
 	if _, err := n.skillRegistry.Get("mine"); err != nil {
 		t.Fatal(err)
+	}
+	for _, principal := range []string{"user:alice", "user:bob", "bot:worker", ""} {
+		ctx := turn.WithIdentity(t.Context(), turn.Identity{Principal: identity.Principal(principal)})
+		if got := n.skillAllowed(ctx, "mine"); got != (principal == "user:alice") {
+			t.Fatalf("learned skill authority for %q = %v", principal, got)
+		}
 	}
 }
 

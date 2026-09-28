@@ -261,12 +261,17 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	claims, err := s.authenticate(r, true)
-	if err != nil || claims.UserID == "" {
+	authn, err := s.authenticateRequest(r)
+	claims := authn.Claims
+	if err != nil || claims == nil || claims.UserID == "" || claims.UserID == "anon" {
 		s.jsonErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if s.agent == nil {
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if s.runner == nil {
 		s.jsonErr(w, http.StatusServiceUnavailable, "agent not configured on this node")
 		return
 	}

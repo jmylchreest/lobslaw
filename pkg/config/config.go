@@ -11,25 +11,27 @@ import (
 // validates its own slice — this layer only parses and resolves
 // secret references.
 type Config struct {
-	Memory    MemoryConfig     `koanf:"memory"`
-	Storage   StorageConfig    `koanf:"storage"`
-	Policy    PolicyConfig     `koanf:"policy"`
-	Compute   ComputeConfig    `koanf:"compute"`
-	Hooks     HooksConfig      `koanf:"hooks"`
-	Gateway   GatewayConfig    `koanf:"gateway"`
-	Discovery DiscoveryConfig  `koanf:"discovery"`
-	Cluster   ClusterConfig    `koanf:"cluster"`
-	Soul      SoulLoaderConfig `koanf:"soul"`
-	Auth      AuthConfig       `koanf:"auth"`
-	Sandbox   SandboxConfig    `koanf:"sandbox"`
-	Audit     AuditConfig      `koanf:"audit"`
-	Skills    SkillsConfig     `koanf:"skills"`
-	Logging   LoggingConfig    `koanf:"logging"`
-	Debug     DebugConfig      `koanf:"debug"`
-	MCP       MCPConfig        `koanf:"mcp"`
-	Security  SecurityConfig   `koanf:"security"`
-	Secrets   SecretsConfig    `koanf:"secrets"`
-	Identity  IdentityConfig   `koanf:"identity"`
+	Memory       MemoryConfig       `koanf:"memory"`
+	Storage      StorageConfig      `koanf:"storage"`
+	Policy       PolicyConfig       `koanf:"policy"`
+	Compute      ComputeConfig      `koanf:"compute"`
+	ComputeTeams ComputeTeamsConfig `koanf:"compute-teams"`
+	UIWeb        UIWebConfig        `koanf:"ui-web"`
+	Hooks        HooksConfig        `koanf:"hooks"`
+	Gateway      GatewayConfig      `koanf:"gateway"`
+	Discovery    DiscoveryConfig    `koanf:"discovery"`
+	Cluster      ClusterConfig      `koanf:"cluster"`
+	Soul         SoulLoaderConfig   `koanf:"soul"`
+	Auth         AuthConfig         `koanf:"auth"`
+	Sandbox      SandboxConfig      `koanf:"sandbox"`
+	Audit        AuditConfig        `koanf:"audit"`
+	Skills       SkillsConfig       `koanf:"skills"`
+	Logging      LoggingConfig      `koanf:"logging"`
+	Debug        DebugConfig        `koanf:"debug"`
+	MCP          MCPConfig          `koanf:"mcp"`
+	Security     SecurityConfig     `koanf:"security"`
+	Secrets      SecretsConfig      `koanf:"secrets"`
+	Identity     IdentityConfig     `koanf:"identity"`
 	// Trace is turn tracing. Off by default.
 	Trace TraceConfig `koanf:"trace"`
 	// SelfLearning defaults to off — the zero value of Mode parses to
@@ -459,6 +461,22 @@ type PolicyRuleConfig struct {
 	Resource string `koanf:"resource"`
 	Effect   string `koanf:"effect"`             // "allow" | "deny"
 	Priority int32  `koanf:"priority,omitempty"` // higher wins
+}
+
+// ComputeTeamsConfig is the [compute-teams] section. Off by default;
+// --all does not enable it.
+type ComputeTeamsConfig struct {
+	Enabled bool `koanf:"enabled"`
+}
+
+// UIWebConfig is the [ui-web] section. Off by default; --all does
+// not enable it. Enabling it does not imply local compute.
+type UIWebConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// Backend is the cluster gRPC address (host:port) of a compute
+	// node. Required when ui-web is on and compute is off — a web
+	// node has no local agent, so turns run there.
+	Backend string `koanf:"backend"`
 }
 
 // ComputeConfig is the [compute] section: LLM providers, the chains

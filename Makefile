@@ -1,4 +1,4 @@
-.PHONY: proto proto-lint proto-breaking proto-tools build test smoke lint lint-tools tidy hooks hook-tools
+.PHONY: proto proto-lint proto-breaking proto-tools build test smoke lint lint-tools tidy hooks hook-tools web web-deps web-test web-check
 
 # Go-tool-installed binaries live under $(go env GOPATH)/bin. Prepend to PATH
 # for targets that shell out to them (buf invokes protoc-gen-go via PATH).
@@ -40,6 +40,30 @@ proto-lint:
 # Detect proto breaking changes against main. Only meaningful on PR branches.
 proto-breaking:
 	@buf breaking --against '.git#branch=main'
+
+# The web console. Vite writes straight into internal/gateway/ui/dist,
+# which go:embed compiles into the binary — one artefact, one location,
+# and no copy step to forget.
+#
+# NOT a prerequisite of `build`. A Go build should not depend on npm
+# being installed: the console is opt-in, and a binary without it logs
+# a warning and serves everything else. Run `make web` before building
+# a release.
+web: web-deps
+	@rm -rf internal/gateway/ui/dist/assets
+	@cd web && npm run build
+
+# The console's own tests. Separate from `test` because that target is
+# Go and adding a node dependency to it would make `make test` need a
+# toolchain it otherwise does not.
+web-test: web-deps
+	@cd web && npm test
+
+web-deps:
+	@cd web && npm ci --no-audit --no-fund
+
+web-check: web-deps
+	@cd web && npm run typecheck
 
 build:
 	@go build ./...

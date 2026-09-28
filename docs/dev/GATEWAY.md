@@ -2,11 +2,12 @@
 
 The gateway is the user-facing edge. It turns inbound REST / Telegram traffic into `compute.ProcessMessageRequest` calls on the agent loop, then turns the agent's response back into a channel-appropriate reply (JSON, or a Telegram message with inline buttons).
 
-Three packages cooperate:
+Four packages cooperate:
 
 - `internal/gateway` — the REST server (`Server`), the Telegram webhook handler (`TelegramHandler`), and the confirmation registry both channels share (`Prompts`, with an in-memory and a raft-backed implementation).
+- `internal/gateway/ui` — the embedded browser console. `go:embed` of a Vite build; `Handler` returns `ErrNotBuilt` when `make web` has not run.
 - `pkg/auth` — JWT validation (`Validator`, `ExtractBearer`) used by the REST server to authenticate inbound requests.
-- `internal/compute` — the agent loop, tool registry, executor, budget, and mock/real LLM providers the channels drive.
+- `internal/compute` — the agent loop, tool registry, executor, budget, and mock/real LLM providers the channels drive. The gateway package does not import it.
 
 The agent loop knows nothing about HTTP or Telegram. Each channel is a thin adapter that translates inbound transport into an internal request.
 
@@ -20,47 +21,62 @@ sequenceDiagram
   participant Client
   participant Server as gateway.Server
   participant Auth as pkg/auth.Validator
-  participant Agent as compute.Agent
+  participant Runner as turn.Runner
   participant Prompts as gateway.PromptRegistry
 
-  Client->>Server: POST /v1/messages<br/>Authorization: Bearer <jwt>
+  Client->>Server: POST /v1/messages<br/>Authorization: Bearer <jwt> or Cookie
   Server->>Server: MaxBytesReader(1MB) + JSON decode
-  Server->>Auth: Validate(token)
-  alt token missing/invalid + RequireAuth
-    Auth-->>Server: error
+  alt cookie login session
+    Server->>Server: lookup opaque session, CSRF Origin check
+  else Bearer JWT
+    Server->>Auth: Validate(token)
+  end
+  alt missing/invalid + RequireAuth
     Server-->>Client: 401
   else ok
-    Auth-->>Server: *types.Claims
-    Server->>Agent: RunToolCallLoop(req with Claims, TurnBudget)
+    Server->>Runner: Run(req with Claims)
     alt resp.NeedsConfirmation && Prompts configured
-      Agent-->>Server: resp
-      Server->>Prompts: Create(turn, reason, "rest", TTL)
+      Runner-->>Server: resp
+      Server->>Prompts: Create(..., RaisedFor=canonical user)
       Prompts-->>Server: Prompt{ID,...}
-      Server-->>Client: 200 {reply, needs_confirmation:true, prompt_id}
+      Server-->>Client: SSE needs_confirmation with prompt_id
+      Client->>Server: POST /v1/prompts/id/resolve
+      Server->>Runner: Resume with one-shot approval
+      Runner-->>Client: final reply
     else plain reply
-      Agent-->>Server: resp
+      Runner-->>Server: resp
       Server-->>Client: 200 {reply, tool_calls, budget}
     end
   end
 ```
 
-Client then polls `GET /v1/prompts/<id>` for state and confirms via `POST /v1/prompts/<id>/resolve` with `{"approve": bool}`.
+Client then polls `GET /v1/prompts/<id>` for state and confirms via `POST /v1/prompts/<id>/resolve` with `{"approve": bool}`. Knowing a prompt id is not access: with `RequireAuth` the caller must be the user the prompt was raised for.
 
 ### Routes
+
+User-data routes (`/v1/*` except login's Bearer exchange) return **401** when `RequireAuth` is set and the caller has no valid JWT or login cookie. `/healthz` and `/readyz` stay public. Telegram and inbound webhooks keep their own secrets.
 
 | Method + Path | Purpose | Status codes |
 |---|---|---|
 | `POST /v1/uploads` | Authenticated raw image/audio upload; returns owner-bound staging ID | 201, 400, 401, 413, 415, 429, 500, 503 |
-| `POST /v1/messages` | Main user entry — sends a message to the agent | 200, 400, 401 (w/ RequireAuth), 500, 503 (no agent) |
+| `POST /v1/messages` | Main user entry — sends a message to the agent | 200, 400, 401, 403 (cookie CSRF), 500, 503 (no agent) |
 | `GET  /healthz` | Liveness — process alive | 200 |
 | `GET  /readyz` | Readiness — server bound + agent configured | 200, 503 |
-| `GET  /v1/prompts/<id>` | Fetch prompt state | 200, 404 |
-| `POST /v1/prompts/<id>/resolve` | Approve/deny a confirmation | 200, 400, 404, 409 (already resolved) |
+| `GET  /v1/prompts/<id>` | Fetch prompt state | 200, 401, 404, 409 (expired) |
+| `POST /v1/prompts/<id>/resolve` | Approve/deny a confirmation | 200, 400, 401, 404, 409 |
+| `GET  /v1/plan` | Upcoming commitments + scheduled tasks | 200, 401, 405, 500 |
+| `GET  /v1/capabilities` | Discovery flags (does not grant access) | 200, 401 |
+| `POST /v1/session` | JWT → opaque login cookie | 200, 401, 403 (not enrolled) |
+| `GET  /v1/session` | Current login identity | 200, 401 |
+| `DELETE /v1/session` | Revoke cookie + cancel tracked streams | 200, 401, 403 |
+| `GET  /` | Embedded SPA when FunctionUIWeb is on and assets were built | 200, 404 |
 | `POST /telegram` | Telegram webhook (if `Telegram` configured on the server) | 200, 401 |
+
+A table-driven test walks every `mux.Handle*` path literal in this package. A new route that is not classified there fails CI.
 
 ### Auth modes
 
-The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes:
+The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes for **Bearer** tokens:
 
 | Validator | RequireAuth | Behaviour |
 |---|---|---|
@@ -70,6 +86,178 @@ The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes:
 | nil | true | **Fail-closed.** Every request 401. Intentional: "I asked for auth but provided no validator" is an operator error that shouldn't silently allow traffic. |
 
 Validated tokens with a missing `scope` claim default to `DefaultScope` rather than an empty string.
+
+Identity is never taken from the JSON body. JWT `sub` is resolved through `identity.Resolver` and `[[user.channels]]` (`type = "rest"`, `address = <jwt sub>`) onto `[[user]].id`. Display-name changes do not change that id.
+
+### Web login sessions
+
+Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (`lobslaw_login`). There is no self-signup: `POST /v1/session` requires the JWT subject to match an operator-declared `[[user]]`. Web login copies `[[user]].roles` onto the session and **does not** grant `role:operator` from the JWT. Cookie-authenticated unsafe methods also check `Origin` against the request host. `DELETE /v1/session` drops the cookie and cancels any in-flight REST streams bound to it. Login sessions are in-memory; a restart means presenting the JWT again.
+
+One-time codes are another enrollment credential. `POST /v1/session/code` requires a valid enrolled Bearer JWT and only mints for that same account. There is no agent-callable minting API or `console_code` tool: inherited operator roles are not human enrollment proof, and credentials must not enter model context. Turn identities are refused at the HTTP minting boundary; retired tool calls are excluded from model tool exposure and dispatch, including coordinator tasks and resumed turns. No HTTP login path trusts `RemoteAddr` as a user identity. Code redemption has a global bounded attempt window, so rotating source addresses or forwarded headers cannot multiply the guessing allowance. Minting replaces the user's previous code and removes expired codes.
+
+```mermaid
+flowchart LR
+    Human[Human CLI with enrolled JWT] --> Mint[POST /v1/session/code]
+    Mint --> Verify[Validate JWT and bind enrolled account]
+    Verify --> Code[Return one-time code to human]
+    Code --> Browser[Browser code redemption]
+    Browser --> Cookie[HttpOnly login cookie]
+    Agent[Agent or task with inherited roles] --> Deny[No credential tool or minting API]
+```
+
+Bot data and chat routes check the bot's explicit human owner; listing filters inaccessible records. Transcript reads authorize the stored session participant, or the owning bot for bot-channel sessions. Settings PATCH requires the editor's `revision` and returns 409 on a stale form. Bot chat holds the conversation gate across Load → Run → approval/resume → Append; heartbeat shutdown is joined before the handler returns.
+
+### Capabilities
+
+`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. Bot/group registries require `FunctionComputeTeams` on the serving compute backend (`--compute-teams` or `[compute-teams].enabled`); a web-only node forwards those routes without enabling local teams. Channel handlers set `turn.Request.BotID` via `TeamRouter` and do not import `internal/compute`. `ui-web` is true when the console handler is mounted. The SPA hides team chrome when teams are off rather than inventing a default team.
+
+A ui-web node without local compute calls `[ui-web].backend` through peer-only
+`ConsoleService.QueryConsole`, `MutateConsole` and streaming `ChatConsole` RPCs.
+Queries, mutations, results and chat events are closed protobuf oneofs with
+resource-specific messages. No method, URL, opaque JSON body, HTTP status or SSE
+frame crosses gRPC. Browser HTTP is decoded on the web node; the backend's local
+adapters reuse the existing REST ownership, revision and audit logic. A peer
+cannot select a handler outside the typed operation set. Login, credentials and
+static assets have no peer operation.
+
+The web node authenticates the user and checks cookie CSRF before asserting
+claims plus a canonical principal. The backend verifies the node certificate,
+rejects operator certificates and claims/principal disagreement, and independently
+checks target ownership. Records, conversation gates and pending prompts stay
+together on the backend, including when the web node has no memory function.
+Capability discovery reads the backend's gates: an initial outage returns 503;
+after discovery an outage preserves known enabled/configured flags with
+availability false. It never invents disabled features from a failed probe.
+
+Durable task queries/decisions reuse the owner-facing messages and service from
+[TASK_APPROVALS.md](TASK_APPROVALS.md). The console overwrites request owners with
+the verified principal; no execution-claim operation is exposed. The backend
+invokes its shared `TaskApprovalAPI`, so the worker retains responsibility for
+scheduling ready tasks. Legacy `ConsoleForward` clients are no longer supported;
+upgrade the web node and its console backend together.
+
+Learned-content review is a separate typed console operation set:
+`QueryConsole.learned_reviews`, `QueryConsole.learned_review` and
+`MutateConsole.decide_learned_review`. Local REST and remote console backends
+both call `node.learnedReviews`, the same human-review service as Telegram.
+`GET /v1/learned-reviews`, `GET /v1/learned-reviews/{id}` and
+`POST /v1/learned-reviews/{id}/decide` require authentication; cookie decisions
+also require the normal Origin check. The service checks `command:exec learned`
+policy and explicit authorship/ownership on every call. A human may review their
+own records and proposals authored by their own live bots; an operator role does
+not grant cross-owner review.
+
+The inspection response includes full current and pending content, reference
+files, rationale, source turns, revision and digest. Decisions carry only the
+inspected revision/digest and explicit approve/reject choice; identity never
+comes from the body. This API uses generated protobuf JSON names and decimal
+string revisions like task approvals. Digest/revision conflicts return 409 and
+require fresh inspection. The response preserves the review service's actual
+activation result, including pending materialisation and activation failures.
+Approving a task is not approval to activate a learned skill.
+
+The console's Learned proposals link polls this policy-filtered list and displays
+the awaiting-review count in both team and single-assistant layouts. It remains
+reachable if the review service is unavailable. Configured outbound notices also
+name the console review page; compute-only console backends receive the notice
+service as well as the learned-review service.
+
+```mermaid
+sequenceDiagram
+  participant Human as Human owner
+  participant Web as Console HTTP
+  participant Peer as Typed ConsoleService
+  participant Review as node.learnedReviews
+  participant Store as SelfTaughtStore / Raft
+  participant Skills as Materialiser / registry
+  Human->>Web: List and inspect learned proposal (authenticated)
+  Web->>Peer: learned_reviews / learned_review (verified identity)
+  Peer->>Review: List / Get with human claims
+  Review->>Review: Check learned policy and author or bot ownership
+  Review-->>Human: Complete content, files, revision and digest
+  Human->>Web: Explicit approve/reject of inspected content
+  Web->>Peer: decide_learned_review (revision, digest, choice)
+  Peer->>Review: Decide with verified human claims
+  Review->>Store: DecideReviewed (revision + digest + author CAS)
+  alt conflict
+    Store-->>Human: 409; reload and inspect again
+  else approved skill
+    Review->>Skills: Materialise and check installed reviewed content
+    Review-->>Human: Actual active / pending / failed activation receipt
+  else rejected
+    Review-->>Human: Archived proposal or unchanged approved version
+  end
+```
+
+`AgentService` remains the remote `turn.Runner` transport. Both RPC services reject operator certificates and unidentified callers: only node peers may assert a user. Remote resume transfers the exact action/resource approval once, consuming the local context grant and reconstructing its one-shot counterpart on the compute node.
+
+### Web console
+
+FunctionUIWeb (`--ui-web` / `[ui-web].enabled`) mounts the SPA on the REST listener via `Server.RegisterConsole`. It does **not** rewrite to compute. A ui-web node without FunctionCompute must set `[ui-web].backend` to a compute node's cluster gRPC address or boot fails. A binary built without `make web` logs a warning and stays up.
+
+A non-loopback bind with the console mounted refuses to start unless `[auth] require_auth = true`. Loopback is exempt so a laptop console can run without a JWT issuer.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Browser
+  participant SPA as embedded SPA
+  participant Server as gateway.Server
+  participant Runner as turn.Runner
+  participant Compute as Backend ConsoleService
+
+  Browser->>Server: GET /
+  alt console mounted
+    Server-->>Browser: index.html (no-cache)
+    Browser->>SPA: boot
+    SPA->>Server: GET /v1/session (cookie)
+    alt 401
+      Browser->>Server: POST /v1/session Authorization Bearer JWT
+      Server-->>Browser: Set-Cookie lobslaw_login
+    end
+    SPA->>Server: GET /v1/capabilities
+    alt compute.available false
+      SPA->>SPA: unavailable, records stay
+    else compute-teams.enabled
+      SPA->>SPA: load teams; empty is empty, 5xx is unavailable
+    else
+      SPA->>SPA: single-assistant chat
+    end
+    SPA->>Server: POST /v1/messages Accept text/event-stream
+    alt runner nil
+      Server-->>SPA: 503
+      SPA->>SPA: unavailable, not deleted
+    else remote backend
+      Server->>Compute: ChatConsole (verified claims + principal, typed message)
+      Compute->>Compute: Authorize target and acquire conversation gate
+      Compute-->>Server: Stream typing / needs_confirmation / final
+      Server-->>SPA: SSE events
+      SPA->>Server: Approve prompt
+      Server->>Compute: MutateConsole.resolve_prompt (typed owner decision)
+    else
+      Server->>Runner: Run
+      Runner-->>SPA: SSE typing / interim / final
+    end
+  else
+    Server-->>Browser: 404
+  end
+```
+
+Each active login stream has a distinct registration. Finishing one stream
+removes only that registration; logout atomically revokes the session and cancels
+every remaining stream, including gRPC-backed turns. A registration racing after
+revocation is cancelled immediately. The browser also aborts all active fetches
+on logout and suppresses callbacks after cancellation.
+
+Model Markdown images render as explicit links, never `<img>` elements: neither
+external nor same-origin image URLs may issue requests just because a reply was
+rendered. Durable bot replies carry typed transcripts and per-attempt receipts,
+serialised with protobuf JSON identically on local and remote SSE. Only the
+runner's `executed` status proves dispatch; it is not proof of successful external
+effects. Requested calls, refusals, approval/budget pauses and unknown outcomes
+are displayed distinctly. Historical inbox names without per-call evidence stay
+labelled attempts. Task detail links and room history expose completed resumed
+work without replacing full coordinator transcripts with summary-only messages.
 
 ---
 
@@ -419,7 +607,7 @@ Caps are lifted for the remainder of the turn via `TurnBudget.Relax()` — seman
 
 ### What the continuation carries
 
-Conversation state: the transcript so far, the user's message, claims, system prompt, model, timezone, summary, recall, and the budget already spent.
+Conversation state: the transcript so far, the user's message, claims, bot ID, canonical principal, system prompt, model, timezone, summary, recall, and the budget already spent. Bot profiles are resolved again on resume so current restrictions still apply.
 
 Two deliberate omissions:
 
@@ -595,7 +783,7 @@ See [MEMORY.md → Sessions](MEMORY.md#sessions) for the storage layout, the tri
 
 Callouts deferred past Phase 6h:
 
-- **`GET /v1/plan` and `GET /v1/health`.** Owned by Phase 7 (scheduler) and Phase 11 (audit) respectively.
+- **`GET /v1/health`.** Owned by Phase 11 (audit). `/v1/plan` is mounted and gated like every other user-data route.
 - **ACME / Let's Encrypt.** TLS certs are passed explicitly; automatic issuance isn't wired.
 - **REST cross-node resume.** REST holds the connection open and resumes in the request that raised the prompt, so it stores no continuation. A REST turn approved elsewhere still records the decision, but the original request has to be re-sent.
 
@@ -774,9 +962,9 @@ Two halves, and only both make it true:
 
 - **Client authentication only.** Nothing can serve with it, so it
   cannot answer connections as a node.
-- **`OU=operator`, refused on the raft transport.** ClientAuth alone
+- **`OU=operator`, refused on peer-only services.** ClientAuth alone
   would not stop it — a peer dials as a client too — so the server
-  refuses that OU on `/RaftTransport/`, on both the unary and the
+  refuses that OU on `/RaftTransport/`, `AgentService` and `ConsoleService`, on both the unary and the
   streaming interceptor. Raft's transport is streaming; a unary-only
   guard would cover nothing that matters.
 

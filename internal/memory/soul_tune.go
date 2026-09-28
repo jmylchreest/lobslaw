@@ -40,15 +40,24 @@ func NewSoulTuneService(raft *RaftNode, store *Store) *SoulTuneService {
 	return &SoulTuneService{raft: raft, store: store}
 }
 
-// Get returns the current SoulTuneRecord. Returns (nil, nil) when
+// Get returns the chief's SoulTuneRecord. Returns (nil, nil) when
 // nothing has been written yet — the Adjuster treats this as "no
 // overlay; serve baseline". Errors are reserved for unmarshal /
 // store failures.
-func (s *SoulTuneService) Get(_ context.Context) (*lobslawv1.SoulTuneRecord, error) {
+func (s *SoulTuneService) Get(ctx context.Context) (*lobslawv1.SoulTuneRecord, error) {
+	return s.GetFor(ctx, ChiefBotID)
+}
+
+// GetFor returns one bot's overlay.
+//
+// The chief's key is SoulTuneRecordID unchanged, so a cluster that
+// upgraded into having bots reads back the personality it already had
+// rather than a default one. See SoulTuneRecordIDFor.
+func (s *SoulTuneService) GetFor(_ context.Context, botID string) (*lobslawv1.SoulTuneRecord, error) {
 	if s.store == nil {
 		return nil, errors.New("soul tune: store not wired")
 	}
-	raw, err := s.store.Get(BucketSoulTune, SoulTuneRecordID)
+	raw, err := s.store.Get(BucketSoulTune, SoulTuneRecordIDFor(botID))
 	if err != nil {
 		if errors.Is(err, types.ErrNotFound) {
 			return nil, nil
@@ -67,23 +76,31 @@ func (s *SoulTuneService) Get(_ context.Context) (*lobslawv1.SoulTuneRecord, err
 // MaxSoulTuneHistory), and the supplied state becomes the new current.
 // updated_at is stamped before proposal and replicated with the state.
 func (s *SoulTuneService) Put(ctx context.Context, state *lobslawv1.SoulTuneState, expectedRevision uint64) (*lobslawv1.SoulTuneRecord, error) {
+	return s.PutFor(ctx, ChiefBotID, state, expectedRevision)
+}
+
+// PutFor writes one bot's overlay. Each bot's record carries its own
+// revision and its own history, so two bots being re-tuned at once
+// cannot conflict with each other — they are different records, not
+// one record with a bot field.
+func (s *SoulTuneService) PutFor(ctx context.Context, botID string, state *lobslawv1.SoulTuneState, expectedRevision uint64) (*lobslawv1.SoulTuneRecord, error) {
 	if state == nil {
 		return nil, errors.New("soul tune: state required")
 	}
 	if s.raft == nil {
 		return nil, errors.New("soul tune: raft not wired")
 	}
-	prev, err := s.Get(ctx)
+	prev, err := s.GetFor(ctx, botID)
 	if err != nil {
 		return nil, err
 	}
 	if prev.GetRevision() != expectedRevision {
 		return nil, fmt.Errorf("%w: soul changed; read current state and retry", ErrClaimConflict)
 	}
-	return s.put(ctx, state, prev)
+	return s.put(ctx, botID, state, prev)
 }
 
-func (s *SoulTuneService) put(ctx context.Context, state *lobslawv1.SoulTuneState, prev *lobslawv1.SoulTuneRecord) (*lobslawv1.SoulTuneRecord, error) {
+func (s *SoulTuneService) put(ctx context.Context, botID string, state *lobslawv1.SoulTuneState, prev *lobslawv1.SoulTuneRecord) (*lobslawv1.SoulTuneRecord, error) {
 	state = proto.Clone(state).(*lobslawv1.SoulTuneState)
 	state.UpdatedAt = timestamppb.Now()
 	hist := append([]*lobslawv1.SoulTuneState(nil), prev.GetHistory()...)
@@ -100,7 +117,7 @@ func (s *SoulTuneService) put(ctx context.Context, state *lobslawv1.SoulTuneStat
 	revision := prev.GetRevision()
 	rec := &lobslawv1.SoulTuneRecord{Current: state, History: hist, Revision: revision + 1}
 	data, err := proto.Marshal(&lobslawv1.LogEntry{
-		Op: lobslawv1.LogOp_LOG_OP_CLAIM, Id: SoulTuneRecordID,
+		Op: lobslawv1.LogOp_LOG_OP_CLAIM, Id: SoulTuneRecordIDFor(botID),
 		ExpectedRevision: &revision,
 		Payload:          &lobslawv1.LogEntry_SoulTune{SoulTune: rec},
 	})
@@ -120,13 +137,18 @@ func (s *SoulTuneService) put(ctx context.Context, state *lobslawv1.SoulTuneStat
 // Rollback appends a restoration as a new revision. The CAS covers the
 // history selection too, so a concurrent edit cannot silently be discarded.
 func (s *SoulTuneService) Rollback(ctx context.Context, steps int) (*lobslawv1.SoulTuneRecord, error) {
+	return s.RollbackFor(ctx, ChiefBotID, steps)
+}
+
+// RollbackFor is the per-bot equivalent.
+func (s *SoulTuneService) RollbackFor(ctx context.Context, botID string, steps int) (*lobslawv1.SoulTuneRecord, error) {
 	if steps < 1 {
 		return nil, errors.New("soul tune: steps must be >= 1")
 	}
 	if s.raft == nil {
 		return nil, errors.New("soul tune: raft not wired")
 	}
-	prev, err := s.Get(ctx)
+	prev, err := s.GetFor(ctx, botID)
 	if err != nil {
 		return nil, err
 	}
@@ -134,5 +156,5 @@ func (s *SoulTuneService) Rollback(ctx context.Context, steps int) (*lobslawv1.S
 		return nil, fmt.Errorf("soul tune: only %d history entries; cannot rollback %d steps", len(prev.GetHistory()), steps)
 	}
 	picked := prev.History[len(prev.History)-steps]
-	return s.put(ctx, picked, prev)
+	return s.put(ctx, botID, picked, prev)
 }

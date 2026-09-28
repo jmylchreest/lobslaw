@@ -23,7 +23,7 @@ import (
 func startRESTWith(t *testing.T, cfg RESTConfig, agent *compute.Agent) string {
 	t.Helper()
 	cfg.Addr = "127.0.0.1:0"
-	srv := NewServer(cfg, agent)
+	srv := NewServer(cfg, compute.Adapt(agent))
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() {

@@ -136,7 +136,22 @@ func (c *Config) Validate() error {
 	if err := validateQueueMode(c.Gateway.QueueMode); err != nil {
 		return err
 	}
+	if err := validateUIWebAuth(c.UIWeb, c.Auth); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateUIWebAuth refuses an unauthenticated console. The node's
+// REST bind is host-empty (`:port`), which is every interface, so
+// loopback exemption lives at the listener rather than here.
+func validateUIWebAuth(ui UIWebConfig, auth AuthConfig) error {
+	if !ui.Enabled || auth.RequireAuth {
+		return nil
+	}
+	return fmt.Errorf("%w: [ui-web] enabled needs [auth] require_auth = true — "+
+		"the console must not be reachable without a token. Bind to localhost and leave this off only if the listener is loopback-only",
+		types.ErrInvalidConfig)
 }
 
 // validateTrustTiers rejects an out-of-range numeric trust_tier.

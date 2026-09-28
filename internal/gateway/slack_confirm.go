@@ -7,7 +7,6 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 )
@@ -22,7 +21,7 @@ import (
 // action_id carries "prompt:<verb>:<id>", which is how the tap is
 // routed back without a side table. Slack caps action_id at 255 bytes;
 // a verb plus a ULID is nowhere near it.
-func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackResponder, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse, session SessionRef) {
+func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackResponder, req turn.Request, resp *turn.Response, session SessionRef) {
 	channel := r.channel
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
@@ -37,7 +36,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 		TTL:          ttl,
 		Action:       resp.ConfirmationAction,
 		Resource:     resp.ConfirmationResource,
-		Continuation: &Continuation{Request: req, Messages: resp.Messages},
+		Continuation: &Continuation{Request: continuationRequest(req, resp), Messages: resp.Messages},
 		// Who may answer, captured from the turn rather than read off
 		// the tap. In a Slack channel this is load-bearing in a way it
 		// is not in a Telegram DM: everyone in the room can see the
@@ -301,7 +300,7 @@ func (h *SlackHandler) grantForRisk(ctx context.Context, promptID, convID string
 	// without anybody having granted that exact pair.
 	keys := make([]string, 0, len(op.labels))
 	for _, l := range op.labels {
-		key := compute.RiskGrantResource(l)
+		key := riskGrantResource(l)
 		if key == "" {
 			return ""
 		}
@@ -427,11 +426,11 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 	turnCtx, r, cleanup := h.startResponsivenessGuards(ctx, channel, thread, thread)
 	defer cleanup()
 
-	cont.Request.Budget.Relax()
 	// The policy equivalent of Relax — see the Telegram twin. From the
-	// prompt record, never the interaction payload.
-	turnCtx = compute.WithTurnApproval(turnCtx, p.Action, p.Resource)
-	resp, err := h.agent.ResumeFromConfirmation(turnCtx, cont.Request, cont.Messages)
+	// prompt record, never the interaction payload. Budget caps are
+	// lifted inside Runner.Resume.
+	turnCtx = turn.WithTurnApproval(turnCtx, p.Action, p.Resource)
+	resp, err := h.runner.Resume(turnCtx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("slack: resume failed", "turn_id", cont.Request.TurnID, "err", err)
 		r.writeFinal(ctx, classifyAgentError(err), nil)

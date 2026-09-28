@@ -165,3 +165,40 @@ func TestValidateAcceptsATriggerDomainAtTheLengthBound(t *testing.T) {
 		t.Errorf("Validate: %v", err)
 	}
 }
+
+func TestValidateRejectsUIWebWithoutRequireAuth(t *testing.T) {
+	t.Parallel()
+	c := &Config{
+		UIWeb: UIWebConfig{Enabled: true},
+		Auth:  AuthConfig{RequireAuth: false},
+	}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("ui-web without require_auth must fail: the default bind is every interface")
+	}
+	if !errors.Is(err, types.ErrInvalidConfig) {
+		t.Errorf("err = %v, want wraps ErrInvalidConfig", err)
+	}
+}
+
+func TestValidateAcceptsUIWebWithRequireAuth(t *testing.T) {
+	t.Parallel()
+	c := &Config{
+		UIWeb: UIWebConfig{Enabled: true},
+		Auth:  AuthConfig{RequireAuth: true},
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+}
+
+func TestValidateUIWebOffIgnoresRequireAuth(t *testing.T) {
+	t.Parallel()
+	c := &Config{
+		UIWeb: UIWebConfig{Enabled: false},
+		Auth:  AuthConfig{RequireAuth: false},
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("ui-web off should pass without require_auth: %v", err)
+	}
+}

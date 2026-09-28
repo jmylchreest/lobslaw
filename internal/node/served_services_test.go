@@ -68,4 +68,6 @@ var servedServices = map[string]bool{
 	"TraceService":        true,
 	"IdentityService":     true,
 	"SessionService":      true,
+	"AgentService":        true,
+	"ConsoleService":      true,
 }

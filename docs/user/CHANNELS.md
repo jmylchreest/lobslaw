@@ -1,6 +1,6 @@
 # Channels
 
-lobslaw exposes the agent loop to users through **channels**. Today there are two: the REST API and Telegram. Channels are configured under `[[gateway.channels]]` in `config.toml`; you can mix and match.
+lobslaw exposes the agent loop to users through **channels**. Today there are REST, an optional browser console, and Telegram. Channels are configured under `[[gateway.channels]]` in `config.toml`; you can mix and match.
 
 ## REST
 
@@ -8,9 +8,13 @@ Default. Mounts on the gateway HTTP port (8443 by default) at:
 
 - `POST /v1/uploads` — upload image/audio bytes with a valid JWT; return an upload ID
 - `POST /v1/messages` — send a message, get a reply
-- `GET /v1/plan` — see what's scheduled and in-flight
-- `POST /v1/prompts/{id}/{approve|deny}` — answer a confirmation prompt
-- `GET /healthz`, `GET /readyz` — health probes
+- `GET /v1/plan` — see what's scheduled and in-flight (401 when `require_auth` is on and you are not signed in)
+- `GET /v1/prompts/{id}` / `POST /v1/prompts/{id}/resolve` — inspect or answer a confirmation
+- `GET /v1/capabilities` — which surfaces this node has (does not grant access)
+- `POST /v1/session` — exchange a JWT for a login cookie; `DELETE /v1/session` revokes it
+- `GET /healthz`, `GET /readyz` — health probes (ungated)
+
+A body field named `user_id` is ignored. Who you are comes from the Bearer token or the login cookie, resolved to `[[user]].id`. To enrol a browser user, declare them under `[[user]]` with `[[user.channels]] type = "rest"` and `address` equal to their JWT `sub`. Logging in does not make them an operator.
 
 ### Conversations over REST
 
@@ -31,6 +35,80 @@ curl -X POST https://localhost:8443/v1/messages \
 Pick the id yourself — anything stable and unique per conversation, containing no `:` or `/` (both are rejected with a 400). Reusing an id resumes that conversation; a fresh id starts a new one.
 
 Session ids are scoped to the authenticated caller, so two users who both pick `default` get two separate conversations and neither can read the other's. On a node with `require_auth = false` every caller is the same anonymous identity, and so shares one namespace — if REST is reachable by more than one person, authenticate it.
+
+## Browser console
+
+Off by default. `--all` does not turn it on. Enable it with `--ui-web` or:
+
+```toml
+[ui-web]
+enabled = true
+# Required when this node does not run compute: cluster gRPC of a compute node.
+# backend = "compute-1:7443"
+
+[auth]
+require_auth = true
+```
+
+Then open the gateway HTTP port in a browser (8443 by default). Sign in with an enrolled JWT. To obtain a code from the CLI, set `LOBSLAW_LOGIN_TOKEN` to your enrolled JWT and run `lobslaw login --config <path>` (or supply `--token`). Type the six-digit code in the browser. Codes expire after five minutes and work once; guessing is limited to ten attempts per minute per web node. There is no self-signup: the person must already be in `[[user]]`. Assistants cannot mint sign-in codes, even in an operator's direct chat; use the CLI or browser so credentials never enter model context.
+
+Loopback connections do not bypass authentication: a reverse proxy can make a remote browser appear to connect from localhost. The old **Continue on this computer** shortcut is no longer offered.
+
+If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
+
+When compute-teams is off (the default), you get a single-assistant chat with inline approval buttons. Named bot rooms start fresh tasks and link to **Task approvals** when an operation or budget needs your decision; the chat stream closes while the task waits. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
+
+In the team console, open **Task approvals** for bot-room, delegated or queued work waiting on you.
+The page shows the task's actor, pending operation, state, expiry and budget
+consumption. You can approve once, grant an offered operation/category for that
+task, deny, or add a bounded budget allowance. Approval queues the saved task for
+its worker; **ready** does not mean it has executed. Refresh or use the next-page
+button to inspect older tasks. Task approval remains available after closing the
+chat that initiated the work.
+
+An **outcome unknown** task may already have produced external effects. Recovery
+is offered only when a saved checkpoint is available and requires acknowledging
+possible duplicate effects, then a fresh approval. **Close without replay** closes
+an uncertain task without running it again; it cannot undo effects already made.
+If no checkpoint is available, further work needs a fresh assignment.
+Cancelling running work prevents further authorisation but cannot undo effects
+already started. Decisions are revision checked; reload a changed task before
+deciding again.
+
+Task links open that task directly, even when it is on an older list page.
+Completed tasks retain the result plus **Transcript and execution receipts**,
+including resumed work. Receipts distinguish actual dispatch from refused,
+approval-paused, budget-paused and uncertain attempts. A handler marked executed
+may still return a failure. In a bot room, **Conversation and task history** lets
+you inspect retained coordinator conversations and task transcripts.
+
+Signing out cancels all active browser streams. Images in model replies appear
+as links that you choose to open, rather than loading automatically. Tool
+receipts distinguish returned results from attempts that may have been refused,
+paused or failed; a returned result alone does not prove the requested external
+effect succeeded. Older inbox records show tool attempts because they lack
+per-call execution evidence.
+
+### Reviewing learned proposals
+
+Open **Learned proposals** (`/learned`) in either console layout. Its notification
+count shows proposals and amendments awaiting your review, including proposals
+authored by bots you own. Your account also needs policy permission for
+`command:exec` on `learned`, as it does for Telegram's `/learned` command. Being
+an operator does not give access to somebody else's proposals.
+
+Choose **Inspect** to see all instructions, current and proposed reference files,
+the amendment rationale and source turn. After inspecting the content, confirm
+the checkbox and choose **Approve reviewed proposal** or **Reject reviewed
+proposal**. An amendment rejection leaves the existing approved version intact.
+The receipt reports whether activation actually succeeded, is pending on a
+compute node, or failed; recorded approval alone is not proof of activation.
+
+If the revision or content changed during inspection, the decision returns a
+conflict. Use **Reload proposal**, inspect the new content and confirm again.
+The console never automatically retries a decision or approves newer content
+using an older inspection. **Task approvals** remain separate: allowing a task
+to continue does not approve a learned skill for activation.
 
 ## Telegram
 

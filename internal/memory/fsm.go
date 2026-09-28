@@ -2,12 +2,15 @@ package memory
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/hashicorp/raft"
+	bolt "go.etcd.io/bbolt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -262,6 +265,9 @@ func (f *FSM) Apply(l *raft.Log) any {
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
+	if p, ok := entry.Payload.(*lobslawv1.LogEntry_TaskAdmission); ok {
+		return f.applyTaskAdmission(p.TaskAdmission)
+	}
 	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ShareBatch); ok {
 		return f.applyShareBatch(p.ShareBatch)
 	}
@@ -279,6 +285,12 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	}
 	if entry.Id == "" {
 		return fmt.Errorf("PUT %s: empty id", bucket)
+	}
+	if err := f.checkBotWrite(bucket, entry.Id, payload); err != nil {
+		return err
+	}
+	if err := f.checkInboxCapacity(entry); err != nil {
+		return err
 	}
 	// Derived state is computed here rather than at each producer, so a
 	// new write path can't forget it. Deterministic: same embedding, same
@@ -377,6 +389,12 @@ func revisionOf(m proto.Message) (uint64, bool) {
 		return p.Revision, true
 	case *lobslawv1.SkillBlob:
 		return p.Revision, true
+	case *lobslawv1.BotRecord:
+		return p.Revision, true
+	case *lobslawv1.GroupRecord:
+		return p.Revision, true
+	case *lobslawv1.BotInboxItem:
+		return p.Revision, true
 	default:
 		return 0, false
 	}
@@ -408,6 +426,12 @@ func setRevision(m proto.Message, rev uint64) {
 		p.Revision = rev
 	case *lobslawv1.SkillBlob:
 		p.Revision = rev
+	case *lobslawv1.BotRecord:
+		p.Revision = rev
+	case *lobslawv1.GroupRecord:
+		p.Revision = rev
+	case *lobslawv1.BotInboxItem:
+		p.Revision = rev
 	}
 }
 
@@ -436,6 +460,19 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 	}
 	if entry.Id == "" {
 		return fmt.Errorf("DELETE %s: empty id", bucket)
+	}
+	if bucket == BucketBotInbox && entry.ExpectedRevision != nil {
+		raw, err := f.store.Get(bucket, entry.Id)
+		if err != nil {
+			return ErrClaimConflict
+		}
+		var item lobslawv1.BotInboxItem
+		if err := proto.Unmarshal(raw, &item); err != nil {
+			return err
+		}
+		if item.GetRevision() != entry.GetExpectedRevision() || !isTerminalInbox(item.GetStatus()) {
+			return ErrClaimConflict
+		}
 	}
 	// Deleting a session must also drop its transcript, else the
 	// message records are orphaned in their bucket forever — nothing
@@ -603,6 +640,12 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 		}
 	}
 
+	if err := f.checkBotWrite(bucket, entry.Id, newPayload); err != nil {
+		return err
+	}
+	if err := f.checkInboxCapacity(entry); err != nil {
+		return err
+	}
 	// The claimer's payload is written wholesale, which is only safe
 	// because the revision check above proved it was built from the
 	// current record.
@@ -612,7 +655,60 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("marshal %s payload: %w", bucket, err)
 	}
+	if item, ok := newPayload.(*lobslawv1.BotInboxItem); ok &&
+		(item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_DONE || item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_FAILED) &&
+		item.GetKind() != lobslawv1.InboxKind_INBOX_KIND_ANSWER && strings.HasPrefix(item.GetSender(), "bot:") {
+		return f.putInboxResult(entry.Id, bytes, item)
+	}
 	return f.store.Put(bucket, entry.Id, bytes)
+}
+
+// Completion and its return receipt share the original claim's Raft transaction.
+// The receipt is terminal: delivering a result must not start another task loop.
+func (f *FSM) putInboxResult(key string, raw []byte, item *lobslawv1.BotInboxItem) error {
+	body := item.GetResult()
+	if body == "" {
+		body = item.GetError()
+	}
+	if body == "" {
+		body = "completed without a reply"
+	}
+	result := &lobslawv1.BotInboxItem{
+		Id: item.GetId() + "-result", Recipient: strings.TrimPrefix(item.GetSender(), "bot:"),
+		Sender: "bot:" + item.GetRecipient(), Kind: lobslawv1.InboxKind_INBOX_KIND_ANSWER,
+		Subject: item.GetSubject(), Body: body, Result: body, Error: item.GetError(),
+		CorrelationId: item.GetId(), Status: item.GetStatus(),
+		TaskId: item.GetTaskId(), RequestedBy: item.GetRequestedBy(),
+		CreatedAt: item.GetCompletedAt(), CompletedAt: item.GetCompletedAt(), Revision: 1,
+	}
+	resultRaw, err := proto.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal inbox result: %w", err)
+	}
+	sealed, err := f.store.cipher.Seal(raw)
+	if err != nil {
+		return fmt.Errorf("seal inbox completion: %w", err)
+	}
+	resultSealed, err := f.store.cipher.Seal(resultRaw)
+	if err != nil {
+		return fmt.Errorf("seal inbox result: %w", err)
+	}
+	return f.store.loadDB().Update(func(tx *bolt.Tx) error {
+		if err := f.store.updateInboxActivity(tx, key, raw); err != nil {
+			return err
+		}
+		if err := f.store.updateInboxActivity(tx, inboxKey(result.GetRecipient(), result.GetId()), resultRaw); err != nil {
+			return err
+		}
+		bucket := tx.Bucket([]byte(BucketBotInbox))
+		if bucket == nil {
+			return errors.New("inbox bucket missing")
+		}
+		if err := bucket.Put([]byte(key), sealed); err != nil {
+			return err
+		}
+		return bucket.Put([]byte(inboxKey(result.GetRecipient(), result.GetId())), resultSealed)
+	})
 }
 
 // claimable is the shape shared by the records that support CLAIM.
@@ -647,6 +743,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketBots:
+		return decodeClaimRecord(raw, &lobslawv1.BotRecord{})
+	case BucketGroups:
+		return decodeClaimRecord(raw, &lobslawv1.GroupRecord{})
+	case BucketBotInbox:
+		return decodeClaimRecord(raw, &lobslawv1.BotInboxItem{})
 
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
@@ -726,7 +828,8 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
-		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
+		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
+		BucketBots, BucketGroups, BucketBotInbox:
 		return true
 	default:
 		return false
@@ -810,6 +913,29 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketEnrolments, p.Enrolment, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
+	default:
+		return teamBucketAndPayload(entry)
+	}
+}
+
+func decodeClaimRecord(raw []byte, record interface {
+	proto.Message
+	claimable
+}) (claimable, error) {
+	if err := proto.Unmarshal(raw, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func teamBucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) {
+	switch p := entry.Payload.(type) {
+	case *lobslawv1.LogEntry_Bot:
+		return BucketBots, p.Bot, nil
+	case *lobslawv1.LogEntry_Group:
+		return BucketGroups, p.Group, nil
+	case *lobslawv1.LogEntry_BotInbox:
+		return BucketBotInbox, p.BotInbox, nil
 	default:
 		return "", nil, fmt.Errorf("unknown log entry payload type: %T", p)
 	}
