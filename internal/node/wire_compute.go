@@ -631,7 +631,7 @@ func (n *Node) attachDreamSummarizer() {
 			break
 		}
 	}
-	s := compute.NewDreamSummarizer(n.roleMap.For(compute.RoleSummariser), model, n.log, n.embedder)
+	s := compute.NewDreamSummarizer(n.roleMap.ForWithTimeout(compute.RoleSummariser), model, n.log, n.embedder)
 	if s == nil {
 		return
 	}
@@ -642,7 +642,7 @@ func (n *Node) attachDreamSummarizer() {
 	// own would be a config field nobody sets, which is how the
 	// reranker came to be advertised and never called; when the two
 	// jobs want different models, that is the moment to split them.
-	if a := compute.NewDreamAdjudicator(n.roleMap.For(compute.RoleSummariser), model, n.log); a != nil {
+	if a := compute.NewDreamAdjudicator(n.roleMap.ForWithTimeout(compute.RoleSummariser), model, n.log); a != nil {
 		runner.SetAdjudicator(a, n.embedder)
 		n.log.Info("dream: near-duplicate adjudication enabled", "provider", label, "model", model)
 	}
@@ -1253,6 +1253,17 @@ func schedulerClaims() *types.Claims {
 // return instead of running an empty turn (which would waste a
 // provider call).
 func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.ScheduledTaskRecord) error {
+	shared := task.Params["share_installation"] != "" || strings.HasPrefix(task.Id, "share-")
+	claims := n.schedulerClaims(task.CreatedBy)
+	if shared {
+		if err := n.checkSharedTask(ctx, task); err != nil {
+			return err
+		}
+		claims = n.schedulerClaims(strings.TrimPrefix(task.Owner, "user:"))
+		// Activation delegates the bound owner’s authority. Resolve current
+		// roles on every run so later grants and revocations take effect.
+		claims.Roles = n.resolveUserRoles(claims.UserID)
+	}
 	prompt := task.Params["prompt"]
 	if prompt == "" {
 		return fmt.Errorf("scheduled task %q: params.prompt missing", task.Id)
@@ -1263,7 +1274,7 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 	}
 	req := compute.ProcessMessageRequest{
 		Message:   prompt,
-		Claims:    n.schedulerClaims(task.CreatedBy),
+		Claims:    claims,
 		TurnID:    fmt.Sprintf("task-%s-%d", task.Id, time.Now().UnixNano()),
 		Budget:    budget,
 		Channel:   task.Params["channel"],
@@ -1272,6 +1283,9 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 	resp, err := n.agent.RunToolCallLoop(ctx, req)
 	if err != nil {
 		return fmt.Errorf("agent loop: %w", err)
+	}
+	if shared && resp.NeedsConfirmation {
+		return fmt.Errorf("shared task %q requires interactive approval; scheduled run did not complete", task.Id)
 	}
 	n.log.Info("scheduler: agent task completed",
 		"task_id", task.Id,

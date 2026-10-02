@@ -276,6 +276,18 @@ func archiveImportTargets(source, destination map[archiveRecordKey]proto.Message
 }
 
 func remapArchiveReferences(msg proto.Message, key archiveRecordKey, targets map[archiveRecordKey]string) error {
+	switch rec := msg.(type) {
+	case *lobslawv1.ShareInstallation:
+		for i, id := range rec.ScheduleIds {
+			if target, ok := targets[archiveRecordKey{"scheduled-tasks", id}]; ok {
+				rec.ScheduleIds[i] = target
+			}
+		}
+	case *lobslawv1.ScheduledTaskRecord:
+		if target, ok := targets[archiveRecordKey{"skill-installations", rec.Params["share_installation"]}]; ok {
+			rec.Params["share_installation"] = target
+		}
+	}
 	m := msg.ProtoReflect()
 	fields := m.Descriptor().Fields()
 	if f := fields.ByName("id"); f != nil {

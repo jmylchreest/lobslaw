@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
-	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/oauth"
 	"github.com/jmylchreest/lobslaw/internal/plan"
@@ -239,42 +237,28 @@ func (n *Node) wireSkills() error {
 	return nil
 }
 
-// wireClawhub constructs the clawhub catalog client + installer when
-// the operator declared a base URL. No-op when ClawhubBaseURL is
-// empty — operators with no clawhub access just don't configure it.
-//
-// Signing defaults to "off". The verifying half exists — a trust store
-// of minisign keys and allowed prefixes, see trusted_publishers.toml —
-// but nothing here signs a bundle, so an operator cannot produce one
-// their own policy would accept.
+// wireClawhub wires retrieval only; all writes use the shared Raft staging path.
 func (n *Node) wireClawhub() error {
 	base := strings.TrimSpace(n.cfg.Security.ClawhubBaseURL)
 	if base == "" {
 		return nil
 	}
-	if n.storageMgr == nil {
-		return nil
+	var verifier clawhub.BundleVerifier
+	if n.skillVerifier != nil {
+		verifier = n.skillVerifier
 	}
-	c, err := clawhub.NewClient(base)
+	source, err := clawhub.NewShareSource(base, verifier)
 	if err != nil {
-		return fmt.Errorf("clawhub client: %w", err)
+		return err
 	}
-	satisfier := binaries.New(binaries.Config{
-		HTTPClient:    egress.For("binaries-install").HTTPClient(),
-		Logger:        n.log,
-		InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
-	})
-	inst, err := clawhub.NewInstaller(clawhub.InstallerConfig{
-		Client:    c,
-		Storage:   n.storageMgr,
-		Policy:    clawhub.SigningOff,
-		Satisfier: satisfier,
-	})
-	if err != nil {
-		return fmt.Errorf("clawhub installer: %w", err)
+	n.clawhubSource = source
+	if n.cfg.Security.ClawhubInstallMount != "" {
+		n.log.Warn("clawhub_install_mount is retired; skill proposals are staged in Raft and no mount is written")
 	}
-	n.clawhubInstaller = inst
-	n.log.Info("clawhub: installer wired", "base", base, "binary_prefix", n.cfg.Security.BinaryInstallPrefix)
+	if n.cfg.Security.ClawhubAutoEmitInstallRules {
+		n.log.Warn("clawhub_auto_emit_install_rules is retired; staged skills require explicit operator policy and activation")
+	}
+	n.log.Info("clawhub: retrieval and proposal staging wired", "base", base)
 	return nil
 }
 

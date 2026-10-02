@@ -54,7 +54,7 @@ func pluginUsage() {
 	fmt.Fprintln(os.Stderr, "usage: lobslaw plugin <command> [args]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  install <source>     copy a plugin directory into the skills root")
+	fmt.Fprintln(os.Stderr, "  install <source>     copy a local plugin directory; ClawHub sources use reviewed cluster staging")
 	fmt.Fprintln(os.Stderr, "  uninstall <name>     remove an installed plugin")
 	fmt.Fprintln(os.Stderr, "  list                 show installed plugins")
 	fmt.Fprintln(os.Stderr, "  enable <name>        re-enable a previously disabled plugin")
@@ -82,6 +82,8 @@ func defaultSkillsRoot() (string, error) {
 
 func pluginInstall(args []string) {
 	fs := newFlagSet("plugin install", flag.ExitOnError)
+	var shareOpts shareInstallOptions
+	shareOpts.bind(fs)
 	root := fs.String("root", "", "skills root (default: $LOBSLAW_SKILLS_ROOT or ~/.local/share/lobslaw/plugins)")
 	yes := fs.Bool("yes", false, "skip the approval prompt (CI / scripted use)")
 	positional, err := parseFlagsAndPositionals(fs, args)
@@ -94,7 +96,7 @@ func pluginInstall(args []string) {
 	source := positional[0]
 
 	if strings.HasPrefix(source, "clawhub:") {
-		if err := pluginInstallClawhub(source, *root); err != nil {
+		if err := pluginInstallClawhub(source, *root, *yes, &shareOpts); err != nil {
 			exitWith(fmt.Sprintf("plugin install: %v", err))
 		}
 		return

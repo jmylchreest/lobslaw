@@ -21,7 +21,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
@@ -105,7 +104,7 @@ func New(cfg Config) (*Driver, error) {
 	}
 	d.endpoint = normaliseEndpoint(d.endpoint)
 	if d.client == nil {
-		d.client = &http.Client{Timeout: 120 * time.Second}
+		d.client = &http.Client{}
 	}
 	if d.log == nil {
 		d.log = slog.Default()
@@ -118,6 +117,10 @@ func New(cfg Config) (*Driver, error) {
 
 // Chat implements compute.ChatDriver.
 func (d *Driver) Chat(ctx context.Context, req compute.ChatRequest) (*compute.ChatResponse, error) {
+	parentCtx := ctx
+	ctx, cancel := compute.WithDefaultLLMTimeout(ctx, compute.DefaultLLMTimeout)
+	defer cancel()
+
 	model := req.Model
 	if model == "" {
 		model = d.model
@@ -144,8 +147,8 @@ func (d *Driver) Chat(ctx context.Context, req compute.ChatRequest) (*compute.Ch
 		// can tell "the user gave up" from "the provider is down".
 		// http.Client wraps it in a *url.Error, which errors.Is sees
 		// through, but the class must be set deliberately.
-		if ctx.Err() != nil {
-			return nil, compute.Permanent(fmt.Errorf("anthropic: %w", ctx.Err()))
+		if parentCtx.Err() != nil {
+			return nil, compute.Permanent(fmt.Errorf("anthropic: %w", parentCtx.Err()))
 		}
 		return nil, compute.Transient(fmt.Errorf("anthropic: http do: %w", err))
 	}

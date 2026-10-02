@@ -48,7 +48,7 @@ never classified, never prompted about, and never granted, under any approval_mo
 |---|---|
 | Filesystem wipes | `rm -rf /`, `rm -rf /*`, `rm --recursive --force /` |
 | `--no-preserve-root` | any use — the flag exists only to remove the guard |
-| Fork bombs | `:(){:|:&};:` and every renamed or reformatted variant |
+| Fork bombs | `:(){:\|:&};:` and every renamed or reformatted variant |
 | Block-device formatting | `mkfs.ext4 /dev/sda1` |
 | Raw block writes | `dd if=… of=/dev/sda` |
 | Network piped to an interpreter | `curl … \| sh`, `wget -O- … \| python3` |

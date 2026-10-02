@@ -790,6 +790,7 @@ timestamp is not evidence of age.
 | dev source | `dev` | scanned directly, outranks everything |
 | signed import | `signed` | store → cache, signature verified |
 | operator import | `operator` | store → cache |
+| portable release / ClawHub proposal | `signed` with verified manifest signature, otherwise `operator` | validate → inactive Raft staging → separate authorized activation → cache |
 | self-taught | `agent` | store → cache, capability floor |
 
 Precedence is **tier first**, then version, then directory. A version
@@ -799,6 +800,30 @@ The mount is an **import source**, not a live one. Drop a skill in and
 it is imported into the store, replicated, materialised and loaded.
 Deleting the file does not remove the skill — it is in the store, and
 comes out with `lobslaw skills remove`.
+
+### Portable releases and ClawHub
+
+`sharing.Source` retrieves an immutable portable artifact. The ClawHub source
+performs bounded extraction, retains exact native manifest/signature bytes and
+converts SKILL.md bundles without installing host binaries or granting policy.
+Both CLI installation and agent proposals use the same destination validation
+and Raft staging path. The agent cannot activate its own proposal.
+
+```mermaid
+flowchart LR
+    Source[Local file or ClawHub] --> Artifact[Portable artifact]
+    Artifact --> Validate[Destination signature and loader validation]
+    Validate --> Stage[Raft: inactive skill and disabled schedules]
+    Stage --> Review[Human reviews content and bound schedules]
+    Review --> Activate[Owner-scoped activation authorization]
+    Activate --> Cache[Verified materialisation and registry]
+```
+
+The destination checks any present manifest signature against its trusted keys
+even with signing policy off; conversion does not claim to verify that identity.
+A release signature additionally covers schedule declarations and dependencies.
+Signature verification and human activation remain separate requirements.
+See [portable sharing](../docs/features/skill-sharing.md) for commands and limits.
 
 ## The dev source
 

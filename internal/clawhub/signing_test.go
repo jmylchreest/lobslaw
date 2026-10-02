@@ -1,16 +1,11 @@
 package clawhub
 
 import (
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/jmylchreest/lobslaw/internal/storage"
 )
 
 type fakeVerifier struct {
@@ -124,73 +119,5 @@ func TestApplySigningPolicyRejectsBadBase64(t *testing.T) {
 	}
 	if _, err := applySigningPolicy(entry, SigningRequire, v); err == nil {
 		t.Error("non-base64 signature should be rejected")
-	}
-}
-
-func TestInstallEnforcesSigningRequire(t *testing.T) {
-	t.Parallel()
-	bundle := makeBundle(t, map[string]string{
-		"manifest.yaml": "name: demo\nversion: 1.0.0\n",
-	})
-	sha := sha256Hex(bundle)
-	v, priv := newFakeVerifier(t, "alice")
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(bundle)
-	}))
-	t.Cleanup(srv.Close)
-
-	entry := &SkillEntry{
-		Name: "demo", Version: "1.0.0", BundleSHA256: sha,
-		SignedBy:  "alice",
-		BundleURL: srv.URL,
-	}
-	signEntry(t, priv, entry)
-
-	mgr := storage.NewManager()
-	mountRoot := t.TempDir()
-	_ = mgr.Register(context.Background(), &fakeMount{label: "skill-tools", path: mountRoot})
-
-	c, _ := NewClient("https://x.invalid")
-	inst, err := NewInstaller(InstallerConfig{
-		Client: c, Storage: mgr,
-		Policy: SigningRequire, Verifier: v,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := inst.Install(context.Background(), entry, InstallTarget{MountLabel: "skill-tools"})
-	if err != nil {
-		t.Fatalf("Install with valid sig: %v", err)
-	}
-	if res.SignedBy != "alice" {
-		t.Errorf("result SignedBy = %q", res.SignedBy)
-	}
-}
-
-func TestInstallSigningRequireRejectsBadSig(t *testing.T) {
-	t.Parallel()
-	bundle := makeBundle(t, map[string]string{"manifest.yaml": "name: x\n"})
-	sha := sha256Hex(bundle)
-	v, _ := newFakeVerifier(t, "alice")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(bundle)
-	}))
-	t.Cleanup(srv.Close)
-	entry := &SkillEntry{
-		Name: "demo", Version: "1.0.0", BundleSHA256: sha,
-		BundleURL: srv.URL,
-		SignedBy:  "alice",
-		Signature: base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
-	}
-	mgr := storage.NewManager()
-	_ = mgr.Register(context.Background(), &fakeMount{label: "skill-tools", path: t.TempDir()})
-	c, _ := NewClient("https://x.invalid")
-	inst, _ := NewInstaller(InstallerConfig{
-		Client: c, Storage: mgr,
-		Policy: SigningRequire, Verifier: v,
-	})
-	if _, err := inst.Install(context.Background(), entry, InstallTarget{MountLabel: "skill-tools"}); err == nil {
-		t.Error("Install with bad signature must fail under SigningRequire")
 	}
 }
