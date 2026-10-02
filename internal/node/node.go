@@ -484,7 +484,8 @@ type Node struct {
 	auditLog *audit.AuditLog
 	auditSvc *audit.Service
 
-	shutdownOnce chan struct{}
+	shutdownOnce       chan struct{}
+	unprotectRaftPaths func()
 
 	// Boot-time state that wire stages need to read. Set by New
 	// before runWireStages and unused after. Lives on the struct
@@ -860,6 +861,9 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	default:
 	}
 	close(n.shutdownOnce)
+	if n.unprotectRaftPaths != nil {
+		defer n.unprotectRaftPaths()
+	}
 
 	// Drained first, before the gRPC stop. A shutdown that discards the
 	// buffer loses precisely the spans from the turn that was in flight
@@ -1004,6 +1008,9 @@ func (n *Node) dialer() discovery.Dialer {
 // resources but hit an error. Best-effort cleanup; errors swallowed
 // because we're already returning a failure.
 func (n *Node) closePartial() {
+	if n.unprotectRaftPaths != nil {
+		defer n.unprotectRaftPaths()
+	}
 	n.stopTracing()
 	if n.store != nil {
 		_ = n.store.Close()

@@ -12,11 +12,17 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/rafttransport"
 )
 
 func (n *Node) wireRaft(advertise string) error {
+	unprotect, err := policy.ProtectRaftPaths(n.cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("protect raft paths: %w", err)
+	}
+	n.unprotectRaftPaths = unprotect
 	store, err := memory.OpenStore(filepath.Join(n.cfg.DataDir, "state.db"), n.cfg.MemoryKey)
 	if err != nil {
 		return fmt.Errorf("open state.db: %w", err)
