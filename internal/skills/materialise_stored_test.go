@@ -382,7 +382,11 @@ func TestAStoredBundledFileCannotEscapeTheSkillDirectory(t *testing.T) {
 // is over.
 func TestABundledFileCannotOverwriteTheManifestOrSignature(t *testing.T) {
 	t.Parallel()
-	for _, path := range []string{"manifest.yaml", "manifest.yaml.sig", "../out.md"} {
+	for _, path := range []string{
+		manifestFile, "MANIFEST.YAML", "./Manifest.Yaml", "nested/../MANIFEST.YAML",
+		signatureFile, "MANIFEST.YAML.SIG", "./Manifest.Yaml.Sig", "nested/../MANIFEST.YAML.SIG",
+		"../out.md",
+	} {
 		m := materialiser(t)
 		sk := stored("tidy", "1.2.3")
 		sk.Files[path] = []byte("payload")

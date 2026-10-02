@@ -213,7 +213,9 @@ func refuseFilePath(path string) string {
 func refuseOwnedName(path string, owned ...string) string {
 	cleaned := filepath.Clean(path)
 	for _, name := range owned {
-		if cleaned == name {
+		// The same stored bundle can be materialised on case-insensitive
+		// filesystems, so reserve aliases on every platform.
+		if strings.EqualFold(cleaned, name) {
 			return fmt.Sprintf("bundled file %q would overwrite a file the materialiser owns", path)
 		}
 	}
