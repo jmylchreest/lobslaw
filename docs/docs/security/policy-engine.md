@@ -342,12 +342,16 @@ action      = "tool:exec"
 resource    = "soul_*"             # glob — * prefix or suffix
 ```
 
-**Subject matching** uses `kind:value` form. Common kinds:
+**Subject matching** uses `kind:value` form. Matchable kinds:
 
 - `scope:owner`, `scope:public` — scope claims
 - `user:alice` — specific user ID
-- `channel:telegram` — channel type
-- `subject:google:1234567890` — OAuth subject
+- `role:admin`: a role the claims carry
+- `*` (or an empty subject): everyone
+
+Malformed or unsupported non-empty subjects (e.g. `owner`, `user:`, or `channel:telegram`)
+refuse boot, naming the rule ID. Empty subjects and `*` remain supported wildcards. See
+[Subject matching](/configuration/policy-rules#subject-matching).
 
 Multiple rules per request? The engine sorts by `priority` (descending) and takes the first match's effect. If nothing matches and the resource has a default-allow seed (built-in tools at priority 1), allow. Otherwise deny.
 
@@ -356,7 +360,7 @@ Multiple rules per request? The engine sorts by `priority` (descending) and take
 | Range | Use |
 |---|---|
 | 1 | Default-allow seeds (built-in tools) |
-| 10 | Default-deny seeds (sensitive built-ins) |
+| 10 | Reserved; no rule is auto-seeded here today, and sensitive built-ins get no seed at all |
 | 20–99 | Operator-declared allow rules |
 | 100+ | Operator-declared overrides + `require_confirmation` for risky tools |
 | 1000+ | Hard denies (e.g. revoked subjects) |
@@ -367,8 +371,8 @@ A higher number wins. Within the same priority, the engine is deterministic (sor
 
 On first boot, `internal/node/wire_seeds.go` writes a fixed set of rules:
 
-- **Allow** every `BuiltinScheme` tool (the in-process built-ins) at priority 1.
-- **Deny** every sensitive built-in (`oauth_*`, `credentials_*`, `clawhub_install`, `soul_*`) at priority 10. The operator overrides these with priority-20 allows in `config.toml`.
+- **Allow** each `BuiltinScheme` tool (the in-process built-ins) outside the sensitive-tool exclusion list at priority 1.
+- Sensitive built-ins (`oauth_*`, `credentials_*`, `clawhub_install`, `soul_*`, and a few others) get **no seed at all**: no allow, no deny. They fall through to the engine's default-deny until the operator adds a priority-20 allow rule in `config.toml`.
 
 Skills, MCP servers, and clawhub-installed tools are **not** seeded. They're invisible to the agent until the operator adds an allow rule:
 
