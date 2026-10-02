@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -204,6 +205,36 @@ func TestArchivePreservesStableSourceIdentity(t *testing.T) {
 	}
 	if id, err := SourceIdentity(restored.Manifest, ""); err != nil || id != "local-stack" {
 		t.Fatalf("source identity: %q, %v", id, err)
+	}
+}
+
+func TestSupportsSchemaGovernsImport(t *testing.T) {
+	cases := []struct {
+		version int
+		want    bool
+	}{
+		{MinSchemaVersion, true},
+		{SchemaVersion, true},
+		{MinSchemaVersion - 1, false},
+		{SchemaVersion + 1, false},
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("schema %d", c.version), func(t *testing.T) {
+			t.Parallel()
+			if got := SupportsSchema(c.version); got != c.want {
+				t.Fatalf("SupportsSchema(%d) = %v, want %v", c.version, got, c.want)
+			}
+			data := rewriteArchive(t, func(h *tar.Header, b []byte) []byte {
+				if h.Name == manifestName {
+					return bytes.Replace(b, []byte(fmt.Sprintf(`"schema_version":%d`, SchemaVersion)), []byte(fmt.Sprintf(`"schema_version":%d`, c.version)), 1)
+				}
+				return b
+			})
+			_, err := Read(bytes.NewReader(data))
+			if got := err == nil; got != c.want {
+				t.Fatalf("Read with schema %d accepted = %v, want %v (err %v)", c.version, got, c.want, err)
+			}
+		})
 	}
 }
 

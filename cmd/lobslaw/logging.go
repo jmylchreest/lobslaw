@@ -31,6 +31,12 @@ func newFlagSet(name string, handling flag.ErrorHandling) *flag.FlagSet {
 func flagSetWithHelpOutput(name string, handling flag.ErrorHandling, help io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, handling)
 	fs.SetOutput(logging.Writer(slog.Default(), slog.LevelError))
+	setFlagUsage(fs, help, fmt.Sprintf("Usage of %s:\n", name))
+	return fs
+}
+
+// setFlagUsage keeps custom help on the same plain-text, sanitized output path.
+func setFlagUsage(fs *flag.FlagSet, help io.Writer, introduction string) {
 	fs.Usage = func() {
 		// Usage is command output, not an error. Render it as one unit so any
 		// credential-shaped defaults can be sanitized before writing plain text.
@@ -38,9 +44,8 @@ func flagSetWithHelpOutput(name string, handling flag.ErrorHandling, help io.Wri
 		previous := fs.Output()
 		fs.SetOutput(&buf)
 		defer fs.SetOutput(previous)
-		_, _ = fmt.Fprintf(&buf, "Usage of %s:\n", name)
+		_, _ = io.WriteString(&buf, introduction)
 		fs.PrintDefaults()
 		_, _ = io.WriteString(help, logging.SanitizeText(buf.String()))
 	}
-	return fs
 }

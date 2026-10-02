@@ -52,6 +52,7 @@ services:
           --ca-key=/run/secrets/ca_key \
           --node-cert=/etc/lobslaw/certs/node-cert.pem \
           --node-key=/etc/lobslaw/certs/node-key.pem \
+          --ip=127.0.0.1 --ip=::1 \
           --copy-ca-public=true
         chown -R 65532:65532 /etc/lobslaw/certs
         chmod 0755 /etc/lobslaw/certs

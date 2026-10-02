@@ -27,6 +27,12 @@ import (
 
 func skillSvc(t *testing.T, policy skills.SigningPolicy, verifier *skills.Verifier) *skillService {
 	t.Helper()
+	svc, _ := skillSvcNode(t, policy, verifier)
+	return svc
+}
+
+func skillSvcNode(t *testing.T, policy skills.SigningPolicy, verifier *skills.Verifier) (*skillService, *Node) {
+	t.Helper()
 	dir := t.TempDir()
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -55,7 +61,7 @@ func skillSvc(t *testing.T, policy skills.SigningPolicy, verifier *skills.Verifi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &skillService{store: skillStore, policy: policy, verifier: verifier}
+	return &skillService{store: skillStore, policy: policy, verifier: verifier, sharing: memory.NewSharingStore(node, store)}, &Node{raft: node, store: store, skillStore: skillStore, skillSigningPolicy: policy, skillVerifier: verifier}
 }
 
 func bundleRequest(manifest, handler string) *lobslawv1.ImportSkillRequest {

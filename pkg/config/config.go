@@ -2001,20 +2001,11 @@ type SecurityConfig struct {
 	// supply-chain requirements declare their own.
 	ClawhubBinaryHosts []string `koanf:"clawhub_binary_hosts,omitempty"`
 
-	// ClawhubInstallMount names the storage mount where installed
-	// skill bundles land. Empty = "skill-tools" (the canonical
-	// label). Operators with custom layouts override.
+	// ClawhubInstallMount is deprecated. ClawHub entry points stage via Raft.
 	ClawhubInstallMount string `koanf:"clawhub_install_mount,omitempty"`
 
-	// ClawhubAutoEmitInstallRules controls whether a successful
-	// clawhub_install also writes a policy rule allowing the agent
-	// to call the newly-installed skill (resource = <skill_name>,
-	// subject = scope:owner, effect = allow, priority = 20). Default
-	// false — operator must explicitly opt in. When true, the
-	// emitted rule appears alongside operator-declared rules in the
-	// policy bucket and survives reload. Operators who want skills
-	// to require an explicit per-skill opt-in (e.g. for
-	// require_confirmation on writes) leave this false.
+	// ClawhubAutoEmitInstallRules is deprecated and ignored. Skill proposals
+	// never grant execution permission; enabling this logs a migration warning.
 	ClawhubAutoEmitInstallRules bool `koanf:"clawhub_auto_emit_install_rules,omitempty"`
 
 	// EgressUDSPath, when set, makes smokescreen also listen on a

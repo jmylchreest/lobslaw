@@ -185,7 +185,8 @@ Imports are not globally atomic. Each completed batch is visible, and an error
 reports its progress. A transcript and its index commit together. Batches are
 limited to 8 MiB including their source receipts; an oversized dependency group
 cannot be imported by this version. Rebuilding an embedding can fail without
-losing completed work. Use `--timeout 30m` or longer for large imports.
+losing completed work. Use `--timeout` to increase the per-call deadline for large imports;
+`archive import --help` and `backup restore --help` show the current default.
 
 ### Restored execution state
 
