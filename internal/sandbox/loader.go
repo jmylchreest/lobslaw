@@ -54,7 +54,7 @@ func (o LoadOptions) withDefaults() LoadOptions {
 		out.TrustedUID = defaultTrustedUID()
 	}
 	if out.RejectWritableMask == 0 {
-		out.RejectWritableMask = 0o022
+		out.RejectWritableMask = defaultRejectWritableMask
 	}
 	if out.Logger == nil {
 		out.Logger = slog.Default()

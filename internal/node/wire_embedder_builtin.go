@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
@@ -34,7 +33,7 @@ func (n *Node) wireBuiltinEmbedder() (compute.EmbeddingProvider, error) {
 	client := egress.For("embedding-model")
 
 	// Bounded: a stalled mirror must not hold start-up open forever.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), embedderInitTimeout)
 	defer cancel()
 
 	dir, err := embedder.Ensure(ctx, client.HTTPClient(), n.cfg.DataDir, cfg.Model, cfg.DownloadURL)

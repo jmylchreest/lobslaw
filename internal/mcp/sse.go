@@ -102,7 +102,7 @@ func NewSSETransport(ctx context.Context, cfg SSEConfig) (*SSETransport, error) 
 		url:           cfg.URL,
 		header:        cfg.Header,
 		cancel:        cancel,
-		frames:        make(chan []byte, 16),
+		frames:        make(chan []byte, sseFrameQueueCapacity),
 		streamErr:     make(chan error, 1),
 		endpointReady: make(chan struct{}),
 	}
@@ -122,7 +122,7 @@ func NewSSETransport(ctx context.Context, cfg SSEConfig) (*SSETransport, error) 
 		return nil, fmt.Errorf("mcp: sse connect: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, sseErrorPreviewBytes))
 		_ = resp.Body.Close()
 		cancel()
 		return nil, fmt.Errorf("mcp: sse connect: %s: %s",
@@ -152,7 +152,7 @@ func (t *SSETransport) readStream(resp *http.Response) {
 	// An MCP frame carrying a tool result is routinely larger than
 	// bufio's 64 KiB default, and the failure mode of the default is
 	// a truncated line reported as a parse error.
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	scanner.Buffer(make([]byte, 0, sseInitialBufferBytes), sseMaxFrameBytes)
 
 	var (
 		event string
@@ -253,7 +253,7 @@ func (t *SSETransport) Send(ctx context.Context, frame []byte) error {
 	// stream.
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted &&
 		resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, sseErrorPreviewBytes))
 		text := strings.TrimSpace(string(body))
 		// 404 and 410 on a POST to an endpoint we were given mean the
 		// SESSION is gone, not the server: the caller can rebuild and
@@ -265,7 +265,7 @@ func (t *SSETransport) Send(ctx context.Context, frame []byte) error {
 		}
 		return fmt.Errorf("mcp: sse send: %s: %s", resp.Status, text)
 	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, sseResponseDrainBytes))
 	return nil
 }
 

@@ -29,6 +29,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 - **Diagrams stay in sync with code** ([decision `lobslaw-documentation-diagrams`](../../)). If you change a flow documented with mermaid, update the diagram in the same commit.
 - **Audience split** ([decision `lobslaw-documentation-audiences`](../../)). Dev docs describe *how it works*. User docs describe *how to use it*. Keep them separate.
 - **Architectural decisions** go in aide (`./.aide/bin/aide decision set ...`), not freeform markdown. Subsystem docs link to the decision by topic.
+- **Numeric defaults and limits** follow `code-magic-numbers`: keep shared values in the owning package's `defaults.go` or `constants.go`, and reuse existing constants. Export only when another package consumes the same contract. Equal values with different purposes keep separate names; arithmetic, indices and independent test vectors need no wrapper. Render tool schemas, help and generated configuration from the runtime constants, with tests checking that they agree. Container identity is shared through [`deploy/image-defaults.env`](../../deploy/image-defaults.env).
 
 ## Shared aide context
 

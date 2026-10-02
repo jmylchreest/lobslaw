@@ -114,19 +114,19 @@ func NewDreamRunner(raft *RaftNode, store *Store, summarizer Summarizer, cfg Dre
 		logger = slog.Default()
 	}
 	if cfg.MaxCandidates <= 0 {
-		cfg.MaxCandidates = 10
+		cfg.MaxCandidates = DefaultDreamMaxCandidates
 	}
 	if cfg.MaxMergeClusters <= 0 {
-		cfg.MaxMergeClusters = 10
+		cfg.MaxMergeClusters = DefaultDreamMaxMergeClusters
 	}
 	if cfg.PruneThreshold <= 0 {
-		cfg.PruneThreshold = 0.1
+		cfg.PruneThreshold = DefaultDreamPruneThreshold
 	}
 	if cfg.HalfLife <= 0 {
-		cfg.HalfLife = 14 * 24 * time.Hour
+		cfg.HalfLife = DefaultDreamHalfLife
 	}
 	if cfg.CommitmentGrace <= 0 {
-		cfg.CommitmentGrace = 24 * time.Hour
+		cfg.CommitmentGrace = DefaultDreamCommitmentGrace
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -478,7 +478,7 @@ func (d *DreamRunner) logDreamSession(now time.Time, candidates, consolidated, p
 	session := &lobslawv1.EpisodicRecord{
 		Id:         fmt.Sprintf("%s%d", dreamSessionPrefix, now.UnixNano()),
 		Event:      fmt.Sprintf("dream run: %d candidates, %d consolidated, %d pruned, %d commitments digested into %d rollups", candidates, consolidated, pruned, digested, digests),
-		Importance: 3, // modest; dream sessions aren't the memories themselves
+		Importance: dreamSessionImportance, // modest; dream sessions aren't the memories themselves
 		Timestamp:  timestamppb.New(now),
 		Tags:       []string{"dream-session"},
 		Retention:  lobslawv1.Retention_RETENTION_LONG_TERM, // survive consolidation so audit trail persists
@@ -588,7 +588,7 @@ func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
 		for _, e := range es {
 			label := strings.TrimSpace(e.reason)
 			if label == "" {
-				label = truncatePrompt(e.prompt, 80)
+				label = truncatePrompt(e.prompt, maxReminderLabelRunes)
 			}
 			if label == "" {
 				label = placeholderCommitmentLabel
@@ -604,7 +604,7 @@ func (d *DreamRunner) digestCommitments(now time.Time) (int, int, error) {
 			Id:         fmt.Sprintf("commitment-digest-%s-%s-%d", key.owner, day, now.UnixNano()),
 			Event:      fmt.Sprintf("commitment digest %s: %d delivered", day, len(es)),
 			Context:    lines.String(),
-			Importance: 4,
+			Importance: reminderImportance,
 			Timestamp:  timestamppb.New(now),
 			Tags:       []string{"commitment-history", "commitment-digest"},
 			Retention:  lobslawv1.Retention_RETENTION_LONG_TERM,

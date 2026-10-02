@@ -36,9 +36,9 @@ func ParseKey(encoded string) (Key, error) {
 		}
 		copy(k[:], decoded)
 		return k, nil
-	case 44, 43:
+	case base64.StdEncoding.EncodedLen(KeySize), base64.RawStdEncoding.EncodedLen(KeySize):
 		b64 := base64.StdEncoding
-		if len(encoded) == 43 {
+		if len(encoded) == base64.RawStdEncoding.EncodedLen(KeySize) {
 			b64 = base64.RawStdEncoding
 		}
 		decoded, err := b64.DecodeString(encoded)
@@ -51,7 +51,7 @@ func ParseKey(encoded string) (Key, error) {
 		copy(k[:], decoded)
 		return k, nil
 	default:
-		return k, fmt.Errorf("unrecognised key encoding (length %d); want hex-%d or base64-%d", len(encoded), hex.EncodedLen(KeySize), 44)
+		return k, fmt.Errorf("unrecognised key encoding (length %d); want hex-%d or base64-%d", len(encoded), hex.EncodedLen(KeySize), base64.StdEncoding.EncodedLen(KeySize))
 	}
 }
 

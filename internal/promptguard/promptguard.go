@@ -112,7 +112,7 @@ func scanInvisible(s string) *Finding {
 	}
 	// A soft hyphen or two is a typesetting artefact from a paste; a
 	// run of them is a word broken up to evade a substring match.
-	if softHyphens >= 3 {
+	if softHyphens >= suspiciousSoftHyphenCount {
 		return &Finding{DetectorInvisible, fmt.Sprintf("%d soft hyphens", softHyphens)}
 	}
 	return nil

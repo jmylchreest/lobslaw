@@ -175,10 +175,10 @@ func (c *Coordinator) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("research: question is required")
 	}
 	if req.Depth <= 0 {
-		req.Depth = 3
+		req.Depth = DefaultDepth
 	}
-	if req.Depth > 10 {
-		req.Depth = 10 // safety cap; planner can otherwise produce 50+ subqs
+	if req.Depth > MaxDepth {
+		req.Depth = MaxDepth // safety cap; planner can otherwise produce 50+ subqs
 	}
 
 	c.log.Info("research: starting",
@@ -314,14 +314,14 @@ func (c *Coordinator) runWorkers(ctx context.Context, req Request, subqs []strin
 	tools := c.tools
 	findings := make([]string, len(subqs))
 	for i, q := range subqs {
-		wctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		wctx, cancel := context.WithTimeout(ctx, workerTimeout)
 		resp, err := c.agent.RunToolCallLoop(wctx, compute.ProcessMessageRequest{
 			Message:      q,
 			Claims:       req.Claims,
 			TurnID:       fmt.Sprintf("%s/worker/%d", req.TaskID, i),
 			SystemPrompt: workerPrompt,
 			Tools:        tools,
-			Budget:       mustBudget(8),
+			Budget:       mustBudget(workerMaxToolCalls),
 		})
 		cancel()
 		if err != nil {
@@ -378,7 +378,7 @@ func (c *Coordinator) synth(ctx context.Context, req Request, subqs, findings []
 			{Role: "system", Content: synthPrompt},
 			{Role: "user", Content: b.String()},
 		},
-		Temperature: 0.2, // mostly deterministic but allow some prose voice
+		Temperature: synthesisTemperature, // mostly deterministic but allow some prose voice
 	})
 	if err != nil {
 		return "", err
@@ -404,7 +404,7 @@ func buildNotification(question, report, memID string) string {
 	b.WriteString(question)
 	b.WriteString("\n\n")
 	// Truncate the body for chat — full report is in memory.
-	max := 3500
+	max := notificationReportMaxBytes
 	if len(report) > max {
 		b.WriteString(report[:max])
 		b.WriteString("\n\n…(truncated; full report in memory")

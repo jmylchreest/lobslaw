@@ -84,7 +84,7 @@ func (n *challengeSource) Notices(_ context.Context, principal string) ([]gatewa
 
 	// Capped low. The nudge names one and counts the rest, so
 	// gathering more than a handful is work whose result is a number.
-	found, err := memory.UnresolvedChallenges(n.store, principal, 5)
+	found, err := memory.UnresolvedChallenges(n.store, principal, noticeChallengeLimit)
 	if err != nil {
 		return nil, err
 	}

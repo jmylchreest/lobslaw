@@ -233,8 +233,8 @@ func validate(cfg *types.SoulConfig) error {
 		{DimSarcasm, cfg.EmotiveStyle.Sarcasm},
 		{DimHumor, cfg.EmotiveStyle.Humor},
 	} {
-		if field.value < 0 || field.value > 10 {
-			return fmt.Errorf("emotive_style.%s=%d must be 0–10", field.name, field.value)
+		if field.value < types.MinEmotiveValue || field.value > types.MaxEmotiveValue {
+			return fmt.Errorf("emotive_style.%s=%d must be %d–%d", field.name, field.value, types.MinEmotiveValue, types.MaxEmotiveValue)
 		}
 	}
 	switch cfg.EmotiveStyle.EmojiUsage {

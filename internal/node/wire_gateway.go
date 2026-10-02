@@ -531,5 +531,5 @@ func restWriteTimeout(g config.GatewayConfig) time.Duration {
 	}
 	// Margin so the agent's own forced-summary path is what ends a slow
 	// turn, not the socket.
-	return hard + 30*time.Second
+	return hard + gatewayWriteDeadlineSlack
 }

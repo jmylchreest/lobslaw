@@ -108,63 +108,63 @@ func MemoryToolDefs() []*types.ToolDef {
 		{
 			Name:        "memory_search",
 			Path:        compute.BuiltinScheme + "memory_search",
-			Description: "Search stored memories for matches against a query. Use when the user references past conversations, preferences, facts they shared earlier, or decisions made. Returns matching records with event (summary), context (detail), tags, importance, and timestamp. Pass query as the keywords to match; optionally limit (default 5, max 20) and tag to filter by a specific tag.",
-			ParametersSchema: []byte(`{
+			Description: fmt.Sprintf("Search stored memories for matches against a query. Use when the user references past conversations, preferences, facts they shared earlier, or decisions made. Returns matching records with event (summary), context (detail), tags, importance, and timestamp. Pass query as the keywords to match; optionally limit (default %d, max %d) and tag to filter by a specific tag.", defaultMemorySearchLimit, maxMemorySearchLimit),
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
 					"query": {"type": "string", "description": "Keywords to match in event or context fields."},
-					"limit": {"type": "integer", "description": "Max results (1-20). Default 5."},
+					"limit": {"type": "integer", "description": "Max results (1-%d). Default %d."},
 					"tag": {"type": "string", "description": "Optional tag to filter results."}
 				},
 				"required": ["query"],
 				"additionalProperties": false
-			}`),
+			}`, maxMemorySearchLimit, defaultMemorySearchLimit)),
 			RiskTier: types.RiskReversible,
 		},
 		{
 			Name:        "memory_write",
 			Path:        compute.BuiltinScheme + "memory_write",
-			Description: "Commit a memory so future conversations can recall it. Use when the user shares a preference, fact about themselves, important decision, or something they explicitly ask you to remember. event is a short summary (one sentence); context is the full detail. Importance 1-10 (default 5). Tags help filtered recall later.",
-			ParametersSchema: []byte(`{
+			Description: fmt.Sprintf("Commit a memory so future conversations can recall it. Use when the user shares a preference, fact about themselves, important decision, or something they explicitly ask you to remember. event is a short summary (one sentence); context is the full detail. Importance %d-%d (default %d). Tags help filtered recall later.", memory.MinImportance, memory.MaxImportance, memory.DefaultImportance),
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
 					"event": {"type": "string", "description": "Short one-sentence summary."},
 					"context": {"type": "string", "description": "Full detail text."},
-					"importance": {"type": "integer", "description": "Score 1-10. Default 5."},
+					"importance": {"type": "integer", "description": "Score %d-%d. Default %d."},
 					"tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags."}
 				},
 				"required": ["event"],
 				"additionalProperties": false
-			}`),
+			}`, memory.MinImportance, memory.MaxImportance, memory.DefaultImportance)),
 			RiskTier: types.RiskReversible,
 		},
 		{
 			Name:        "memory_recent",
 			Path:        compute.BuiltinScheme + "memory_recent",
-			Description: "List memories written recently. Use when the user asks 'what have you learned about me recently' or 'what's new in memory'. Optionally filter by retention (session|episodic|long-term) and a cutoff duration (since). Returns up to limit entries (default 20) sorted newest-first. Present as a markdown table or bullet list — this is fact-dense enumerable content, not narrative.",
-			ParametersSchema: []byte(`{
+			Description: fmt.Sprintf("List memories written recently. Use when the user asks 'what have you learned about me recently' or 'what's new in memory'. Optionally filter by retention (session|episodic|long-term) and a cutoff duration (since). Returns up to limit entries (default %d) sorted newest-first. Present as a markdown table or bullet list — this is fact-dense enumerable content, not narrative.", defaultMemoryRecentLimit),
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
 					"retention": {"type": "string", "description": "Filter by retention Tier: session | episodic | long-term. Default: all."},
 					"since": {"type": "string", "description": "Only include entries newer than this duration ago (e.g. '24h', '7d'). Default: no filter."},
-					"limit": {"type": "integer", "description": "Max entries (1-50). Default 20."}
+					"limit": {"type": "integer", "description": "Max entries (1-%d). Default %d."}
 				},
 				"additionalProperties": false
-			}`),
+			}`, maxMemoryRecentLimit, defaultMemoryRecentLimit)),
 			RiskTier: types.RiskReversible,
 		},
 		{
 			Name:        "dream_recap",
 			Path:        compute.BuiltinScheme + "dream_recap",
 			Description: "Show what was consolidated during recent REM/dream cycles. Returns vector records tagged as consolidations with their source_id counts, consolidation timestamps, and summary text. Use when the user asks 'what did you dream about', 'what did you consolidate', or 'what did you learn last night'. Always narrate the result in your own voice per Personality & Style — summarise what you learned, omit the raw structure. Optional since filter (e.g. '24h', '7d', default all-time).",
-			ParametersSchema: []byte(`{
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
 					"since": {"type": "string", "description": "Only include consolidations newer than this (e.g. '24h'). Default: all."},
-					"limit": {"type": "integer", "description": "Max entries (1-50). Default 10."}
+					"limit": {"type": "integer", "description": "Max entries (1-%d). Default %d."}
 				},
 				"additionalProperties": false
-			}`),
+			}`, maxDreamRecapLimit, defaultDreamRecapLimit)),
 			RiskTier: types.RiskReversible,
 		},
 		{
@@ -224,9 +224,9 @@ func newMemorySearchHandler(store *memory.Store, embedder compute.EmbeddingProvi
 		if query == "" {
 			return nil, 2, errors.New("memory_search: query is required")
 		}
-		limit := 5
+		limit := defaultMemorySearchLimit
 		if raw, ok := args["limit"]; ok && raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 20 {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= maxMemorySearchLimit {
 				limit = n
 			}
 		}
@@ -419,9 +419,9 @@ func newMemoryWriteHandler(raft memoryRaftApplier, embedder compute.EmbeddingPro
 			return nil, 2, errors.New("memory_write: event is required")
 		}
 		ctxField := args["context"]
-		importance := int32(5)
+		importance := memory.DefaultImportance
 		if raw, ok := args["importance"]; ok && raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 10 {
+			if n, err := strconv.Atoi(raw); err == nil && n >= int(memory.MinImportance) && n <= int(memory.MaxImportance) {
 				importance = int32(n)
 			}
 		}
@@ -481,9 +481,9 @@ func newDreamRecapHandler(store *memory.Store, authz compute.CrossOwnerAuthorize
 		// sufficient, and does not need to walk the sources.
 		turn, _ := turn.IdentityFrom(ctx)
 		audience := compute.ReadAudience(ctx, turn, authz)
-		limit := 10
+		limit := defaultDreamRecapLimit
 		if raw, ok := args["limit"]; ok && raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= maxDreamRecapLimit {
 				limit = n
 			}
 		}
@@ -634,14 +634,14 @@ func priorEpisodic(store *memory.Store, id string) *lobslawv1.EpisodicRecord {
 // so it is as important as what it replaces.
 func correctedImportance(args map[string]string, prior *lobslawv1.EpisodicRecord) int32 {
 	if raw, ok := args["importance"]; ok && raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= 10 {
+		if n, err := strconv.Atoi(raw); err == nil && n >= int(memory.MinImportance) && n <= int(memory.MaxImportance) {
 			return int32(n)
 		}
 	}
 	if prior != nil && prior.Importance > 0 {
 		return prior.Importance
 	}
-	return 5
+	return memory.DefaultImportance
 }
 
 // correctedTags keeps the original's tags and adds the corrects
@@ -803,9 +803,9 @@ func newMemoryRecentHandler(store *memory.Store, authz compute.CrossOwnerAuthori
 		// it.
 		turn, _ := turn.IdentityFrom(ctx)
 		audience := compute.ReadAudience(ctx, turn, authz)
-		limit := 20
+		limit := defaultMemoryRecentLimit
 		if raw, ok := args["limit"]; ok && raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= maxMemoryRecentLimit {
 				limit = n
 			}
 		}

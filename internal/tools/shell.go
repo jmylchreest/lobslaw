@@ -38,17 +38,17 @@ func ShellToolDef() *types.ToolDef {
 	return &types.ToolDef{
 		Name:        "shell_command",
 		Path:        compute.BuiltinScheme + "shell_command",
-		Description: "Run a shell command and return stdout+stderr. Use sparingly. Commands the user has not already approved raise a confirmation they answer; ask for what you actually need rather than working around a pending approval. A small compiled-in floor (rm -rf /, fork bombs, mkfs, curl|sh) is refused outright and must not be retried or worked around. timeout_secs bounds the run (default 30, max 300). cwd is optional. Return value includes stdout, stderr, exit_code, and truncated flag if output exceeded 256KB.",
-		ParametersSchema: []byte(`{
+		Description: fmt.Sprintf("Run a shell command and return stdout+stderr. Use sparingly. Commands the user has not already approved raise a confirmation they answer; ask for what you actually need rather than working around a pending approval. A small compiled-in floor (rm -rf /, fork bombs, mkfs, curl|sh) is refused outright and must not be retried or worked around. timeout_secs bounds the run (default %d, max %d). cwd is optional. Return value includes stdout, stderr, exit_code, and truncated flag if output exceeded %dKB.", int(shellDefaultTimeout/time.Second), int(shellMaxTimeout/time.Second), shellMaxOutputBytes/1024),
+		ParametersSchema: []byte(fmt.Sprintf(`{
 			"type": "object",
 			"properties": {
 				"command": {"type": "string", "description": "Full command string (passed via sh -c)."},
 				"cwd": {"type": "string", "description": "Absolute path to run in. Default is server's workspace dir."},
-				"timeout_secs": {"type": "integer", "description": "Wall-clock timeout (default 30, max 300)."}
+				"timeout_secs": {"type": "integer", "description": "Wall-clock timeout (default %d, max %d)."}
 			},
 			"required": ["command"],
 			"additionalProperties": false
-		}`),
+		}`, int(shellDefaultTimeout/time.Second), int(shellMaxTimeout/time.Second))),
 		// Derived rather than written into the sentence above, which
 		// is where this list used to live. compute.disabled_tools can
 		// switch any of them off, and a description recommending a tool

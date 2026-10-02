@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -193,7 +192,7 @@ func rollbackSnapshot(ops snapshotRestoreOps, path, tmp, backup string) error {
 func prepareSnapshotDB(path string) (*bolt.DB, error) {
 	// Read-only Open avoids loading a corrupt freelist before checking the
 	// snapshot's declared size against its real length.
-	check, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: 5 * time.Second})
+	check, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: storeOpenTimeout})
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +214,7 @@ func prepareSnapshotDB(path string) (*bolt.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
+	fresh, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: storeOpenTimeout})
 	if err != nil {
 		return nil, err
 	}

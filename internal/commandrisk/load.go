@@ -120,7 +120,7 @@ func ParseTable(data []byte) (map[string]CommandRiskRule, error) {
 // nobody's intent, and a bound is a shorter thing to be sure of than a
 // visited-set.
 func resolve(name string, t Rule, f tableFile, depth int) (CommandRiskRule, error) {
-	if depth > 4 {
+	if depth > maxRuleInheritanceDepth {
 		return CommandRiskRule{}, fmt.Errorf("extends chain too deep")
 	}
 	if t.Extends != "" {

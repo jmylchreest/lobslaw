@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 )
 
 // Vision, as a driver rather than a format enum.
@@ -209,7 +208,7 @@ func DoVisionRequest(
 	if resp.StatusCode != http.StatusOK {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("vision: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("vision: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, DiagnosticExcerptMaxBytes)),
 		}
 	}
 	return raw, nil
@@ -235,7 +234,7 @@ func HTTPClientOr(c *http.Client) *http.Client {
 	if c != nil {
 		return c
 	}
-	return &http.Client{Timeout: 60 * time.Second}
+	return &http.Client{Timeout: DefaultVisionTimeout}
 }
 
 type openAIVisionRequest struct {

@@ -252,7 +252,7 @@ func splitHostPortLenient(addr string) (host, port string, err error) {
 }
 
 func enrolContext() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 15*time.Second)
+	return context.WithTimeout(context.Background(), enrolRPCTimeout)
 }
 
 // enrolClient dials the enrolment listener.
@@ -321,7 +321,7 @@ func pollUntilAnswered(addr, caFile, id, dir string, wait time.Duration) error {
 			fmt.Printf("Still waiting after %s. Run `lobslaw enrol status --id %s` again later.\n", wait, id)
 			return nil
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(enrolPollInterval)
 	}
 }
 

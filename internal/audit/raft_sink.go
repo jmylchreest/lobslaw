@@ -51,7 +51,7 @@ func NewRaftSink(cfg RaftConfig) (*RaftSink, error) {
 		return nil, errors.New("audit.RaftSink: Store required")
 	}
 	if cfg.ApplyTimeout <= 0 {
-		cfg.ApplyTimeout = 5 * time.Second
+		cfg.ApplyTimeout = DefaultApplyTimeout
 	}
 	return &RaftSink{raft: cfg.Raft, store: cfg.Store, applyTimeout: cfg.ApplyTimeout}, nil
 }

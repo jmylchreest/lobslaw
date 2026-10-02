@@ -555,7 +555,7 @@ func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, prov
 	if err != nil {
 		return "", fmt.Errorf("marshal commitment: %w", err)
 	}
-	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+	if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 		return "", fmt.Errorf("raft apply: %w", err)
 	}
 	return id, nil

@@ -80,7 +80,7 @@ func NewEpisodicIngester(raft raftApplier, applyTimeout time.Duration, embedder 
 		return nil, errors.New("episodic ingester: raft applier required")
 	}
 	if applyTimeout <= 0 {
-		applyTimeout = 5 * time.Second
+		applyTimeout = DefaultEpisodicApplyTimeout
 	}
 	return &EpisodicIngester{
 		raft:     raft,
@@ -142,7 +142,7 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 		Id:         id,
 		Event:      event,
 		Context:    textutil.Sanitise(stored),
-		Importance: 5,
+		Importance: DefaultImportance,
 		Timestamp:  timestamppb.New(turn.CompletedAt),
 		Tags:       tags,
 		Retention:  lobslawv1.Retention_RETENTION_SESSION,

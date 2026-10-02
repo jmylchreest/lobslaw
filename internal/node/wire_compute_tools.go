@@ -423,7 +423,7 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 				"name", name, "panic", r)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), toolBootstrapTimeout)
 	defer cancel()
 
 	// Resolve version="latest" against GitHub's releases API, then
@@ -506,7 +506,7 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 		currentOut := runDetect(ctx, decl.Detect)
 		if !strings.Contains(currentOut, declVersion) {
 			force = true
-			reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, 80) + ")"
+			reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, toolVersionPreviewRunes) + ")"
 		} else {
 			n.log.Debug("binary: auto-install skip (version match)",
 				"name", name, "version", declVersion)

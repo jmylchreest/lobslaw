@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // ImageRequest is one text-to-image call.
@@ -67,7 +66,7 @@ func NewOpenAIImageDriver(cfg OpenAIImageConfig) (*OpenAIImageDriver, error) {
 	}
 	c := cfg.HTTPClient
 	if c == nil {
-		c = &http.Client{Timeout: 3 * time.Minute}
+		c = &http.Client{Timeout: DefaultImageTimeout}
 	}
 	return &OpenAIImageDriver{cfg: cfg, client: c}, nil
 }
@@ -133,10 +132,10 @@ func (d *OpenAIImageDriver) Generate(ctx context.Context, req ImageRequest) (*Ar
 	if readErr != nil {
 		return nil, Transient(fmt.Errorf("image: read: %w", readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("image: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("image: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, DiagnosticExcerptMaxBytes)),
 		}
 	}
 

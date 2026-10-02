@@ -247,7 +247,7 @@ func (c *Compactor) maybeTitle(ctx context.Context, key turn.SessionKey, summary
 // for. Models overshoot length instructions routinely, and an
 // oversized summary is charged on every subsequent turn.
 func truncateToTokens(s string, maxTokens int) string {
-	maxBytes := maxTokens * 4
+	maxBytes := maxTokens * estimatedBytesPerToken
 	if len(s) <= maxBytes {
 		return s
 	}

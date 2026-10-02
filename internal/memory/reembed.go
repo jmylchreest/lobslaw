@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/ids"
 
@@ -293,7 +292,7 @@ func (s *Service) apply(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return status.Errorf(codes.Internal, "marshal log entry: %v", err)
 	}
-	if _, err := s.raft.Apply(data, 5*time.Second); err != nil {
+	if _, err := s.raft.Apply(data, reembedApplyTimeout); err != nil {
 		return status.Errorf(codes.Internal, "apply %s: %v", entry.Id, err)
 	}
 	return nil

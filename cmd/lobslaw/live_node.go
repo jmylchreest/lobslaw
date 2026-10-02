@@ -29,8 +29,6 @@ import (
 // overrides, and the mTLS paths come from [cluster.mtls] exactly as
 // the node reads them.
 
-const defaultLiveNodeTimeout = 10 * time.Second
-
 // liveNode holds the flags a subcommand needs to reach a running node.
 type liveNode struct {
 	configPath  string
@@ -45,7 +43,7 @@ type liveNode struct {
 
 // bind registers the shared flags on fs. Call before fs.Parse.
 func (l *liveNode) bind(fs *flag.FlagSet) {
-	l.bindWithTimeout(fs, defaultLiveNodeTimeout)
+	l.bindWithTimeout(fs, defaultRPCTimeout)
 }
 
 // bindWithTimeout registers the command default for both execution and help.

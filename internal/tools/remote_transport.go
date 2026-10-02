@@ -603,7 +603,7 @@ func (r *Remote) Put(ctx context.Context, remotePath string, body []byte) error 
 	defer func() { _ = session.Close() }()
 
 	session.Stdin = bytes.NewReader(body)
-	stderr := compute.NewCappedBuffer(8 << 10)
+	stderr := compute.NewCappedBuffer(remoteTransferStderrMaxBytes)
 	session.Stderr = stderr
 
 	runCtx, cancelRun := context.WithTimeout(ctx, r.defaultTimeout)
@@ -647,7 +647,7 @@ func (r *Remote) Get(ctx context.Context, remotePath string) ([]byte, error) {
 	// One byte over the cap, so a file exactly AT the limit reads
 	// whole and only a genuinely oversized one trips it.
 	out := &limitedBuffer{limit: remoteMaxTransferBytes + 1}
-	stderr := compute.NewCappedBuffer(8 << 10)
+	stderr := compute.NewCappedBuffer(remoteTransferStderrMaxBytes)
 	session.Stdout = out
 	session.Stderr = stderr
 

@@ -104,13 +104,13 @@ func NewJWKSCache(cfg JWKSConfig) (*JWKSCache, error) {
 		keys:            make(map[string]parsedKey),
 	}
 	if c.client == nil {
-		c.client = &http.Client{Timeout: 10 * time.Second}
+		c.client = &http.Client{Timeout: defaultJWKSFetchTimeout}
 	}
 	if c.refreshInterval <= 0 {
-		c.refreshInterval = 10 * time.Minute
+		c.refreshInterval = defaultJWKSRefreshInterval
 	}
 	if c.forceRefreshMin <= 0 {
-		c.forceRefreshMin = 30 * time.Second
+		c.forceRefreshMin = defaultJWKSForceRefreshMin
 	}
 	if c.logger == nil {
 		c.logger = slog.Default()
@@ -208,14 +208,14 @@ func (c *JWKSCache) fetchAndStore(ctx context.Context, forceRefreshAttempt bool)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxJWKSErrorPreviewBytes))
 		c.logger.Warn("jwks: non-2xx — keeping stale cache",
 			"url", c.url, "status", resp.StatusCode, "body", string(body))
 		return c.markRefreshAttempt(forceRefreshAttempt, fmt.Errorf("jwks: HTTP %d", resp.StatusCode))
 	}
 
 	var js jwks
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&js); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJWKSResponseBytes)).Decode(&js); err != nil {
 		c.logger.Warn("jwks: malformed response — keeping stale cache", "url", c.url, "err", err)
 		return c.markRefreshAttempt(forceRefreshAttempt, fmt.Errorf("jwks: decode: %w", err))
 	}

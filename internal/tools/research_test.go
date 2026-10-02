@@ -2,8 +2,11 @@ package tools
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/compute/research"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 )
@@ -74,14 +77,14 @@ func TestResearchStartValidatesDepth(t *testing.T) {
 	t.Parallel()
 
 	fn, _ := researchTool(t)
-	for _, bad := range []string{"0", "11", "-1", "deep", "3.5"} {
+	for _, bad := range []string{"0", strconv.Itoa(research.MaxDepth + 1), "-1", "deep", "3.5"} {
 		if _, code, err := fn(context.Background(), map[string]string{
 			"question": "q", "depth": bad,
 		}); err == nil || code != 2 {
 			t.Errorf("depth %q was accepted (code=%d err=%v)", bad, code, err)
 		}
 	}
-	for _, ok := range []string{"1", "5", "10"} {
+	for _, ok := range []string{"1", strconv.Itoa(research.DefaultDepth), strconv.Itoa(research.MaxDepth)} {
 		if _, code, err := fn(context.Background(), map[string]string{
 			"question": "q", "depth": ok,
 		}); err != nil || code != 0 {

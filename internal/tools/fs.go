@@ -91,7 +91,7 @@ func readFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 
 	scanner := bufio.NewScanner(f)
 	// Bump the max-token size — default 64KB chokes on long log lines.
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+	scanner.Buffer(make([]byte, 0, scannerMaxLineBytes), scannerMaxLineBytes)
 
 	var (
 		collected []string
@@ -461,7 +461,7 @@ func searchFilesBuiltin(ctx context.Context, args map[string]string) ([]byte, in
 // tool works on bare minimal systems.
 func chooseSearchCommand(pattern, path, glob string) (string, []string) {
 	if rg, err := exec.LookPath("rg"); err == nil {
-		args := []string{"--no-heading", "--line-number", "--max-count=10"}
+		args := []string{"--no-heading", "--line-number", fmt.Sprintf("--max-count=%d", searchFileMaxMatchesPerFile)}
 		if glob != "" {
 			args = append(args, "--glob", glob)
 		}

@@ -8,7 +8,6 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -95,7 +94,7 @@ func ApplyArchiveImport(ctx context.Context, raft RebindApplier, store *Store, i
 		if err != nil {
 			return result, err
 		}
-		response, err := raft.Apply(data, 30*time.Second)
+		response, err := raft.Apply(data, archiveApplyTimeout)
 		if err != nil {
 			return result, err
 		}
@@ -214,7 +213,7 @@ func archiveImportGroups(records []archive.Record) ([][]archive.Record, error) {
 			if mapping.Kind == "session-messages" {
 				// Message keys end in a fixed-width sequence; session IDs can contain colons.
 				split := strings.LastIndex(mapping.DestinationId, ":")
-				if split <= 0 || len(mapping.DestinationId)-split-1 != 20 {
+				if split <= 0 || len(mapping.DestinationId)-split-1 != sessionSeqWidth {
 					return nil, errors.New("invalid mapped message key")
 				}
 				key = "1/" + mapping.DestinationId[:split]

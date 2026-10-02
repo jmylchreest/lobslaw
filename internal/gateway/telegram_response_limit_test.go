@@ -17,8 +17,8 @@ func TestTelegramResponseLimits(t *testing.T) {
 		name, body string
 		limit      int
 	}{
-		{"updates", `{"ok":true,"result":[{"update_id":10,"message":{"photo":[{"file_id":"image","file_size":15000000}],"voice":{"file_id":"voice","file_size":20000000}}}]}`, 8 << 20},
-		{"file", `{"ok":true,"result":{"file_path":"voice.ogg"}}`, 1 << 20},
+		{"updates", `{"ok":true,"result":[{"update_id":10,"message":{"photo":[{"file_id":"image","file_size":15000000}],"voice":{"file_id":"voice","file_size":20000000}}}]}`, int(telegramPollMaxBytes)},
+		{"file", `{"ok":true,"result":{"file_path":"voice.ogg"}}`, int(telegramAPIResponseMaxBytes)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, extra := range []int{0, 1} {
