@@ -8,9 +8,6 @@ import (
 	"strings"
 )
 
-// Match the kernel's bounded symlink traversal; cycles must fail closed.
-const maxPathSymlinks int = 40
-
 // resolveExistingPath follows existing components even when a write's
 // destination does not exist yet. Resolve before cleaning: link/.. is
 // relative to the link's target, not to the directory containing the link.
