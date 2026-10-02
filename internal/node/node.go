@@ -20,7 +20,6 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jmylchreest/lobslaw/internal/audit"
-	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
@@ -35,6 +34,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/sharing"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/soul"
@@ -325,18 +325,18 @@ type Node struct {
 	transport *rafttransport.Transport
 	raft      *memory.RaftNode
 
-	policySvc        *policy.Service
-	memorySvc        *memory.Service
-	credentialSvc    *memory.CredentialService
-	userPrefsSvc     *memory.UserPrefsService
-	notifySvc        *notify.Service
-	oauthTracker     *oauth.Tracker
-	oauthProviders   map[string]oauth.ProviderConfig
-	clawhubInstaller *clawhub.Installer
-	planSvc          *plan.Service
-	storageSvc       *storage.Service
-	storageMgr       *storage.Manager
-	skillRegistry    *skills.Registry
+	policySvc      *policy.Service
+	memorySvc      *memory.Service
+	credentialSvc  *memory.CredentialService
+	userPrefsSvc   *memory.UserPrefsService
+	notifySvc      *notify.Service
+	oauthTracker   *oauth.Tracker
+	oauthProviders map[string]oauth.ProviderConfig
+	clawhubSource  sharing.Source
+	planSvc        *plan.Service
+	storageSvc     *storage.Service
+	storageMgr     *storage.Manager
+	skillRegistry  *skills.Registry
 	// jobDrivers maps a generation driver's name to its
 	// implementation. The name is embedded in every JobHandle the
 	// driver mints, so a handle polled after a crash takeover is
@@ -470,7 +470,8 @@ type Node struct {
 	// promptRegistry, kept separately because the sweeper needs the
 	// concrete type. Nil on a gateway node that does not host raft —
 	// there, confirmations stay process-local.
-	promptStore *memory.PromptStore
+	promptStore   *memory.PromptStore
+	taskApprovals *taskApprovalServer
 
 	// leaderGate fans raft leadership transitions out to leader-pinned
 	// singleton workloads (currently just the telegram long-poller).

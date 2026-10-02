@@ -27,6 +27,14 @@ import (
 
 const skillsUsage = `lobslaw skills — install and inspect skills on a RUNNING cluster
 
+  fetch <source> --to file:<path>  retrieve a ClawHub skill for review
+  publish --to file:<path> [--dir <dir> | <name> [version]]
+  inspect file:<path>             inspect a portable package offline
+  sign --key <path> --publisher <name> --to file:<path> file:<source>
+  install --owner user:<id> <source>  preview a staged installation
+  activate-install --owner user:<id> <id>  preview activation
+    Add --apply --expected-plan <digest> to apply a reviewed preview.
+
   list [--all]                    installed skills; --all includes superseded versions
   import <dir> [--tier=operator]  read a skill directory and install it
   export <name> <version> <dir>   write a stored skill back out, byte-identical
@@ -36,7 +44,7 @@ const skillsUsage = `lobslaw skills — install and inspect skills on a RUNNING 
 Connection comes from --config ([cluster] advertise_addr and
 [cluster.mtls]), or from --addr / --ca-cert / --node-cert / --node-key.
 
-There is no --offline form. Importing writes to raft; doing it against
+Inspect, sign and publish --dir work locally. Installation writes to raft; doing it against
 a stopped node would produce a record the running cluster never sees.
 
 A skill dropped into the skills storage mount is imported automatically
@@ -55,6 +63,18 @@ func dispatchSkills(args []string) bool {
 
 	var err error
 	switch sub[0] {
+	case "fetch":
+		err = skillsFetch(sub[1:])
+	case "publish":
+		err = skillsPublish(sub[1:])
+	case "inspect":
+		err = skillsInspect(sub[1:])
+	case "install":
+		err = skillsInstall(sub[1:])
+	case "activate-install":
+		err = skillsActivateInstall(sub[1:])
+	case "sign":
+		err = skillsSign(sub[1:])
 	case "list":
 		err = skillsList(sub[1:])
 	case "import":

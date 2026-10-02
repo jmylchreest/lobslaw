@@ -339,13 +339,13 @@ func MemoryWriteApprovalDefault() types.PolicyRule {
 // to. A nil approvals store subtracts nothing, so the zero value is
 // the safe one.
 func (e *Executor) unapprovedLabels(ctx context.Context, action string, labels []commandrisk.RiskLabel) []commandrisk.RiskLabel {
-	if e.approvals == nil || len(labels) == 0 {
+	if len(labels) == 0 {
 		return labels
 	}
 	remaining := make([]commandrisk.RiskLabel, 0, len(labels))
 	for _, l := range labels {
 		key := RiskGrantResource(l)
-		if key != "" && e.approvals.Granted(ctx, action, key) {
+		if key != "" && e.approvalGranted(ctx, action, key) {
 			continue
 		}
 		remaining = append(remaining, l)
