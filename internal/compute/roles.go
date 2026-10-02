@@ -160,6 +160,12 @@ func (rm *RoleMap) For(role Role) LLMProvider {
 	return rm.main
 }
 
+// ForWithTimeout resolves a role and bounds each Chat call by its timeout.
+// For and IsMain retain the underlying provider identity for replay policy.
+func (rm *RoleMap) ForWithTimeout(role Role) LLMProvider {
+	return &roleTimeoutProvider{provider: rm.For(role), timeout: rm.TimeoutFor(role)}
+}
+
 // LabelFor names the provider that actually serves a role, following
 // the same fallback chain For does.
 //

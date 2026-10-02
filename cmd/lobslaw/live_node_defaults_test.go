@@ -20,9 +20,13 @@ func TestLiveNodeTimeoutDefaultMatchesHelpAndCanBeOverridden(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			node := liveNode{timeout: tc.preset}
+			var node liveNode
 			fs := flag.NewFlagSet(tc.name, flag.ContinueOnError)
-			node.bind(fs)
+			if tc.preset == 0 {
+				node.bind(fs)
+			} else {
+				node.bindWithTimeout(fs, tc.preset)
+			}
 			var help bytes.Buffer
 			fs.SetOutput(&help)
 			fs.PrintDefaults()
