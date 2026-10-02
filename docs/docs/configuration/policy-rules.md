@@ -27,7 +27,7 @@ resource    = "soul_*"
 | `description` | no | string | Free text |
 | `priority` | yes | int | Higher = wins; see priority table |
 | `effect` | yes | enum | `allow`, `deny`, `require_confirmation` |
-| `subject` | yes | string | `kind:value` form: `scope:owner`, `user:alice`, `role:admin`, or `*` for everyone |
+| `subject` | no | string | `kind:value` form: `scope:owner`, `user:alice`, `role:admin`; empty or `*` matches everyone |
 | `action` | yes | string | `tool:exec`, `shell:run`, `memory:write`, `credentials:read`, `credentials:grant`, `oauth:start`, `clawhub:install` |
 | `resource` | yes | string | Glob — `*` matches everything; `soul_*` prefix; `*.send` suffix |
 
@@ -45,16 +45,18 @@ Higher number wins on conflict. Within the same priority, the engine sorts by id
 
 ## Subject matching
 
-`kind:value`; bare strings (e.g. `owner` instead of `scope:owner`) match nothing. A node refuses to
-boot if a rule's subject kind is not one of these; see [Security → Policy engine](/security/policy-engine)
-for why. Available kinds:
+Non-empty subjects must use `kind:value` with a supported kind and a non-empty value, or `*`.
+Malformed subjects (e.g. `owner` or `user:`) and unsupported kinds (e.g. `channel:telegram`)
+refuse boot, with the rule ID named in the error. Empty subjects and `*` are supported wildcards
+that match everyone. See [Security → Policy engine](/security/policy-engine) for why.
+Available kinds:
 
 | Kind | Source | Example |
 |---|---|---|
 | `scope` | `Claims.Scope` from gateway auth | `scope:owner`, `scope:public` |
 | `user` | `Claims.UserID` | `user:alice` |
 | `role` | `Claims.Roles` | `role:admin` |
-| `*` | matches anything | `*` |
+| Empty or `*` | matches everyone | `""`, `*` |
 
 ## Resource glob
 

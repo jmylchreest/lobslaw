@@ -442,8 +442,9 @@ type PolicyConfig struct {
 	// Rules are operator-declared [[policy.rules]] entries seeded
 	// at boot via raft. Each rule mirrors lobslawv1.PolicyRule
 	// fields. Subjects MUST be "kind:value" (scope:owner,
-	// user:alice, role:admin) or "*". A bare string like "owner",
-	// or any other kind the engine does not match, fails the node
+	// user:alice, role:admin), "*", or empty (both wildcards match
+	// everyone). A bare string like "owner", an empty value like
+	// "user:", or a kind the engine does not match fails the node
 	// at boot rather than seeding a rule that would silently never
 	// apply. Higher Priority wins. Sensitive built-ins get no seed
 	// at all (fall through to default-deny); operator allow rules
