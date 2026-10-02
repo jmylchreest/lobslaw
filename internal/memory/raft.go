@@ -21,12 +21,6 @@ const (
 	// SnapshotDir is the directory lobslaw hands to
 	// raft.NewFileSnapshotStore, directly under DataDir.
 	SnapshotDir = "snapshots"
-	// RaftSnapshotStoreSegment is hashicorp/raft's own subdirectory
-	// name for a snapshot store, one level below SnapshotDir. It
-	// mirrors the unexported snapPath constant in
-	// hashicorp/raft's file_snapshot.go. Raft does not export it, so
-	// anything matching its output needs its own copy of the name.
-	RaftSnapshotStoreSegment = "snapshots"
 )
 
 // RaftConfig holds the parameters for constructing a Raft node.

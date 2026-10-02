@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-
-	"github.com/jmylchreest/lobslaw/internal/memory"
 )
 
 // The policy engine is default-deny, which is right, but it is
@@ -17,10 +15,11 @@ import (
 // misconfiguration or a persuasive prompt cannot reach. Set every rule
 // to allow and turn confirmations off and `rm -rf /` is permitted.
 //
-// This file is that floor. It is compiled in, it reads no
-// configuration, and there is no override flag. The test that no
-// config path disables it is the actual feature — the pattern list is
-// the easy part.
+// This file is that floor. Its rules are compiled in and there is
+// no override flag. Node wiring identifies its owned Raft paths;
+// that identifies ownership without permitting an override. The test
+// that no config path disables it is the actual feature — the pattern
+// list is the easy part.
 //
 // WHAT THIS IS NOT: a security boundary. A shell can reach every one
 // of these paths by other means — a here-doc, a base64'd script, an
@@ -203,12 +202,6 @@ type protectedPath struct {
 	// rather than deny. ~/.ssh/config holds no key material and
 	// refusing it outright breaks ordinary work.
 	carveOut []string
-	// dirs, when set, matches a consecutive run of path segments
-	// anywhere in the path, in order. A single dir segment is
-	// deliberately not enough here: exists so a guard can name a
-	// distinctive multi-segment sequence without over-matching on a
-	// common single directory name (see the raft-snapshot entry).
-	dirs []string
 	// abs matches an exact absolute path.
 	abs string
 	// base matches a basename glob anywhere.
@@ -310,17 +303,6 @@ var protectedPaths = []protectedPath{
 	// carveOut here could never take effect — latent rather than live,
 	// because none of the shared entries has one yet, and exactly the
 	// kind of thing that is discovered by someone adding one.
-	{name: "raft-log", base: memory.RaftLogFile, why: "this is lobslaw's own Raft log"},
-	// A bare "snapshots" segment rule would over-match. It is a
-	// common directory name, which is exactly why the ".git" segment
-	// rule above was removed. What is distinctive is the two-segment
-	// sequence a written snapshot passes through: lobslaw hands
-	// memory.SnapshotDir to raft's file snapshot store, which creates
-	// its own inner memory.RaftSnapshotStoreSegment beneath it, so a
-	// path through an actual snapshot always has both segments
-	// consecutively.
-	{name: "raft-snapshot", dirs: []string{memory.SnapshotDir, memory.RaftSnapshotStoreSegment},
-		why: "this is a Raft snapshot"},
 	{name: "bearer-token", base: "*.jwt", why: "this is a bearer token"},
 
 	// NOT ".git". It was in the fs list, where it was written for
@@ -336,9 +318,28 @@ var protectedPaths = []protectedPath{
 //
 // Deliberately independent of whatever sandbox or mount policy is in
 // force: the point of a floor is that it does not consult
-// configuration, so a mount that happens to expose ~/.aws does not
-// make reading it acceptable.
+// allow/deny configuration, so a mount that happens to expose ~/.aws
+// does not make reading it acceptable.
 func CheckPath(path string) (PathVerdict, error) {
+	verdict, err := checkPathPatterns(path)
+	if verdict == PathDenied || strings.TrimSpace(path) == "" {
+		return verdict, err
+	}
+	resolved, resolveErr := resolveExistingPath(strings.TrimSpace(path))
+	if resolveErr != nil {
+		return PathDenied, &HardlineError{Pattern: "unresolved-path", Detail: resolveErr.Error()}
+	}
+	if raftErr := checkRaftPath(resolved); raftErr != nil {
+		return PathDenied, raftErr
+	}
+	resolvedVerdict, resolvedErr := checkPathPatterns(resolved)
+	if resolvedVerdict != PathAllowed {
+		return resolvedVerdict, resolvedErr
+	}
+	return verdict, err
+}
+
+func checkPathPatterns(path string) (PathVerdict, error) {
 	p := strings.TrimSpace(path)
 	if p == "" {
 		return PathAllowed, nil
@@ -370,11 +371,6 @@ func CheckPath(path string) (PathVerdict, error) {
 				}
 			}
 			return PathDenied, &HardlineError{Pattern: pp.name, Detail: pp.why}
-		case len(pp.dirs) > 0:
-			if !hasConsecutiveSegments(segments, pp.dirs) {
-				continue
-			}
-			return PathDenied, &HardlineError{Pattern: pp.name, Detail: pp.why}
 		case pp.base != "":
 			ok, _ := filepath.Match(pp.base, base)
 			if !ok {
@@ -391,22 +387,6 @@ func CheckPath(path string) (PathVerdict, error) {
 		}
 	}
 	return PathAllowed, nil
-}
-
-// hasConsecutiveSegments reports whether want appears in segments in
-// order and back to back, at any offset. Used for a guard that needs
-// to name a distinctive multi-segment sequence rather than a single
-// directory name that would over-match.
-func hasConsecutiveSegments(segments, want []string) bool {
-	if len(want) == 0 || len(want) > len(segments) {
-		return false
-	}
-	for start := 0; start+len(want) <= len(segments); start++ {
-		if slices.Equal(segments[start:start+len(want)], want) {
-			return true
-		}
-	}
-	return false
 }
 
 // CheckCommandPaths refuses a command that names a protected path.
