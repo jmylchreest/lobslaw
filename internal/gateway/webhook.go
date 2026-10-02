@@ -182,7 +182,7 @@ func (h *WebhookHandler) checkAuth(r *http.Request) bool {
 // ({"prompt": "..."}) or a plain-text body. JSON takes precedence
 // when Content-Type is application/json.
 func (h *WebhookHandler) extractPrompt(r *http.Request) (string, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+	body, err := io.ReadAll(io.LimitReader(r.Body, webhookMaxRequestBytes))
 	if err != nil {
 		return "", err
 	}

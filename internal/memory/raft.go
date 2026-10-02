@@ -117,7 +117,7 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 	}
 
 	snapDir := filepath.Join(cfg.DataDir, "snapshots")
-	snapStore, err := raft.NewFileSnapshotStore(snapDir, 2, os.Stderr)
+	snapStore, err := raft.NewFileSnapshotStore(snapDir, retainedSnapshots, os.Stderr)
 	if err != nil {
 		_ = boltStore.Close()
 		return nil, fmt.Errorf("create snapshot store: %w", err)
@@ -131,10 +131,10 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 	raftCfg := raft.DefaultConfig()
 	raftCfg.LocalID = raft.ServerID(cfg.NodeID)
 	raftCfg.Logger = newHCLogAdapter(logger, "raft")
-	raftCfg.HeartbeatTimeout = nonZeroDur(cfg.HeartbeatTimeout, 500*time.Millisecond)
-	raftCfg.ElectionTimeout = nonZeroDur(cfg.ElectionTimeout, 500*time.Millisecond)
-	raftCfg.LeaderLeaseTimeout = nonZeroDur(cfg.LeaderLeaseTimeout, 250*time.Millisecond)
-	raftCfg.CommitTimeout = nonZeroDur(cfg.CommitTimeout, 50*time.Millisecond)
+	raftCfg.HeartbeatTimeout = nonZeroDur(cfg.HeartbeatTimeout, DefaultRaftHeartbeatTimeout)
+	raftCfg.ElectionTimeout = nonZeroDur(cfg.ElectionTimeout, DefaultRaftElectionTimeout)
+	raftCfg.LeaderLeaseTimeout = nonZeroDur(cfg.LeaderLeaseTimeout, DefaultRaftLeaderLeaseTimeout)
+	raftCfg.CommitTimeout = nonZeroDur(cfg.CommitTimeout, DefaultRaftCommitTimeout)
 
 	hadState, err := raft.HasExistingState(boltStore, boltStore, snapStore)
 	if err != nil {
@@ -240,7 +240,7 @@ func (n *RaftNode) BootstrapSelf() error {
 // added us before declaring boot success.
 func (n *RaftNode) WaitForConfigInclusion(ctx context.Context, poll time.Duration) error {
 	if poll <= 0 {
-		poll = 200 * time.Millisecond
+		poll = leaderPollInterval
 	}
 	t := time.NewTicker(poll)
 	defer t.Stop()
@@ -278,7 +278,7 @@ func (n *RaftNode) startStateWatch() {
 	n.watchOnce.Do(func() {
 		n.watchWG.Go(func() {
 			leaderCh := n.Raft.LeaderCh()
-			obsCh := make(chan raft.Observation, 16)
+			obsCh := make(chan raft.Observation, raftObservationBuffer)
 			obs := raft.NewObserver(obsCh, false, func(o *raft.Observation) bool {
 				switch o.Data.(type) {
 				case raft.LeaderObservation, raft.PeerObservation, raft.RaftState:
@@ -290,14 +290,14 @@ func (n *RaftNode) startStateWatch() {
 			defer n.Raft.DeregisterObserver(obs)
 
 			// Periodic DEBUG snapshot of cluster state.
-			snapshot := time.NewTicker(30 * time.Second)
+			snapshot := time.NewTicker(stateLogInterval)
 			defer snapshot.Stop()
 
 			// Reconciliation tick — the safety net described above.
 			// 1s is fast enough that singleton workloads (telegram
 			// poller, scheduler claims) catch up well within a
 			// human-noticeable window after any missed edge.
-			reconcile := time.NewTicker(1 * time.Second)
+			reconcile := time.NewTicker(stateReconcileInterval)
 			defer reconcile.Stop()
 
 			for {
@@ -419,7 +419,7 @@ func nonZeroDur(v, fallback time.Duration) time.Duration {
 // raft.ServerAddress) join as a voting member. Must be called on the
 // leader.
 func (n *RaftNode) AddVoter(id raft.ServerID, addr raft.ServerAddress) error {
-	future := n.Raft.AddVoter(id, addr, 0, 10*time.Second)
+	future := n.Raft.AddVoter(id, addr, 0, addVoterTimeout)
 	return future.Error()
 }
 
@@ -506,7 +506,7 @@ func (n *RaftNode) WaitForLeader(timeout time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out waiting for leader (state=%s)", n.Raft.State())
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(raftShutdownPollInterval)
 	}
 }
 

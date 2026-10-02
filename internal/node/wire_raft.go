@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 
+	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/rafttransport"
@@ -109,7 +110,7 @@ func (n *Node) wireRaft(advertise string) error {
 func (n *Node) establishRaftMembership(ctx context.Context) error {
 	timeout := n.cfg.BootstrapTimeout
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = defaultRaftJoinTimeout
 	}
 
 	if n.raft.HadStateOnBoot() {
@@ -130,15 +131,15 @@ func (n *Node) establishRaftMembership(ctx context.Context) error {
 	// either source is enough to find a peer to dial. Brief wait
 	// (≤2s) gives the broadcast listener a chance to populate the
 	// registry on container/LAN startups where everyone races up.
-	candidates := n.collectJoinCandidates(ctx, 2*time.Second)
+	candidates := n.collectJoinCandidates(ctx, joinCandidateWait)
 	if len(candidates) > 0 {
 		joinCtx, cancel := context.WithTimeout(ctx, timeout)
-		err := n.discCli.JoinCluster(joinCtx, candidates, 5*time.Second)
+		err := n.discCli.JoinCluster(joinCtx, candidates, discovery.DefaultDialTimeout)
 		cancel()
 		if err == nil {
 			waitCtx, waitCancel := context.WithTimeout(ctx, timeout)
 			defer waitCancel()
-			if err := n.raft.WaitForConfigInclusion(waitCtx, 200*time.Millisecond); err != nil {
+			if err := n.raft.WaitForConfigInclusion(waitCtx, membershipPollInterval); err != nil {
 				return fmt.Errorf("joined via candidates but never observed self in committed config within %s: %w", timeout, err)
 			}
 			n.log.Info("raft: joined existing cluster",

@@ -29,7 +29,7 @@ func (n *Node) authorizeSharing(ctx context.Context, action, owner string) (stri
 	if owner == "" {
 		owner = actor
 	}
-	if !strings.HasPrefix(owner, "user:") || len(owner) <= 5 {
+	if !strings.HasPrefix(owner, userOwnerPrefix) || len(owner) <= len(userOwnerPrefix) {
 		return "", status.Error(codes.InvalidArgument, "owner must be a user principal")
 	}
 	roles := n.resolveUserRoles(cert.Subject.CommonName)

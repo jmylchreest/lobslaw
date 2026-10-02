@@ -247,7 +247,7 @@ func (e *ContextEngine) assemble(entries []recallEntry, strategy string) Context
 	blocks := make([]promptgen.ContextBlock, 0, len(entries))
 	spent := 0
 	for _, entry := range entries {
-		content := truncateContext(entry.rec.Context, 800)
+		content := truncateContext(entry.rec.Context, recallContextMaxBytes)
 		// score and when ride on Source, which WrapContext already
 		// renders as an attribute — so the metadata survives without a
 		// second tag vocabulary to carry it.
@@ -418,7 +418,7 @@ func (e *ContextEngine) annotateDisputes(audience memory.Audience, entries []rec
 			}
 			note := &disputeNote{
 				verdict:     v.GetVerdict(),
-				counterpart: truncateContext(text, 200),
+				counterpart: truncateContext(text, recallDisputeMaxBytes),
 			}
 			if epi.Timestamp != nil {
 				note.when = epi.Timestamp.AsTime()
@@ -507,7 +507,7 @@ func (e *ContextEngine) recall(ctx context.Context, audience memory.Audience, us
 // enough" — see recall, where only the first of those may fall back —
 // and so an operator tuning the floor can see what it is rejecting.
 func (e *ContextEngine) vectorRecall(audience memory.Audience, vec []float32) ([]recallEntry, recallStats, error) {
-	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2,
+	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*recallOverfetchFactor,
 		audience, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		return nil, recallStats{}, err
@@ -599,7 +599,7 @@ func (e *ContextEngine) lexicalRecall(audience memory.Audience, userMessage stri
 	}
 	// Over-fetch for the same reason the vector path does: the
 	// quarantine filter below can empty out an otherwise full page.
-	hits, err := lexicalEpisodicSearch(e.store, audience, userMessage, "", e.maxRecall*2)
+	hits, err := lexicalEpisodicSearch(e.store, audience, userMessage, "", e.maxRecall*recallOverfetchFactor)
 	if err != nil {
 		e.log.Warn("context-engine: lexical recall failed", "err", err)
 		return nil
@@ -872,7 +872,7 @@ func TokeniseQuery(query string) []string {
 	for _, f := range fields {
 		// Strip trailing punctuation the user types casually.
 		f = strings.Trim(f, ".,!?;:'\"()[]")
-		if len(f) <= 2 {
+		if len(f) < minLexicalWordBytes {
 			continue
 		}
 		// Contractions reduced to their head word BEFORE the stopword
@@ -884,9 +884,9 @@ func TokeniseQuery(query string) []string {
 		//
 		// The head word is also the right token to SEARCH for when it
 		// survives: a possessive like "john's" should match "john".
-		if head, ok := strings.CutSuffix(f, "'s"); ok && len(head) > 2 {
+		if head, ok := strings.CutSuffix(f, "'s"); ok && len(head) >= minLexicalWordBytes {
 			f = head
-		} else if head, ok := strings.CutSuffix(f, "n't"); ok && len(head) > 2 {
+		} else if head, ok := strings.CutSuffix(f, "n't"); ok && len(head) >= minLexicalWordBytes {
 			f = head
 		}
 		if memorySearchStopwords[f] {

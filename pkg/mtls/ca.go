@@ -31,7 +31,7 @@ func GenerateCA(opts CAOpts) (certPEM, keyPEM []byte, err error) {
 		opts.CommonName = defaultCACommonName
 	}
 	if opts.ValidFor == 0 {
-		opts.ValidFor = 10 * 365 * 24 * time.Hour
+		opts.ValidFor = DefaultCAValidity
 	}
 	now := opts.Now
 	if now.IsZero() {

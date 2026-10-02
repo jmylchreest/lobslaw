@@ -129,7 +129,7 @@ func (n *Node) scheduleChallengeFor(_ context.Context, owner string, now time.Ti
 	if err != nil {
 		return fmt.Errorf("marshal commitment: %w", err)
 	}
-	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+	if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 		return fmt.Errorf("raft apply: %w", err)
 	}
 	n.log.Info("dream: challenge scheduled", "owner", owner, "due", due)

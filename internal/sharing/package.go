@@ -27,7 +27,7 @@ const (
 	MaxSchedules = 32
 )
 
-var identifier = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
+var identifier = regexp.MustCompile(fmt.Sprintf(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,%d}$`, MaxIdentifierBytes-1))
 var inputPattern = regexp.MustCompile(`\{\{([a-zA-Z0-9_.-]+)\}\}`)
 
 type Package struct {
@@ -153,7 +153,7 @@ func validate(p Package) error {
 	if !identifier.MatchString(p.Name) || !identifier.MatchString(p.Version) || len(p.Manifest) == 0 {
 		return errors.New("sharing: invalid skill identity or empty manifest")
 	}
-	if len(p.Files) > MaxFiles || len(p.Schedules) > MaxSchedules || len(p.Inputs) > 64 {
+	if len(p.Files) > MaxFiles || len(p.Schedules) > MaxSchedules || len(p.Inputs) > MaxInputs {
 		return errors.New("sharing: too many files, schedules or inputs")
 	}
 	for name := range p.Files {
@@ -170,7 +170,7 @@ func validate(p Package) error {
 	}
 	seen := make(map[string]bool)
 	for _, s := range p.Schedules {
-		if !identifier.MatchString(s.Key) || seen[s.Key] || s.Name == "" || s.Prompt == "" || len(s.Prompt) > 16<<10 {
+		if !identifier.MatchString(s.Key) || seen[s.Key] || s.Name == "" || s.Prompt == "" || len(s.Prompt) > MaxSourcePromptBytes {
 			return errors.New("sharing: invalid or duplicate schedule")
 		}
 		seen[s.Key] = true
@@ -212,14 +212,14 @@ func Bind(p Package, inputs map[string]string) ([]Schedule, error) {
 		return nil, errors.New("sharing: supply exactly the declared inputs")
 	}
 	for _, key := range p.Inputs {
-		if value, ok := inputs[key]; !ok || value == "" || len(value) > 4096 {
+		if value, ok := inputs[key]; !ok || value == "" || len(value) > MaxInputBytes {
 			return nil, fmt.Errorf("sharing: input %q is required and bounded", key)
 		}
 	}
 	out := append([]Schedule(nil), p.Schedules...)
 	for i := range out {
 		out[i].Prompt = inputPattern.ReplaceAllStringFunc(out[i].Prompt, func(key string) string { return inputs[key[2:len(key)-2]] })
-		if len(out[i].Prompt) > 32<<10 {
+		if len(out[i].Prompt) > MaxBoundPromptBytes {
 			return nil, errors.New("sharing: bound prompt too large")
 		}
 	}
@@ -282,7 +282,7 @@ func VerifyWith(a Artifact, required bool, verify func([]byte, []byte) (string, 
 }
 
 func validateOrigin(origin *Origin) error {
-	if origin != nil && (len(origin.Reference) > 512 || len(origin.Catalog) > 2048 || len(origin.Format) > 32 || len(origin.Digest) != 71 || !strings.HasPrefix(origin.Digest, "sha256:")) {
+	if origin != nil && (len(origin.Reference) > MaxOriginReferenceBytes || len(origin.Catalog) > MaxOriginCatalogBytes || len(origin.Format) > MaxOriginFormatBytes || len(origin.Digest) != len("sha256:")+hex.EncodedLen(sha256.Size) || !strings.HasPrefix(origin.Digest, "sha256:")) {
 		return errors.New("sharing: invalid source provenance")
 	}
 	return nil

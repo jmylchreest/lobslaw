@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/jmylchreest/lobslaw/internal/memory"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -45,8 +47,8 @@ func (s *Server) handleTaskApprovals(w http.ResponseWriter, r *http.Request) {
 		limit := 0
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			limit, err = strconv.Atoi(raw)
-			if err != nil || limit < 0 || limit > 100 {
-				http.Error(w, "limit must be 0..100", http.StatusBadRequest)
+			if err != nil || limit < 0 || limit > int(memory.MaxTaskApprovalListLimit) {
+				http.Error(w, fmt.Sprintf("limit must be 0..%d", memory.MaxTaskApprovalListLimit), http.StatusBadRequest)
 				return
 			}
 		}
@@ -63,7 +65,7 @@ func (s *Server) handleTaskApprovals(w http.ResponseWriter, r *http.Request) {
 				Choice                   string         `json:"choice"`
 				AcknowledgeDuplicateRisk bool           `json:"acknowledge_duplicate_risk"`
 			}
-			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, restTaskApprovalMaxBytes))
 			decoder.DisallowUnknownFields()
 			if err = decoder.Decode(&body); err != nil {
 				http.Error(w, "invalid decision", http.StatusBadRequest)

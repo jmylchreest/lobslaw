@@ -64,8 +64,8 @@ func PlanArchiveImport(existing, incoming []archive.Record, opts ArchiveImportOp
 		}
 		return planArchiveRecords(existing, incoming, opts)
 	}
-	if strings.TrimSpace(opts.SourceID) != opts.SourceID || len(opts.SourceID) > 256 {
-		return ArchiveImportPlan{}, errors.New("source id must be nonempty, trimmed and at most 256 bytes")
+	if strings.TrimSpace(opts.SourceID) != opts.SourceID || len(opts.SourceID) > archive.MaxSourceIDBytes {
+		return ArchiveImportPlan{}, fmt.Errorf("source id must be nonempty, trimmed and at most %d bytes", archive.MaxSourceIDBytes)
 	}
 	return planTrackedArchive(existing, incoming, opts)
 }

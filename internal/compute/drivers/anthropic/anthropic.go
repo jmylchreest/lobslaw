@@ -159,18 +159,18 @@ func (d *Driver) Chat(ctx context.Context, req compute.ChatRequest) (*compute.Ch
 		return nil, compute.Transient(fmt.Errorf("anthropic: read body: %w", readErr))
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		d.log.Warn("anthropic: response error",
-			"status", resp.StatusCode, "model", model, "body", textutil.Truncate(string(raw), "…[truncated]", 512))
+			"status", resp.StatusCode, "model", model, "body", textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes))
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
+			Err:   fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)),
 		}
 	}
 
 	var out wireResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, compute.Permanent(fmt.Errorf("anthropic: malformed response: %w (body: %s)", err, textutil.Truncate(string(raw), "…[truncated]", 512)))
+		return nil, compute.Permanent(fmt.Errorf("anthropic: malformed response: %w (body: %s)", err, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)))
 	}
 	return out.toChatResponse(), nil
 }

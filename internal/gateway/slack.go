@@ -252,7 +252,7 @@ func NewSlackHandler(cfg SlackConfig, agent *compute.Agent) (*SlackHandler, erro
 		// cannot redirect the bot's traffic somewhere else.
 		base := egress.For("gateway/slack").HTTPClient()
 		wrapped := *base
-		wrapped.Timeout = 30 * time.Second
+		wrapped.Timeout = slackAPIRequestTimeout
 		client = &wrapped
 	}
 	logger := cfg.Logger

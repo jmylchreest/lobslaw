@@ -82,7 +82,7 @@ func (s *CredentialService) claimCredential(ctx context.Context, before, after *
 }
 
 func waitCredential(ctx context.Context) error {
-	timer := time.NewTimer(20 * time.Millisecond)
+	timer := time.NewTimer(credentialRefreshPollInterval)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

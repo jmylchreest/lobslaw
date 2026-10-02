@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
@@ -52,7 +51,7 @@ func clusterCAInit(args []string) {
 	caCert := fs.String("ca-cert", envOr("LOBSLAW_CA_CERT", ""), "path to write the CA public certificate")
 	caKey := fs.String("ca-key", envOr("LOBSLAW_CA_KEY", ""), "path to write the CA private key")
 	commonName := fs.String("common-name", "Lobslaw Cluster CA", "CA certificate Subject Common Name")
-	validFor := fs.Duration("valid-for", 10*365*24*time.Hour, "CA validity duration (default 10 years)")
+	validFor := fs.Duration("valid-for", mtls.DefaultCAValidity, "CA validity duration")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -97,7 +96,7 @@ func clusterSignNode(args []string) {
 	fs.Var(&dnsNames, "dns", "another DNS name this node answers at (repeatable)")
 	var ips stringList
 	fs.Var(&ips, "ip", "an IP address this node answers at (repeatable)")
-	validFor := fs.Duration("valid-for", 365*24*time.Hour, "node certificate validity duration")
+	validFor := fs.Duration("valid-for", mtls.DefaultNodeCertValidity, "node certificate validity duration")
 	copyCA := fs.Bool("copy-ca-public", true, "also copy the CA public cert next to the node cert for the main container")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -316,7 +315,7 @@ func clusterExportOperator(args []string, legacyName bool) {
 	caKey := fs.String("ca-key", envOr("LOBSLAW_CA_KEY", ""),
 		"path to the CA private key (consumed only by this subcommand)")
 	out := fs.String("out", "", "directory to write operator.pem, operator-key.pem and ca.pem into")
-	validFor := fs.Duration("valid-for", 90*24*time.Hour,
+	validFor := fs.Duration("valid-for", mtls.DefaultOperatorCertValidity,
 		"validity duration; shorter than a node's by default because a person's credential travels")
 	rest, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {

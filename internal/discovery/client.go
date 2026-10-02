@@ -57,7 +57,7 @@ func (c *Client) DialSeeds(ctx context.Context, seeds []string, perDialTimeout t
 		return nil, nil
 	}
 	if perDialTimeout <= 0 {
-		perDialTimeout = 5 * time.Second
+		perDialTimeout = DefaultDialTimeout
 	}
 
 	// Expand srv:/dns: prefixed entries via DNS. Plain host:port
@@ -93,7 +93,7 @@ func (c *Client) JoinCluster(ctx context.Context, seeds []string, perDialTimeout
 		return fmt.Errorf("no seeds configured for join")
 	}
 	if perDialTimeout <= 0 {
-		perDialTimeout = 5 * time.Second
+		perDialTimeout = DefaultDialTimeout
 	}
 	expanded := ExpandSeeds(ctx, seeds, c.resolver, c.logger)
 	if len(expanded) == 0 {

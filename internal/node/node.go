@@ -556,8 +556,8 @@ func New(cfg Config) (*Node, error) {
 		// large" instead of the store's message naming the offending
 		// file, so the transport ceiling is raised above the one that
 		// carries meaning.
-		grpc.MaxRecvMsgSize(3*memory.DefaultMaxSkillTotalBytes),
-		grpc.MaxSendMsgSize(3*memory.DefaultMaxSkillTotalBytes),
+		grpc.MaxRecvMsgSize(maxNodeGRPCMessageBytes),
+		grpc.MaxSendMsgSize(maxNodeGRPCMessageBytes),
 		grpc.ChainUnaryInterceptor(
 			grpcinterceptors.RequestID(log),
 			grpcinterceptors.Recovery(log),
@@ -654,7 +654,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// AddVoter) is a separate flow handled by establishRaftMembership
 	// below.
 	if len(n.cfg.SeedNodes) > 0 {
-		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, 5*time.Second); err != nil {
+		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, discovery.DefaultDialTimeout); err != nil {
 			n.log.Warn("seed-list bootstrap incomplete", "err", err)
 		}
 	}
@@ -767,7 +767,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// level, not fatal — the node still boots; the first user turn
 	// hits default-deny and the operator sees the warning.
 	if n.raft != nil {
-		if err := n.raft.WaitForLeader(5 * time.Second); err == nil {
+		if err := n.raft.WaitForLeader(startupLeaderWait); err == nil {
 			if err := n.seedDefaultPolicyRules(ctx); err != nil {
 				n.log.Warn("policy: seed defaults failed", "err", err)
 			}
@@ -874,7 +874,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
+	case <-time.After(nodeGracefulStopTimeout):
 		n.log.Warn("gRPC graceful-stop timed out; forcing")
 		n.server.Stop()
 	}
@@ -900,7 +900,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		}
 	}
 	if n.egressProvider != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), egressStopTimeout)
 		defer cancel()
 		if err := n.egressProvider.Stop(stopCtx); err != nil {
 			n.log.Warn("egress proxy shutdown", "err", err)

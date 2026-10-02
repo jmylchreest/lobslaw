@@ -60,7 +60,7 @@ fetched with --download-url if absent — the same rules as
 [compute.embeddings].
 
   --download-url URL   where to fetch a model that is not present
-  --limit N            evaluate at most N records (default 200)
+  --limit N            evaluate at most N records (default %d)
 `
 
 func dispatchEmbedEval(args []string) bool {
@@ -80,7 +80,7 @@ func runEmbedEval(args []string) error {
 	var store offlineStore
 	store.bind(fs)
 	downloadURL := fs.String("download-url", "", "where to fetch a model that is not already present")
-	limit := fs.Int("limit", 200, "evaluate at most this many records")
+	limit := fs.Int("limit", defaultEmbedEvalLimit, "evaluate at most this many records")
 	// Default from config so this measures what the NODE does. An
 	// evaluation that skipped the prefixes would score an e5 model as
 	// the node never runs it, and the whole point is deciding whether
@@ -93,7 +93,7 @@ func runEmbedEval(args []string) error {
 		return err
 	}
 	if len(models) == 0 {
-		fmt.Fprint(os.Stderr, embedEvalUsage)
+		fmt.Fprintf(os.Stderr, embedEvalUsage, defaultEmbedEvalLimit)
 		os.Exit(2)
 	}
 
@@ -192,7 +192,7 @@ type evalResult struct {
 }
 
 func evalModel(name, downloadURL, dataDir string, pairs []evalPair, queryPrefix, passagePrefix string) (evalResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), embedEvalTimeout)
 	defer cancel()
 
 	dir, err := embedder.Ensure(ctx, egress.For("embedding-model").HTTPClient(), dataDir, name, downloadURL)

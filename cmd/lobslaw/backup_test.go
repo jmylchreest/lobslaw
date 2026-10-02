@@ -57,7 +57,7 @@ func TestImportHelpDefaultsAndRestoreFlags(t *testing.T) {
 				t.Fatal(err)
 			}
 			help := string(data)
-			if !strings.Contains(help, command) || !strings.Contains(help, "(default "+defaultArchiveImportTimeout.String()+")") {
+			if !strings.Contains(help, command) || !strings.Contains(help, "(default "+defaultRestoreTimeout.String()+")") {
 				t.Fatalf("missing usage or actual timeout default: %s", help)
 			}
 			for _, name := range []string{"skip", "alongside", "replace", "replace-original", "keep-existing"} {
@@ -71,10 +71,10 @@ func TestImportHelpDefaultsAndRestoreFlags(t *testing.T) {
 }
 
 func TestLiveNodeTimeoutDefaultsAndOverrides(t *testing.T) {
-	for _, timeout := range []time.Duration{defaultLiveNodeTimeout, defaultArchiveImportTimeout} {
+	for _, timeout := range []time.Duration{defaultRPCTimeout, defaultRestoreTimeout} {
 		fs := flag.NewFlagSet("timeout", flag.ContinueOnError)
 		var node liveNode
-		if timeout == defaultLiveNodeTimeout {
+		if timeout == defaultRPCTimeout {
 			node.bind(fs)
 		} else {
 			node.bindWithTimeout(fs, timeout)

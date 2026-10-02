@@ -51,7 +51,7 @@ func (r Repository) lock() (func(), error) {
 }
 
 func validID(id string) bool {
-	if len(id) == 0 || len(id) > 128 {
+	if len(id) == 0 || len(id) > maxGenerationIDBytes {
 		return false
 	}
 	for _, c := range id {
@@ -204,7 +204,7 @@ func (r Repository) generation(id string) (Generation, error) {
 	if err != nil {
 		return generation, err
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, 16<<20))
+	decoder := json.NewDecoder(io.LimitReader(file, maxManifestBytes))
 	err = decoder.Decode(&generation)
 	_ = file.Close()
 	if err != nil {

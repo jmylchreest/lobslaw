@@ -42,7 +42,7 @@ func NewSessionPruner(raft *RaftNode, store *Store, cfg SessionPruneConfig, logg
 		logger = slog.Default()
 	}
 	if cfg.MaxAge <= 0 {
-		cfg.MaxAge = 24 * time.Hour
+		cfg.MaxAge = DefaultSessionMaxAge
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

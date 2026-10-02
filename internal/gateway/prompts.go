@@ -213,10 +213,6 @@ type PromptRegistry struct {
 	prompts map[string]*Prompt
 }
 
-// defaultPromptTTL bounds a confirmation that arrives with no TTL of
-// its own. A prompt with no expiry is a turn that waits forever.
-const defaultPromptTTL = 5 * time.Minute
-
 // NewPromptRegistry constructs an empty registry.
 func NewPromptRegistry() *PromptRegistry {
 	return &PromptRegistry{prompts: make(map[string]*Prompt)}
@@ -235,7 +231,7 @@ func (r *PromptRegistry) Create(np NewPrompt) (*Prompt, error) {
 	}
 	ttl := np.TTL
 	if ttl <= 0 {
-		ttl = defaultPromptTTL
+		ttl = DefaultPromptTTL
 	}
 	now := time.Now()
 	p := &Prompt{
@@ -376,7 +372,7 @@ func (r *PromptRegistry) transitionLocked(p *Prompt, decision PromptDecision) {
 // randomHexID returns 32 hex chars (16 random bytes) — unguessable
 // across any realistic in-flight set without being unwieldy in URLs.
 func randomHexID() (string, error) {
-	var b [16]byte
+	var b [promptIDBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}

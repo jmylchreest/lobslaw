@@ -194,13 +194,13 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg.Addr = fmt.Sprintf(":%d", config.DefaultGatewayHTTPPort)
 	}
 	if cfg.ReadTimeout <= 0 {
-		cfg.ReadTimeout = 30 * time.Second
+		cfg.ReadTimeout = restReadTimeout
 	}
 	if cfg.WriteTimeout <= 0 {
-		cfg.WriteTimeout = 60 * time.Second
+		cfg.WriteTimeout = restWriteTimeout
 	}
 	if cfg.IdleTimeout <= 0 {
-		cfg.IdleTimeout = 2 * time.Minute
+		cfg.IdleTimeout = restIdleTimeout
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -309,7 +309,7 @@ func (s *Server) Start(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), restShutdownTimeout)
 		defer cancel()
 		_ = s.httpSrv.Shutdown(shutdownCtx)
 		return nil
@@ -447,7 +447,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	// Cap body size to avoid clients streaming megabytes. The actual
 	// useful message is usually under a few KB; 1MB covers rare long
 	// copy-paste scenarios.
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, restMessageMaxBytes)
 
 	var req messageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -598,7 +598,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	for resp.NeedsConfirmation && s.cfg.Prompts != nil {
 		ttl := s.cfg.ConfirmationTTL
 		if ttl <= 0 {
-			ttl = 5 * time.Minute
+			ttl = DefaultPromptTTL
 		}
 		// The REST caller holds the connection open, so this handler
 		// resumes the turn itself and does not need the continuation
@@ -864,7 +864,7 @@ func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id string) {
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, restPromptMaxBytes)
 	var body struct {
 		Approve bool `json:"approve"`
 		// Scope is "once" | "session" | "always". Absent or

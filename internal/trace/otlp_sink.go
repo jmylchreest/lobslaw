@@ -350,7 +350,7 @@ func floatAttr(k string, v float64) *commonpb.KeyValue {
 // traceID derives a stable 16-byte id from a turn id.
 func traceID(turnID string) []byte {
 	sum := sha256.Sum256([]byte("lobslaw-turn:" + turnID))
-	return sum[:16]
+	return sum[:traceIDBytes]
 }
 
 // spanID derives a stable 8-byte id.
@@ -361,5 +361,5 @@ func traceID(turnID string) []byte {
 // shows up as one inexplicable trace six months later.
 func spanID(id string) []byte {
 	sum := sha256.Sum256([]byte("lobslaw-span:" + id))
-	return sum[:8]
+	return sum[:spanIDBytes]
 }

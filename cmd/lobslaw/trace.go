@@ -138,7 +138,7 @@ func resolveTraceDir(cfgPath, dir string) (string, error) {
 func traceList(args []string) error {
 	fs := newFlagSet("trace list", flag.ExitOnError)
 	cfgPath, dir := traceDir(fs)
-	limit := fs.Int("limit", 20, "how many turns to list")
+	limit := fs.Int("limit", defaultTraceListLimit, "how many turns to list")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 
@@ -60,7 +59,7 @@ func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
 			return nil, fmt.Errorf("create state.db parent dir: %w", err)
 		}
 	}
-	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: readOnly, Timeout: 5 * time.Second})
+	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: readOnly, Timeout: storeOpenTimeout})
 	if err != nil {
 		return nil, fmt.Errorf("open state.db %q: %w", path, err)
 	}

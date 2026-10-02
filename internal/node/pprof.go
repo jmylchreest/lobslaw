@@ -8,7 +8,6 @@ import (
 	"net/http/pprof"
 	"os"
 	"runtime"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/logging"
 )
@@ -60,7 +59,7 @@ func (n *Node) startPprof(ctx context.Context) {
 		ErrorLog:          logging.StandardLogger(n.log, slog.LevelError),
 		Addr:              addr,
 		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: pprofReadHeaderTimeout,
 	}
 
 	if !pprofAddrIsLoopback(addr) {
@@ -81,7 +80,7 @@ func (n *Node) startPprof(ctx context.Context) {
 	}()
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), pprofShutdownTimeout)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()

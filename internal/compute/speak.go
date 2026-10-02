@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // Speech is the first generation modality, and the easiest one: it is
@@ -87,7 +86,7 @@ func NewOpenAISpeakDriver(cfg OpenAISpeakConfig) (*OpenAISpeakDriver, error) {
 	if c == nil {
 		// Generous: synthesising a long reply is slower than a chat
 		// turn, and a truncated audio file is worse than a slow one.
-		c = &http.Client{Timeout: 3 * time.Minute}
+		c = &http.Client{Timeout: DefaultSpeakTimeout}
 	}
 	return &OpenAISpeakDriver{cfg: cfg, client: c}, nil
 }
@@ -143,10 +142,10 @@ func (d *OpenAISpeakDriver) Speak(ctx context.Context, req SpeakRequest) (*Artif
 	if readErr != nil {
 		return nil, Transient(fmt.Errorf("speak: read: %w", readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("speak: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("speak: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, DiagnosticExcerptMaxBytes)),
 		}
 	}
 	if len(raw) == 0 {

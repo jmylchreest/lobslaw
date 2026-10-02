@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/httpbody"
 	"github.com/jmylchreest/lobslaw/internal/logging"
@@ -89,7 +88,7 @@ func (h *TelegramHandler) downloadOne(ctx context.Context, turnDir string, a *ty
 	ext := pickExtension(a)
 	dst := filepath.Join(turnDir, sanitiseRef(a.Reference)+ext)
 
-	getCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	getCtx, cancel := context.WithTimeout(ctx, telegramDownloadTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(getCtx, http.MethodGet, fileURL, nil)
 	if err != nil {
@@ -132,7 +131,7 @@ func (h *TelegramHandler) downloadOne(ctx context.Context, turnDir string, a *ty
 // "file is too big" are surfaced naturally.
 func (h *TelegramHandler) resolveFileURL(ctx context.Context, fileID string) (result string, retErr error) {
 	defer func() { retErr = logging.SafeError(retErr) }()
-	getCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	getCtx, cancel := context.WithTimeout(ctx, telegramFileMetadataTimeout)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"file_id": fileID})
 	url := fmt.Sprintf("%s/bot%s/getFile", h.base, h.cfg.BotToken)
@@ -156,7 +155,7 @@ func (h *TelegramHandler) resolveFileURL(ctx context.Context, fileID string) (re
 		} `json:"result"`
 		Description string `json:"description"`
 	}
-	raw, err := httpbody.Read(resp.Body, 1<<20)
+	raw, err := httpbody.Read(resp.Body, telegramAPIResponseMaxBytes)
 	if err != nil {
 		return "", fmt.Errorf("getFile read: %w", err)
 	}

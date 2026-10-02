@@ -321,7 +321,7 @@ func (e *SimilarityError) Error() string {
 	b.WriteString(ErrSimilarExists.Error())
 	b.WriteString("; say Refines:<id> with a rationale, or Distinct:true. Closest:")
 	for i, c := range e.Candidates {
-		if i == 3 {
+		if i == maxDisplayedSimilarArtefacts {
 			b.WriteString(" …")
 			break
 		}
@@ -338,7 +338,7 @@ func (s *SelfTaughtStore) guardAgainstDuplicates(ctx context.Context, rec *lobsl
 	if intent.Distinct {
 		return nil
 	}
-	similar, err := s.Similar(ctx, rec, 5)
+	similar, err := s.Similar(ctx, rec, duplicateCandidateLimit)
 	if err != nil {
 		return err
 	}
@@ -748,7 +748,7 @@ func (s *SelfTaughtStore) applyEntry(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("self-taught: marshal: %w", err)
 	}
-	res, err := s.raft.Apply(data, 5*time.Second)
+	res, err := s.raft.Apply(data, selfTaughtApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("self-taught: raft apply: %w", err)
 	}

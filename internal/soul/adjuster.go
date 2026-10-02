@@ -253,9 +253,9 @@ func (a *Adjuster) Apply(ctx context.Context, utterance string) (*ApplyResult, e
 
 	coefficient := a.baseline.Config.Adjustments.FeedbackCoefficient
 	if coefficient <= 0 {
-		coefficient = 0.15
+		coefficient = DefaultFeedbackCoefficient
 	}
-	delta := int(math.Round(coefficient * 10 * float64(fb.Direction)))
+	delta := int(math.Round(coefficient * float64(types.MaxEmotiveValue) * float64(fb.Direction)))
 	if delta == 0 {
 		return &ApplyResult{
 			Applied:   false,
@@ -308,11 +308,11 @@ func clamp(value, baseline int) int {
 	if value < baseline-MaxDriftFromBaseline {
 		value = baseline - MaxDriftFromBaseline
 	}
-	if value < 0 {
-		value = 0
+	if value < types.MinEmotiveValue {
+		value = types.MinEmotiveValue
 	}
-	if value > 10 {
-		value = 10
+	if value > types.MaxEmotiveValue {
+		value = types.MaxEmotiveValue
 	}
 	return value
 }
