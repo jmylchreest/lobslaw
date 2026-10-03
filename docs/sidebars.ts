@@ -65,6 +65,7 @@ const sidebars: SidebarsConfig = {
         "features/notifications",
         "features/research",
         "features/web-search",
+        "features/google-calendar",
         "features/scheduler",
         "features/council",
         "features/memory",

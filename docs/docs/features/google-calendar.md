@@ -1,7 +1,9 @@
-# Google Calendar
+---
+title: Google Calendar
+description: Configure Google OAuth, independent Calendar read/write permissions, and per-user account connections.
+---
 
-For deployment configuration and user commands, see the
-[user-facing Calendar guide](../docs/features/google-calendar.md).
+# Google Calendar
 
 Google Calendar is an opt-in, first-party connector for every authenticated
 lobslaw user. Each user connects their own Google account and selects calendars
@@ -9,7 +11,7 @@ with independent read and write grants. Event creation and updates always requir
 confirmation of the exact change. KitchenOwl, Drive and Gmail are outside this
 release.
 
-## Operator setup
+## 1. Configure the operator-managed OAuth client
 
 Run the connector on a node with compute, local memory/policy services, and an
 enabled HTTP gateway. Upgrade every Raft peer before enabling it: this feature
@@ -31,6 +33,20 @@ client_secret_ref = "env:LOBSLAW_GOOGLE_CALENDAR_CLIENT_SECRET"
 callback_url = "https://assistant.example.com/integrations/google/callback"
 ```
 
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Register the connector and its tools when enabled. |
+| `client_id_ref` | Empty | Required when enabled; `env:NAME` or `file:/path` reference to the Google client ID. |
+| `client_secret_ref` | Empty | Required when enabled; secret reference to the Google client secret. |
+| `callback_url` | Empty | Required when enabled; exact HTTPS URL ending in `/integrations/google/callback`, without query or fragment. |
+
+Supply the referenced variables to the running lobslaw process, for example from
+a Kubernetes Secret or a container environment file. Do not put credential values
+in `config.toml`. Restart the node after changing connector configuration. This
+uses `[security.google_calendar]`, not the legacy `[security.oauth.google]`
+device-flow configuration. Each user grants their own Google account access;
+the client ID and secret identify the deployment's OAuth application.
+
 Terminate TLS at the gateway or a reverse proxy. The user's browser must reach
 both `/integrations/google/start` and `/integrations/google/callback` at that
 HTTPS origin. These two routes use short-lived state and a secure browser cookie;
@@ -38,11 +54,11 @@ they do not require a lobslaw bearer token. Do not log callback query strings,
 which contain authorization codes. `/v1/calendar` always requires a valid bearer
 token, even if the normal message gateway allows anonymous requests.
 
-The homelab deployment inspected during development runs a single StatefulSet
-with a tailnet-only gateway on port 8443 and plain HTTP internally. It therefore
-needs HTTPS termination and routing for the browser callback. A private callback
-can remain on the tailnet if the user's browser can reach it and Google accepts
-the registered URI. This feature does not change that deployment or its secrets.
+For a gateway serving plain HTTP inside Docker or Kubernetes, route those paths
+through an HTTPS reverse proxy to its configured HTTP port. A tailnet-only
+callback can remain private if the user's browser can reach it and Google accepts
+the registered URI. Do not expose the gateway's other management routes merely
+to make OAuth work.
 
 Outbound calls use the dedicated `integration/google-calendar` egress role,
 restricted to `www.googleapis.com`, `oauth2.googleapis.com` and
@@ -50,7 +66,7 @@ restricted to `www.googleapis.com`, `oauth2.googleapis.com` and
 happens on the user's device. All connector HTTP calls are bounded, have a
 30-second timeout, refuse redirects and omit provider response bodies from errors.
 
-## Policy and classification
+## 2. Allow reads and optionally writes
 
 Permissions have three layers, all of which must allow the operation:
 
@@ -66,7 +82,13 @@ require an explicit `allow`; a `require_confirmation` policy is treated as denie
 Calendar writes have a separate mandatory exact confirmation after authorization,
 so an operator allow cannot suppress that confirmation.
 
-Example read-only policy for users with role `calendar-user`:
+Example read-only policy for users with role `calendar-user`. Assign this role
+through the existing [user identity/channel configuration](/configuration/channels)
+or validated REST claims. For an owner-only deployment, replace
+`subject = "role:calendar-user"` with `subject = "scope:owner"` in **every** rule
+below. A policy role does not itself grant access to a chat channel.
+
+Enable `[policy]` in your node configuration, then add these rules:
 
 ```toml
 [[policy.rules]]
@@ -103,8 +125,20 @@ priority = 20
 ```
 
 The tool wildcard does **not** grant writes: `calendar:write` remains denied.
-Add a separate rule for that action when desired. User-level calendar grants can
-still remain read-only. Existing broader operator rules also apply; review those
+To permit writes with mandatory confirmation, add this **separate** rule:
+
+```toml
+[[policy.rules]]
+id = "calendar-write"
+subject = "role:calendar-user"
+action = "calendar:write"
+resource = "google/*"
+effect = "allow"
+priority = 20
+```
+
+Use the same subject as the other rules. User-level calendar grants can still
+remain read-only. Existing broader operator rules also apply; review those
 when configuring a read-only role.
 
 Trusted tool definitions declare state effects separately from network transport:
@@ -129,9 +163,13 @@ not erase a real `read`. Tool effects describe operations, not authorization.
 Shell/session label grants and approvals of another tool or payload cannot satisfy
 the Calendar write gate.
 
-## User setup
+## 3. Connect an account in a private conversation
 
-In a private Telegram conversation:
+In a private Telegram conversation, the commands below are human management
+commands, not instructions for the agent to run. Keep the returned flow ID;
+it identifies this login attempt, whereas the connection ID identifies the
+activated account. Replace angle-bracket placeholders with the displayed values:
+
 
 1. `/calendar connect read` (or `write` to request event-write consent).
 2. Open the returned short-lived URL and choose the Google account.
@@ -141,6 +179,15 @@ In a private Telegram conversation:
    The final permission can be `read`, `write`, or `read-write`.
 5. `/calendar list` shows connection IDs and grants. Tell the assistant which
    connection/calendar to use, then ask for your agenda or an event change.
+
+For read/write use, start with `/calendar connect write` and finish with
+`/calendar allow <flow-id> <displayed-email> <calendar-id> read-write`.
+The Telegram activation command selects one calendar per connection. Use the
+REST activation example below to select several calendars together.
+
+After setup, ask “Using this connection and calendar, what is on tomorrow?”
+or “Add a dentist appointment tomorrow from 10:00 to 11:00.” The second request
+must show the exact change and require approval before it is sent to Google.
 
 OAuth completion alone does not activate a connection. Activation is a human
 management operation, absent from agent tools. A Google write token does not
@@ -209,40 +256,31 @@ Writes request `sendUpdates=none`; this is not a promise of complete silence fro
 Google or invisibility to people who already share the calendar. See
 [Events.insert](https://developers.google.com/workspace/calendar/api/v3/reference/events/insert).
 
-## Credentials, learning and future services
+## Privacy and learning
 
-Connector credentials carry a canonical owner and a connector binding. Legacy
-OAuth status, skill issuance, grant/revoke and credential replacement paths cannot
-read or modify them, including a skill named `google-calendar`. The FSM rejects
-ownership/connector changes from stale proposals. Tokens and connection metadata
-are encrypted before entering Raft; refresh reuses the existing coordinated
-credential refresh mechanism. Google `sub` identifies the external account;
-email is only display/confirmation metadata. Legacy unowned credentials are not
-adopted automatically.
+Connections are bound to the authenticated user's canonical identity. Tokens stay
+in encrypted connector storage and are not issued to skills. Shared-chat Calendar
+access is refused. The self-learning review skips transcripts containing Calendar
+tool calls, but ordinary conversation retention and model-provider handling still
+apply to event content. This is not general data-loss prevention for later
+paraphrases or summaries.
 
-OAuth state, PKCE verifier, pending tokens and mutation previews are encrypted and
-replicated in `integration_state`. Replays and concurrent transitions use CAS.
-Expired records are removed by the leader's reaper. Allocation is bounded to 100
-records per owner and 10,000 globally, including records awaiting cleanup.
-Portable memory archives omit credentials and integration state; physical
-snapshots contain their encrypted records and require the cluster key.
+## Troubleshooting and first-use checks
 
-Learned instructions may describe how to use the typed tools, but cannot expand
-permissions, activate accounts, approve changes or obtain tokens. Calendar text
-is untrusted tool data. The post-turn self-learning fork skips transcripts that
-contain Calendar tool calls. Tool descriptions also instruct the model not to
-save event contents in learned notes/skills. This is not general data-loss
-prevention: later user paraphrases or summaries without tool provenance are not
-identified by that guard. Existing conversation retention and model-provider data
-handling still apply to event content returned to the assistant.
+| Symptom | Check |
+| --- | --- |
+| `/calendar` is unavailable | Confirm the deployed version includes Calendar, the connector is enabled, and the node has compute plus local memory/policy services and an enabled gateway. |
+| Command or operation denied | Check channel access, caller scope/roles, `command:exec`, `tool:exec`, and the independent `calendar:*` rules. Operation rules must use `allow`; confirmation is a separate write gate. |
+| Google rejects the redirect | Match the configured HTTPS callback exactly to the Google Web application client's registered redirect URI. |
+| Connection failed or expired | Ensure the same browser retains the secure cookie, complete the flow within 15 minutes, or start a new attempt. |
+| Reads work but writes fail | Check operator `calendar:write`, Google write consent, and the selected calendar's local write grant. Updates also require reads. |
+| Event changed since review | Start a new turn to fetch the current version and approve the new change. |
+| Write outcome uncertain | Inspect Google Calendar before requesting another change; the connector will not automatically resend it. |
+| Need different calendars or permissions | Disconnect and reconnect; there is no in-place grant-edit command yet. |
 
-Drive and Gmail should add separate connectors, OAuth consent and operation
-permissions. Do not extend a Calendar token and give it to skills: a local list
-of allowed scopes does not downscope a bearer token at Google. Provider-managed
-scope granularity and lobslaw's operation permissions are separate boundaries.
-
-Tests use fake Google transports and real local Raft/storage fixtures. They cover
-account/owner binding, replay, cookie/PKCE handling, independent read/write grants,
-exact approval, concurrency, version conflicts, credential replacement, redirects,
-response bounds, private management and classification. Live Google consent and
-an actual account round trip remain deployment smoke tests.
+Start with a read-only connection and confirm that an event-write request is
+refused. Then, if wanted, reconnect with read/write grants, create a disposable
+guest-free event, and check that no write occurs until you approve its exact
+preview. Deny another change and verify the event stays unchanged. Finally test
+an update and disconnect. This live OAuth/account smoke test complements the
+automated tests, which use fake Google responses.
