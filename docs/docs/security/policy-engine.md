@@ -164,6 +164,12 @@ why the de-escalation only ever turns a deletion into a write.
 
 ### Approval is a subset check
 
+Classification preserves independent effects. A network read can carry both
+`reads` and `network`; `cat file; touch other` carries `reads` and `writes`.
+Approving only `writes` does not authorize that compound command's read.
+A mutating flag such as `sed -i` still classifies as `writes`: the read needed
+internally to perform that same mutation is not a separate operation.
+
 `[compute] approval_mode` names the set of labels that run without being asked
 about. A command runs when **every** label it carries is in that set, and asks
 otherwise. Nothing is compared or ranked.

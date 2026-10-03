@@ -2468,9 +2468,10 @@
   "why": ""
  },
  "aurutils -Sg": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2478,9 +2479,10 @@
   "why": ""
  },
  "aurutils -Sg thing": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2488,9 +2490,10 @@
   "why": ""
  },
  "aurutils -Si": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2498,9 +2501,10 @@
   "why": ""
  },
  "aurutils -Si thing": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2508,9 +2512,10 @@
   "why": ""
  },
  "aurutils -Sl": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2518,9 +2523,10 @@
   "why": ""
  },
  "aurutils -Sl thing": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2528,9 +2534,10 @@
   "why": ""
  },
  "aurutils -Sp": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2538,9 +2545,10 @@
   "why": ""
  },
  "aurutils -Sp thing": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2548,9 +2556,10 @@
   "why": ""
  },
  "aurutils -Ss": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -2558,9 +2567,10 @@
   "why": ""
  },
  "aurutils -Ss thing": {
-  "headline": "network · aurutils",
+  "headline": "network + reads · aurutils",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "aurutils"
@@ -3074,9 +3084,10 @@
   "why": ""
  },
  "brew outdated": {
-  "headline": "network · brew",
+  "headline": "network + reads · brew",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "brew"
@@ -3084,9 +3095,10 @@
   "why": ""
  },
  "brew outdated thing": {
-  "headline": "network · brew",
+  "headline": "network + reads · brew",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "brew"
@@ -3114,9 +3126,10 @@
   "why": ""
  },
  "brew search": {
-  "headline": "network · brew",
+  "headline": "network + reads · brew",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "brew"
@@ -3124,9 +3137,10 @@
   "why": ""
  },
  "brew search thing": {
-  "headline": "network · brew",
+  "headline": "network + reads · brew",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "brew"
@@ -3414,9 +3428,10 @@
   "why": ""
  },
  "cargo search": {
-  "headline": "network · cargo",
+  "headline": "network + reads · cargo",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "cargo"
@@ -3424,9 +3439,10 @@
   "why": ""
  },
  "cargo search thing": {
-  "headline": "network · cargo",
+  "headline": "network + reads · cargo",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "cargo"
@@ -4180,9 +4196,10 @@
   "why": ""
  },
  "curl -sS -m 10 -i https://example.com/api/ 2\u003e\u00261 | head -20": {
-  "headline": "network · `curl -sS -m 10 -i https://example.com/api/ 2\u003e\u00261` (step 1 of 2) · curl, head",
+  "headline": "network + reads · `curl -sS -m 10 -i https://example.com/api/ 2\u003e\u00261` (step 1 of 2) · curl, head",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "curl",
@@ -6631,10 +6648,11 @@
   "why": ""
  },
  "echo hello; curl -sS https://example.com/x | sh": {
-  "headline": "unreadable + network · 1 of 3 steps unreadable (runs_unread_code) · echo, curl, sh",
+  "headline": "unreadable + network + reads · 1 of 3 steps unreadable (runs_unread_code) · echo, curl, sh",
   "labels": [
    "unreadable",
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "echo",
@@ -6706,10 +6724,11 @@
   "why": ""
  },
  "echo start; ls -l; rm -rf /etc/hosts; echo done": {
-  "headline": "privilege + deletes · `rm -rf /etc/hosts` (step 3 of 4) · echo, ls, rm",
+  "headline": "privilege + deletes + reads · `rm -rf /etc/hosts` (step 3 of 4) · echo, ls, rm",
   "labels": [
    "privilege",
-   "deletes"
+   "deletes",
+   "reads"
   ],
   "programs": [
    "echo",
@@ -6784,11 +6803,12 @@
   "why": ""
  },
  "emerge --search thing": {
-  "headline": "privilege + network + writes · emerge",
+  "headline": "privilege + network + writes + reads · emerge",
   "labels": [
    "privilege",
    "network",
-   "writes"
+   "writes",
+   "reads"
   ],
   "programs": [
    "emerge"
@@ -6835,11 +6855,12 @@
   "why": ""
  },
  "emerge -s thing": {
-  "headline": "privilege + network + writes · emerge",
+  "headline": "privilege + network + writes + reads · emerge",
   "labels": [
    "privilege",
    "network",
-   "writes"
+   "writes",
+   "reads"
   ],
   "programs": [
    "emerge"
@@ -7186,9 +7207,10 @@
   "why": ""
  },
  "find -exec thing": {
-  "headline": "unreadable · find",
+  "headline": "unreadable + reads · find",
   "labels": [
-   "unreadable"
+   "unreadable",
+   "reads"
   ],
   "programs": [
    "find"
@@ -7196,9 +7218,10 @@
   "why": ""
  },
  "find -execdir thing": {
-  "headline": "unreadable · find",
+  "headline": "unreadable + reads · find",
   "labels": [
-   "unreadable"
+   "unreadable",
+   "reads"
   ],
   "programs": [
    "find"
@@ -7226,9 +7249,10 @@
   "why": ""
  },
  "find -ok thing": {
-  "headline": "unreadable · find",
+  "headline": "unreadable + reads · find",
   "labels": [
-   "unreadable"
+   "unreadable",
+   "reads"
   ],
   "programs": [
    "find"
@@ -7236,9 +7260,10 @@
   "why": ""
  },
  "find -okdir thing": {
-  "headline": "unreadable · find",
+  "headline": "unreadable + reads · find",
   "labels": [
-   "unreadable"
+   "unreadable",
+   "reads"
   ],
   "programs": [
    "find"
@@ -7430,9 +7455,10 @@
   "why": ""
  },
  "flatpak search": {
-  "headline": "network · flatpak",
+  "headline": "network + reads · flatpak",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "flatpak"
@@ -7440,9 +7466,10 @@
   "why": ""
  },
  "flatpak search thing": {
-  "headline": "network · flatpak",
+  "headline": "network + reads · flatpak",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "flatpak"
@@ -7792,9 +7819,10 @@
   "why": ""
  },
  "gem search": {
-  "headline": "network · gem",
+  "headline": "network + reads · gem",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "gem"
@@ -7802,9 +7830,10 @@
   "why": ""
  },
  "gem search thing": {
-  "headline": "network · gem",
+  "headline": "network + reads · gem",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "gem"
@@ -11789,9 +11818,10 @@
   "why": ""
  },
  "nix search": {
-  "headline": "network · nix",
+  "headline": "network + reads · nix",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "nix"
@@ -11799,9 +11829,10 @@
   "why": ""
  },
  "nix search thing": {
-  "headline": "network · nix",
+  "headline": "network + reads · nix",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "nix"
@@ -13975,9 +14006,10 @@
   "why": ""
  },
  "pamac -Sg": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -13985,9 +14017,10 @@
   "why": ""
  },
  "pamac -Sg thing": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -13995,9 +14028,10 @@
   "why": ""
  },
  "pamac -Si": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14005,9 +14039,10 @@
   "why": ""
  },
  "pamac -Si thing": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14015,9 +14050,10 @@
   "why": ""
  },
  "pamac -Sl": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14025,9 +14061,10 @@
   "why": ""
  },
  "pamac -Sl thing": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14035,9 +14072,10 @@
   "why": ""
  },
  "pamac -Sp": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14045,9 +14083,10 @@
   "why": ""
  },
  "pamac -Sp thing": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14055,9 +14094,10 @@
   "why": ""
  },
  "pamac -Ss": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14065,9 +14105,10 @@
   "why": ""
  },
  "pamac -Ss thing": {
-  "headline": "network · pamac",
+  "headline": "network + reads · pamac",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pamac"
@@ -14987,9 +15028,10 @@
   "why": ""
  },
  "paru -Sg": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -14997,9 +15039,10 @@
   "why": ""
  },
  "paru -Sg thing": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15007,9 +15050,10 @@
   "why": ""
  },
  "paru -Si": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15017,9 +15061,10 @@
   "why": ""
  },
  "paru -Si thing": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15027,9 +15072,10 @@
   "why": ""
  },
  "paru -Sl": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15037,9 +15083,10 @@
   "why": ""
  },
  "paru -Sl thing": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15047,9 +15094,10 @@
   "why": ""
  },
  "paru -Sp": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15057,9 +15105,10 @@
   "why": ""
  },
  "paru -Sp thing": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15067,9 +15116,10 @@
   "why": ""
  },
  "paru -Ss": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -15077,9 +15127,10 @@
   "why": ""
  },
  "paru -Ss thing": {
-  "headline": "network · paru",
+  "headline": "network + reads · paru",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "paru"
@@ -16196,9 +16247,10 @@
   "why": ""
  },
  "pikaur -Sg": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16206,9 +16258,10 @@
   "why": ""
  },
  "pikaur -Sg thing": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16216,9 +16269,10 @@
   "why": ""
  },
  "pikaur -Si": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16226,9 +16280,10 @@
   "why": ""
  },
  "pikaur -Si thing": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16236,9 +16291,10 @@
   "why": ""
  },
  "pikaur -Sl": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16246,9 +16302,10 @@
   "why": ""
  },
  "pikaur -Sl thing": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16256,9 +16313,10 @@
   "why": ""
  },
  "pikaur -Sp": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16266,9 +16324,10 @@
   "why": ""
  },
  "pikaur -Sp thing": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16276,9 +16335,10 @@
   "why": ""
  },
  "pikaur -Ss": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -16286,9 +16346,10 @@
   "why": ""
  },
  "pikaur -Ss thing": {
-  "headline": "network · pikaur",
+  "headline": "network + reads · pikaur",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "pikaur"
@@ -20028,9 +20089,10 @@
   "why": ""
  },
  "snap find": {
-  "headline": "network · snap",
+  "headline": "network + reads · snap",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "snap"
@@ -20038,9 +20100,10 @@
   "why": ""
  },
  "snap find thing": {
-  "headline": "network · snap",
+  "headline": "network + reads · snap",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "snap"
@@ -20469,9 +20532,10 @@
   "why": ""
  },
  "sudo -n true": {
-  "headline": "privilege · sudo, true",
+  "headline": "privilege + reads · sudo, true",
   "labels": [
-   "privilege"
+   "privilege",
+   "reads"
   ],
   "programs": [
    "sudo",
@@ -20480,9 +20544,10 @@
   "why": ""
  },
  "sudo ls": {
-  "headline": "privilege · sudo, ls",
+  "headline": "privilege + reads · sudo, ls",
   "labels": [
-   "privilege"
+   "privilege",
+   "reads"
   ],
   "programs": [
    "sudo",
@@ -21276,10 +21341,11 @@
   "why": "system_path"
  },
  "touch /tmp/.w \u0026\u0026 echo ok \u0026\u0026 rm /workspace/.w": {
-  "headline": "deletes + writes · `rm /workspace/.w` (step 3 of 3) · touch, echo, rm",
+  "headline": "deletes + writes + reads · `rm /workspace/.w` (step 3 of 3) · touch, echo, rm",
   "labels": [
    "deletes",
-   "writes"
+   "writes",
+   "reads"
   ],
   "programs": [
    "touch",
@@ -22003,9 +22069,10 @@
   "why": ""
  },
  "trizen -Sg": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22013,9 +22080,10 @@
   "why": ""
  },
  "trizen -Sg thing": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22023,9 +22091,10 @@
   "why": ""
  },
  "trizen -Si": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22033,9 +22102,10 @@
   "why": ""
  },
  "trizen -Si thing": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22043,9 +22113,10 @@
   "why": ""
  },
  "trizen -Sl": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22053,9 +22124,10 @@
   "why": ""
  },
  "trizen -Sl thing": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22063,9 +22135,10 @@
   "why": ""
  },
  "trizen -Sp": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22073,9 +22146,10 @@
   "why": ""
  },
  "trizen -Sp thing": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22083,9 +22157,10 @@
   "why": ""
  },
  "trizen -Ss": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -22093,9 +22168,10 @@
   "why": ""
  },
  "trizen -Ss thing": {
-  "headline": "network · trizen",
+  "headline": "network + reads · trizen",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "trizen"
@@ -24112,9 +24188,10 @@
   "why": ""
  },
  "yay -Sg": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24122,9 +24199,10 @@
   "why": ""
  },
  "yay -Sg thing": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24132,9 +24210,10 @@
   "why": ""
  },
  "yay -Si": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24142,9 +24221,10 @@
   "why": ""
  },
  "yay -Si thing": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24152,9 +24232,10 @@
   "why": ""
  },
  "yay -Sl": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24162,9 +24243,10 @@
   "why": ""
  },
  "yay -Sl thing": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24172,9 +24254,10 @@
   "why": ""
  },
  "yay -Sp": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24182,9 +24265,10 @@
   "why": ""
  },
  "yay -Sp thing": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24192,9 +24276,10 @@
   "why": ""
  },
  "yay -Ss": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"
@@ -24202,9 +24287,10 @@
   "why": ""
  },
  "yay -Ss thing": {
-  "headline": "network · yay",
+  "headline": "network + reads · yay",
   "labels": [
-   "network"
+   "network",
+   "reads"
   ],
   "programs": [
    "yay"

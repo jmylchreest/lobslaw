@@ -42,13 +42,13 @@ func TestAdjudicate(t *testing.T) {
 		// A label the classifier positively determined is NEVER
 		// removed, under either setting. A command cannot argue its own
 		// deletion away.
-		{"advisory cannot remove", commandrisk.L(commandrisk.LabelDeletes), commandrisk.LabelReads, true, RiskTrustAdvisory, commandrisk.L(commandrisk.LabelDeletes), false},
-		{"resolve_unknown cannot remove either", commandrisk.L(commandrisk.LabelDeletes), commandrisk.LabelReads, true, RiskTrustResolveUnknown, commandrisk.L(commandrisk.LabelDeletes), false},
-		{"a write is not talked down to a read", commandrisk.L(commandrisk.LabelWrites), commandrisk.LabelReads, true, RiskTrustResolveUnknown, commandrisk.L(commandrisk.LabelWrites), false},
+		{"advisory cannot remove", commandrisk.L(commandrisk.LabelDeletes), commandrisk.LabelReads, true, RiskTrustAdvisory, commandrisk.L(commandrisk.LabelDeletes, commandrisk.LabelReads), true},
+		{"resolve_unknown cannot remove either", commandrisk.L(commandrisk.LabelDeletes), commandrisk.LabelReads, true, RiskTrustResolveUnknown, commandrisk.L(commandrisk.LabelDeletes, commandrisk.LabelReads), true},
+		{"a write is not talked down to a read", commandrisk.L(commandrisk.LabelWrites), commandrisk.LabelReads, true, RiskTrustResolveUnknown, commandrisk.L(commandrisk.LabelWrites, commandrisk.LabelReads), true},
 
 		// The one permitted replacement, and only into the gap where
 		// static reading had no opinion at all.
-		{"advisory leaves unreadable alone", commandrisk.L(commandrisk.LabelUnreadable), commandrisk.LabelReads, true, RiskTrustAdvisory, commandrisk.L(commandrisk.LabelUnreadable), false},
+		{"advisory leaves unreadable alone", commandrisk.L(commandrisk.LabelUnreadable), commandrisk.LabelReads, true, RiskTrustAdvisory, commandrisk.L(commandrisk.LabelUnreadable, commandrisk.LabelReads), true},
 		{"resolve_unknown fills the gap", commandrisk.L(commandrisk.LabelUnreadable), commandrisk.LabelReads, true, RiskTrustResolveUnknown, commandrisk.L(commandrisk.LabelReads), true},
 		{"resolve_unknown can fill it with something worse", commandrisk.L(commandrisk.LabelUnreadable), commandrisk.LabelDeletes, true, RiskTrustResolveUnknown, commandrisk.L(commandrisk.LabelDeletes), true},
 
