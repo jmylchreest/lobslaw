@@ -1340,7 +1340,6 @@ message CredentialRecord {
   string owner = 18;
   string connector = 19;
   bytes connector_data = 20; // encrypted connector metadata, never agent input
-
 }
 
 message AllowedScopes {
