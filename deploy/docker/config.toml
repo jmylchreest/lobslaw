@@ -13,6 +13,11 @@ data_dir    = "/var/lobslaw/data"
 ca_cert   = "/etc/lobslaw/certs/ca.pem"
 node_cert = "/etc/lobslaw/certs/node-cert.pem"
 node_key  = "/etc/lobslaw/certs/node-key.pem"
+# The operator CA defaults to beside ca_cert, but compose mounts the
+# certs volume read-only, so the node could not create it on first
+# boot. The data volume is writable and persistent.
+operator_ca_cert = "/var/lobslaw/data/operator-ca.pem"
+operator_ca_key  = "/var/lobslaw/data/operator-ca-key.pem"
 
 [memory]
 enabled = true
