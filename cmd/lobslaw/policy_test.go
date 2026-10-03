@@ -121,12 +121,47 @@ func TestPolicyReadAllRulesIncludesEveryProvenance(t *testing.T) {
 		},
 	)
 
-	got, err := policyReadAllRules(store)
+	got, skipped, err := policyReadAllRules(store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 3 {
 		t.Fatalf("found %d rules, want 3 (unfiltered): %+v", len(got), got)
+	}
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0 — every rule here is readable", skipped)
+	}
+}
+
+// A rule the engine would refuse to load must be COUNTED, not quietly
+// dropped. Engine.loadRules fails the whole load on an unmarshal
+// error, so a listing that reported only the readable ones would say
+// "2 rule(s)" about a node that will not start.
+func TestPolicyReadAllRulesCountsUnreadableRules(t *testing.T) {
+	t.Parallel()
+	store := policyTestStore(t,
+		&lobslawv1.PolicyRule{
+			Id: "readable", Subject: "*", Action: "tool:exec",
+			Resource: "read_file", Effect: "allow",
+		},
+	)
+	// Truncated rather than merely mismatched: protobuf-go keeps a
+	// wrong wire type as an unknown field and parses on, so only a
+	// length that runs past the end of the buffer actually fails.
+	// Field 1, wire type 2, declared 5 bytes, one supplied.
+	if err := store.Put(memory.BucketPolicyRules, "corrupt", []byte{0x0A, 0x05, 'a'}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, skipped, err := policyReadAllRules(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1 — the unreadable rule was not counted", skipped)
+	}
+	if len(got) != 1 {
+		t.Errorf("found %d readable rules, want 1: %+v", len(got), got)
 	}
 }
 

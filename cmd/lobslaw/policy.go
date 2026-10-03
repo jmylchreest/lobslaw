@@ -361,15 +361,38 @@ func renderPolicyRules(w io.Writer, rules []*lobslawv1.PolicyRule, source string
 		if createdBy == "" {
 			createdBy = "-"
 		}
-		_, _ = fmt.Fprintf(w, "  %-30s %-18s %-20s -> %-20s %-6s pri=%-4d %s\n",
-			r.GetId(), r.GetSubject(), r.GetAction(), r.GetResource(), r.GetEffect(), r.GetPriority(), createdBy)
+		_, _ = fmt.Fprintf(w, "  %-30s %-18s %-20s -> %-20s %-6s pri=%-4d %s%s\n",
+			r.GetId(), r.GetSubject(), r.GetAction(), r.GetResource(), r.GetEffect(), r.GetPriority(),
+			createdBy, policyRuleQualifiers(r))
 	}
 	_, _ = fmt.Fprintf(w, "\n%d rule(s).\n", len(rules))
 	return nil
 }
 
+// policyRuleQualifiers names the narrowing the engine enforces but the
+// columns do not show. Both scope and conditions decide whether a rule
+// applies at all (claims.Scope, conditionsHold), so a scoped or
+// conditioned rule that printed identically to an unconditional one
+// would misreport what the node does.
+//
+// Counted rather than spelled out: the full predicate belongs in
+// --json, and a condition list is unbounded where a row is not.
+func policyRuleQualifiers(r *lobslawv1.PolicyRule) string {
+	var parts []string
+	if s := r.GetScope(); s != "" {
+		parts = append(parts, "scope="+s)
+	}
+	if n := len(r.GetConditions()); n > 0 {
+		parts = append(parts, fmt.Sprintf("conditions=%d", n))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(parts, " ") + "]"
+}
+
 func policyRuleJSON(r *lobslawv1.PolicyRule) map[string]any {
-	return map[string]any{
+	m := map[string]any{
 		"id":         r.GetId(),
 		"subject":    r.GetSubject(),
 		"action":     r.GetAction(),
@@ -378,6 +401,22 @@ func policyRuleJSON(r *lobslawv1.PolicyRule) map[string]any {
 		"priority":   r.GetPriority(),
 		"created_by": r.GetCreatedBy(),
 	}
+	// Omitted when absent rather than emitted empty: a consumer
+	// checking for a scope should not have to tell "" from unscoped.
+	if s := r.GetScope(); s != "" {
+		m["scope"] = s
+	}
+	if conds := r.GetConditions(); len(conds) > 0 {
+		out := make([]map[string]any, 0, len(conds))
+		for _, c := range conds {
+			out = append(out, map[string]any{"key": c.GetKey(), "op": c.GetOp(), "value": c.GetValue()})
+		}
+		m["conditions"] = out
+	}
+	if r.GetCreatedAt() != nil {
+		m["created_at"] = r.GetCreatedAt().AsTime()
+	}
+	return m
 }
 
 // renderRevocation reports what happened, keeping protected rules and
@@ -475,9 +514,15 @@ func policyRules(args []string) error {
 	}
 	defer func() { _ = s.Close() }()
 
-	rules, err := policyReadAllRules(s)
+	rules, skipped, err := policyReadAllRules(s)
 	if err != nil {
 		return err
+	}
+	// Before the listing, not after: a reader who stops at the first
+	// screen still learns the set is incomplete.
+	if skipped > 0 {
+		_, _ = fmt.Fprintf(os.Stderr,
+			"warning: %d unreadable rule(s) skipped; this node would refuse to load them\n", skipped)
 	}
 	rules = filterPolicyRules(rules, *subject, *createdBy)
 	sortPolicyRules(rules)
@@ -590,20 +635,28 @@ func approvalMintedRules(s *memory.Store) ([]*lobslawv1.PolicyRule, error) {
 
 // policyReadAllRules reads every rule in the bucket, no provenance
 // filter: the offline counterpart to SyncRules.
-func policyReadAllRules(s *memory.Store) ([]*lobslawv1.PolicyRule, error) {
+//
+// An unreadable rule does not hide the readable ones, but it is
+// COUNTED and reported. The engine's own loadRules refuses the whole
+// load on the same byte (see Engine.loadRules), so a listing that
+// silently skipped it would print "N rule(s)" as though complete
+// while the node it describes would not start.
+func policyReadAllRules(s *memory.Store) ([]*lobslawv1.PolicyRule, int, error) {
 	var out []*lobslawv1.PolicyRule
+	skipped := 0
 	err := s.ForEach(memory.BucketPolicyRules, func(_ string, raw []byte) error {
 		var rule lobslawv1.PolicyRule
 		if err := proto.Unmarshal(raw, &rule); err != nil {
-			return nil //nolint:nilerr // one unreadable rule should not hide the rest
+			skipped++
+			return nil //nolint:nilerr // counted and reported by the caller
 		}
 		out = append(out, &rule)
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read policy rules: %w", err)
+		return nil, 0, fmt.Errorf("read policy rules: %w", err)
 	}
-	return out, nil
+	return out, skipped, nil
 }
 
 func approvalRuleJSON(r *lobslawv1.PolicyRule) map[string]any {

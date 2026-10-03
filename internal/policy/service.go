@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -154,7 +155,7 @@ func ruleToProto(r types.PolicyRule) *lobslawv1.PolicyRule {
 	for _, c := range r.Conditions {
 		conds = append(conds, &lobslawv1.Condition{Key: c.Key, Op: c.Op, Value: c.Value})
 	}
-	return &lobslawv1.PolicyRule{
+	out := &lobslawv1.PolicyRule{
 		Id:         r.ID,
 		Subject:    r.Subject,
 		Action:     r.Action,
@@ -163,5 +164,10 @@ func ruleToProto(r types.PolicyRule) *lobslawv1.PolicyRule {
 		Conditions: conds,
 		Priority:   int32(r.Priority),
 		Scope:      r.Scope,
+		CreatedBy:  r.CreatedBy,
 	}
+	if !r.CreatedAt.IsZero() {
+		out.CreatedAt = timestamppb.New(r.CreatedAt)
+	}
+	return out
 }
