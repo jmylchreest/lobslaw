@@ -46,6 +46,9 @@ func taskToolRestriction(ctx context.Context, req ProcessMessageRequest, name st
 	if name == retiredConsoleCodeTool {
 		return "sign-in credentials are only available through authenticated human login"
 	}
+	if name == "task_create" && TaskIDFrom(ctx) != "" {
+		return "already executing a task; carry out the assigned work instead of queuing it again"
+	}
 	if req.Bot != nil && len(req.Bot.FilterTools([]Tool{{Name: name}})) == 0 {
 		return "tool is excluded by bot tool restrictions"
 	}

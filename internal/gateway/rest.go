@@ -140,7 +140,7 @@ type RESTConfig struct {
 	Prompts       Prompts
 	TaskApprovals TaskApprovalAPI
 	Learned       LearnedReviews
-	// Named bot chats are fresh durable tasks, including their budget approvals.
+	// StartBotTask handles explicit /task commands, never ordinary bot chat.
 	StartBotTask func(context.Context, turn.Request) (*lobslawv1.TaskApprovalRecord, error)
 	TaskIdentity *identity.Resolver
 

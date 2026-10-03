@@ -171,7 +171,21 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		ConversationSummary: prior.Summary,
 	}
 
-	if s.cfg.StartBotTask != nil {
+	// Chat is conversational regardless of the recipient or whether teams are
+	// enabled. Only an explicit /task command bypasses the conversational runner;
+	// the model can separately choose task_create or delegate via inbox_post.
+	command := strings.Fields(body.Message)[0]
+	if command == "/task" {
+		taskBody := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(body.Message), command))
+		if taskBody == "" {
+			emit("error", map[string]any{"message": "usage: /task <work to carry out>"})
+			return
+		}
+		if s.cfg.StartBotTask == nil {
+			emit("error", map[string]any{"message": "tasks are unavailable on this node"})
+			return
+		}
+		req.Message = taskBody
 		task, err := s.cfg.StartBotTask(ctx, req)
 		if err != nil {
 			emit("error", map[string]any{"message": err.Error()})

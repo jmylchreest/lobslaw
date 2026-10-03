@@ -35,7 +35,7 @@ type InboxConfig struct {
 }
 
 // RegisterInboxBuiltins installs inbox_list / inbox_read /
-// inbox_post / inbox_resolve.
+// inbox_post / inbox_resolve and conversational task creation.
 func RegisterInboxBuiltins(b *Builtins, cfg InboxConfig) error {
 	if cfg.Service == nil {
 		return errors.New("inbox builtins: Service required")
@@ -49,11 +49,29 @@ func RegisterInboxBuiltins(b *Builtins, cfg InboxConfig) error {
 	if err := b.Register("inbox_resolve", newInboxResolveHandler(cfg.Service)); err != nil {
 		return err
 	}
-	return b.Register("inbox_post", newInboxPostHandler(cfg.Service, cfg.Bots))
+	if err := b.Register("inbox_post", newInboxPostHandler(cfg.Service, cfg.Bots)); err != nil {
+		return err
+	}
+	return b.Register("task_create", newTaskCreateHandler(cfg.Service, cfg.Bots))
 }
 
 func InboxToolDefs() []*types.ToolDef {
 	return []*types.ToolDef{
+		{
+			Name:        "task_create",
+			Path:        compute.BuiltinScheme + "task_create",
+			Description: "Create a durable task for yourself from this conversation. Chats are conversational by default: answer greetings, discussion and ordinary questions directly without creating a task. Use this only when the user explicitly asks to create a task, or you judge the request needs tracked, multi-step or background work. Supply a self-contained body with the relevant context and desired outcome; the task does not inherit this chat's history. After queuing, tell the user what was queued; do not also execute the same work in this chat. Use inbox_post to delegate to another bot instead. Unavailable while already executing a task.",
+			ParametersSchema: []byte(`{
+				"type": "object",
+				"properties": {
+					"subject": {"type": "string", "description": "One-line task summary."},
+					"body": {"type": "string", "description": "Self-contained work instruction, relevant context and desired outcome."}
+				},
+				"required": ["body"],
+				"additionalProperties": false
+			}`),
+			RiskTier: types.RiskReversible,
+		},
 		{
 			Name:        "inbox_list",
 			Path:        compute.BuiltinScheme + "inbox_list",
@@ -224,6 +242,50 @@ func newInboxResolveHandler(svc InboxService) compute.BuiltinFunc {
 		}
 		body, err := json.Marshal(inboxSummary(item))
 		return body, 0, err
+	}
+}
+
+// The actor, owner and claims come from the live turn, never model arguments.
+// The existing queue worker admits and executes this work with durable approvals.
+func newTaskCreateHandler(svc InboxService, bots compute.BotResolver) compute.BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		me, err := callerBot(ctx)
+		if err != nil {
+			return nil, 2, fmt.Errorf("task_create: %w", err)
+		}
+		if compute.TaskIDFrom(ctx) != "" {
+			return nil, 2, errors.New("task_create: already executing a task; carry out the assigned work instead of queuing it again")
+		}
+		body := strings.TrimSpace(args["body"])
+		if body == "" {
+			return nil, 2, errors.New("task_create: body is required")
+		}
+		if bots == nil {
+			return nil, 2, errors.New("task_create: bots are unavailable")
+		}
+		profile, err := bots.ResolveBot(ctx, me)
+		if err != nil {
+			return nil, 2, fmt.Errorf("task_create: %w", err)
+		}
+		caller, _ := turn.IdentityFrom(ctx)
+		owner := requesterLabel(caller)
+		if owner == "" || owner != profile.Owner {
+			return nil, 2, errors.New("task_create: caller does not own this bot")
+		}
+		item, err := svc.Post(ctx, &lobslawv1.BotInboxItem{
+			Recipient: me, Sender: "bot:" + me, RequestedBy: owner,
+			TaskClaims: turn.ClaimsToProto(claimsFromTurn(caller)),
+			Kind:       lobslawv1.InboxKind_INBOX_KIND_TASK, Subject: args["subject"], Body: body,
+		})
+		if err != nil {
+			return nil, 1, fmt.Errorf("task_create: %w", err)
+		}
+		out, err := json.Marshal(map[string]any{
+			"id": item.GetId(), "recipient": item.GetRecipient(),
+			"status": memory.InboxStatusName(item.GetStatus()),
+			"note":   "task queued; follow its progress in this bot's inbox; do not repeat the work in this conversation",
+		})
+		return out, 0, err
 	}
 }
 

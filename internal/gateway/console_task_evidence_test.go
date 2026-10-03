@@ -53,7 +53,7 @@ func TestTaskEvidenceJSONMatchesAcrossLocalAndRemoteChat(t *testing.T) {
 				client := testConsoleClient(t, backend)
 				front = startWebREST(t, nil, func(c *RESTConfig) { c.RemoteConsole = client })
 			}
-			response := doJSON(t, http.MethodPost, webBaseURL(front)+"/v1/bots/chief/messages", `{"message":"question"}`, http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}})
+			response := doJSON(t, http.MethodPost, webBaseURL(front)+"/v1/bots/chief/messages", `{"message":"/task question"}`, http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}})
 			body, err := io.ReadAll(response.Body)
 			if err != nil {
 				t.Fatal(err)

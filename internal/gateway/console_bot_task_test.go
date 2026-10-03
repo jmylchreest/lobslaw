@@ -49,14 +49,14 @@ func TestTypedBotChatReleasesStreamForDurableTaskApproval(t *testing.T) {
 	backend := startWebREST(t, &approvalConsoleRunner{}, func(c *RESTConfig) {
 		c.Bots = &memBots{recs: map[string]*pb.BotRecord{"worker": {Id: "worker", Owner: "user:alice"}}}
 		c.StartBotTask = func(_ context.Context, req turn.Request) (*pb.TaskApprovalRecord, error) {
-			if req.Claims.UserID != "alice" || req.BotID != "worker" {
+			if req.Claims.UserID != "alice" || req.BotID != "worker" || req.Message != "work" {
 				t.Errorf("task authority lost: %+v", req)
 			}
 			return &pb.TaskApprovalRecord{Id: "durable-task", State: pb.TaskApprovalState_TASK_APPROVAL_STATE_WAITING, SessionId: "bot:worker.task.durable-task", Transcript: []*pb.SessionMessage{{Role: "user", Content: "work"}, {Role: "assistant", Content: "progress"}}, Receipts: []*pb.TurnToolInvocation{{ToolName: "echo", ExecutionStatus: turn.ReceiptExecuted}, {ToolName: "delete", ExecutionStatus: turn.ReceiptApprovalRequired}}}, nil
 		}
 	})
 	client := testConsoleClient(t, backend)
-	stream, err := client.ChatConsole(t.Context(), &pb.ChatConsoleRequest{Identity: consoleTestIdentity(), Bot: "worker", Message: "work"})
+	stream, err := client.ChatConsole(t.Context(), &pb.ChatConsoleRequest{Identity: consoleTestIdentity(), Bot: "worker", Message: "/task work"})
 	if err != nil {
 		t.Fatal(err)
 	}

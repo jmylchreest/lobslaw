@@ -205,7 +205,8 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
 
   // One timeline. Queue items and spoken lines interleave by time,
   // because that is the order they happened in.
-  const sentByMe = (feed ?? []).filter((i) => i.sender === `bot:${bot.id}`);
+  // Self-created tasks already appear in this bot's work queue.
+  const sentByMe = (feed ?? []).filter((i) => i.sender === `bot:${bot.id}` && i.recipient !== bot.id);
   const names = new Map((roster ?? []).map((b) => [b.id, b.display_name || b.id]));
   const thread: Entry[] = [
     ...(work ?? []).map((item) => ({

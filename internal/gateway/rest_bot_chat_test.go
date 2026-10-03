@@ -2,12 +2,15 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -47,6 +50,72 @@ func TestBotChatStreamsAReplyForTheRequestedBot(t *testing.T) {
 	}
 	if got.Channel != botChannel || got.ChannelID != "coordinator" {
 		t.Errorf("turn channel = %q:%q, want bot:coordinator", got.Channel, got.ChannelID)
+	}
+}
+
+// Teams being enabled must not turn conversational messages into queue work,
+// either locally or through the typed console proxy, for any kind of bot.
+type conversationalBotRunner struct{ captureRunner }
+
+func (c *conversationalBotRunner) Run(ctx context.Context, req turn.Request) (*turn.Response, error) {
+	response, err := c.captureRunner.Run(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	response.Messages = append([]turn.Message{{Role: "system", Content: "system"}}, req.ConversationHistory...)
+	response.TurnStartIndex = len(response.Messages)
+	response.Messages = append(response.Messages, turn.Message{Role: "user", Content: req.Message}, turn.Message{Role: "assistant", Content: response.Reply})
+	return response, nil
+}
+
+func TestBotChatsRemainConversationalWithTasksEnabled(t *testing.T) {
+	t.Parallel()
+	for _, remote := range []bool{false, true} {
+		for _, coordinator := range []bool{false, true} {
+			t.Run(fmt.Sprintf("remote=%t/coordinator=%t", remote, coordinator), func(t *testing.T) {
+				t.Parallel()
+				runner := &conversationalBotRunner{}
+				backend := startWebREST(t, runner, func(c *RESTConfig) {
+					c.Bots = stubBots{rec: &lobslawv1.BotRecord{Id: "bot", Owner: "user:alice", Enabled: true, IsCoordinator: coordinator}}
+					c.StartBotTask = func(context.Context, turn.Request) (*lobslawv1.TaskApprovalRecord, error) {
+						t.Error("ordinary chat created a task")
+						return nil, fmt.Errorf("unexpected task")
+					}
+				})
+				front := backend
+				if remote {
+					client := testConsoleClient(t, backend)
+					front = startWebREST(t, nil, func(c *RESTConfig) { c.RemoteConsole = client })
+				}
+				for index, message := range []string{"Hello!", "What do you think about this approach?", "Can you explain how backups work?"} {
+					response := doJSON(t, http.MethodPost, webBaseURL(front)+"/v1/bots/bot/messages", fmt.Sprintf(`{"message":%q}`, message), http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}})
+					raw, err := io.ReadAll(response.Body)
+					response.Body.Close()
+					if err != nil || !strings.Contains(string(raw), "event: reply") || runner.lastRequest().Message != message {
+						t.Fatalf("chat was not handled conversationally: %s, %v", raw, err)
+					}
+					if history := runner.lastRequest().ConversationHistory; len(history) != index*2 || (index > 0 && history[0].Content != "Hello!") {
+						t.Fatalf("conversation history lost: %+v", history)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestBotChatOutlivesHTTPReadTimeout(t *testing.T) {
+	t.Parallel()
+	runner := &captureRunner{hold: make(chan struct{})}
+	server := startWebREST(t, runner, func(c *RESTConfig) {
+		c.ReadTimeout = 25 * time.Millisecond
+		c.Bots = stubBots{rec: &lobslawv1.BotRecord{Id: "bot", Owner: "user:alice", Enabled: true}}
+	})
+	timer := time.AfterFunc(150*time.Millisecond, func() { close(runner.hold) })
+	defer timer.Stop()
+	response := doJSON(t, http.MethodPost, webBaseURL(server)+"/v1/bots/bot/messages", `{"message":"Hello!"}`, http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}})
+	raw, err := io.ReadAll(response.Body)
+	if err != nil || !strings.Contains(string(raw), "event: reply") {
+		t.Fatalf("stream cancelled by HTTP read timeout: %s, %v", raw, err)
 	}
 }
 

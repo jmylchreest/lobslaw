@@ -1079,6 +1079,14 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// gateway set was defeated by the code meant to report it
 			// gracefully and the request hung until the client gave up.
 			if ctx.Err() != nil {
+				a.cfg.Logger.Warn("agent: turn context ended during LLM call",
+					"turn_id", req.TurnID, "task_id", TaskIDFrom(ctx), "err", ctx.Err())
+				// A graceful chat reply is not evidence that assigned work
+				// completed. Return the interrupted task with its evidence so
+				// the durable runner records uncertainty instead of success.
+				if TaskIDFrom(ctx) != "" {
+					return resp, fmt.Errorf("task interrupted during LLM call: %w", ctx.Err())
+				}
 				summaryCtx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), a.summaryReplyTimeout())
 				defer cancel()
