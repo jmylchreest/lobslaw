@@ -297,7 +297,13 @@ func (s *Service) Activate(ctx context.Context, id, email string, calendars map[
 	}
 	r.Revision++
 	connection := randomID()
-	metadata, _ := json.Marshal(Connection{Subject: f.Subject, Email: f.Email, Active: true, Calendars: calendars})
+	names := map[string]string{}
+	for _, cal := range view.Calendars {
+		if _, ok := calendars[cal.ID]; ok {
+			names[cal.ID] = cal.Name
+		}
+	}
+	metadata, _ := json.Marshal(Connection{Names: names, Subject: f.Subject, Email: f.Email, Active: true, Calendars: calendars})
 	p := &memory.PlaintextCredential{ID: connection, Provider: "google", Subject: connection, AccessToken: f.Token.AccessToken, RefreshToken: f.Token.RefreshToken, Scopes: strings.Fields(f.Token.Scope), ExpiresAt: f.ExpiresAt, ConnectorData: metadata}
 	if err := s.cfg.Credentials.Put(ctx, p); err != nil {
 		return out, err
@@ -313,19 +319,28 @@ func (s *Service) Connections(ctx context.Context) ([]ConnectionView, error) {
 	if err := s.authorize(ctx, "calendar:connect", "google"); err != nil {
 		return nil, err
 	}
-	rows, err := s.cfg.Credentials.List(ctx)
+	profile, record, err := s.profile(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ConnectionView, 0, len(rows))
-	for _, p := range rows {
-		c, err := decodeConnection(p)
-		if err != nil {
-			return nil, err
+	inventory, err := s.inventory(ctx, profile, record.Revision)
+	if err != nil {
+		return nil, err
+	}
+	out := []ConnectionView{}
+	for _, c := range inventory.Calendars {
+		index := -1
+		for i := range out {
+			if out[i].ID == c.Connection {
+				index = i
+				break
+			}
 		}
-		if p.Provider == "google" && c.Active {
-			out = append(out, ConnectionView{ID: p.Subject, Email: c.Email, Calendars: c.Calendars})
+		if index < 0 {
+			out = append(out, ConnectionView{ID: c.Connection, Email: c.Account, Calendars: map[string]Permission{}})
+			index = len(out) - 1
 		}
+		out[index].Calendars[c.Calendar] = c.Permission
 	}
 	return out, nil
 }

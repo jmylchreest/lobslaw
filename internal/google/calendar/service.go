@@ -45,7 +45,12 @@ type StateStore interface {
 	Get(context.Context, string) (*lobslawv1.IntegrationStateRecord, error)
 	Save(context.Context, *lobslawv1.IntegrationStateRecord) error
 }
+type SettingsStore interface {
+	Get(context.Context) (*lobslawv1.IntegrationStateRecord, error)
+	Save(context.Context, *lobslawv1.IntegrationStateRecord) error
+}
 type Config struct {
+	Settings                            SettingsStore
 	ClientID, ClientSecret, RedirectURL string
 	Client                              *http.Client
 	Credentials                         Credentials
@@ -61,6 +66,7 @@ type Permission struct {
 	Write bool `json:"write"`
 }
 type Connection struct {
+	Names     map[string]string     `json:"names,omitempty"`
 	Subject   string                `json:"subject"`
 	Email     string                `json:"email"`
 	Active    bool                  `json:"active"`
@@ -84,6 +90,7 @@ type EventTime struct {
 	TimeZone string `json:"timeZone,omitempty"`
 }
 type Event struct {
+	Transparency      string            `json:"transparency,omitempty"`
 	ID                string            `json:"id"`
 	Title             string            `json:"summary"`
 	Start             EventTime         `json:"start"`
@@ -154,6 +161,16 @@ func (s *Service) connection(ctx context.Context, id, cal string, write bool) (*
 		return nil, c, errors.New("calendar: connection not active")
 	}
 	permission, ok := c.Calendars[cal]
+	profile, _, err := s.profile(ctx)
+	if err != nil {
+		return nil, c, err
+	}
+	if profile.Disconnected[id] {
+		return nil, c, errors.New("calendar: connection disconnected")
+	}
+	if preference, exists := profile.Calendars[calendarRef(id, cal)]; exists && preference.Permission != nil {
+		permission = *preference.Permission
+	}
 	action := "calendar:read"
 	allowed := permission.Read
 	if write {
@@ -238,6 +255,11 @@ func validID(id string) bool {
 }
 func (s *Service) Events(ctx context.Context, q Query) (EventPage, error) {
 	var out EventPage
+	target, err := s.Resolve(ctx, q.Connection, q.Calendar, "", false)
+	if err != nil {
+		return out, err
+	}
+	q.Connection, q.Calendar = target.Connection, target.Calendar
 	if !validID(q.Calendar) {
 		return out, errors.New("calendar: calendar ID required")
 	}
@@ -256,7 +278,7 @@ func (s *Service) Events(ctx context.Context, q Query) (EventPage, error) {
 	if err != nil {
 		return out, err
 	}
-	values := url.Values{"timeMin": {q.Start}, "timeMax": {q.End}, "singleEvents": {"true"}, "orderBy": {"startTime"}, "maxResults": {fmt.Sprint(maxEvents)}, "fields": {"items(id,summary,start,end,status,htmlLink,recurringEventId,originalStartTime),nextPageToken"}}
+	values := url.Values{"timeMin": {q.Start}, "timeMax": {q.End}, "singleEvents": {"true"}, "orderBy": {"startTime"}, "maxResults": {fmt.Sprint(maxEvents)}, "fields": {"items(id,summary,start,end,status,transparency,attendees(self,responseStatus),htmlLink,recurringEventId,originalStartTime),nextPageToken"}}
 	var page struct {
 		Items         []Event `json:"items"`
 		NextPageToken string  `json:"nextPageToken"`
@@ -267,6 +289,11 @@ func (s *Service) Events(ctx context.Context, q Query) (EventPage, error) {
 	return out, err
 }
 func (s *Service) Event(ctx context.Context, q Query) (Event, error) {
+	target, err := s.Resolve(ctx, q.Connection, q.Calendar, "", false)
+	if err != nil {
+		return Event{}, err
+	}
+	q.Connection, q.Calendar = target.Connection, target.Calendar
 	if !validID(q.Calendar) || !validID(q.Event) {
 		return Event{}, errors.New("calendar: calendar and event IDs required")
 	}
@@ -285,18 +312,18 @@ func (s *Service) Calendars(ctx context.Context, id string) ([]CalendarView, err
 	if err := s.authorize(ctx, "calendar:read", resource(id, "*")); err != nil {
 		return nil, err
 	}
-	p, err := s.cfg.Credentials.Get(ctx, "google", id)
+	profile, record, err := s.profile(ctx)
 	if err != nil {
 		return nil, err
 	}
-	c, err := decodeConnection(p)
-	if err != nil || !c.Active {
-		return nil, errors.New("calendar: connection inactive")
+	inventory, err := s.inventory(ctx, profile, record.Revision)
+	if err != nil {
+		return nil, err
 	}
 	var result []CalendarView
-	for id, p := range c.Calendars {
-		if p.Read {
-			result = append(result, CalendarView{ID: id})
+	for _, c := range inventory.Calendars {
+		if c.Connection == id && c.Permission.Read {
+			result = append(result, CalendarView{ID: c.Calendar, Name: c.Nickname})
 		}
 	}
 	slices.SortFunc(result, func(a, b CalendarView) int { return strings.Compare(a.ID, b.ID) })

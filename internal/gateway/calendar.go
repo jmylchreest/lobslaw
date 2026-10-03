@@ -13,6 +13,7 @@ import (
 )
 
 type CalendarRequest struct {
+	Change    calendar.SettingsChange        `json:"change,omitempty"`
 	Operation string                         `json:"operation"`
 	ID        string                         `json:"id,omitempty"`
 	Write     bool                           `json:"write,omitempty"`
@@ -55,6 +56,7 @@ func (h *TelegramHandler) registerCalendarCommand() {
 	if h.cfg.Calendar == nil {
 		return
 	}
+	h.registerCalendarsCommand()
 	h.commands.Register(&Command{Name: "calendar", Summary: "connect and manage your Google Calendar in private", Handler: func(ctx context.Context, req CommandRequest) (string, error) {
 		if req.Shared {
 			return "", errors.New("calendar: use a private conversation")
