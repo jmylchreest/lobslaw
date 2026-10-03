@@ -163,8 +163,12 @@ const (
 // is one tune record per cluster — the agent has one identity.
 const SoulTuneRecordID = "soul:tune"
 
+// BucketIntegrationState holds encrypted short-lived connector state.
+const BucketIntegrationState = "integration_state"
+
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
+	BucketIntegrationState,
 	BucketSkillInstallations,
 	BucketArchiveImports,
 	BucketArchiveMappings,

@@ -119,6 +119,7 @@ func (n *Node) wireGateway() error {
 		Prompts:          n.promptRegistry,
 		TaskApprovals:    n.taskApprovalAPI(),
 		TaskIdentity:     n.identityResolver(),
+		Calendar:         n.calendarManagement(),
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
 		Plan:             planServiceOrNil(n.planSvc),
 		Sessions:         n.newSessionStore(),
@@ -127,6 +128,9 @@ func (n *Node) wireGateway() error {
 		Logger:           n.log,
 	}
 
+	if n.calendarSvc != nil {
+		cfg.CalendarOAuth = n.calendarSvc.BrowserHandler()
+	}
 	n.gatewaySrv = gateway.NewServer(cfg, n.agent)
 	n.log.Info("gateway wired",
 		"http_port", port,
@@ -346,6 +350,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		// approval and leaves the CLI path working.
 		Enrolments:        n.enrolmentDecider(),
 		Learned:           n.learnedReviews(),
+		Calendar:          n.calendarManagement(),
 		CommandAuthorizer: n.commandAuthorizerOrNil(),
 		SessionGrants:     n.sessionGrantsView(),
 		Roles:             n.resolveUserRoles,

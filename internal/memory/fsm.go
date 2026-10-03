@@ -280,6 +280,11 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	if entry.Id == "" {
 		return fmt.Errorf("PUT %s: empty id", bucket)
 	}
+	if p, ok := payload.(*lobslawv1.CredentialRecord); ok {
+		if err := f.credentialBoundary(entry.Id, p); err != nil {
+			return err
+		}
+	}
 	// Derived state is computed here rather than at each producer, so a
 	// new write path can't forget it. Deterministic: same embedding, same
 	// float ops in the same order, same result on every replica.
@@ -353,6 +358,8 @@ func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
 // interface because protoc-gen-go emits getters but no setters.
 func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
+	case *lobslawv1.IntegrationStateRecord:
+		return p.Revision, true
 	case *lobslawv1.CredentialRecord:
 		return p.Revision, true
 	case *lobslawv1.SoulTuneRecord:
@@ -384,6 +391,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
+	case *lobslawv1.IntegrationStateRecord:
+		p.Revision = rev
 	case *lobslawv1.CredentialRecord:
 		p.Revision = rev
 	case *lobslawv1.SoulTuneRecord:
@@ -428,7 +437,7 @@ func (f *FSM) currentRevision(bucket, id string) (uint64, error) {
 }
 
 func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
-	bucket, _, err := bucketAndPayload(entry)
+	bucket, payload, err := bucketAndPayload(entry)
 	if err != nil {
 		// DELETE is allowed to carry just the id + a typed discriminator
 		// in payload (to know which bucket). If payload is absent, reject.
@@ -436,6 +445,11 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 	}
 	if entry.Id == "" {
 		return fmt.Errorf("DELETE %s: empty id", bucket)
+	}
+	if p, ok := payload.(*lobslawv1.CredentialRecord); ok {
+		if err := f.credentialBoundary(entry.Id, p); err != nil {
+			return err
+		}
 	}
 	// Deleting a session must also drop its transcript, else the
 	// message records are orphaned in their bucket forever — nothing
@@ -559,6 +573,29 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	expectedRev := entry.GetExpectedRevision()
 
 	raw, getErr := f.store.Get(bucket, entry.Id)
+	if bucket == BucketIntegrationState && getErr != nil {
+		if !IsCredentialNotFound(getErr) {
+			return getErr
+		}
+		count, owned := 0, 0
+		owner := newPayload.(*lobslawv1.IntegrationStateRecord).Owner
+		if err := f.store.ForEach(bucket, func(_ string, b []byte) error {
+			var r lobslawv1.IntegrationStateRecord
+			if err := proto.Unmarshal(b, &r); err != nil {
+				return err
+			}
+			count++
+			if r.Owner == owner {
+				owned++
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if count >= 10000 || owned >= 100 {
+			return fmt.Errorf("integration state limit reached; wait for expiry cleanup")
+		}
+	}
 	if bucket == BucketCredentials {
 		// A credential CLAIM can only modify the same existing account generation.
 		// A delete/recreate may reset the revision; it must not admit an old claim.
@@ -569,7 +606,7 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 		if err := proto.Unmarshal(raw, &current); err != nil {
 			return err
 		}
-		if current.Generation != newPayload.(*lobslawv1.CredentialRecord).Generation {
+		if next := newPayload.(*lobslawv1.CredentialRecord); current.Generation != next.Generation || current.Owner != next.Owner || current.Connector != next.Connector {
 			return fmt.Errorf("%w: credential replaced", ErrClaimConflict)
 		}
 	}
@@ -635,6 +672,12 @@ type claimable interface {
 // holder's id as expected_claimer.
 func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
+	case BucketIntegrationState:
+		var r lobslawv1.IntegrationStateRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	case BucketCredentials:
 		var r lobslawv1.CredentialRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
@@ -725,7 +768,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
+	case BucketIntegrationState, BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
 		return true
 	default:
@@ -765,6 +808,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketChannelState, p.ChannelState, nil
 	case *lobslawv1.LogEntry_SoulTune:
 		return BucketSoulTune, p.SoulTune, nil
+	case *lobslawv1.LogEntry_IntegrationState:
+		return BucketIntegrationState, p.IntegrationState, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:
@@ -929,3 +974,23 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 // doesn't need any release logic — the View transaction closes with
 // Persist's return.
 func (s *snapshot) Release() {}
+
+// Ownership and connector binding cannot change at a reused credential key.
+// Enforced during deterministic application, including stale follower proposals.
+func (f *FSM) credentialBoundary(id string, next *lobslawv1.CredentialRecord) error {
+	raw, err := f.store.Get(BucketCredentials, id)
+	if IsCredentialNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var current lobslawv1.CredentialRecord
+	if err := proto.Unmarshal(raw, &current); err != nil {
+		return err
+	}
+	if current.Owner != next.Owner || current.Connector != next.Connector {
+		return fmt.Errorf("credential ownership boundary changed")
+	}
+	return nil
+}

@@ -32,6 +32,8 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	Calendar      CalendarManagement
+	CalendarOAuth http.Handler
 	// IncomingDir holds temporary, owner-bound REST media uploads.
 	IncomingDir string
 
@@ -220,6 +222,12 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 // triggers a graceful shutdown with a bounded timeout.
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
+	if s.cfg.Calendar != nil {
+		mux.HandleFunc("/v1/calendar", s.handleCalendar)
+	}
+	if s.cfg.CalendarOAuth != nil {
+		mux.Handle("/integrations/google/", s.cfg.CalendarOAuth)
+	}
 	mux.HandleFunc("/v1/messages", s.handleMessages)
 	if s.cfg.TaskApprovals != nil {
 		mux.HandleFunc("/v1/task-approvals", s.handleTaskApprovals)

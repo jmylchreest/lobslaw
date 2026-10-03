@@ -1956,12 +1956,22 @@ type SkillsConfig struct {
 	DevSource string `koanf:"dev_source,omitempty"`
 }
 
+// GoogleCalendarConfig enables the trusted per-user Calendar connector.
+type GoogleCalendarConfig struct {
+	Enabled         bool   `koanf:"enabled"`
+	ClientIDRef     string `koanf:"client_id_ref"`
+	ClientSecretRef string `koanf:"client_secret_ref"`
+	CallbackURL     string `koanf:"callback_url"`
+}
+
 // SecurityConfig carries cross-cutting safety controls: the egress
 // filter's ACL inputs, future subprocess sandbox knobs, etc. Each
 // field is independently optional — empty struct is valid and
 // produces sensible-default behaviour (deny-by-default ACL with
 // permissive fetch_url).
 type SecurityConfig struct {
+	GoogleCalendar GoogleCalendarConfig `koanf:"google_calendar"`
+
 	// SessionGrantTTL bounds an "approve for the rest of this
 	// conversation" grant. Zero takes the default of 24h.
 	//

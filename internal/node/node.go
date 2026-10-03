@@ -24,6 +24,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/google/calendar"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -325,18 +326,20 @@ type Node struct {
 	transport *rafttransport.Transport
 	raft      *memory.RaftNode
 
-	policySvc      *policy.Service
-	memorySvc      *memory.Service
-	credentialSvc  *memory.CredentialService
-	userPrefsSvc   *memory.UserPrefsService
-	notifySvc      *notify.Service
-	oauthTracker   *oauth.Tracker
-	oauthProviders map[string]oauth.ProviderConfig
-	clawhubSource  sharing.Source
-	planSvc        *plan.Service
-	storageSvc     *storage.Service
-	storageMgr     *storage.Manager
-	skillRegistry  *skills.Registry
+	policySvc        *policy.Service
+	memorySvc        *memory.Service
+	calendarSvc      *calendar.Service
+	integrationState *memory.IntegrationStateStore
+	credentialSvc    *memory.CredentialService
+	userPrefsSvc     *memory.UserPrefsService
+	notifySvc        *notify.Service
+	oauthTracker     *oauth.Tracker
+	oauthProviders   map[string]oauth.ProviderConfig
+	clawhubSource    sharing.Source
+	planSvc          *plan.Service
+	storageSvc       *storage.Service
+	storageMgr       *storage.Manager
+	skillRegistry    *skills.Registry
 	// jobDrivers maps a generation driver's name to its
 	// implementation. The name is embedded in every JobHandle the
 	// driver mints, so a handle polled after a crash takeover is

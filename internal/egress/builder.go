@@ -16,6 +16,7 @@ import (
 // a fresh ACLInputs from the current config and calls Build again,
 // then swaps via SmokescreenProvider.SetACL.
 type ACLInputs struct {
+	GoogleCalendar bool
 	// Providers is [[compute.providers]] from config.toml. Each
 	// provider's endpoint host becomes an allowed host under role
 	// "llm" (and per-role "llm/<label>" for callers that want
@@ -122,6 +123,10 @@ func Build(in ACLInputs) Rules {
 	rules := Rules{
 		Roles:      make(map[string][]string),
 		Permissive: make(map[string]bool),
+	}
+
+	if in.GoogleCalendar {
+		rules.Roles["integration/google-calendar"] = []string{"www.googleapis.com", "oauth2.googleapis.com", "openidconnect.googleapis.com"}
 	}
 
 	// LLM provider endpoints — collected under "llm" (broad), plus

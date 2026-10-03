@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+	"github.com/jmylchreest/lobslaw/internal/tools"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -45,6 +46,7 @@ var policyLocalOnly = map[string]func([]string) error{
 // policyClassify prints what the classifier makes of a command line.
 func policyClassify(args []string) error {
 	fs := newFlagSet("policy classify", flag.ExitOnError)
+	toolName := fs.String("tool", "", "classify a trusted Calendar builtin by name (no execution)")
 	asJSON := fs.Bool("json", false, "emit JSON")
 	scratch := fs.String("scratch", "",
 		"comma-separated scratch roots, as [compute.shell_approval] scratch_paths would set")
@@ -56,6 +58,22 @@ func policyClassify(args []string) error {
 	positional, err := parseFlagsAndPositionals(fs, args)
 	if err != nil {
 		return err
+	}
+	if *toolName != "" {
+		if len(positional) > 0 || *scratch != "" || *withModel != "" {
+			return errors.New("--tool cannot be combined with shell classification")
+		}
+		for _, td := range tools.CalendarToolDefs() {
+			if td.Name == *toolName {
+				labels := compute.ToolEffectLabels(*td.Effects)
+				if *asJSON {
+					return json.NewEncoder(os.Stdout).Encode(map[string]any{"tool": td.Name, "labels": labels, "effects": td.Effects, "requires_exact_confirmation": td.Effects.State == "write", "policy": "independent calendar permissions required"})
+				}
+				fmt.Printf("%s: %s\nIndependent calendar permissions required; writes require exact confirmation.\n", td.Name, commandrisk.RenderLabels(labels))
+				return nil
+			}
+		}
+		return fmt.Errorf("no trusted effect declaration for tool %q", *toolName)
 	}
 	command := strings.TrimSpace(strings.Join(positional, " "))
 	if command == "" {

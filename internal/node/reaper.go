@@ -66,6 +66,11 @@ func (n *Node) reapOnce(ctx context.Context) {
 	}
 	if n.credentialSvc != nil && n.raft != nil && n.raft.IsLeader() {
 		n.reapSyntheticCredentials(ctx, now)
+		if n.integrationState != nil {
+			if err := n.integrationState.Sweep(ctx, now); err != nil {
+				n.log.Warn("integration state cleanup failed", "err", err)
+			}
+		}
 	}
 }
 
