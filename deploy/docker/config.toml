@@ -461,11 +461,13 @@ main      = "minimax-m2.7"
 preflight = "minimax-m2.7"
 reranker  = "minimax-m2.7"
 
-# web_search builtin. Gated on there being a backend to use — no key
-# and no declared provider means no registration (operator opt-in).
-# This shape means Exa, whose endpoint defaults to its public API.
-[compute.web_search]
-api_key_ref = "env:LOBSLAW_EXA_API_KEY"
+# web_search builtin. Off until a backend is declared (operator opt-in).
+# A declared api_key_ref that resolves empty refuses to boot, so set
+# LOBSLAW_EXA_API_KEY before uncommenting. This shape means Exa, whose
+# endpoint defaults to its public API.
+#
+# [compute.web_search]
+# api_key_ref = "env:LOBSLAW_EXA_API_KEY"
 
 # For a self-hosted SearXNG instead — nothing leaves your network.
 # Two things it also needs: json in the instance's search.formats, and
