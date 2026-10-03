@@ -292,19 +292,21 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 		labels = L(LabelReads)
 	}
 
+	var escalations []RiskLabel
 	for _, tok := range args {
 		for pattern, esc := range rule.Escalate {
 			if escalateMatches(pattern, tok.text) {
-				labels = MergeLabels(labels, esc)
+				escalations = MergeLabels(escalations, esc)
 			}
 		}
 	}
+	labels = addOperationEffects(labels, escalations)
 	if len(seg.writeTargets) > 0 {
 		// A redirection writes whatever the program on the left prints,
 		// so the segment writes however innocent that program is.
 		// `echo pwned > ~/.ssh/authorized_keys` is the case that makes
 		// this non-negotiable.
-		labels = MergeLabels(labels, L(LabelWrites))
+		labels = addOperationEffects(labels, L(LabelWrites))
 	}
 
 	// Only a targeting program's own operands are read as paths. For
@@ -321,6 +323,24 @@ func classifyRiskSegment(seg riskSegment, table map[string]CommandRiskRule) Risk
 
 	out.Labels = MergeLabels(labels, floor)
 	return out
+}
+
+// addOperationEffects refines one operation, rather than combining independent
+// commands. A mutation flag or output redirection changes a read-only verb into
+// a mutation; its incidental reads do not require a separate read grant. Network
+// access and privilege do not change whether the underlying operation reads.
+// MergeLabels itself must remain a union, including across compound segments.
+func addOperationEffects(base, effects []RiskLabel) []RiskLabel {
+	if HasLabel(effects, LabelWrites) || HasLabel(effects, LabelDeletes) || HasLabel(effects, LabelDisrupts) {
+		kept := make([]RiskLabel, 0, len(base))
+		for _, label := range base {
+			if label != LabelReads {
+				kept = append(kept, label)
+			}
+		}
+		base = kept
+	}
+	return MergeLabels(base, effects)
 }
 
 // programName is the command as invoked, without its path:
@@ -390,7 +410,7 @@ func verbLabels(rule CommandRiskRule, base []RiskLabel, args []riskToken) ([]Ris
 
 	case len(rule.OperandLabels) > 0:
 		if _, _, ok := firstOperand(args); ok {
-			return MergeLabels(base, rule.OperandLabels), ""
+			return addOperationEffects(base, rule.OperandLabels), ""
 		}
 	}
 	return base, ""

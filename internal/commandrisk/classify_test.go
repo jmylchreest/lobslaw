@@ -24,7 +24,7 @@ func TestClassifyRiskObservedProbes(t *testing.T) {
 			cmd: `id && echo "--- kernel ---" && uname -a && echo "--- tools ---" && ` +
 				`for b in podman docker buildah skopeo git rustc go opencode; do ` +
 				`printf '%-9s' "$b"; command -v "$b" || echo MISSING; done`,
-			labels: L(LabelUnreadable),
+			labels: L(LabelUnreadable, LabelReads),
 			why:    "shell_keyword",
 			// The readable part is still reported, which is the whole
 			// point: the prompt can say what it DID understand.
@@ -44,17 +44,17 @@ func TestClassifyRiskObservedProbes(t *testing.T) {
 			// Both, which is the whole point of a set: the tier this
 			// replaced reported only the deletion and lost the fact
 			// that it had also created files.
-			labels: L(LabelDeletes, LabelWrites),
+			labels: L(LabelDeletes, LabelWrites, LabelReads),
 		},
 		{
 			name:   "sudo probe is privilege escalation",
 			cmd:    `echo "--- sudo ---"; sudo -n true 2>&1; echo done`,
-			labels: L(LabelPrivilege),
+			labels: L(LabelPrivilege, LabelReads),
 		},
 		{
 			name:   "egress probe reaches the network",
 			cmd:    `echo "--- egress ---"; curl -sS -o /dev/null -w '%{http_code}' https://example.com`,
-			labels: L(LabelNetwork),
+			labels: L(LabelNetwork, LabelReads),
 		},
 	}
 
@@ -179,8 +179,8 @@ func TestClassifyRiskWrappers(t *testing.T) {
 		{"env ls -l", L(LabelReads), ""},
 		// Privilege is ADDED to what the wrapped command does, not
 		// substituted for it: `sudo rm -rf /` is both.
-		{"sudo -n true", L(LabelPrivilege), ""},
-		{"sudo ls", L(LabelPrivilege), ""},
+		{"sudo -n true", L(LabelPrivilege, LabelReads), ""},
+		{"sudo ls", L(LabelPrivilege, LabelReads), ""},
 		{"sudo rm -rf /", L(LabelPrivilege, LabelDeletes), "system_path"},
 		{"sudo some-inhouse-tool", L(LabelUnreadable), "unrecognised_command"},
 	}
@@ -225,7 +225,7 @@ func TestClassifyRiskTable(t *testing.T) {
 		{"sed -i.bak s/a/b/ f", L(LabelWrites)},
 		{"find . -name x", L(LabelReads)},
 		{"find . -delete", L(LabelDeletes)},
-		{"find . -exec rm {} ;", L(LabelUnreadable)},
+		{"find . -exec rm {} ;", L(LabelUnreadable, LabelReads)},
 		{"mount", L(LabelReads)},
 		{"mount /dev/sda1 /mnt", L(LabelDisrupts)},
 		{"dd if=/dev/zero of=/dev/sda", L(LabelDeletes, LabelDisrupts)},
@@ -250,8 +250,8 @@ func TestClassifyRiskTable(t *testing.T) {
 // of probe into a prompt somebody can answer.
 func TestClassifyRiskNamesTheCulprit(t *testing.T) {
 	v := ClassifyRisk(`echo start; ls -l; rm -rf /etc/hosts; echo done`)
-	if !sameLabels(v.Labels, L(LabelPrivilege, LabelDeletes)) {
-		t.Fatalf("labels = %v, want privilege+deletes", v.Labels)
+	if !sameLabels(v.Labels, L(LabelPrivilege, LabelDeletes, LabelReads)) {
+		t.Fatalf("labels = %v, want privilege+deletes+reads", v.Labels)
 	}
 	if v.Culprit != "rm -rf /etc/hosts" {
 		t.Errorf("culprit = %q, want the rm segment", v.Culprit)
@@ -389,9 +389,9 @@ func TestVerdictApproved(t *testing.T) {
 	}
 }
 
-// "reads" means reads AND NOTHING ELSE, so it never rides along beside
-// a stronger label.
-func TestReadsIsDroppedBesideOthers(t *testing.T) {
+// Mutating a read-only verb replaces its incidental reads; independent effects
+// such as privilege must preserve the underlying read classification.
+func TestReadVerbRefinement(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		cmd  string
@@ -399,7 +399,7 @@ func TestReadsIsDroppedBesideOthers(t *testing.T) {
 	}{
 		{"sed -i s/a/b/ f", L(LabelWrites)},
 		{"find . -delete", L(LabelDeletes)},
-		{"sudo ls", L(LabelPrivilege)},
+		{"sudo ls", L(LabelPrivilege, LabelReads)},
 		{"uname -a", L(LabelReads)},
 	} {
 		if got := ClassifyRisk(tc.cmd); !sameLabels(got.Labels, tc.want) {
@@ -476,9 +476,8 @@ func TestClassifyRiskPackageManagers(t *testing.T) {
 		// The AUR helpers are pacman plus a network hop, including on
 		// a search, which pacman does locally and paru does not.
 		{"yay -S firefox", L(LabelNetwork, LabelPrivilege, LabelWrites)},
-		// reads is dropped beside a stronger label, so an AUR search
-		// reports the fact that matters: it reaches off the box.
-		{"paru -Ss firefox", L(LabelNetwork)},
+		// An AUR search preserves both its read and network effects.
+		{"paru -Ss firefox", L(LabelNetwork, LabelReads)},
 		{"yay -Q", L(LabelReads)},
 
 		// Flag-driven, and now failing closed.

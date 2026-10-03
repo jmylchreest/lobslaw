@@ -317,15 +317,9 @@ func AdjudicateWith(ctx context.Context, static commandrisk.RiskVerdict, command
 		// classifier DID read, which is the guarantee that setting
 		// cannot weaken a positive determination.
 		//
-		// Compared before and after rather than assumed, because
-		// merging can be a no-op: "reads" beside a stronger label is
-		// dropped, so a model answering "reads" about a deletion
-		// changes nothing and must not be reported as though it had.
-		merged := commandrisk.MergeLabels(static.Labels, commandrisk.L(label))
-		if len(merged) != len(static.Labels) {
-			static.Labels = merged
-			static.FromModel = true
-		}
+		// Preserve every static effect even when the model adds reads.
+		static.Labels = commandrisk.MergeLabels(static.Labels, commandrisk.L(label))
+		static.FromModel = true
 	}
 	return static
 }
