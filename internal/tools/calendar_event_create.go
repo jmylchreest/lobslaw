@@ -9,7 +9,7 @@ import (
 
 func calendarEventCreateDef() *types.ToolDef {
 	p, r := calendarMutationProps(false)
-	return calendarDef("calendar_event_create", "Create a guest-free event after exact human confirmation. Supply title and start/end; date means all-day (exclusive end), dateTime requires an RFC3339 offset. No invitations, deletion or series edits.", true, p, r)
+	return calendarDef("calendar_event_create", "Create a guest-free event after exact human confirmation. Select calendar by nickname or inventory ID, or omit it and supply purpose to use an explicit default (general when purpose is omitted). Ask the user when no default exists. Supply title and start/end; date means all-day (exclusive end), dateTime requires an RFC3339 offset. No invitations, deletion or series edits.", true, p, r)
 }
 func calendarEventCreateHandler(s CalendarOperations) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {

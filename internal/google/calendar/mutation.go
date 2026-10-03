@@ -17,6 +17,7 @@ import (
 )
 
 type Mutation struct {
+	Purpose     string    `json:"purpose,omitempty"`
 	Connection  string    `json:"connection"`
 	Calendar    string    `json:"calendar"`
 	Event       string    `json:"event,omitempty"`
@@ -32,14 +33,17 @@ type Preview struct {
 	Summary     string `json:"summary"`
 }
 type pendingMutation struct {
-	Nonce      string   `json:"nonce"`
-	Operation  string   `json:"operation"`
-	Mutation   Mutation `json:"mutation"`
-	Generation string   `json:"generation"`
-	ETag       string   `json:"etag"`
-	Status     string   `json:"status"`
-	Result     *Event   `json:"result,omitempty"`
-	Before     *Event   `json:"before,omitempty"`
+	SettingsRevision uint64   `json:"settings_revision"`
+	Nickname         string   `json:"nickname"`
+	Account          string   `json:"account"`
+	Nonce            string   `json:"nonce"`
+	Operation        string   `json:"operation"`
+	Mutation         Mutation `json:"mutation"`
+	Generation       string   `json:"generation"`
+	ETag             string   `json:"etag"`
+	Status           string   `json:"status"`
+	Result           *Event   `json:"result,omitempty"`
+	Before           *Event   `json:"before,omitempty"`
 }
 
 func eventInstant(e EventTime) (time.Time, error) {
@@ -87,6 +91,18 @@ func validateMutation(operation string, m Mutation) error {
 }
 func (s *Service) Prepare(ctx context.Context, operation string, m Mutation) (Preview, error) {
 	var preview Preview
+	if operation == "update" && m.Calendar == "" {
+		return preview, errors.New("calendar: select the calendar containing the event")
+	}
+	target, err := s.Resolve(ctx, m.Connection, m.Calendar, m.Purpose, true)
+	if err != nil {
+		return preview, err
+	}
+	m.Connection, m.Calendar = target.Connection, target.Calendar
+	_, settings, err := s.profile(ctx)
+	if err != nil {
+		return preview, err
+	}
 	if err := validateMutation(operation, m); err != nil {
 		return preview, err
 	}
@@ -104,13 +120,14 @@ func (s *Service) Prepare(ctx context.Context, operation string, m Mutation) (Pr
 	encoded, _ := json.Marshal(struct {
 		Owner, Turn, Operation string
 		Mutation               Mutation
-	}{string(id.Principal), id.TurnID, operation, m})
+		Revision               uint64
+	}{string(id.Principal), id.TurnID, operation, m, settings.Revision})
 	digest := sha256.Sum256(encoded)
 	key := hex.EncodeToString(digest[:])
 	if _, existing, err := s.pending(ctx, key); err == nil {
 		return mutationPreview(key, existing), nil
 	}
-	pending := pendingMutation{Nonce: randomID(), Operation: operation, Mutation: m, Generation: p.Generation, Status: "pending"}
+	pending := pendingMutation{SettingsRevision: settings.Revision, Nickname: target.Nickname, Account: target.Account, Nonce: randomID(), Operation: operation, Mutation: m, Generation: p.Generation, Status: "pending"}
 	if operation == "update" {
 		before, err := s.Event(ctx, Query{Connection: m.Connection, Calendar: m.Calendar, Event: m.Event})
 		if err != nil {
@@ -150,6 +167,7 @@ func writableEvent(e Event) error {
 func mutationPreview(id string, p pendingMutation) Preview {
 	data, _ := json.MarshalIndent(p.Mutation, "", "  ")
 	summary := fmt.Sprintf("%s Google Calendar event (write + network). Exact change:\n%s", p.Operation, data)
+	summary += fmt.Sprintf("\nCalendar: %s\nAccount: %s", p.Nickname, p.Account)
 	if p.Before != nil {
 		before, _ := json.MarshalIndent(p.Before, "", "  ")
 		summary += "\nCurrent event:\n" + string(before)
@@ -210,6 +228,13 @@ func (s *Service) Apply(ctx context.Context, id string) (Event, error) {
 	}
 	if p.Status == "done" && p.Result != nil {
 		return *p.Result, nil
+	}
+	_, settings, err := s.profile(ctx)
+	if err != nil {
+		return Event{}, err
+	}
+	if settings.Revision != p.SettingsRevision {
+		return Event{}, errors.New("calendar: settings changed since review; prepare a new change")
 	}
 	if p.Status != "approved" {
 		return Event{}, errors.New("calendar: exact approval required or prior outcome uncertain; inspect the event")

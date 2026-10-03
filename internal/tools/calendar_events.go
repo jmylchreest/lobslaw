@@ -9,7 +9,7 @@ import (
 )
 
 func calendarEventsDef() *types.ToolDef {
-	return calendarDef("calendar_events", "Read up to 100 events within an RFC3339 start/end interval; truncated=true requires a narrower interval.", false, calendarProps("connection", "calendar", "start", "end"), []string{"connection", "calendar", "start", "end"})
+	return calendarDef("calendar_events", "Read up to 100 events within an RFC3339 start/end interval; truncated=true requires a narrower interval.", false, calendarProps("connection", "calendar", "start", "end"), []string{"calendar", "start", "end"})
 }
 func calendarEventsHandler(s CalendarOperations) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {

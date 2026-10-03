@@ -9,6 +9,8 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/google/calendar"
+	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -30,7 +32,7 @@ func (n *Node) wireCalendar(b *tools.Builtins) error {
 	if err != nil {
 		return fmt.Errorf("calendar client secret: %w", err)
 	}
-	svc, err := calendar.New(calendar.Config{ClientID: clientID, ClientSecret: secret, RedirectURL: c.CallbackURL, Client: egress.For("integration/google-calendar").HTTPClient(), Credentials: n.credentialSvc.ForConnector("google-calendar"), State: n.integrationState, Authorize: n.authorizeCalendar})
+	svc, err := calendar.New(calendar.Config{ClientID: clientID, ClientSecret: secret, RedirectURL: c.CallbackURL, Client: egress.For("integration/google-calendar").HTTPClient(), Credentials: n.credentialSvc.ForConnector("google-calendar"), State: n.integrationState, Settings: memory.NewConnectorSettingsStore(n.raft, n.store, n.cfg.MemoryKey, "google-calendar"), Authorize: n.authorizeCalendar})
 	if err != nil {
 		return err
 	}
@@ -43,6 +45,23 @@ func (n *Node) wireCalendar(b *tools.Builtins) error {
 			return err
 		}
 	}
+	n.executor.RegisterOperationGate("calendar_settings_update", func(ctx context.Context, _ *types.Claims, args map[string]string) error {
+		c, err := tools.CalendarSettingsChange(args)
+		if err != nil {
+			return err
+		}
+		p, err := svc.PrepareSettings(ctx, c)
+		if err != nil {
+			return err
+		}
+		if !p.Confirm {
+			return nil
+		}
+		if err := compute.ConfirmExactOperation(ctx, "calendar:settings-change", p.ApprovalKey, p.Summary, types.ToolEffects{State: types.ToolWrites, Network: true}); err != nil {
+			return err
+		}
+		return svc.ApproveSettings(ctx, p.ID)
+	})
 	for _, operation := range []string{"create", "update"} {
 		n.executor.RegisterOperationGate("calendar_event_"+operation, func(ctx context.Context, _ *types.Claims, args map[string]string) error {
 			m, err := tools.CalendarMutation(args)
@@ -71,8 +90,26 @@ func (n *Node) calendarManagement() gateway.CalendarManagement {
 		if claims == nil || claims.UserID == "" {
 			return nil, errors.New("calendar: authentication required")
 		}
-		ctx = turn.WithIdentity(ctx, turn.Identity{UserID: claims.UserID, Principal: n.identityResolver().Resolve(claims.UserID), Scope: claims.Scope, Roles: claims.Roles})
+		ctx = turn.WithIdentity(ctx, turn.Identity{UserID: claims.UserID, Principal: n.identityResolver().Resolve(claims.UserID), Scope: claims.Scope, Roles: claims.Roles, TurnID: "calendar-management:" + ids.New()})
 		switch req.Operation {
+		case "inventory":
+			return n.calendarSvc.Inventory(ctx)
+		case "settings_prepare":
+			return n.calendarSvc.PrepareSettings(ctx, req.Change)
+		case "settings_apply":
+			if err := n.calendarSvc.ApproveSettings(ctx, req.ID); err != nil {
+				return nil, err
+			}
+			return n.calendarSvc.ApplySettings(ctx, req.ID)
+		case "settings_immediate":
+			p, err := n.calendarSvc.PrepareSettings(ctx, req.Change)
+			if err != nil {
+				return nil, err
+			}
+			if p.Confirm {
+				return nil, errors.New("calendar: confirmation required")
+			}
+			return n.calendarSvc.ApplySettings(ctx, p.ID)
 		case "connect":
 			return n.calendarSvc.Begin(ctx, req.Write)
 		case "pending":
