@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:browser": "node tests/approvals.browser.mjs && node tests/learned.browser.mjs",
+    "test:browser": "node tests/approvals.browser.mjs && node tests/learned.browser.mjs && node tests/pwa.browser.mjs",
+    "test:pwa": "node tests/pwa.browser.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -23,9 +24,10 @@
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "playwright": "1.58.2",
     "typescript": "~5.7.2",
     "vite": "^6.0.3",
-    "vitest": "^5.0.1",
-    "playwright": "1.58.2"
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.0.1"
   }
 }

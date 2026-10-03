@@ -100,3 +100,21 @@ func TestBuiltMatchesHandler(t *testing.T) {
 		t.Fatalf("Built is false but Handler returned %v", err)
 	}
 }
+
+func TestPWAAssetsHaveRevalidatingHeaders(t *testing.T) {
+	t.Parallel()
+	h := handlerOrSkip(t)
+	for _, path := range []string{"/sw.js", "/push-worker.js", "/manifest.webmanifest"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != noCache {
+			t.Fatalf("PWA asset %s is not revalidated: %d %v", path, rec.Code, rec.Header())
+		}
+		if path == "/manifest.webmanifest" && rec.Header().Get("Content-Type") != "application/manifest+json" {
+			t.Fatalf("manifest has incorrect MIME type: %v", rec.Header())
+		}
+		if strings.Contains(rec.Body.String(), `<div id="root">`) {
+			t.Fatalf("PWA asset %s fell through to the shell", path)
+		}
+	}
+}

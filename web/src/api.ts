@@ -289,6 +289,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  pushConfig: () => request<{ public_key: string }>("/v1/push"),
+  subscribePush: (subscription: PushSubscriptionJSON) => request("/v1/push", { method: "POST", body: JSON.stringify(subscription) }),
+  unsubscribePush: (endpoint: string) => request("/v1/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
   learnedReviews: () => request<{ reviews?: LearnedReview[] }>("/v1/learned-reviews").then((r) => r.reviews ?? []),
   learnedReview: (id: string) => request<LearnedReview>(`/v1/learned-reviews/${encodeURIComponent(id)}`),
   decideLearnedReview: (review: LearnedReview, approve: boolean) =>

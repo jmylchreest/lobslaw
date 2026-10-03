@@ -87,6 +87,12 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveIndex(w, r)
 		return
 	}
+	if name == "sw.js" || name == "push-worker.js" || name == "manifest.webmanifest" || strings.HasPrefix(name, "workbox-") {
+		w.Header().Set("Cache-Control", noCache)
+	}
+	if name == "manifest.webmanifest" {
+		w.Header().Set("Content-Type", "application/manifest+json")
+	}
 	h.files.ServeHTTP(w, r)
 }
 

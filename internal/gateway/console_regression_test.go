@@ -280,7 +280,7 @@ func TestConsoleTaskDecisionsUseSharedOwnerContract(t *testing.T) {
 func TestLocalTaskCookieStillRejectsAnonymousAndForgedOwner(t *testing.T) {
 	t.Parallel()
 	api := new(taskAPISpy)
-	s := NewServer(RESTConfig{TaskApprovals: api}, nil)
+	s := NewServer(RESTConfig{TaskApprovals: api, Users: enrolledAlice()}, nil)
 	s.logins.put(&loginSession{ID: "login", UserID: "alice"})
 	r := httptest.NewRequest(http.MethodPost, "http://console/v1/task-approvals/task/decide", strings.NewReader(`{"owner":"user:bob","revision":"1","choice":"once"}`))
 	r.AddCookie(&http.Cookie{Name: LoginCookieName, Value: "login"})

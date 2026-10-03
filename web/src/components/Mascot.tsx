@@ -67,3 +67,9 @@ export function Mascot({ id, size = 30, dim }: { id: string; size?: number; dim?
     </svg>
   );
 }
+
+// Public artwork only: cached for notification icons, never conversation data.
+export function mascotSVG(id: string): string {
+  const hue = botHue(id);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 100 100"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="hsl(${hue},85%,66%)"/><stop offset="100%" stop-color="hsl(${hue},78%,52%)"/></linearGradient></defs><path d="${SHAPES[pick(id)]}" fill="url(#g)"/><ellipse cx="38" cy="58" rx="7.5" ry="9.75" fill="#0b0b0d"/><ellipse cx="62" cy="58" rx="7.5" ry="9.75" fill="#0b0b0d"/></svg>`;
+}

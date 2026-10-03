@@ -622,12 +622,17 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
  * the routine either existed or did not, and both looked identical.
  */
 function Routines({ botId }: { botId: string }) {
-  const { data, error, loading } = useLoad(() => api.routines(botId), [botId]);
+  const { data, error, loading, reload } = useLoad(() => api.routines(botId), [botId]);
+  useEffect(() => {
+    const timer = setInterval(reload, 8000);
+    return () => clearInterval(timer);
+  }, [reload]);
   if (loading && !data) return null;
 
   return (
     <div className="panel">
       <div className="lbl">Routines</div>
+      <p className="hint">Ask this agent to pause, resume, change, or stop a routine. Results appear in the conversation; use schedule_get to inspect its last dispatch and checkpoint.</p>
       {error ? <Err error={error} />
         : !data || data.length === 0 ? (
           <div className="panel-empty">
@@ -646,6 +651,7 @@ function Routines({ botId }: { botId: string }) {
                   <span className="meta">{rt.next_run ? `next ${when(rt.next_run)}` : "not scheduled"}</span>
                 </div>
                 {rt.prompt && <div className="routine-body">{rt.prompt}</div>}
+                <div className="hint">ID: {rt.id}</div>
                 {rt.last_run && <div className="meta" style={{ marginTop: 4 }}>last ran {when(rt.last_run)}</div>}
               </div>
             ))}

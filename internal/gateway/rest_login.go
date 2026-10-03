@@ -27,7 +27,7 @@ type requestAuth struct {
 }
 
 type loginSession struct {
-	ID        string
+	ID        string `json:"-"`
 	UserID    string
 	Roles     []string
 	Scope     string
@@ -41,6 +41,7 @@ type loginStore struct {
 	codes        map[string]loginCode
 	codeAttempts int
 	codeWindow   time.Time
+	path         string
 }
 
 type loginStream struct{ cancel context.CancelFunc }
@@ -60,32 +61,58 @@ func newLoginStore() *loginStore {
 	}
 }
 
-func (s *loginStore) put(sess *loginSession) {
+func (s *loginStore) put(sess *loginSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sessions[sess.ID] = sess
+	key := loginKey(sess.ID)
+	previous := s.sessions[key]
+	stored := *sess
+	stored.ID = ""
+	stored.Roles = append([]string(nil), sess.Roles...)
+	s.sessions[key] = &stored
+	if err := s.persistLocked(); err != nil {
+		if previous == nil {
+			delete(s.sessions, key)
+		} else {
+			s.sessions[key] = previous
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *loginStore) get(id string) *loginSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sess := s.sessions[id]
+	sess := s.sessions[loginKey(id)]
 	if sess == nil {
 		return nil
 	}
 	if !sess.ExpiresAt.IsZero() && time.Now().After(sess.ExpiresAt) {
-		delete(s.sessions, id)
+		delete(s.sessions, loginKey(id))
 		s.cancelLocked(id)
 		return nil
 	}
-	return sess
+	result := *sess
+	result.ID = id
+	result.Roles = append([]string(nil), sess.Roles...)
+	return &result
 }
 
-func (s *loginStore) revoke(id string) {
+func (s *loginStore) revoke(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.sessions, id)
+	key := loginKey(id)
+	previous := s.sessions[key]
+	delete(s.sessions, key)
+	if err := s.persistLocked(); err != nil {
+		if previous != nil {
+			s.sessions[key] = previous
+		}
+		return err
+	}
 	s.cancelLocked(id)
+	return nil
 }
 
 func (s *loginStore) track(id string, cancel context.CancelFunc) *loginStream {
@@ -95,7 +122,7 @@ func (s *loginStore) track(id string, cancel context.CancelFunc) *loginStream {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	registration := &loginStream{cancel: cancel}
-	sess := s.sessions[id]
+	sess := s.sessions[loginKey(id)]
 	if sess == nil || (!sess.ExpiresAt.IsZero() && !time.Now().Before(sess.ExpiresAt)) {
 		cancel()
 		return registration
@@ -127,6 +154,7 @@ func (s *loginStore) cancelLocked(id string) {
 }
 
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	switch r.Method {
 	case http.MethodPost:
 		s.handleSessionLogin(w, r)
@@ -182,7 +210,17 @@ func (s *Server) handleSessionRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if authn.LoginID != "" {
-		s.logins.revoke(authn.LoginID)
+		if s.push != nil {
+			if err := s.push.RemoveLogin(authn.LoginID); err != nil {
+				s.jsonErr(w, http.StatusInternalServerError, "could not revoke device notifications; try again")
+				return
+			}
+		}
+		if err := s.logins.revoke(authn.LoginID); err != nil {
+			s.log.Error("rest: revoke browser session", "err", err)
+			s.jsonErr(w, http.StatusInternalServerError, "could not save sign-out; try again")
+			return
+		}
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     LoginCookieName,
@@ -258,10 +296,16 @@ func (s *Server) authenticateRequest(r *http.Request) (requestAuth, error) {
 	}
 	if c, err := r.Cookie(LoginCookieName); err == nil && c.Value != "" {
 		if sess := s.logins.get(c.Value); sess != nil {
+			// Re-read enrollment after a restart: persisted sessions must not
+			// retain access or roles removed from the node configuration.
+			user, ok := s.enrolledUser(r.Context(), sess.UserID)
+			if !ok {
+				return requestAuth{}, fmt.Errorf("login user is no longer enrolled")
+			}
 			authn := requestAuth{
 				Claims: &types.Claims{
 					UserID: sess.UserID,
-					Roles:  append([]string(nil), sess.Roles...),
+					Roles:  append([]string(nil), user.Roles...),
 					Scope:  sess.Scope,
 				},
 				LoginID:    sess.ID,

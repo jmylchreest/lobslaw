@@ -68,6 +68,12 @@ func (s *Server) handleBotRoutines(w http.ResponseWriter, r *http.Request, botID
 
 	out := make([]routineJSON, 0, len(tasks))
 	for _, t := range tasks {
+		if owner := t.Params["requested_by"]; owner != "" && s.cfg.Bots != nil {
+			bot, err := s.cfg.Bots.Get(r.Context(), botID)
+			if err != nil || bot.Owner != owner {
+				continue
+			}
+		}
 		row := routineJSON{
 			ID:       t.GetId(),
 			Name:     t.GetName(),

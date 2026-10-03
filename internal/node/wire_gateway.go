@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -166,6 +167,9 @@ func (n *Node) wireGateway() error {
 	if n.remoteTurnConn != nil {
 		cfg.RemoteConsole = lobslawv1.NewConsoleServiceClient(n.remoteTurnConn)
 	}
+	if n.cfg.DataDir != "" {
+		cfg.LoginSessionFile = filepath.Join(n.cfg.DataDir, "auth", "browser-sessions.json")
+	}
 	n.gatewaySrv = gateway.NewServer(cfg, runner)
 	if n.server != nil && n.agent != nil {
 		lobslawv1.RegisterConsoleServiceServer(n.server, n.gatewaySrv)
@@ -258,7 +262,7 @@ func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHan
 	n.notifySvc = notifySvc
 
 	if err := tools.RegisterNotifyBuiltins(n.builtinsRegistry, tools.NotifyConfig{
-		Service: notifySvc,
+		Service: botNotifier{n: n, fallback: notifySvc},
 	}); err != nil {
 		n.log.Warn("notify: builtin register failed", "err", err)
 		return

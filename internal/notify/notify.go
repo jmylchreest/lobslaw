@@ -34,6 +34,7 @@ const (
 // channel-agnostic plaintext; sinks render it however their
 // channel demands.
 type Notification struct {
+	BotID             string
 	UserID            string
 	Body              string
 	Urgency           Urgency

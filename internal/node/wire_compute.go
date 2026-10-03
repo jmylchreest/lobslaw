@@ -1260,6 +1260,13 @@ func schedulerClaims() *types.Claims {
 // return instead of running an empty turn (which would waste a
 // provider call).
 func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.ScheduledTaskRecord) error {
+	if strings.HasPrefix(task.Owner, "bot:") {
+		err := n.dispatchBotSchedule(ctx, task)
+		if err != nil {
+			n.reportScheduleError(ctx, task, err)
+		}
+		return err
+	}
 	shared := task.Params["share_installation"] != "" || strings.HasPrefix(task.Id, "share-")
 	claims, botID, principal := schedulerIdentity(task.Owner)
 	if shared {

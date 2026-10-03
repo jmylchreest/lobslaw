@@ -91,6 +91,27 @@ func inboxKey(recipient, id string) string { return recipient + ":" + id }
 // caller from turn identity and never by the model — a bot that could
 // name its own sender could post work that appears to come from you.
 func (s *InboxService) Post(ctx context.Context, item *lobslawv1.BotInboxItem) (*lobslawv1.BotInboxItem, error) {
+	return s.post(ctx, item, "", time.Time{})
+}
+
+// PostOnce admits a scheduler occurrence with a stable, trusted ULID. Replaying
+// after a crash returns its existing work, never overwriting execution evidence.
+func (s *InboxService) PostOnce(ctx context.Context, item *lobslawv1.BotInboxItem, id string, at time.Time) (*lobslawv1.BotInboxItem, error) {
+	if item == nil || id == "" || at.IsZero() {
+		return nil, errors.New("inbox: occurrence identity required")
+	}
+	if existing, err := s.Get(ctx, item.Recipient, id); err == nil {
+		if existing.RequestedBy != item.RequestedBy || existing.Sender != item.Sender {
+			return nil, errors.New("inbox: occurrence ownership mismatch")
+		}
+		return existing, nil
+	} else if !errors.Is(err, ErrInboxNotFound) {
+		return nil, err
+	}
+	return s.post(ctx, item, id, at)
+}
+
+func (s *InboxService) post(ctx context.Context, item *lobslawv1.BotInboxItem, occurrence string, at time.Time) (*lobslawv1.BotInboxItem, error) {
 	if item == nil {
 		return nil, errors.New("inbox: item required")
 	}
@@ -125,7 +146,17 @@ func (s *InboxService) Post(ctx context.Context, item *lobslawv1.BotInboxItem) (
 	item.CompletedAt = nil
 	item.TaskId = ""
 
-	if err := s.apply(ctx, lobslawv1.LogOp_LOG_OP_PUT, item, nil, ""); err != nil {
+	op := lobslawv1.LogOp_LOG_OP_PUT
+	var expected *uint64
+	if occurrence != "" {
+		item.Id, item.CreatedAt = occurrence, timestamppb.New(at)
+		op = lobslawv1.LogOp_LOG_OP_CLAIM
+		expected = new(uint64)
+	}
+	if err := s.apply(ctx, op, item, expected, ""); err != nil {
+		if occurrence != "" && errors.Is(err, ErrClaimConflict) {
+			return s.PostOnce(ctx, item, occurrence, at)
+		}
 		return nil, err
 	}
 	return item, nil

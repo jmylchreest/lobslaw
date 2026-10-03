@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api, isUnavailable, streamChat, type Bot, type Group, type InboxItem } from "./api";
 import { LoginGate } from "./components/LoginGate";
+import { InstallApp } from "./components/Pwa";
+import { PushControls } from "./components/PushControls";
 import { Markdown } from "./components/Markdown";
 import { Mascot } from "./components/Mascot";
 import { Empty, Err, Spinner, useLoad, when } from "./components/ui";
@@ -208,8 +210,7 @@ function Shell() {
 function Signed() {
   const { data } = useLoad(() => api.session());
   const id = data?.user_id ?? "";
-  if (!id || id === "anon") return null;
-  return <div className="signed">{id.startsWith("user:") ? id.slice("user:".length) : id}</div>;
+  return <><InstallApp /><PushControls userId={id} />{id && id !== "anon" && <div className="signed">{id.startsWith("user:") ? id.slice("user:".length) : id}</div>}</>;
 }
 
 /** The team switcher.

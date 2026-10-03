@@ -3,6 +3,7 @@ package gateway
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,13 +13,13 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
 func (s *Server) handleSessionCode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -116,8 +117,13 @@ func (s *loginStore) allowCodeAttempt(now time.Time) bool {
 }
 
 func (s *Server) issueLoginCookie(w http.ResponseWriter, r *http.Request, user config.UserConfig, scope string) {
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		s.jsonErr(w, http.StatusInternalServerError, "could not create browser session")
+		return
+	}
 	sess := &loginSession{
-		ID:        loginSessionIDPrefix + ids.New(),
+		ID:        loginSessionIDPrefix + hex.EncodeToString(secret[:]),
 		UserID:    user.ID,
 		Roles:     append([]string(nil), user.Roles...),
 		Scope:     scope,
@@ -126,7 +132,11 @@ func (s *Server) issueLoginCookie(w http.ResponseWriter, r *http.Request, user c
 	if sess.Scope == "" {
 		sess.Scope = s.cfg.DefaultScope
 	}
-	s.logins.put(sess)
+	if err := s.logins.put(sess); err != nil {
+		s.log.Error("rest: persist browser session", "err", err)
+		s.jsonErr(w, http.StatusInternalServerError, "could not save browser session; request a new sign-in code and try again")
+		return
+	}
 	http.SetCookie(w, s.loginCookie(r, sess))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"user_id": user.ID})

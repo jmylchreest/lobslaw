@@ -11,9 +11,8 @@ const (
 	// stays a JSON field on POST /v1/messages.
 	LoginCookieName = "lobslaw_login"
 
-	// DefaultLoginSessionTTL bounds a cookie login. Restart drops the
-	// in-memory store; the caller re-supplies the JWT.
-	DefaultLoginSessionTTL = 12 * time.Hour
+	// DefaultLoginSessionTTL bounds a cookie login, including across restarts.
+	DefaultLoginSessionTTL = 30 * 24 * time.Hour
 
 	// ChannelREST is the channel type stored on [[user.channels]] and
 	// passed to identity.Resolver for JWT subjects.

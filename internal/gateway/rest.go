@@ -21,6 +21,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/logging"
+	"github.com/jmylchreest/lobslaw/internal/push"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -106,6 +107,10 @@ type RESTConfig struct {
 	// to "reject with 401". Deployments that MUST have valid JWTs
 	// (anything reachable from the public internet) set this true.
 	RequireAuth bool
+
+	// LoginSessionFile persists browser sessions on this gateway's local disk.
+	// Empty uses an ephemeral store (primarily for tests).
+	LoginSessionFile string
 
 	// Identity maps JWT subjects and channel addresses onto [[user]].id.
 	// Nil keeps Bearer "the subject is the user" behaviour; cookie
@@ -218,6 +223,7 @@ type Server struct {
 	log     *slog.Logger
 	conv    *conversationLog
 	logins  *loginStore
+	push    *push.Service
 	uploads *restUploads
 
 	mu         sync.Mutex
@@ -263,7 +269,14 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 // cancelled or the HTTP server returns an error. A cancelled ctx
 // triggers a graceful shutdown with a bounded timeout.
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.logins.load(s.cfg.LoginSessionFile); err != nil {
+		return fmt.Errorf("rest: load browser sessions: %w", err)
+	}
+	if err := s.initPush(); err != nil {
+		return fmt.Errorf("rest: web push: %w", err)
+	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/push", s.handlePush)
 	mux.HandleFunc("/v1/messages", s.consoleRoute(s.handleMessages))
 	if s.cfg.TaskApprovals != nil || s.cfg.RemoteConsole != nil {
 		mux.HandleFunc("/v1/task-approvals", s.handleTaskApprovals)
@@ -325,6 +338,9 @@ func (s *Server) Start(ctx context.Context) error {
 	uploadCtx, stopUploads := context.WithCancel(ctx)
 	defer func() { stopUploads(); s.uploads.close() }()
 	go s.uploads.run(uploadCtx)
+	if s.push != nil {
+		go s.runPush(uploadCtx)
+	}
 
 	s.log.Info("rest server listening", "addr", ln.Addr().String(), "tls", s.cfg.TLSCert != "")
 

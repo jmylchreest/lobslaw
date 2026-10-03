@@ -707,9 +707,15 @@ func (s *Scheduler) runTaskHandler(ctx context.Context, t *lobslawv1.ScheduledTa
 		s.releaseTaskClaim(ctx, t, firedAt)
 		return
 	}
+	if t.Params == nil {
+		t.Params = map[string]string{}
+	}
 	if err := handler(ctx, t); err != nil {
+		t.Params["last_error"] = err.Error()
 		s.log.Error("scheduler: task handler error",
 			"task_id", t.Id, "handler_ref", t.HandlerRef, "err", err)
+	} else {
+		t.Params["last_error"] = ""
 	}
 	s.completeTask(ctx, t, firedAt)
 }
@@ -771,6 +777,14 @@ func (s *Scheduler) completeTask(ctx context.Context, t *lobslawv1.ScheduledTask
 			return
 		}
 		merged := proto.Clone(current).(*lobslawv1.ScheduledTaskRecord)
+		if merged.Params == nil {
+			merged.Params = map[string]string{}
+		}
+		for _, key := range []string{"last_error", "last_item_id", "last_dispatch_status"} {
+			if value, ok := t.Params[key]; ok {
+				merged.Params[key] = value
+			}
+		}
 		merged.LastRun = timestamppb.New(firedAt)
 		if !next.IsZero() {
 			merged.NextRun = timestamppb.New(next)

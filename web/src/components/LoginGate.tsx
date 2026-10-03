@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, api, isUnavailable } from "../api";
 import { Err, Spinner } from "./ui";
+import { InstallApp } from "./Pwa";
 
 export function LoginGate({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -11,9 +12,9 @@ export function LoginGate({ children }: { children: ReactNode }) {
     api.session()
       .then((s) => { setUserId(s.user_id); setNeedLogin(false); setError(null); })
       .catch((e: Error) => {
-        setNeedLogin(true);
-        setUserId(null);
         if (e instanceof ApiError && e.status === 401) {
+          setNeedLogin(true);
+          setUserId(null);
           setError(null);
           return;
         }
@@ -22,12 +23,21 @@ export function LoginGate({ children }: { children: ReactNode }) {
   }, []);
   useEffect(refresh, [refresh]);
   useEffect(() => {
+    window.addEventListener("online", refresh);
+    return () => window.removeEventListener("online", refresh);
+  }, [refresh]);
+  useEffect(() => {
     function bounce() { setNeedLogin(true); setUserId(null); setError(null); }
     window.addEventListener("lobslaw:unauthorized", bounce);
     return () => window.removeEventListener("lobslaw:unauthorized", bounce);
   }, []);
 
   if (needLogin) return <SignIn onIn={refresh} error={error} onClearError={() => setError(null)} />;
+  if (!userId && error) return <div className="center"><div className="empty" role="status">
+    <b>{navigator.onLine ? "Node did not answer" : "You’re offline"}</b>
+    <span>Reconnect to load your conversations. Your sign-in will be checked when the node is reachable.</span>
+    <button className="btn" onClick={refresh}>Retry connection</button>
+  </div></div>;
   if (!userId) return <div className="center"><Spinner /></div>;
   return <>{children}</>;
 }
@@ -61,6 +71,7 @@ function SignIn({ onIn, error, onClearError }: {
             <div className="hint">Sign in to this node</div>
           </div>
         </div>
+        <InstallApp />
 
         <div className="field">
           <label htmlFor="code">One-time code</label>

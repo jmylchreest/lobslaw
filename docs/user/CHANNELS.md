@@ -54,9 +54,90 @@ Then open the gateway HTTP port in a browser (8443 by default). Sign in with an 
 
 Loopback connections do not bypass authentication: a reverse proxy can make a remote browser appear to connect from localhost. The old **Continue on this computer** shortcut is no longer offered.
 
+Browser sessions last 30 days and survive gateway/container restarts when
+`[cluster].data_dir` is persistent. Each web node saves a private session snapshot
+at `<data_dir>/auth/browser-sessions.json`; only hashes of the random cookie tokens
+are stored. Logout is persisted, expired sessions are rejected, and current user
+enrollment and roles are checked on each request. Sessions are local to the web
+node, not replicated across web nodes. A node without a data directory uses
+ephemeral sessions. Existing in-memory logins need one new sign-in after upgrading.
+
+### Install on a phone
+
+Serve the console at a stable **HTTPS** address with a certificate trusted by the
+phone, either directly or through a TLS reverse proxy. A plain LAN HTTP address
+does not support service workers or full PWA installation. Behind a proxy, forward
+the original host and set `X-Forwarded-Proto: https` so login cookies are secure.
+
+- **iPhone/iPad:** open in Safari, choose **Share → Add to Home Screen**.
+- **Android:** choose **Install Lobslaw** in the console, or **Install app** in the
+  browser menu. The installed app uses Lobslaw's name and home-screen icon.
+
+The service worker caches the public application shell. An offline launch shows a
+reconnection screen; conversations, API responses and credentials are not cached
+by the worker, and messages/approvals are never queued for later replay. A network
+outage is shown as a connection problem rather than a sign-out. Updates wait for
+**Reload to update**, so finish active chats and save drafts before applying one.
+
+### Selective push notifications
+
+Choose **Enable notifications** in the signed-in console and grant the browser's
+permission. On iPhone/iPad this must be done inside the installed Home Screen app
+(iOS 16.4+). Preferences are per device; **Disable notifications** unsubscribes that
+device. Logging out revokes subscriptions associated with that browser session.
+
+Lobslaw sends push for approval/attention requests, failed work, explicit agent
+`notify` calls, and completed routines configured with `notify_on=always`.
+Ordinary replies and quiet routine completions do not generate push. Notifications
+show the agent's name and open its conversation or the relevant task. The browser
+uses the agent's cached avatar when available; OS presentation varies, and the
+application identity remains Lobslaw. Only public avatar artwork is cached.
+
+Subscriptions, VAPID credentials and delivery receipts survive restarts in the
+web node's private `<data_dir>/auth/web-push.json`. Browser-vendor delivery uses
+encrypted Web Push through the egress proxy, restricted to Google, Mozilla and
+Apple push endpoints. Expired subscriptions are removed, transient failures back
+off, and stable event tags coalesce retries. Phone delivery requires an active
+subscription, HTTPS, and connectivity; this is not a guarantee of immediate OS
+delivery. The web node polls durable bot inbox evidence, including through a
+remote compute backend, every 15 seconds.
+
+### Recurring agent work
+
+With the scheduler and compute-teams enabled, ask a named agent to do work on a
+schedule: "Every weekday at 9am Europe/London, check the assigned work and let me
+know the outcome." The agent uses `schedule_create`, and must return its saved
+routine id. Prompts are self-contained instructions, not inherited chat history.
+
+Each occurrence enters that agent's durable task queue. Results and approvals
+appear in its conversation even after closing the app. Replaying the same
+occurrence does not create another task; an outstanding occurrence suppresses
+overlapping runs. Missed intervals are coalesced by the scheduler rather than
+replaying an entire outage's backlog. Runs retain the original human owner and
+recheck the bot and current roles before execution.
+
+- `schedule_list` / `schedule_get`: inspect instructions, timing, last dispatched
+  inbox item, errors and checkpoint.
+- `schedule_update`: pause/resume, edit instructions/timing, or save a bounded
+  checkpoint for the next occurrence. The next run receives that checkpoint and
+  an excerpt of the previous outcome; full evidence remains in the inbox.
+- `schedule_delete`: stop future occurrences. Already queued work has its own
+  cancellation controls.
+- `notify_on=always`: announce each completed outcome, when the user requests it.
+- `notify_on=match` (default): keep ordinary outcomes quiet; the agent can call
+  `notify` for a meaningful change or a question needing attention.
+- `notify_on=never`: quiet outcomes. Required approvals and failures still surface.
+
+Use an explicit IANA timezone for daily work; otherwise the caller's timezone or
+UTC applies. Old bot-owned routines without a saved human owner must be recreated
+from an authenticated conversation. Recurring instructions use the agent's
+existing tools and access; they do not grant new integrations or credentials.
+
+### Console access and tasks
+
 If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
 
-When compute-teams is off (the default), you get a single-assistant chat with inline approval buttons. Named bot rooms start fresh tasks and link to **Task approvals** when an operation or budget needs your decision; the chat stream closes while the task waits. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
+When compute-teams is off (the default), you get a single-assistant chat with inline approval buttons. Named bot rooms are conversational by default; `/task <instructions>` explicitly starts durable work, and the model can queue work with `task_create` or delegate it. Tasks link to **Task approvals** when an operation or budget needs your decision. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address. Teams, records, conversations and approvals are served by that backend over cluster mTLS; enable `compute-teams` on the backend to expose its teams without adding local compute to the web node. Login and static assets remain on the web node. A backend outage means unavailable, not deleted history.
 
 In the team console, open **Task approvals** for bot-room, delegated or queued work waiting on you.
 The page shows the task's actor, pending operation, state, expiry and budget
