@@ -93,7 +93,13 @@ RUN apt-get update && \
         nonroot && \
     mkdir -p /lobslaw/usr/local/bin && \
     chown -R "$UID_IN_IMAGE:$GID_IN_IMAGE" /lobslaw && \
+    mkdir -p /var/lobslaw/data /var/lobslaw/audit /var/lobslaw/skills && \
+    chown -R "$UID_IN_IMAGE:$GID_IN_IMAGE" /var/lobslaw && \
     rm /tmp/lobslaw-image-defaults.env
+# /var/lobslaw/{data,audit,skills} exist in the image, owned by
+# nonroot, so a named volume mounted there starts out writable: Docker
+# copies a mount point's ownership into a new empty volume, and with no
+# directory in the image it creates the volume root-owned instead.
 # git is in the apt-install above because brew's bootstrap clones
 # the brew repo (and homebrew-core tap) via git rather than curl+tar.
 # Brew installs at /lobslaw/usr/local (Satisfier's prefix); the manual
