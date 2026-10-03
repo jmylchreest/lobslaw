@@ -142,6 +142,8 @@ RUN . /tmp/lobslaw-image-defaults.env && \
     useradd --system --uid "$UID_IN_IMAGE" --gid "$GID_IN_IMAGE" \
         --home-dir /lobslaw --create-home --shell /usr/sbin/nologin \
         lobslaw && \
+    mkdir -p /var/lobslaw/data /var/lobslaw/audit /var/lobslaw/skills && \
+    chown -R "$UID_IN_IMAGE:$GID_IN_IMAGE" /var/lobslaw && \
     rm /tmp/lobslaw-image-defaults.env
 
 COPY --from=build /out/lobslaw /usr/local/bin/lobslaw
