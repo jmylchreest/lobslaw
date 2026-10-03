@@ -37,10 +37,11 @@ type ToolDef struct {
 	//
 	// Names, not descriptions: the point is that the LIST is derived
 	// and the prose around it is not.
-	RecommendTools []string `json:"recommend_tools,omitempty"`
-	AvoidTools     []string `json:"avoid_tools,omitempty"`
-	SidecarOnly    bool     `json:"sidecar_only,omitempty"`
-	RiskTier       RiskTier `json:"risk_tier"`
+	RecommendTools []string     `json:"recommend_tools,omitempty"`
+	AvoidTools     []string     `json:"avoid_tools,omitempty"`
+	SidecarOnly    bool         `json:"sidecar_only,omitempty"`
+	RiskTier       RiskTier     `json:"risk_tier"`
+	Effects        *ToolEffects `json:"effects,omitempty"`
 }
 
 // ToolPermission is a per-tool grant attached to a role or session.

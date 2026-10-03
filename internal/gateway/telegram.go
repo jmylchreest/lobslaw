@@ -163,7 +163,8 @@ type TelegramConfig struct {
 	Prompts Prompts
 
 	// Learned exposes owner-scoped human review, never agent approval tools.
-	Learned LearnedReviews
+	Learned  LearnedReviews
+	Calendar CalendarManagement
 
 	// ConfirmationTTL mirrors RESTConfig.ConfirmationTTL. 0 → 5min.
 	ConfirmationTTL time.Duration
@@ -457,6 +458,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
 	RegisterBuiltinCommands(h.commands, h.conv)
 	h.registerLearnedCommand()
+	h.registerCalendarCommand()
 	// Nil leaves /grants unregistered — see RegisterGrantCommands.
 	RegisterGrantCommands(h.commands, cfg.SessionGrants)
 	return h, nil

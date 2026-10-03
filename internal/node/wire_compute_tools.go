@@ -27,6 +27,9 @@ import (
 // by hand; and the whole pass must precede Agent construction, which
 // snapshots the tool registry.
 func (n *Node) registerAgentTools(builtins *tools.Builtins, embedder compute.EmbeddingProvider) (func() []promptgen.BinaryInfo, error) {
+	if n.cfg.Security.GoogleCalendar.Enabled && (n.raft == nil || n.store == nil) {
+		return nil, fmt.Errorf("google calendar requires local memory and policy services")
+	}
 	var binariesProvider func() []promptgen.BinaryInfo
 
 	// Everything in this block persists through Raft and reads back
@@ -299,6 +302,9 @@ func (n *Node) wireCommitmentTools(builtins *tools.Builtins) error {
 // surfaces "not configured" at call time. Default-deny policy seed
 // gates these to scope:owner.
 func (n *Node) wireCredentialsTools(builtins *tools.Builtins) error {
+	if err := n.wireCalendar(builtins); err != nil {
+		return err
+	}
 	if n.credentialSvc == nil || n.oauthTracker == nil {
 		return nil
 	}

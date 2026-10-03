@@ -104,6 +104,7 @@ func (n *Node) wireCredentials() error {
 		return fmt.Errorf("credentials service: %w", err)
 	}
 	n.credentialSvc = cs
+	n.integrationState = memory.NewIntegrationStateStore(n.raft, n.store, n.cfg.MemoryKey)
 	n.oauthTracker = oauth.NewTracker(n.log)
 	providers, err := n.resolveOAuthProviders()
 	if err != nil {

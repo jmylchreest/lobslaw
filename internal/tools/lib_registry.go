@@ -225,6 +225,9 @@ func (r *Registry) Len() int {
 //     the local sidecar gRPC endpoint, not exec)
 //   - RiskTier must be one of the defined values
 func validateTool(t *types.ToolDef) error {
+	if t != nil && t.Effects != nil && !t.Effects.Valid() {
+		return errors.New("tool: invalid effects")
+	}
 	if t == nil {
 		return errors.New("ToolDef is nil")
 	}
@@ -244,6 +247,10 @@ func validateTool(t *types.ToolDef) error {
 // callers can't mutate the registry through a returned pointer.
 func cloneTool(t *types.ToolDef) *types.ToolDef {
 	out := *t
+	if t.Effects != nil {
+		effects := *t.Effects
+		out.Effects = &effects
+	}
 	if t.ArgvTemplate != nil {
 		out.ArgvTemplate = append([]string(nil), t.ArgvTemplate...)
 	}

@@ -59,6 +59,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	// skills with destructive actions (e.g. clear_workspace) extend
 	// this map.
 	noSeedTools := map[string]bool{
+		"calendar_list": true, "calendar_events": true, "calendar_event": true, "calendar_event_create": true, "calendar_event_update": true,
 		"soul_get":              true,
 		"soul_reset":            true,
 		"soul_tune":             true,

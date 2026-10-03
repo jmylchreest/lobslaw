@@ -103,6 +103,9 @@ func (s *CredentialService) editCredentialACL(ctx context.Context, provider, sub
 		if err != nil {
 			return err
 		}
+		if err := authorizeCredential(ctx, before); err != nil {
+			return err
+		}
 		after := proto.Clone(before).(*lobslawv1.CredentialRecord)
 		if err := edit(after); err != nil {
 			return err

@@ -104,6 +104,7 @@ func (n *Node) subprocessProxyURL(role string, networkIsolation bool) string {
 // what lets a skill installed after boot get its role.
 func buildEgressInputs(n *Node) egress.ACLInputs {
 	in := egress.ACLInputs{
+		GoogleCalendar:     n.cfg.Security.GoogleCalendar.Enabled,
 		Providers:          n.cfg.Compute.Providers,
 		Channels:           n.cfg.Gateway.Channels,
 		ClawhubBaseURL:     n.cfg.Security.ClawhubBaseURL,

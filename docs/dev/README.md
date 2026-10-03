@@ -107,3 +107,5 @@ read that diff. Everything else in a commit, you wrote and reviewed.
 - [Soul implementation and format review](SOUL.md) — effective state, prompt separation, field audit, and proposed extensions.
 
 - [Logging and secret redaction](LOGGING.md) — shared filtering pipeline, dependency adapters, and safe errors.
+
+- [Google Calendar](GOOGLE_CALENDAR.md): per-user OAuth, independent read/write grants, exact event confirmations, and deployment setup.

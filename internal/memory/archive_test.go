@@ -32,6 +32,9 @@ func TestArchivePreservesContentButExcludesDerivedAndSecretState(t *testing.T) {
 	if err := s.Put(BucketCredentials, "secret", []byte("not exported")); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.Put(BucketIntegrationState, "flow", []byte("not exported")); err != nil {
+		t.Fatal(err)
+	}
 	key := s.key
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
