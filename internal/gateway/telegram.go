@@ -24,6 +24,8 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/turn"
+	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -49,6 +51,12 @@ const (
 // TelegramConfig configures the Telegram channel — either as an
 // inbound webhook receiver or an outbound long-poll client.
 type TelegramConfig struct {
+	// Selective task notices use numeric private-chat bindings and durable
+	// message-to-agent context, never model-supplied routing arguments.
+	NotifyTasks            bool
+	ConsoleURL             string
+	NotificationRecipients map[int64]string
+	NotificationBotCheck   func(context.Context, string, string) error
 	// BotToken is the full Telegram Bot API token. Resolved from
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
@@ -275,10 +283,13 @@ type ChannelStateStore interface {
 // server's mux at /telegram so HTTPS + port are shared. Stateless
 // per request except for the HTTP client (connection pool).
 type TelegramHandler struct {
-	cfg    TelegramConfig
-	runner turn.Runner
-	log    *slog.Logger
-	client *http.Client
+	notificationMu         sync.Mutex
+	notificationDispatchMu sync.Mutex
+	notificationRetry      map[string]time.Time
+	cfg                    TelegramConfig
+	runner                 turn.Runner
+	log                    *slog.Logger
+	client                 *http.Client
 	// pollTimeout is how long Telegram holds getUpdates open, and
 	// pollSlack how much longer than that we wait before treating the
 	// request as stalled. Fields rather than constants so a test can
@@ -332,12 +343,13 @@ type tgUpdate struct {
 }
 
 type tgMessage struct {
-	MessageID int64   `json:"message_id"`
-	From      *tgUser `json:"from,omitempty"`
-	Chat      tgChat  `json:"chat"`
-	Text      string  `json:"text,omitempty"`
-	Caption   string  `json:"caption,omitempty"`
-	Date      int64   `json:"date"`
+	ReplyToMessage *tgMessage `json:"reply_to_message,omitempty"`
+	MessageID      int64      `json:"message_id"`
+	From           *tgUser    `json:"from,omitempty"`
+	Chat           tgChat     `json:"chat"`
+	Text           string     `json:"text,omitempty"`
+	Caption        string     `json:"caption,omitempty"`
+	Date           int64      `json:"date"`
 
 	// Media — presence (non-nil/non-empty) means the user sent
 	// something we can't process as text yet. We acknowledge with a
@@ -407,6 +419,25 @@ type tgCallbackQuery struct {
 // neither is optional, and a misconfigured handler would either
 // accept anyone's traffic or fail silently to reply.
 func NewTelegramHandler(cfg TelegramConfig, runner turn.Runner) (*TelegramHandler, error) {
+	if cfg.NotifyTasks {
+		if cfg.ChannelState == nil {
+			return nil, errors.New("telegram task notices require persistent channel state")
+		}
+		if cfg.ConsoleURL == "" {
+			return nil, errors.New("telegram task notices require ui-web.public_url")
+		}
+		if err := config.ValidateConsolePublicURL(cfg.ConsoleURL); err != nil {
+			return nil, err
+		}
+		if len(cfg.NotificationRecipients) == 0 {
+			return nil, errors.New("telegram task notices require an enrolled numeric private-chat address")
+		}
+		for chat, owner := range cfg.NotificationRecipients {
+			if chat <= 0 || !strings.HasPrefix(owner, "user:") {
+				return nil, errors.New("telegram task notices require private chats bound to users")
+			}
+		}
+	}
 	if cfg.BotToken == "" {
 		return nil, errors.New("telegram: BotToken required")
 	}
@@ -443,18 +474,19 @@ func NewTelegramHandler(cfg TelegramConfig, runner turn.Runner) (*TelegramHandle
 		logger = slog.Default()
 	}
 	h := &TelegramHandler{
-		cfg:          cfg,
-		runner:       runner,
-		log:          logger,
-		client:       client,
-		pollTimeout:  pollLongTimeout,
-		pollSlack:    pollDeadlineSlack,
-		pollBackoff:  pollInitialBackoff,
-		base:         base,
-		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
-		pendingScope: make(map[string]scopedOperation),
-		seenUpdate:   make(map[int64]time.Time),
-		conv:         newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
+		notificationRetry: make(map[string]time.Time),
+		cfg:               cfg,
+		runner:            runner,
+		log:               logger,
+		client:            client,
+		pollTimeout:       pollLongTimeout,
+		pollSlack:         pollDeadlineSlack,
+		pollBackoff:       pollInitialBackoff,
+		base:              base,
+		gate:              NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
+		pendingScope:      make(map[string]scopedOperation),
+		seenUpdate:        make(map[int64]time.Time),
+		conv:              newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
 	}
 	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
 	RegisterBuiltinCommands(h.commands, h.conv)
@@ -532,6 +564,15 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		Channel:   "telegram",
 		ChannelID: strconv.FormatInt(msg.Chat.ID, 10),
 		UserID:    claims.UserID,
+	}
+	notification, err := h.notificationReply(ctx, msg, canonicalUserPrincipal(claims.UserID))
+	if err != nil {
+		h.log.Warn("telegram: notification reply refused", "err", err)
+		h.sendText(msg.Chat.ID, "I couldn't verify the context of that notification. Please open its web-console link.")
+		return
+	}
+	if notification != nil {
+		sessionRef.ChannelID += ".notice." + notification.ThreadID
 	}
 	// Before the gate: a command is not a turn. It must not take a
 	// lease, load a transcript, or reach the model — /new in particular
@@ -614,6 +655,14 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		SharedConversation:  isSharedChat(msg.Chat),
 		BotID:               resolveTeamBot(ctx, h.cfg.TeamRouter, "telegram", channelID, userID),
 	}
+	if notification != nil {
+		agentReq.BotID = notification.BotID
+		agentReq.Principal = identity.Bot(notification.BotID)
+		agentReq.ChannelID = sessionRef.ChannelID
+		contextNote := "The user is replying to a notification from you. Discuss the referenced work; this reply is not an approval of a pending operation. Task decisions are made through the web console. The notification may describe an earlier state; use inbox_read for current evidence when needed.\n"
+		contextNote += promptgen.WrapContext([]promptgen.ContextBlock{{Source: "notification-context", Trust: promptgen.TrustUntrusted, Content: notification.Context}})
+		agentReq.ConversationHistory = append([]turn.Message{{Role: "system", Content: contextNote}}, prior.Messages...)
+	}
 
 	// Wrap the agent call with the responsiveness guards: typing
 	// indicator keep-alive, interim "still working" message (if
@@ -660,6 +709,10 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		h.sendText(msg.Chat.ID, "Confirmation required: "+resp.ConfirmationReason)
 	case resp.Reply == "":
 		h.sendText(msg.Chat.ID, "(empty reply)")
+	case notification != nil:
+		if err := h.sendNotificationReply(ctx, msg.Chat.ID, msg.MessageID, resp.Reply, *notification); err != nil {
+			h.log.Warn("telegram: contextual reply delivery failed", "err", err)
+		}
 	case isSharedChat(msg.Chat):
 		// No notice in a group. The nudge says how many proposals the
 		// OPERATOR has waiting — their queue, not the group's — and the

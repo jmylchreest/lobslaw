@@ -91,7 +91,11 @@ Lobslaw sends push for approval/attention requests, failed work, explicit agent
 Ordinary replies and quiet routine completions do not generate push. Notifications
 show the agent's name and open its conversation or the relevant task. The browser
 uses the agent's cached avatar when available; OS presentation varies, and the
-application identity remains Lobslaw. Only public avatar artwork is cached.
+application identity remains Lobslaw. Public avatar artwork and an opaque,
+session-expiring notification audience marker are cached; the marker grants no
+API access. Logout and account changes clear the marker and unsubscribe the
+browser. Already queued messages for an old audience display only a generic
+notice, never the previous account's private text or task link.
 
 Subscriptions, VAPID credentials and delivery receipts survive restarts in the
 web node's private `<data_dir>/auth/web-push.json`. Browser-vendor delivery uses
@@ -99,8 +103,18 @@ encrypted Web Push through the egress proxy, restricted to Google, Mozilla and
 Apple push endpoints. Expired subscriptions are removed, transient failures back
 off, and stable event tags coalesce retries. Phone delivery requires an active
 subscription, HTTPS, and connectivity; this is not a guarantee of immediate OS
-delivery. The web node polls durable bot inbox evidence, including through a
-remote compute backend, every 15 seconds.
+delivery. The web node reads a paginated notification index every 15 seconds,
+including through a remote compute backend. The index is updated atomically with
+inbox state, independently of the console's recent-activity window. Outstanding
+attention candidates remain indexed until their state changes; terminal outcomes
+are eligible for 24 hours, and explicit notifications also respect their TTL.
+Each page is bounded, and a failed evidence read defers that candidate without
+discarding delivery receipts or blocking unrelated notifications.
+
+The audience-bound push protocol requires the updated app and worker. After an
+upgrade from the earlier unbound protocol, use **Reload to update**, then enable
+notifications again. The VAPID identity is preserved, but legacy device bindings
+are not allowed to receive private payloads.
 
 ### Recurring agent work
 
@@ -221,6 +235,64 @@ lobslaw supports two transports for Telegram: **poll** (outbound-only long-polli
    ```
 
 4. **Restart** the node. You should see `telegram: long-poll loop starting` in the logs (poll mode) or the bot receive your `setWebhook` call (webhook mode).
+
+### Task notifications, console links and replies
+
+Enable selective notices on the Telegram channel and set the address you actually
+open in a browser. A local IP with HTTP works for these links; Telegram poll mode
+does not need a public domain or a publicly accessible HTTPS endpoint.
+
+```toml
+[ui-web]
+enabled = true
+public_url = "http://192.168.5.137:8443"
+
+[auth]
+require_auth = true
+
+[[gateway.channels]]
+type = "telegram"
+mode = "poll"
+bot_token_ref = "env:LOBSLAW_TELEGRAM_BOT_TOKEN"
+notify_tasks = true
+
+[gateway.channels.user_scopes]
+"123456789" = "owner"
+```
+
+Add `{ type = "telegram", address = "123456789" }` to the intended enrolled
+`[[user]]` record's `channels` array, preserving its other bindings. Use the
+numeric user id of a **private chat**, not a group id or a mutable username. That
+person must open the Telegram bot and press **Start** before it can contact them.
+For Docker Compose, set the token in `deploy/docker/.env`; it is passed into the
+container as `LOBSLAW_TELEGRAM_BOT_TOKEN`.
+
+Notices use the same selection as PWA push: attention requests, failures, explicit
+agent notifications, and routine outcomes requested with `notify_on=always`.
+Each message names the agent and includes an **Open in Lobslaw** button plus the
+plain console URL. Task outcomes link directly to their record; other messages
+link to the agent's conversation. Links contain no login credentials. A local-IP
+link needs LAN/VPN access from the phone, while Telegram messages themselves work
+wherever Telegram is reachable.
+
+Use Telegram's **Reply** action on a notice to discuss it with that agent. Replies
+are routed by a stored message id, not by names or task ids parsed from the text.
+The mapping is checked against the current user and bot owner and survives
+restarts. Follow-up replies to the agent's answer stay in the same isolated
+thread. These messages are conversation, not an approval of a pending task;
+use the linked console for task decisions. Ordinary unthreaded Telegram messages
+continue to reach the user's coordinator.
+
+Notification receipts and bounded reply mappings use the persistent channel-state
+store; task notices require that store on the Telegram gateway. Only the leader
+delivers when a leader gate is available. Normal restarts do not replay saved
+deliveries. Telegram provides no send idempotency key, so a lost API acknowledgement
+can still produce a retry duplicate. New activation skips historical completed
+outcomes but includes outstanding attention requests. `notify_tasks` defaults to
+false, and can be switched off without disabling ordinary Telegram chat.
+Receipts for events that remain eligible are never evicted by the inactive-history
+cap. Retirement happens only after a complete successful index scan, and it never
+moves the activation watermark. Reply mappings have a separate bounded lifetime.
 
 ### Poll vs webhook
 

@@ -786,7 +786,9 @@ func (s *Scheduler) completeTask(ctx context.Context, t *lobslawv1.ScheduledTask
 			}
 		}
 		merged.LastRun = timestamppb.New(firedAt)
-		if !next.IsZero() {
+		// A cadence edit/resume may have moved NextRun while the handler ran.
+		// Only advance the old slot if those scheduling fields are unchanged.
+		if !next.IsZero() && current.Schedule == t.Schedule && proto.Equal(current.NextRun, t.NextRun) {
 			merged.NextRun = timestamppb.New(next)
 		}
 		merged.ClaimedBy = ""

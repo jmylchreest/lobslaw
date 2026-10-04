@@ -89,6 +89,9 @@ func (s *Store) updateInboxActivity(tx *bolt.Tx, key string, raw []byte) error {
 		return fmt.Errorf("inbox activity projection unavailable")
 	}
 	if raw == nil {
+		if err := s.updateInboxNotifications(tx, key, nil, nil); err != nil {
+			return err
+		}
 		return index.Delete([]byte(key))
 	}
 	var item pb.BotInboxItem
@@ -110,10 +113,29 @@ func (s *Store) updateInboxActivity(tx *bolt.Tx, key string, raw []byte) error {
 	if len(sealed) > MaxInboxRecentRecordBytes {
 		return fmt.Errorf("inbox activity projection exceeds byte bound")
 	}
+	if err := s.updateInboxNotifications(tx, key, summary, sealed); err != nil {
+		return err
+	}
 	return index.Put([]byte(key), sealed)
 }
 
 func (s *Store) rebuildInboxActivity(tx *bolt.Tx) error {
+	if tx.Bucket([]byte(bucketInboxNotificationKeys)) != nil {
+		if err := tx.DeleteBucket([]byte(bucketInboxNotificationKeys)); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.CreateBucket([]byte(bucketInboxNotificationKeys)); err != nil {
+		return err
+	}
+	if tx.Bucket([]byte(bucketInboxNotifications)) != nil {
+		if err := tx.DeleteBucket([]byte(bucketInboxNotifications)); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.CreateBucket([]byte(bucketInboxNotifications)); err != nil {
+		return err
+	}
 	if tx.Bucket([]byte(bucketInboxActivity)) != nil {
 		if err := tx.DeleteBucket([]byte(bucketInboxActivity)); err != nil {
 			return err

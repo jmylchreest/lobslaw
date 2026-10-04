@@ -51,6 +51,21 @@ try {
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload();
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  await page.getByLabel("One-time code").waitFor();
+  const setAudience = (id, epoch) => page.evaluate(async ({ id, epoch }) => {
+    const db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open("lobslaw-push", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("state");
+      req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+    });
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("state", "readwrite");
+      tx.objectStore("state").put({ id, epoch, expires: new Date(Date.now() + 3600000).toISOString() }, "audience");
+      tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }, { id, epoch });
+  await setAudience("alice-binding", 1);
   assert.ok(registrationID, "service worker registration missing");
   const worker = context.serviceWorkers()[0];
   await worker.evaluate(() => {
@@ -64,7 +79,7 @@ try {
   const sendPush = (message) => cdp.send("ServiceWorker.deliverPushMessage", { origin, registrationId: registrationID, data: JSON.stringify(message) });
   const iconData = "data:image/png;base64," + (await readFile(new URL("logo-64.png", dist))).toString("base64");
   await page.evaluate(async (data) => { await (await caches.open("lobslaw-agent-icons")).put("/__agent-icons/tester", new Response(data)); }, iconData);
-  await sendPush({ id: "attention-1", title: "Tester needs your attention", body: "Review the proposed operation", url: "/approvals/task-1", icon: "/__agent-icons/tester" });
+  await sendPush({ audience: "alice-binding", id: "attention-1", title: "Tester needs your attention", body: "Review the proposed operation", url: "/approvals/task-1", icon: "/__agent-icons/tester" });
   async function waitForPush(count) {
     for (let i = 0; i < 100; i++) {
       if (await worker.evaluate((n) => self.pushTestMessages.length >= n, count)) return;
@@ -76,10 +91,18 @@ try {
   const notices = await worker.evaluate(() => self.pushTestMessages.map((n) => ({ title: n.title, body: n.body, url: n.data.url })));
   assert.deepEqual(notices, [{ title: "Tester needs your attention", body: "Review the proposed operation", url: "/approvals/task-1" }]);
   assert.equal(await worker.evaluate(() => self.pushTestMessages[0].icon), iconData, "agent avatar not used");
-  await sendPush({ id: "attention-1", title: "Tester needs your attention", body: "Same event retried", url: "https://evil.test/" });
+  await sendPush({ audience: "alice-binding", id: "attention-1", title: "Tester needs your attention", body: "Same event retried", url: "https://evil.test/" });
   await waitForPush(2);
   assert.deepEqual(await worker.evaluate(() => self.pushTestMessages.map((n) => n.tag)), ["attention-1", "attention-1"]);
   assert.equal(await worker.evaluate(() => self.pushTestMessages[1].data.url), "/");
+  // Already queued pushes from a previous account must not expose their body,
+  // title, avatar, or task URL after the browser's audience changes.
+  await setAudience("bob-binding", 2);
+  await sendPush({ audience: "alice-binding", id: "private", title: "Alice private agent", body: "Alice private result", url: "/approvals/private-task" });
+  await waitForPush(3);
+  assert.deepEqual(await worker.evaluate(() => {
+    const n = self.pushTestMessages[2]; return { title: n.title, body: n.body, url: n.data.url };
+  }), { title: "Lobslaw", body: "Open Lobslaw to view your updates.", url: "/" });
   await page.evaluate(async () => { for (const n of await (await navigator.serviceWorker.ready).getNotifications()) n.close(); });
   await page.getByLabel("One-time code").fill("123 456");
 

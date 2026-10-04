@@ -98,6 +98,9 @@ func (s *Server) QueryConsole(ctx context.Context, in *pb.QueryConsoleRequest) (
 	if in.GetTaskApprovals() != nil || in.GetTaskApproval() != nil {
 		return s.queryConsoleTask(ctx, in)
 	}
+	if in.GetNotificationCandidates() != nil {
+		return s.queryConsoleNotifications(ctx, in)
+	}
 	if in.GetLearnedReviews() != nil || in.GetLearnedReview() != nil {
 		return s.queryConsoleLearned(ctx, in)
 	}

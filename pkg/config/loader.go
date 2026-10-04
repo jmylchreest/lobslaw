@@ -139,6 +139,14 @@ func (c *Config) Validate() error {
 	if err := validateUIWebAuth(c.UIWeb, c.Auth); err != nil {
 		return err
 	}
+	if err := ValidateConsolePublicURL(c.UIWeb.PublicURL); err != nil {
+		return err
+	}
+	for _, ch := range c.Gateway.Channels {
+		if ch.NotifyTasks && (ch.Type != "telegram" || c.UIWeb.PublicURL == "") {
+			return fmt.Errorf("%w: notify_tasks requires a Telegram channel and [ui-web].public_url", types.ErrInvalidConfig)
+		}
+	}
 	return nil
 }
 

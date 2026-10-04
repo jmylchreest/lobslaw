@@ -473,6 +473,9 @@ type ComputeTeamsConfig struct {
 // not enable it. Enabling it does not imply local compute.
 type UIWebConfig struct {
 	Enabled bool `koanf:"enabled"`
+	// PublicURL is the browser-reachable root URL used in notification links.
+	// May be a LAN HTTP address; never inferred from an inbound Host header.
+	PublicURL string `koanf:"public_url,omitempty"`
 	// Backend is the cluster gRPC address (host:port) of a compute
 	// node. Required when ui-web is on and compute is off — a web
 	// node has no local agent, so turns run there.
@@ -1639,6 +1642,9 @@ type UserChannelAddrConfig struct {
 // determines which of the fields below are consulted.
 type GatewayChannelConfig struct {
 	Type string `koanf:"type"`
+	// NotifyTasks enables selective task/routine notices for Telegram DMs.
+	// Requires ui-web.public_url and numeric enrolled Telegram addresses.
+	NotifyTasks bool `koanf:"notify_tasks,omitempty"`
 	// Mode picks "webhook" (default) or "poll" for telegram. Poll
 	// mode needs no inbound network — right default for personal
 	// deployments behind NAT. secret_token_ref is only required in

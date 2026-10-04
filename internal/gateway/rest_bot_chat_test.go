@@ -90,7 +90,7 @@ func TestBotChatsRemainConversationalWithTasksEnabled(t *testing.T) {
 				for index, message := range []string{"Hello!", "What do you think about this approach?", "Can you explain how backups work?"} {
 					response := doJSON(t, http.MethodPost, webBaseURL(front)+"/v1/bots/bot/messages", fmt.Sprintf(`{"message":%q}`, message), http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}})
 					raw, err := io.ReadAll(response.Body)
-					response.Body.Close()
+					_ = response.Body.Close()
 					if err != nil || !strings.Contains(string(raw), "event: reply") || runner.lastRequest().Message != message {
 						t.Fatalf("chat was not handled conversationally: %s, %v", raw, err)
 					}

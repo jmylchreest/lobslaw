@@ -208,7 +208,9 @@ func TestTypedConsolePreservesPartialUpdatesAndRevision(t *testing.T) {
 func TestLogoutCancelsRemainingStreamsAfterOneFinishes(t *testing.T) {
 	t.Parallel()
 	s := NewServer(RESTConfig{}, nil)
-	s.logins.put(&loginSession{ID: "login", UserID: "alice"})
+	if err := s.logins.put(&loginSession{ID: "login", UserID: "alice"}); err != nil {
+		t.Fatal(err)
+	}
 	first, done := s.bindStream(context.Background(), "login")
 	second, stopSecond := s.bindStream(context.Background(), "login")
 	defer stopSecond()
@@ -218,7 +220,9 @@ func TestLogoutCancelsRemainingStreamsAfterOneFinishes(t *testing.T) {
 	if first.Err() == nil || second.Err() != nil || third.Err() != nil {
 		t.Fatal("finishing one stream affected another")
 	}
-	s.logins.revoke("login")
+	if err := s.logins.revoke("login"); err != nil {
+		t.Fatal(err)
+	}
 	if second.Err() == nil || third.Err() == nil {
 		t.Fatal("logout left another active stream running")
 	}
@@ -281,7 +285,9 @@ func TestLocalTaskCookieStillRejectsAnonymousAndForgedOwner(t *testing.T) {
 	t.Parallel()
 	api := new(taskAPISpy)
 	s := NewServer(RESTConfig{TaskApprovals: api, Users: enrolledAlice()}, nil)
-	s.logins.put(&loginSession{ID: "login", UserID: "alice"})
+	if err := s.logins.put(&loginSession{ID: "login", UserID: "alice"}); err != nil {
+		t.Fatal(err)
+	}
 	r := httptest.NewRequest(http.MethodPost, "http://console/v1/task-approvals/task/decide", strings.NewReader(`{"owner":"user:bob","revision":"1","choice":"once"}`))
 	r.AddCookie(&http.Cookie{Name: LoginCookieName, Value: "login"})
 	r.Header.Set("Origin", "http://console")

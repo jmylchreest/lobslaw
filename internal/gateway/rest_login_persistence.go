@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/atomicfile"
 )
 
 // Only token hashes reach disk. A copy of the session file is not a collection
@@ -71,20 +73,5 @@ func (s *loginStore) persistLocked() error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(s.path), ".browser-sessions-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if _, err := f.Write(raw); err != nil {
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), s.path)
+	return atomicfile.WritePrivate(s.path, raw)
 }

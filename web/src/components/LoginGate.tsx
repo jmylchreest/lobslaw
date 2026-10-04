@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ApiError, api, isUnavailable } from "../api";
 import { Err, Spinner } from "./ui";
 import { InstallApp } from "./Pwa";
+import { clearLocalPush } from "../pushBinding";
 
 export function LoginGate({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -27,7 +28,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("online", refresh);
   }, [refresh]);
   useEffect(() => {
-    function bounce() { setNeedLogin(true); setUserId(null); setError(null); }
+    function bounce() { void clearLocalPush().catch(() => {}); setNeedLogin(true); setUserId(null); setError(null); }
     window.addEventListener("lobslaw:unauthorized", bounce);
     return () => window.removeEventListener("lobslaw:unauthorized", bounce);
   }, []);

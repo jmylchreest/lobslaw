@@ -12,8 +12,9 @@ import (
 )
 
 type botNotifier struct {
-	n        *Node
-	fallback *notify.Service
+	n              *Node
+	fallback       *notify.Service
+	telegramEvents bool
 }
 
 func (b botNotifier) Send(ctx context.Context, message notify.Notification) error {
@@ -38,6 +39,9 @@ func (b botNotifier) Send(ctx context.Context, message notify.Notification) erro
 			return err
 		}
 		delivered = true
+		if b.telegramEvents {
+			message.SkipChannels = append(message.SkipChannels, "telegram")
+		}
 		message.UserID = strings.TrimPrefix(owner, "user:")
 	}
 	if b.fallback != nil {

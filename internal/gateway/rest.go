@@ -275,6 +275,9 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.initPush(); err != nil {
 		return fmt.Errorf("rest: web push: %w", err)
 	}
+	if s.cfg.Telegram != nil && s.cfg.Telegram.NotificationsEnabled() {
+		s.cfg.Telegram.cfg.NotificationBotCheck = s.validateNotificationBot
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/push", s.handlePush)
 	mux.HandleFunc("/v1/messages", s.consoleRoute(s.handleMessages))
@@ -336,10 +339,14 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	uploadCtx, stopUploads := context.WithCancel(ctx)
-	defer func() { stopUploads(); s.uploads.close() }()
+	var notificationWorkers sync.WaitGroup
+	defer func() { stopUploads(); notificationWorkers.Wait(); s.uploads.close() }()
 	go s.uploads.run(uploadCtx)
 	if s.push != nil {
-		go s.runPush(uploadCtx)
+		notificationWorkers.Go(func() { s.runPush(uploadCtx) })
+	}
+	if s.cfg.Telegram != nil && s.cfg.Telegram.NotificationsEnabled() {
+		notificationWorkers.Go(func() { s.runTelegramNotifications(uploadCtx) })
 	}
 
 	s.log.Info("rest server listening", "addr", ln.Addr().String(), "tls", s.cfg.TLSCert != "")

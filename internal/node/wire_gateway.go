@@ -2,9 +2,11 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/notify"
@@ -262,7 +265,7 @@ func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHan
 	n.notifySvc = notifySvc
 
 	if err := tools.RegisterNotifyBuiltins(n.builtinsRegistry, tools.NotifyConfig{
-		Service: botNotifier{n: n, fallback: notifySvc},
+		Service: botNotifier{n: n, fallback: notifySvc, telegramEvents: tg != nil && tg.NotificationsEnabled()},
 	}); err != nil {
 		n.log.Warn("notify: builtin register failed", "err", err)
 		return
@@ -382,7 +385,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig, runner turn.
 	// (gateway-only nodes) → today's behaviour, operator must ensure
 	// only one such node runs the bot.
 	var gate singleton.Gate
-	if n.leaderGate != nil && mode == gateway.TelegramModePoll {
+	if n.leaderGate != nil {
 		gate = n.leaderGate
 	}
 
@@ -390,7 +393,27 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig, runner turn.
 	if n.raft != nil && n.store != nil {
 		channelState = memory.NewChannelStateService(n.raft, n.store)
 	}
+	recipients := map[int64]string{}
+	if ch.NotifyTasks {
+		for _, user := range n.cfg.Users {
+			for _, binding := range user.Channels {
+				if binding.Type != "telegram" {
+					continue
+				}
+				chat, err := strconv.ParseInt(binding.Address, 10, 64)
+				if err != nil || chat <= 0 {
+					return nil, fmt.Errorf("telegram notify_tasks: user %q needs a numeric private-chat address", user.ID)
+				}
+				owner := identity.User(user.ID).String()
+				if existing, ok := recipients[chat]; ok && existing != owner {
+					return nil, errors.New("telegram notification address belongs to multiple users")
+				}
+				recipients[chat] = owner
+			}
+		}
+	}
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
+		NotifyTasks: ch.NotifyTasks, ConsoleURL: n.cfg.UIWeb.PublicURL, NotificationRecipients: recipients,
 		IncomingDir:      n.incomingDir(),
 		Notices:          n.notices,
 		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),

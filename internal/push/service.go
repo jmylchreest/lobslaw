@@ -4,7 +4,8 @@ package push
 
 import (
 	"context"
-	"crypto/elliptic"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -20,20 +21,16 @@ import (
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+
+	"github.com/jmylchreest/lobslaw/internal/atomicfile"
+	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/notify"
 )
 
-type Event struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	URL       string    `json:"url"`
-	Icon      string    `json:"icon"`
-	At        time.Time `json:"-"`
-	Attention bool      `json:"-"`
-	Expires   time.Time `json:"-"`
-}
+type Event = notify.Event
 
 type Device struct {
+	Generation   string
 	Owner        string
 	Login        string
 	Subscription webpush.Subscription
@@ -49,15 +46,18 @@ type snapshot struct {
 }
 
 type Sender func(context.Context, []byte, *webpush.Subscription, *webpush.Options) (*http.Response, error)
-type Source func(context.Context, string) ([]Event, error)
+type Source = notify.EventSource
 
 type Service struct {
-	mu     sync.Mutex
-	data   snapshot
-	path   string
-	client *http.Client
-	send   Sender
-	retry  map[string]time.Time
+	// Only one outbox scan runs at a time. Subscription mutation remains
+	// independent of network I/O; both sends and acknowledgements check generation.
+	dispatchMu sync.Mutex
+	mu         sync.Mutex
+	data       snapshot
+	path       string
+	client     *http.Client
+	send       Sender
+	retry      map[string]time.Time
 }
 
 func Open(path string, client *http.Client) (*Service, error) {
@@ -65,7 +65,7 @@ func Open(path string, client *http.Client) (*Service, error) {
 		return nil, errors.New("push: persistent storage required")
 	}
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = egress.For("gateway/web-push").HTTPClient()
 	}
 	copyClient := *client
 	copyClient.Timeout = 10 * time.Second
@@ -75,14 +75,22 @@ func Open(path string, client *http.Client) (*Service, error) {
 		return nil, err
 	}
 	raw, err := os.ReadFile(path)
-	if err == nil {
+	switch {
+	case err == nil:
 		if err := json.Unmarshal(raw, &s.data); err != nil {
 			return nil, err
 		}
 		if s.data.PrivateKey == "" || s.data.PublicKey == "" || s.data.Devices == nil || s.data.Sent == nil {
 			return nil, errors.New("push: invalid saved state")
 		}
-	} else if os.IsNotExist(err) {
+		// Old workers cannot enforce audience binding. Require those devices to
+		// register through the versioned protocol before resuming private push.
+		for id, d := range s.data.Devices {
+			if d.Generation == "" {
+				delete(s.data.Devices, id)
+			}
+		}
+	case os.IsNotExist(err):
 		private, public, err := webpush.GenerateVAPIDKeys()
 		if err != nil {
 			return nil, err
@@ -91,7 +99,7 @@ func Open(path string, client *http.Client) (*Service, error) {
 		if err := s.saveLocked(); err != nil {
 			return nil, err
 		}
-	} else {
+	default:
 		return nil, err
 	}
 	return s, nil
@@ -116,8 +124,7 @@ func ValidateSubscription(sub webpush.Subscription) error {
 	if err != nil {
 		return errors.New("invalid push public key")
 	}
-	x, _ := elliptic.Unmarshal(elliptic.P256(), key)
-	if x == nil {
+	if _, err := ecdh.P256().NewPublicKey(key); err != nil {
 		return errors.New("invalid push public key")
 	}
 	auth, err := base64.RawURLEncoding.DecodeString(sub.Keys.Auth)
@@ -135,6 +142,10 @@ func (s *Service) Subscribe(owner, login string, expires time.Time, sub webpush.
 	defer s.mu.Unlock()
 	id := hash(sub.Endpoint)
 	old, existed := s.data.Devices[id]
+	if existed && !time.Now().Before(old.Expires) {
+		delete(s.data.Devices, id)
+		existed = false
+	}
 	if existed && old.Owner != owner {
 		return errors.New("subscription belongs to another account; unsubscribe in this browser first")
 	}
@@ -148,10 +159,17 @@ func (s *Service) Subscribe(owner, login string, expires time.Time, sub webpush.
 		return errors.New("maximum ten devices per user")
 	}
 	since := time.Now()
-	if existed {
+	generation := old.Generation
+	if existed && old.Login == hash(login) && old.Subscription.Keys == sub.Keys {
 		since = old.Since
+	} else {
+		var secret [16]byte
+		if _, err := rand.Read(secret[:]); err != nil {
+			return err
+		}
+		generation = hex.EncodeToString(secret[:])
 	}
-	s.data.Devices[id] = Device{Owner: owner, Login: hash(login), Subscription: sub, Since: since, Expires: expires}
+	s.data.Devices[id] = Device{Generation: generation, Owner: owner, Login: hash(login), Subscription: sub, Since: since, Expires: expires}
 	if err := s.saveLocked(); err != nil {
 		if existed {
 			s.data.Devices[id] = old
@@ -201,85 +219,111 @@ func (s *Service) RemoveLogin(login string) error {
 // Dispatch polls durable evidence. Success receipts survive restart; transient
 // failures retry with backoff. A stable browser tag coalesces ambiguous retries.
 func (s *Service) Dispatch(ctx context.Context, source Source) error {
+	return s.DispatchPages(ctx, notify.SinglePage(source))
+}
+
+// DispatchPages streams durable candidates without retaining an owner's entire
+// outbox in memory. A partial scan leaves successful delivery receipts intact.
+func (s *Service) DispatchPages(ctx context.Context, source notify.EventPages) error {
+	s.dispatchMu.Lock()
+	defer s.dispatchMu.Unlock()
 	s.mu.Lock()
-	devices := map[string]Device{}
+	owners := map[string]map[string]Device{}
 	for id, d := range s.data.Devices {
 		if time.Now().Before(d.Expires) {
-			devices[id] = d
+			if owners[d.Owner] == nil {
+				owners[d.Owner] = map[string]Device{}
+			}
+			owners[d.Owner][id] = d
 		}
 	}
-	public, private := s.data.PublicKey, s.data.PrivateKey
 	s.mu.Unlock()
-	events := map[string][]Event{}
 	var errs []error
-	for id, d := range devices {
-		if err := ctx.Err(); err != nil {
-			return errors.Join(append(errs, err)...)
-		}
-		if _, ok := events[d.Owner]; !ok {
-			got, err := source(ctx, d.Owner)
-			if err != nil {
-				errs = append(errs, err)
-				events[d.Owner] = nil
-				continue
-			}
-			events[d.Owner] = got
-		}
-		for _, event := range events[d.Owner] {
+	for owner, devices := range owners {
+		for cursor := ""; ; {
 			if err := ctx.Err(); err != nil {
 				return errors.Join(append(errs, err)...)
 			}
-			if !event.Attention && event.At.Before(d.Since) || event.At.Before(time.Now().Add(-24*time.Hour)) {
-				continue
-			}
-			ttl := 3600
-			if !event.Expires.IsZero() {
-				remaining := int(time.Until(event.Expires).Seconds())
-				if remaining <= 0 {
-					continue
-				}
-				if remaining < ttl {
-					ttl = remaining
-				}
-			}
-			key := id + ":" + event.ID
-			s.mu.Lock()
-			_, sent := s.data.Sent[key]
-			retry := s.retry[key]
-			_, active := s.data.Devices[id]
-			s.mu.Unlock()
-			if !active || sent || time.Now().Before(retry) {
-				continue
-			}
-			payload, err := json.Marshal(event)
+			page, err := source(ctx, owner, cursor)
 			if err != nil {
 				errs = append(errs, err)
-				continue
+				break
 			}
-			response, err := s.send(ctx, payload, &d.Subscription, &webpush.Options{HTTPClient: s.client, Subscriber: "https://github.com/jmylchreest/lobslaw", VAPIDPublicKey: public, VAPIDPrivateKey: private, TTL: ttl, Topic: hash(event.ID)[:32]})
-			status := 0
-			if response != nil {
-				status = response.StatusCode
-				response.Body.Close()
+			for _, event := range page.Events {
+				for id, d := range devices {
+					if err := s.deliver(ctx, id, d, event); err != nil {
+						errs = append(errs, err)
+					}
+				}
 			}
-			s.mu.Lock()
-			switch {
-			case err == nil && status >= 200 && status < 300:
-				s.data.Sent[key] = time.Now()
-				delete(s.retry, key)
-			case status == 404 || status == 410:
-				delete(s.data.Devices, id)
-			default:
-				s.retry[key] = time.Now().Add(2 * time.Minute)
-				errs = append(errs, fmt.Errorf("push delivery failed (status %d); retry pending", status))
+			if page.Next == "" {
+				break
 			}
-			if saveErr := s.saveLocked(); saveErr != nil {
-				errs = append(errs, saveErr)
+			if page.Next == cursor {
+				errs = append(errs, errors.New("notification cursor did not advance"))
+				break
 			}
-			s.mu.Unlock()
+			cursor = page.Next
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (s *Service) deliver(ctx context.Context, id string, d Device, event Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !event.Attention && event.At.Before(d.Since) || event.At.Before(time.Now().Add(-24*time.Hour)) {
+		return nil
+	}
+	ttl := 3600
+	if !event.Expires.IsZero() {
+		ttl = min(ttl, int(time.Until(event.Expires).Seconds()))
+		if ttl <= 0 {
+			return nil
+		}
+	}
+	key := id + ":" + d.Generation + ":" + event.ID
+	s.mu.Lock()
+	current, active := s.data.Devices[id]
+	_, sent := s.data.Sent[key]
+	retry := s.retry[key]
+	public, private := s.data.PublicKey, s.data.PrivateKey
+	s.mu.Unlock()
+	if !active || current.Generation != d.Generation || current.Owner != d.Owner || current.Login != d.Login || !time.Now().Before(current.Expires) || sent || time.Now().Before(retry) {
+		return nil
+	}
+	payload, err := json.Marshal(struct {
+		Event
+		Audience string `json:"audience"`
+	}{event, d.Generation})
+	if err != nil {
+		return err
+	}
+	response, sendErr := s.send(ctx, payload, &d.Subscription, &webpush.Options{HTTPClient: s.client, Subscriber: "https://github.com/jmylchreest/lobslaw", VAPIDPublicKey: public, VAPIDPrivateKey: private, TTL: ttl, Topic: hash(event.ID)[:32]})
+	status := 0
+	if response != nil {
+		status = response.StatusCode
+		_ = response.Body.Close()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, active = s.data.Devices[id]
+	if !active || current.Generation != d.Generation || current.Owner != d.Owner || current.Login != d.Login {
+		return nil
+	}
+	var deliveryErr error
+	switch {
+	case sendErr == nil && status >= 200 && status < 300:
+		s.data.Sent[key] = time.Now()
+		delete(s.retry, key)
+	case status == 404 || status == 410:
+		delete(s.data.Devices, id)
+	default:
+		s.retry[key] = time.Now().Add(2 * time.Minute)
+		deliveryErr = fmt.Errorf("push delivery failed (status %d); retry pending", status)
+	}
+	return errors.Join(deliveryErr, s.saveLocked())
 }
 
 func (s *Service) saveLocked() error {
@@ -297,20 +341,16 @@ func (s *Service) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(s.path), ".push-*")
-	if err != nil {
-		return err
+	return atomicfile.WritePrivate(s.path, raw)
+}
+
+// Binding is an opaque audience identifier, not an authentication credential.
+func (s *Service) Binding(owner, login, endpoint string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.data.Devices[hash(endpoint)]
+	if !ok || d.Owner != owner || d.Login != hash(login) || !time.Now().Before(d.Expires) {
+		return ""
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if _, err := f.Write(raw); err != nil {
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), s.path)
+	return d.Generation
 }

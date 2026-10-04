@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ const (
 // channel-agnostic plaintext; sinks render it however their
 // channel demands.
 type Notification struct {
+	// SkipChannels have already been accepted by a durable transport outbox.
+	SkipChannels      []string
 	BotID             string
 	UserID            string
 	Body              string
@@ -168,6 +171,9 @@ func (s *Service) lookupPrefs(ctx context.Context, userID string) (*lobslawv1.Us
 // channel type. Failures here are real errors (the user is
 // expecting a reply on this exact channel).
 func (s *Service) deliverOriginator(ctx context.Context, n Notification, prefs *lobslawv1.UserPreferences) error {
+	if slices.Contains(n.SkipChannels, n.OriginatorChannel) {
+		return ErrUserUnbound
+	}
 	addr := findChannelAddress(prefs, n.OriginatorChannel)
 	if addr == "" {
 		// Originator delivery falls back to OriginatorID — the
@@ -198,6 +204,9 @@ func (s *Service) broadcast(ctx context.Context, n Notification, prefs *lobslawv
 	}
 	delivered := 0
 	for _, c := range prefs.Channels {
+		if slices.Contains(n.SkipChannels, c.Type) {
+			continue
+		}
 		sink := s.sinkFor(c.Type)
 		if sink == nil {
 			s.logger.Debug("notify: no sink for channel type; skipping",

@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	webpush "github.com/SherClockHolmes/webpush-go"
-	"github.com/jmylchreest/lobslaw/internal/push"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
+
+	webpush "github.com/SherClockHolmes/webpush-go"
+
+	"github.com/jmylchreest/lobslaw/internal/push"
 
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -29,7 +31,7 @@ func TestPushSubscriptionRequiresEnrollmentAndCookieCSRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(webpush.Subscription{Endpoint: "https://fcm.googleapis.com/test", Keys: webpush.Keys{P256dh: key, Auth: base64.RawURLEncoding.EncodeToString(make([]byte, 16))}})
+	body, _ := json.Marshal(map[string]any{"endpoint": "https://fcm.googleapis.com/test", "keys": webpush.Keys{P256dh: key, Auth: base64.RawURLEncoding.EncodeToString(make([]byte, 16))}, "protocol_version": 1})
 	for _, tc := range []struct {
 		cookie, origin bool
 		status         int
@@ -46,6 +48,23 @@ func TestPushSubscriptionRequiresEnrollmentAndCookieCSRF(t *testing.T) {
 		if w.Code != tc.status {
 			t.Fatalf("%+v: got %d %s", tc, w.Code, w.Body)
 		}
+		if w.Code == 200 {
+			var binding struct {
+				ID string `json:"binding_id"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &binding); err != nil || len(binding.ID) != 32 {
+				t.Fatal("missing push audience binding")
+			}
+		}
+	}
+	legacy, _ := json.Marshal(webpush.Subscription{Endpoint: "https://fcm.googleapis.com/test", Keys: webpush.Keys{P256dh: key, Auth: base64.RawURLEncoding.EncodeToString(make([]byte, 16))}})
+	r := httptest.NewRequest(http.MethodPost, "http://console/v1/push", bytes.NewReader(legacy))
+	r.AddCookie(&http.Cookie{Name: LoginCookieName, Value: "login"})
+	r.Header.Set("Origin", "http://console")
+	w := httptest.NewRecorder()
+	s.handlePush(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatal("legacy client can register without audience support")
 	}
 }
 

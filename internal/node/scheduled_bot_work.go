@@ -11,13 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/oklog/ulid/v2"
 )
 
 // Scheduling admits work; the ordinary durable task worker executes it. A slow
@@ -95,11 +96,12 @@ func (n *Node) dispatchBotSchedule(ctx context.Context, task *pb.ScheduledTaskRe
 	}
 	body := fmt.Sprintf("Execute occurrence of routine %s (%s). Do not recreate the schedule.\n\n%s\n\nSave progress for the next run with schedule_update(id=%s, checkpoint=...). Previous inbox item: %s.\n", task.Id, task.Name, task.Params["prompt"], task.Id, task.Params["last_item_id"])
 	body += "Notification policy: " + mode + ". "
-	if mode == "always" {
+	switch mode {
+	case "always":
 		body += "The final outcome will be announced automatically; do not duplicate it with notify.\n"
-	} else if mode == "never" {
+	case "never":
 		body += "Keep routine outcomes quiet.\n"
-	} else {
+	default:
 		body += "Use notify only for a meaningful change or when your owner needs attention.\n"
 	}
 	body += promptgen.WrapContext([]promptgen.ContextBlock{{Source: "routine-checkpoint", Trust: promptgen.TrustUntrusted, Content: task.Params["checkpoint"]}, {Source: "previous-occurrence", Trust: promptgen.TrustUntrusted, Content: previous}})

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -174,15 +175,10 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	// Chat is conversational regardless of the recipient or whether teams are
 	// enabled. Only an explicit /task command bypasses the conversational runner;
 	// the model can separately choose task_create or delegate via inbox_post.
-	command := strings.Fields(body.Message)[0]
-	if command == "/task" {
-		taskBody := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(body.Message), command))
-		if taskBody == "" {
-			emit("error", map[string]any{"message": "usage: /task <work to carry out>"})
-			return
-		}
-		if s.cfg.StartBotTask == nil {
-			emit("error", map[string]any{"message": "tasks are unavailable on this node"})
+	taskBody, explicit, parseErr := botTaskCommand(body.Message, s.cfg.StartBotTask != nil)
+	if explicit {
+		if parseErr != nil {
+			emit("error", map[string]any{"message": parseErr.Error()})
 			return
 		}
 		req.Message = taskBody
@@ -296,6 +292,21 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		"cost_usd":        resp.BudgetState.SpendUSD,
 		"session_id":      botChannel + ":" + botID,
 	})
+}
+
+func botTaskCommand(message string, available bool) (string, bool, error) {
+	fields := strings.Fields(message)
+	if len(fields) == 0 || fields[0] != "/task" {
+		return "", false, nil
+	}
+	body := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(message), "/task"))
+	if body == "" {
+		return "", true, errors.New("usage: /task <work to carry out>")
+	}
+	if !available {
+		return "", true, errors.New("tasks are unavailable on this node")
+	}
+	return body, true, nil
 }
 
 // Only runner-recorded dispatch proves execution. A tool name, output or absent

@@ -9,13 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func scheduleCron(ctx context.Context, when, zone string) (string, error) {

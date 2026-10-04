@@ -12,10 +12,11 @@ import (
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/push"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 func (s *Server) initPush() error {
@@ -59,16 +60,24 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, 403, err.Error())
 		return
 	}
-	var sub webpush.Subscription
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&sub); err != nil {
+	var body struct {
+		webpush.Subscription
+		ProtocolVersion int `json:"protocol_version"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&body); err != nil {
 		s.jsonErr(w, 400, "invalid subscription")
 		return
 	}
 	owner := canonicalUserPrincipal(user.ID)
+	var expires time.Time
 	if r.Method == http.MethodDelete {
-		err = s.push.Remove(owner, sub.Endpoint)
+		err = s.push.Remove(owner, body.Endpoint)
 	} else {
-		expires := time.Now().Add(DefaultLoginSessionTTL)
+		if body.ProtocolVersion != 1 {
+			s.jsonErr(w, 400, "reload Lobslaw before enabling notifications")
+			return
+		}
+		expires = time.Now().Add(DefaultLoginSessionTTL)
 		if authn.FromCookie {
 			sess := s.logins.get(authn.LoginID)
 			if sess == nil {
@@ -79,13 +88,13 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		} else if !authn.Claims.ExpiresAt.IsZero() && authn.Claims.ExpiresAt.Before(expires) {
 			expires = authn.Claims.ExpiresAt
 		}
-		err = s.push.Subscribe(owner, authn.LoginID, expires, sub)
+		err = s.push.Subscribe(owner, authn.LoginID, expires, body.Subscription)
 	}
 	if err != nil {
 		s.jsonErr(w, 400, err.Error())
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "binding_id": s.push.Binding(owner, authn.LoginID, body.Endpoint), "expires_at": expires.UTC().Format(time.RFC3339), "user_id": user.ID})
 }
 
 func (s *Server) runPush(ctx context.Context) {
@@ -93,7 +102,7 @@ func (s *Server) runPush(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		leg, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := s.push.Dispatch(leg, s.pushEvents)
+		err := s.push.DispatchPages(leg, s.notificationEventPage)
 		cancel()
 		if err != nil && ctx.Err() == nil {
 			s.log.Warn("web push delivery deferred", "err", err)
@@ -106,73 +115,19 @@ func (s *Server) runPush(ctx context.Context) {
 	}
 }
 
-func (s *Server) pushEvents(ctx context.Context, owner string) ([]push.Event, error) {
-	user, ok := s.enrolledUser(ctx, strings.TrimPrefix(owner, "user:"))
-	if !ok {
-		return nil, nil
-	}
-	claims := &types.Claims{UserID: user.ID, Roles: user.Roles, Scope: s.cfg.DefaultScope}
-	var bots []*pb.ConsoleBot
-	if s.cfg.RemoteConsole != nil {
-		reply, err := s.cfg.RemoteConsole.QueryConsole(ctx, &pb.QueryConsoleRequest{Identity: consoleIdentity(claims), Query: &pb.QueryConsoleRequest_Bots{Bots: &pb.ConsoleEmpty{}}})
+func (s *Server) notificationEvents(ctx context.Context, owner string) ([]notify.Event, error) {
+	var events []notify.Event
+	for cursor := ""; ; {
+		page, err := s.notificationEventPage(ctx, owner, cursor)
 		if err != nil {
 			return nil, err
 		}
-		bots = reply.GetBots().GetBots()
-	} else if s.cfg.Bots != nil {
-		records, err := s.cfg.Bots.List(ctx)
-		if err != nil {
-			return nil, err
+		events = append(events, page.Events...)
+		if page.Next == "" {
+			return events, nil
 		}
-		for _, b := range records {
-			if b.Owner == owner {
-				bots = append(bots, &pb.ConsoleBot{Id: b.Id, DisplayName: b.DisplayName})
-			}
-		}
+		cursor = page.Next
 	}
-	var events []push.Event
-	for _, bot := range bots {
-		var items []*pb.ConsoleInboxItem
-		if s.cfg.RemoteConsole != nil {
-			reply, err := s.cfg.RemoteConsole.QueryConsole(ctx, &pb.QueryConsoleRequest{Identity: consoleIdentity(claims), Query: &pb.QueryConsoleRequest_Inbox{Inbox: &pb.ConsoleList{Id: bot.Id, Status: "all", Limit: 200}}})
-			if err != nil {
-				return nil, err
-			}
-			items = reply.GetInbox().GetItems()
-		} else if s.cfg.Inbox != nil {
-			var err error
-			items, err = s.cfg.Inbox.Recent(ctx, bot.Id, 200)
-			if err != nil {
-				return nil, err
-			}
-		}
-		for _, item := range items {
-			if item.RequestedBy != owner {
-				continue
-			}
-			var task *pb.TaskApprovalRecord
-			if item.Status == "waiting" && item.TaskId != "" {
-				query := &pb.GetTaskApprovalRequest{Id: item.TaskId, Owner: owner}
-				if s.cfg.RemoteConsole != nil {
-					reply, err := s.cfg.RemoteConsole.QueryConsole(ctx, &pb.QueryConsoleRequest{Identity: consoleIdentity(claims), Query: &pb.QueryConsoleRequest_TaskApproval{TaskApproval: query}})
-					if err != nil {
-						return nil, err
-					}
-					task = reply.GetTaskApproval().GetRecord()
-				} else if s.cfg.TaskApprovals != nil {
-					reply, err := s.cfg.TaskApprovals.GetTaskApproval(ctx, query)
-					if err != nil {
-						return nil, err
-					}
-					task = reply.GetRecord()
-				}
-			}
-			if event, ok := inboxPushEvent(bot, item, task); ok {
-				events = append(events, event)
-			}
-		}
-	}
-	return events, nil
 }
 
 func inboxPushEvent(bot *pb.ConsoleBot, item *pb.ConsoleInboxItem, task *pb.TaskApprovalRecord) (push.Event, bool) {
@@ -180,7 +135,7 @@ func inboxPushEvent(bot *pb.ConsoleBot, item *pb.ConsoleInboxItem, task *pb.Task
 	if name == "" {
 		name = bot.Id
 	}
-	e := push.Event{ID: fmt.Sprintf("%s:%s:%d", item.Id, item.Status, item.Revision), Title: name, URL: "/bots/" + url.PathEscape(bot.Id), Icon: "/__agent-icons/" + url.PathEscape(bot.Id)}
+	e := push.Event{ID: fmt.Sprintf("%s:%s:%d", item.Id, item.Status, item.Revision), Title: name, URL: "/bots/" + url.PathEscape(bot.Id), Icon: "/__agent-icons/" + url.PathEscape(bot.Id), BotID: bot.Id, TaskID: item.TaskId, InboxID: item.Id}
 	e.At, _ = time.Parse(time.RFC3339Nano, item.CompletedAt)
 	if e.At.IsZero() {
 		e.At, _ = time.Parse(time.RFC3339Nano, item.CreatedAt)
@@ -225,6 +180,9 @@ func inboxPushEvent(bot *pb.ConsoleBot, item *pb.ConsoleInboxItem, task *pb.Task
 	case item.Status == "done" && strings.HasPrefix(item.Sender, "schedule:") && strings.HasSuffix(item.Sender, ":always"):
 		e.Title += " — routine complete"
 		e.Body = item.Result
+		if item.TaskId != "" {
+			e.URL = "/approvals/" + url.PathEscape(item.TaskId)
+		}
 	default:
 		return push.Event{}, false
 	}

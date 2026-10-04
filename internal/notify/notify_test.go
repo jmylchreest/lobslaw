@@ -85,6 +85,23 @@ func TestSendBroadcastsToEveryBoundChannel(t *testing.T) {
 	}
 }
 
+func TestDurableTelegramOutboxSuppressesLegacyDuplicate(t *testing.T) {
+	prefs := &stubPrefs{records: map[string]*lobslawv1.UserPreferences{"alice": {UserId: "alice", Channels: []*lobslawv1.UserChannelAddress{{Type: "telegram", Address: "42"}, {Type: "slack", Address: "dm"}}}}}
+	tg, slack := &fakeSink{channelType: "telegram"}, &fakeSink{channelType: "slack"}
+	svc := NewService(prefs, nil)
+	_ = svc.RegisterSink(tg)
+	_ = svc.RegisterSink(slack)
+	if err := svc.Send(t.Context(), Notification{UserID: "alice", Body: "outcome", SkipChannels: []string{"telegram"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tg.calls()) != 0 || len(slack.calls()) != 1 {
+		t.Fatal("durable routing duplicated Telegram or suppressed another channel")
+	}
+	if err := svc.Send(t.Context(), Notification{UserID: "alice", Body: "outcome", OriginatorChannel: "telegram", SkipChannels: []string{"telegram"}}); !errors.Is(err, ErrUserUnbound) {
+		t.Fatal("originator bypassed durable Telegram routing")
+	}
+}
+
 func TestSendOriginatorOnlyDeliversOnThatChannel(t *testing.T) {
 	t.Parallel()
 	prefs := &stubPrefs{records: map[string]*lobslawv1.UserPreferences{

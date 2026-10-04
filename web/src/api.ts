@@ -4,6 +4,8 @@
 // calls, and a generator would be a build-step dependency plus a schema
 // to keep in step, for types a person can read in one screen.
 
+import { clearLocalPush } from "./pushBinding";
+
 export type BotStatus = "pending" | "claimed" | "waiting" | "done" | "failed" | "cancelled";
 export type InboxKind = "task" | "question" | "answer" | "result" | "fyi";
 
@@ -290,7 +292,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   pushConfig: () => request<{ public_key: string }>("/v1/push"),
-  subscribePush: (subscription: PushSubscriptionJSON) => request("/v1/push", { method: "POST", body: JSON.stringify(subscription) }),
+  subscribePush: (subscription: PushSubscriptionJSON) => request<{ binding_id: string; expires_at: string; user_id: string }>("/v1/push", { method: "POST", body: JSON.stringify({ ...subscription, protocol_version: 1 }) }),
   unsubscribePush: (endpoint: string) => request("/v1/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
   learnedReviews: () => request<{ reviews?: LearnedReview[] }>("/v1/learned-reviews").then((r) => r.reviews ?? []),
   learnedReview: (id: string) => request<LearnedReview>(`/v1/learned-reviews/${encodeURIComponent(id)}`),
@@ -314,20 +316,25 @@ export const api = {
     }),
   session: () => request<SessionInfo>("/v1/session"),
 
-  login: (token: string) =>
-    request<SessionInfo>("/v1/session", {
+  login: async (token: string) => {
+    await clearLocalPush();
+    return request<SessionInfo>("/v1/session", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
-    }),
+    });
+  },
 
-  loginCode: (code: string) =>
-    request<SessionInfo>("/v1/session", {
+  loginCode: async (code: string) => {
+    await clearLocalPush();
+    return request<SessionInfo>("/v1/session", {
       method: "POST",
       body: JSON.stringify({ code }),
-    }),
+    });
+  },
 
-  logout: () => {
+  logout: async () => {
     cancelActiveStreams();
+    await clearLocalPush();
     return request<{ status: string }>("/v1/session", { method: "DELETE" });
   },
 

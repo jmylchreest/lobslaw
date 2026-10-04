@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -14,8 +17,6 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func scheduleRecord(t *testing.T, n *Node, id string) *pb.ScheduledTaskRecord {
@@ -78,59 +79,7 @@ func TestRecurringBotWorkSurvivesRestartAndDeliversOutcome(t *testing.T) {
 	if task.Owner != "bot:worker" || task.Params["requested_by"] != "user:alice" || !strings.HasPrefix(task.Schedule, "CRON_TZ=Europe/London ") {
 		t.Fatalf("identity/timezone lost: %+v", task)
 	}
-	task.NextRun = timestamppb.New(time.Now().Add(-time.Second))
-	putTestSchedule(t, n, task)
-	// Run the real scheduler, not a direct model call. Completion persists the
-	// dispatched item id; the worker separately executes the admitted task.
-	handlers := scheduler.NewHandlerRegistry()
-	_ = handlers.RegisterTask(scheduler.AgentTurnHandlerRef, n.runTaskAsAgentTurn)
-	sch, err := scheduler.NewScheduler(scheduler.Config{NodeID: cfg.NodeID, MaxSleep: 10 * time.Millisecond}, n.raft, handlers)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- sch.Run(ctx) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		task = scheduleRecord(t, n, scheduleID)
-		if task.LastRun != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if task.Params["last_item_id"] == "" {
-		t.Fatal("scheduler did not admit visible work")
-	}
-	occurrence := task.Params["last_item_id"]
-	// Replaying the original occurrence cannot enqueue it twice.
-	replay := proto.Clone(task).(*pb.ScheduledTaskRecord)
-	replay.NextRun = timestamppb.New(task.LastRun.AsTime())
-	// An overlapping tick must leave the pending item as the only work.
-	if err := n.dispatchBotSchedule(t.Context(), replay); err != nil {
-		t.Fatal(err)
-	}
-	items, err := n.inboxSvc.List(t.Context(), "worker", memory.InboxFilter{})
-	if err != nil || len(items) != 1 {
-		t.Fatalf("overlapping work: %v %v", items, err)
-	}
-	if err := n.drainOneInboxItem(t.Context(), "worker"); err != nil {
-		t.Fatal(err)
-	}
-	item, err := n.inboxSvc.Get(t.Context(), "worker", occurrence)
-	if err != nil || item.Status != pb.InboxStatus_INBOX_STATUS_DONE || item.Result != "Daily outcome: checked the assigned work." {
-		t.Fatalf("outcome not delivered: %+v %v", item, err)
-	}
-	if !strings.HasSuffix(item.Sender, ":always") {
-		t.Fatal("requested notification policy lost")
-	}
-	if scheduleRecord(t, n, scheduleID).Params["checkpoint"] != "processed revision abc123" {
-		t.Fatal("checkpoint not persisted")
-	}
+	exerciseScheduledOccurrence(t, n, task)
 	stop()
 	provider2 := compute.NewMockProviderFunc(func(req compute.ChatRequest, _ int) (compute.MockResponse, error) {
 		var text strings.Builder
@@ -153,7 +102,7 @@ func TestRecurringBotWorkSurvivesRestartAndDeliversOutcome(t *testing.T) {
 	if err := n2.drainOneInboxItem(t.Context(), "worker"); err != nil {
 		t.Fatal(err)
 	}
-	items, err = n2.inboxSvc.List(t.Context(), "worker", memory.InboxFilter{})
+	items, err := n2.inboxSvc.List(t.Context(), "worker", memory.InboxFilter{})
 	if err != nil || len(items) != 2 {
 		t.Fatalf("replay produced duplicate: %d %v", len(items), err)
 	}
@@ -167,6 +116,63 @@ func TestRecurringBotWorkSurvivesRestartAndDeliversOutcome(t *testing.T) {
 	other := turn.WithIdentity(t.Context(), turn.Identity{Principal: identity.Bot("other")})
 	if _, _, err := update(other, map[string]string{"id": scheduleID, "enabled": "true"}); err == nil {
 		t.Fatal("another agent edited the routine")
+	}
+}
+
+func exerciseScheduledOccurrence(t *testing.T, n *Node, task *pb.ScheduledTaskRecord) {
+	t.Helper()
+	id := task.Id
+	task.NextRun = timestamppb.New(time.Now().Add(-time.Second))
+	putTestSchedule(t, n, task)
+	handlers := scheduler.NewHandlerRegistry()
+	if err := handlers.RegisterTask(scheduler.AgentTurnHandlerRef, n.runTaskAsAgentTurn); err != nil {
+		t.Fatal(err)
+	}
+	sch, err := scheduler.NewScheduler(scheduler.Config{NodeID: n.cfg.NodeID, MaxSleep: 10 * time.Millisecond}, n.raft, handlers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sch.Run(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		task = scheduleRecord(t, n, id)
+		if task.LastRun != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if task.Params["last_item_id"] == "" {
+		t.Fatal("scheduler did not admit visible work")
+	}
+	occurrence := task.Params["last_item_id"]
+	replay := proto.Clone(task).(*pb.ScheduledTaskRecord)
+	replay.NextRun = timestamppb.New(task.LastRun.AsTime())
+	if err := n.dispatchBotSchedule(t.Context(), replay); err != nil {
+		t.Fatal(err)
+	}
+	items, err := n.inboxSvc.List(t.Context(), "worker", memory.InboxFilter{})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("overlapping work: %v %v", items, err)
+	}
+	if err := n.drainOneInboxItem(t.Context(), "worker"); err != nil {
+		t.Fatal(err)
+	}
+	item, err := n.inboxSvc.Get(t.Context(), "worker", occurrence)
+	if err != nil || item.Status != pb.InboxStatus_INBOX_STATUS_DONE || item.Result != "Daily outcome: checked the assigned work." {
+		t.Fatalf("outcome not delivered: %+v %v", item, err)
+	}
+	if !strings.HasSuffix(item.Sender, ":always") {
+		t.Fatal("requested notification policy lost")
+	}
+	if scheduleRecord(t, n, id).Params["checkpoint"] != "processed revision abc123" {
+		t.Fatal("checkpoint not persisted")
 	}
 }
 

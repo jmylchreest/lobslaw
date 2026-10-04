@@ -229,6 +229,8 @@ var allBuckets = []string{
 	BucketTaskApprovals,
 	bucketTaskHistory,
 	bucketInboxActivity,
+	bucketInboxNotifications,
+	bucketInboxNotificationKeys,
 	BucketConsolidations,
 	BucketDisputes,
 	BucketPinned,

@@ -2706,6 +2706,7 @@ message QueryConsoleRequest {
     GetTaskApprovalRequest task_approval = 18;
     ConsoleEmpty learned_reviews = 19;
     ConsoleTarget learned_review = 20;
+    ConsoleNotificationQuery notification_candidates = 21;
   }
 }
 message ConsoleCapability {
@@ -2882,6 +2883,7 @@ message QueryConsoleResponse {
     GetTaskApprovalResponse task_approval = 16;
     ConsoleLearnedReviews learned_reviews = 17;
     ConsoleLearnedReview learned_review = 18;
+    ConsoleNotificationPage notification_candidates = 19;
   }
 }
 message ConsoleStrings {
@@ -3213,4 +3215,16 @@ message RecoverTaskApprovalResponse {
 }
 message CheckGrantTaskApprovalResponse {
   bool granted = 1;
+}
+
+// Owner-checked, bounded reads of durable notification candidates. A cursor is
+// local to the named bot; it is never a browser path or an authority assertion.
+message ConsoleNotificationQuery {
+  string bot = 1;
+  string after = 2;
+  int32 limit = 3;
+}
+message ConsoleNotificationPage {
+  repeated ConsoleInboxItem items = 1;
+  string next_cursor = 2;
 }

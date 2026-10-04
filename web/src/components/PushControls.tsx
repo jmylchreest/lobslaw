@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { setRoster } from "../theme";
 import { mascotSVG } from "./Mascot";
+import { clearLocalPush, pushBindingEpoch, savePushBinding } from "../pushBinding";
 
 async function cacheAgentIcons() {
   const bots = await api.listBots();
@@ -22,19 +23,26 @@ export function PushControls({ userId }: { userId: string }) {
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const operation = useRef(0);
   useEffect(() => {
     if (!supported || !userId || userId === "anon") return;
     let live = true;
+    const version = ++operation.current;
     async function renew() {
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.getSubscription();
-      if (!sub || localStorage.getItem("lobslaw:push-owner") !== userId) return;
-      await api.subscribePush(sub.toJSON());
-      if (live) setEnabled(true);
+      if (localStorage.getItem("lobslaw:push-owner") !== userId) return;
+      if (!sub) return;
+      const epoch = await pushBindingEpoch();
+      const binding = await api.subscribePush(sub.toJSON());
+      if (!live || version !== operation.current) return;
+      if (binding.user_id !== userId) throw new Error("Your sign-in changed; reload Lobslaw.");
+      if (!await savePushBinding(binding.binding_id, binding.expires_at, epoch)) return;
+      setEnabled(true);
       void cacheAgentIcons().catch(() => {});
     }
     void renew().catch((error) => { if (live) setMessage(error.message); });
-    return () => { live = false; };
+    return () => { live = false; operation.current++; };
   }, [supported, userId]);
   if (!userId || userId === "anon") return null;
 
@@ -44,18 +52,24 @@ export function PushControls({ userId }: { userId: string }) {
       return;
     }
     setBusy(true); setMessage("");
+    const version = ++operation.current;
     try {
       if (!enabled && await Notification.requestPermission() !== "granted") throw new Error("Notifications are blocked. You can change this in your browser or device settings.");
       const reg = await navigator.serviceWorker.ready;
       let sub = await reg.pushManager.getSubscription();
       if (enabled) {
-        if (sub) { await api.unsubscribePush(sub.endpoint); await sub.unsubscribe(); }
-        localStorage.removeItem("lobslaw:push-owner"); setEnabled(false);
+        await clearLocalPush();
+        setEnabled(false);
+        if (sub) await api.unsubscribePush(sub.endpoint);
       } else {
+        const epoch = await pushBindingEpoch();
         const config = await api.pushConfig();
         const key = Uint8Array.from(atob(config.public_key.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
         sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-        await api.subscribePush(sub.toJSON());
+        const binding = await api.subscribePush(sub.toJSON());
+        if (version !== operation.current) return;
+        if (binding.user_id !== userId) throw new Error("Your sign-in changed; reload Lobslaw.");
+        if (!await savePushBinding(binding.binding_id, binding.expires_at, epoch)) return;
         localStorage.setItem("lobslaw:push-owner", userId); setEnabled(true);
         void cacheAgentIcons().catch(() => {});
       }
