@@ -241,3 +241,39 @@ func TestHistoricalSnapshotMigrationAndRestart(t *testing.T) {
 		t.Fatal("lost snapshot state", err)
 	}
 }
+
+func TestFutureStoreRejectedBeforeCreatingBuckets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucket([]byte(formatBucket))
+		if err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(StateFormat{Version: 999, Protocol: "future"})
+		return b.Put([]byte(formatKey), raw)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store, err := OpenStore(path, crypto.Key{}); err == nil {
+		_ = store.Close()
+		t.Fatal("opened future store")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("modified unsupported store before rejection")
+	}
+}
