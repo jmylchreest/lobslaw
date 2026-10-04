@@ -13,12 +13,13 @@ const ControlProtocol = "lobslaw-rolling-v1"
 func SupportedContracts() []uint32 { return []uint32{1} }
 
 type Transition struct {
-	ID              string   `json:"id"`
-	Target          uint32   `json:"target"`
-	Epoch           uint64   `json:"epoch"`
-	MembershipIndex uint64   `json:"membership_index"`
-	Members         []string `json:"members"`
-	Index           uint64   `json:"index"`
+	ID                    string   `json:"id"`
+	Target                uint32   `json:"target"`
+	Epoch                 uint64   `json:"epoch"`
+	MembershipIndex       uint64   `json:"membership_index"`
+	MembershipFingerprint string   `json:"membership_fingerprint"`
+	Members               []string `json:"members"`
+	Index                 uint64   `json:"index"`
 }
 
 type ContractState struct {
@@ -68,7 +69,7 @@ func (s ContractState) Advance(action string, t Transition, supported []uint32) 
 	case "prepare":
 		if s.Prepared != nil {
 			p := s.Prepared
-			if p.ID == t.ID && p.Target == t.Target && p.MembershipIndex == t.MembershipIndex && slices.Equal(p.Members, t.Members) {
+			if p.matches(t) {
 				return s, nil
 			}
 			return s, errors.New("another transition is prepared")
@@ -88,7 +89,7 @@ func (s ContractState) Advance(action string, t Transition, supported []uint32) 
 		s.Prepared = &t
 	case "finalize", "abort":
 		p := s.Prepared
-		if p == nil || p.ID != t.ID || p.Target != t.Target || p.MembershipIndex != t.MembershipIndex || !slices.Equal(p.Members, t.Members) {
+		if p == nil || !p.matches(t) {
 			return s, errors.New("prepared transition does not match")
 		}
 		if action == "finalize" {
@@ -102,4 +103,8 @@ func (s ContractState) Advance(action string, t Transition, supported []uint32) 
 		return s, errors.New("expected prepare, finalize or abort")
 	}
 	return s, s.Validate(supported)
+}
+
+func (t Transition) matches(other Transition) bool {
+	return t.ID == other.ID && t.Target == other.Target && t.Epoch == other.Epoch && t.MembershipIndex == other.MembershipIndex && t.MembershipFingerprint == other.MembershipFingerprint && slices.Equal(t.Members, other.Members)
 }

@@ -833,3 +833,9 @@ lobslaw cluster upgrade abort --context prod --id rollout-1 --target 2 --epoch 0
 Use the actual epoch from status. These require an operator certificate and an
 explicit cluster upgrade policy grant. See [data migrations](./data-migrations)
 for the initial coordinated transition, quorum and rollback limits.
+
+Transfer leadership to a caught-up configured voter before replacing the leader:
+
+```sh
+lobslaw cluster upgrade transfer --context prod --member node-2
+```

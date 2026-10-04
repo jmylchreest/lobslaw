@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -48,7 +50,7 @@ func (n *RaftNode) UpgradeStatus() (*pb.UpgradeStatusResponse, error) {
 }
 
 func transitionCommand(action string, t dataformat.Transition) *pb.UpgradeCommand {
-	return &pb.UpgradeCommand{Action: action, TransitionId: t.ID, ExpectedEpoch: t.Epoch, Target: t.Target, MembershipIndex: t.MembershipIndex, MemberIds: slices.Clone(t.Members)}
+	return &pb.UpgradeCommand{Action: action, TransitionId: t.ID, ExpectedEpoch: t.Epoch, Target: t.Target, MembershipIndex: t.MembershipIndex, MembershipFingerprint: t.MembershipFingerprint, MemberIds: slices.Clone(t.Members)}
 }
 
 func (n *RaftNode) validateProposal(raw []byte) error {
@@ -79,6 +81,9 @@ func (n *RaftNode) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeReque
 	if err != nil {
 		return nil, err
 	}
+	if req.Action == "transfer" {
+		return n.transferUpgradeLeader(ctx, req.TargetNodeId)
+	}
 	if state.CompletedID == req.TransitionId && state.CompletedAction == req.Action && state.Epoch == req.ExpectedEpoch+1 {
 		return n.UpgradeStatus()
 	}
@@ -92,7 +97,10 @@ func (n *RaftNode) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeReque
 		ids = append(ids, string(s.ID))
 	}
 	slices.Sort(ids)
-	t := dataformat.Transition{ID: req.TransitionId, Target: req.Target, Epoch: req.ExpectedEpoch, MembershipIndex: cfg.Index(), Members: ids, Index: 1}
+	t := dataformat.Transition{ID: req.TransitionId, Target: req.Target, Epoch: req.ExpectedEpoch, MembershipIndex: n.Raft.AppliedIndex(), MembershipFingerprint: configurationFingerprint(servers), Members: ids, Index: 1}
+	if state.Prepared != nil {
+		t.MembershipIndex = state.Prepared.MembershipIndex
+	}
 	if _, err := state.Advance(req.Action, t, dataformat.SupportedContracts()); err != nil {
 		return nil, err
 	}
@@ -148,10 +156,66 @@ func (n *RaftNode) checkUpgradeMembers(ctx context.Context, servers []raft.Serve
 		}
 		if finalize {
 			p := peer.State.Prepared
-			if p == nil || p.ID != t.ID || p.Target != t.Target || p.MembershipIndex != t.MembershipIndex || !slices.Equal(p.Members, t.Members) || p.Index != state.Prepared.Index {
+			if p == nil || p.ID != t.ID || p.Target != t.Target || p.MembershipIndex != t.MembershipIndex || p.MembershipFingerprint != t.MembershipFingerprint || !slices.Equal(p.Members, t.Members) || p.Index != state.Prepared.Index {
 				return fmt.Errorf("member %s has not durably prepared this transition", server.ID)
 			}
 		}
 	}
 	return nil
+}
+
+// The pinned Raft GetConfiguration API returns index zero. Fence preparation
+// with the applied barrier index and compare the complete configuration,
+// including addresses and suffrage, on every continuation.
+func configurationFingerprint(servers []raft.Server) string {
+	servers = slices.Clone(servers)
+	slices.SortFunc(servers, func(a, b raft.Server) int {
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
+	})
+	raw, _ := json.Marshal(servers)
+	return fmt.Sprintf("%x", sha256.Sum256(raw))
+}
+
+func (n *RaftNode) transferUpgradeLeader(ctx context.Context, id string) (*pb.UpgradeStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, upgradeTimeout)
+	defer cancel()
+	if id == "" {
+		return nil, errors.New("target node id required")
+	}
+	if id == string(n.nodeID) {
+		return n.UpgradeStatus()
+	}
+	state, err := n.fsm.store.ContractState()
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range n.ConfigurationServers() {
+		if string(member.ID) != id || member.Suffrage != raft.Voter {
+			continue
+		}
+		if n.upgradeProbe == nil {
+			return nil, errors.New("member verification unavailable")
+		}
+		remote, err := n.upgradeProbe(ctx, member)
+		if err != nil {
+			return nil, err
+		}
+		if remote == nil || remote.ID != id {
+			return nil, errors.New("member identity mismatch")
+		}
+		if err := remote.supports(state.Required()); err != nil {
+			return nil, err
+		}
+		if err := n.Raft.LeadershipTransferToServer(member.ID, member.Address).Error(); err != nil {
+			return nil, err
+		}
+		return n.UpgradeStatus()
+	}
+	return nil, errors.New("target is not a configured voter")
 }

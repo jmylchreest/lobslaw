@@ -54,7 +54,7 @@ func (s *upgradeService) UpgradeStatus(ctx context.Context, _ *pb.UpgradeStatusR
 	}
 	return s.node.raft.UpgradeStatus()
 }
-func (s *upgradeService) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest) (*pb.UpgradeStatusResponse, error) {
+func (s *upgradeService) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest) (*pb.ChangeUpgradeResponse, error) {
 	if err := s.authorize(ctx, true); err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (s *upgradeService) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgrad
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "upgrade blocked: %v", err)
 	}
-	return out, nil
+	return &pb.ChangeUpgradeResponse{Status: out}, nil
 }
 
 func (n *Node) wireUpgradeService() {
@@ -90,7 +90,7 @@ func (n *Node) probeUpgradeMember(ctx context.Context, server raft.Server) (*mem
 	}
 	state := dataformat.ContractState{Active: reply.ActiveContract, Epoch: reply.Epoch}
 	if p := reply.Prepared; p != nil {
-		state.Prepared = &dataformat.Transition{ID: p.TransitionId, Target: p.Target, Epoch: p.ExpectedEpoch, MembershipIndex: p.MembershipIndex, Members: p.MemberIds, Index: reply.PreparedIndex}
+		state.Prepared = &dataformat.Transition{ID: p.TransitionId, Target: p.Target, Epoch: p.ExpectedEpoch, MembershipIndex: p.MembershipIndex, MembershipFingerprint: p.MembershipFingerprint, Members: p.MemberIds, Index: reply.PreparedIndex}
 	}
 	if err := state.Validate(reply.SupportedContracts); err != nil {
 		return nil, err

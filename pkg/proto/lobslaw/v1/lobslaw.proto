@@ -2557,7 +2557,7 @@ message CheckGrantTaskApprovalResponse {
 // Upgrade control is deliberately stable across supported data contracts.
 service UpgradeService {
   rpc UpgradeStatus(UpgradeStatusRequest) returns (UpgradeStatusResponse);
-  rpc ChangeUpgrade(ChangeUpgradeRequest) returns (UpgradeStatusResponse);
+  rpc ChangeUpgrade(ChangeUpgradeRequest) returns (ChangeUpgradeResponse);
 }
 message UpgradeStatusRequest {}
 message UpgradeStatusResponse {
@@ -2577,6 +2577,7 @@ message ChangeUpgradeRequest {
   string transition_id = 2;
   uint64 expected_epoch = 3;
   uint32 target = 4;
+  string target_node_id = 5;
 }
 message UpgradeCommand {
   string action = 1;
@@ -2585,4 +2586,9 @@ message UpgradeCommand {
   uint32 target = 4;
   uint64 membership_index = 5;
   repeated string member_ids = 6;
+  string membership_fingerprint = 7;
+}
+
+message ChangeUpgradeResponse {
+  UpgradeStatusResponse status = 1;
 }

@@ -161,7 +161,12 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 		_ = boltStore.Close()
 		return nil, err
 	}
-	logs, err := preflightLogs(context.Background(), boltStore, manifest.LegacyFormat)
+	_, covered, err := inspectSnapshots(context.Background(), cfg.DataDir, fsm.store.key)
+	if err != nil {
+		_ = boltStore.Close()
+		return nil, fmt.Errorf("snapshot compatibility preflight: %w", err)
+	}
+	logs, err := preflightLogs(context.Background(), boltStore, manifest.LegacyFormat, covered)
 	if err != nil {
 		_ = boltStore.Close()
 		return nil, fmt.Errorf("data compatibility preflight: %w", err)

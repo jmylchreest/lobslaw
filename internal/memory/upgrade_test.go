@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/hashicorp/raft"
 
 	"github.com/jmylchreest/lobslaw/internal/dataformat"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -101,5 +105,60 @@ func TestSnapshotFreezesStateAtCapture(t *testing.T) {
 	}
 	if _, err := destination.Get(BucketPolicyRules, "after-capture"); err == nil {
 		t.Fatal("snapshot contains writes after its Raft capture index")
+	}
+}
+
+func TestUpgradeConflictDoesNotHaltCommittedFSM(t *testing.T) {
+	node, fsm := newTestRaft(t)
+	raw, err := proto.Marshal(&pb.LogEntry{Op: pb.LogOp_LOG_OP_PUT, Payload: &pb.LogEntry_Upgrade{Upgrade: &pb.UpgradeCommand{Action: "abort", TransitionId: "stale", Target: 1, MembershipIndex: 1, MemberIds: []string{"test-node"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := node.applyRaw(raw, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflict, ok := result.(error)
+	if !ok || !errors.Is(conflict, ErrUpgradeConflict) {
+		t.Fatal("expected deterministic conflict", result)
+	}
+	if fsm.Failure() != nil {
+		t.Fatal("stale operator command halted the cluster", fsm.Failure())
+	}
+}
+
+func TestSnapshotCoveredLogGaps(t *testing.T) {
+	logs := raft.NewInmemStore()
+	for _, index := range []uint64{1, 5} {
+		if err := logs.StoreLog(&raft.Log{Index: index, Term: 1, Type: raft.LogNoop}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := preflightLogs(context.Background(), logs, ""); err == nil {
+		t.Fatal("accepted unexplained missing logs")
+	}
+	if _, err := preflightLogs(context.Background(), logs, "", 3); err == nil {
+		t.Fatal("accepted a gap beyond the validated snapshot")
+	}
+	if _, err := preflightLogs(context.Background(), logs, "", 4); err != nil {
+		t.Fatal("rejected installed snapshot gap", err)
+	}
+}
+
+func TestUpgradeConfigurationFingerprintIncludesAddressAndSuffrage(t *testing.T) {
+	servers := []raft.Server{{ID: "a", Address: "a:1", Suffrage: raft.Voter}, {ID: "b", Address: "b:1", Suffrage: raft.Voter}}
+	digest := configurationFingerprint(servers)
+	if digest != configurationFingerprint([]raft.Server{servers[1], servers[0]}) {
+		t.Fatal("configuration ordering changed identity")
+	}
+	changed := slices.Clone(servers)
+	changed[0].Address = "other:1"
+	if digest == configurationFingerprint(changed) {
+		t.Fatal("address change ignored")
+	}
+	changed = slices.Clone(servers)
+	changed[0].Suffrage = raft.Nonvoter
+	if digest == configurationFingerprint(changed) {
+		t.Fatal("voting change ignored")
 	}
 }

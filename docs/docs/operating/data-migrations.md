@@ -69,7 +69,7 @@ Only explicitly supported contract combinations can run together.
 
 During a supported rollout, replace one follower at a time, wait for catch-up,
 and preserve a majority of healthy voters. Transfer leadership before replacing
-the leader. A two-voter cluster cannot retain quorum while one member is stopped.
+the leader using `lobslaw cluster upgrade transfer --context prod --member NODE_ID`. A two-voter cluster cannot retain quorum while one member is stopped.
 This feature does not install binaries or automatically remove unavailable members.
 
 New binaries continue using the active contract, including snapshot output. New
@@ -104,3 +104,15 @@ data: prepared history may remain in logs/snapshots. Supported binary rollback i
 before preparation. After activation, older binaries are refused; use the original
 cluster backup and binary for disaster recovery, accounting for subsequent writes
 and external effects. Do not start copied directories as duplicate node identities.
+
+Team-capable nodes started on contract 1 keep team execution/tools disabled. After
+finalization, restart those compute nodes one at a time to wire the enabled team
+services. This does not require stopping the whole cluster. New empty data
+stores begin on contract 1; historical team stores retain contract 2 through the
+initial coordinated migration. Do not activate solely because binaries have
+changed: inspect status and check ordinary operations first.
+
+The upgrade RPC status is local to the addressed member; it reports its node ID,
+reader capabilities, active contract, epoch, preparation index and known leader.
+A blocked preparation/finalization identifies the first member that is not ready.
+Activation changes storage interpretation, not ownership or tool permissions.

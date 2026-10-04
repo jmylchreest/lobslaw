@@ -4200,7 +4200,7 @@ const (
 // Upgrade control is deliberately stable across supported data contracts.
 type UpgradeServiceClient interface {
 	UpgradeStatus(ctx context.Context, in *UpgradeStatusRequest, opts ...grpc.CallOption) (*UpgradeStatusResponse, error)
-	ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*UpgradeStatusResponse, error)
+	ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*ChangeUpgradeResponse, error)
 }
 
 type upgradeServiceClient struct {
@@ -4221,9 +4221,9 @@ func (c *upgradeServiceClient) UpgradeStatus(ctx context.Context, in *UpgradeSta
 	return out, nil
 }
 
-func (c *upgradeServiceClient) ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*UpgradeStatusResponse, error) {
+func (c *upgradeServiceClient) ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*ChangeUpgradeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UpgradeStatusResponse)
+	out := new(ChangeUpgradeResponse)
 	err := c.cc.Invoke(ctx, UpgradeService_ChangeUpgrade_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -4238,7 +4238,7 @@ func (c *upgradeServiceClient) ChangeUpgrade(ctx context.Context, in *ChangeUpgr
 // Upgrade control is deliberately stable across supported data contracts.
 type UpgradeServiceServer interface {
 	UpgradeStatus(context.Context, *UpgradeStatusRequest) (*UpgradeStatusResponse, error)
-	ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*UpgradeStatusResponse, error)
+	ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*ChangeUpgradeResponse, error)
 }
 
 // UnimplementedUpgradeServiceServer should be embedded to have
@@ -4251,7 +4251,7 @@ type UnimplementedUpgradeServiceServer struct{}
 func (UnimplementedUpgradeServiceServer) UpgradeStatus(context.Context, *UpgradeStatusRequest) (*UpgradeStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpgradeStatus not implemented")
 }
-func (UnimplementedUpgradeServiceServer) ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*UpgradeStatusResponse, error) {
+func (UnimplementedUpgradeServiceServer) ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*ChangeUpgradeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ChangeUpgrade not implemented")
 }
 func (UnimplementedUpgradeServiceServer) testEmbeddedByValue() {}

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/raft"
@@ -41,8 +42,12 @@ func (s *compatibleLogStore) GetLog(index uint64, out *raft.Log) error {
 	return nil
 }
 
-func preflightLogs(ctx context.Context, store raft.LogStore, profile string) (*compatibleLogStore, error) {
+func preflightLogs(ctx context.Context, store raft.LogStore, profile string, snapshotCoverage ...uint64) (*compatibleLogStore, error) {
 	adapted := &compatibleLogStore{LogStore: store, profile: profile}
+	var covered uint64
+	if len(snapshotCoverage) > 0 {
+		covered = snapshotCoverage[0]
+	}
 	first, err := store.FirstIndex()
 	if err != nil {
 		return nil, err
@@ -59,7 +64,7 @@ func preflightLogs(ctx context.Context, store raft.LogStore, profile string) (*c
 			return nil, err
 		}
 		var entry raft.Log
-		if err := adapted.GetLog(index, &entry); err != nil {
+		if err := adapted.GetLog(index, &entry); err != nil && !(errors.Is(err, raft.ErrLogNotFound) && index <= covered) {
 			return nil, err
 		}
 		if index == last {

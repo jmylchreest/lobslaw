@@ -1,106 +1,102 @@
-# Design: coordinated activation for rolling binary upgrades
-
-Status: implementation in progress. The initial transition from unversioned deployments is coordinated; rolling upgrades start with the control-protocol baseline in this branch.
+# Rolling data contracts
 
 ## Overview
 
-Separate a node's supported capabilities from the cluster's active data contract. Nodes can be replaced one at a time while all writers, snapshot producers and feature handlers remain on the committed active contract. A separate operator-controlled activation advances that contract after every configured member is ready.
+This branch is the rolling-control baseline. The first move from an unversioned
+or migration-only binary remains coordinated. Subsequent supported binaries can
+coexist while retaining the active cluster contract. Activation is an explicit,
+replicated operator action, not a side effect of installing a binary.
 
-The first release must teach every node this protocol. Existing unversioned deployments cannot be assumed to understand activation, reject future state, or correctly decode historical colliding tags. Default proposal: one coordinated transition to the baseline, then rolling upgrades between explicitly tested adjacent contracts.
+The baseline supports contract 1; the stacked team implementation supports 1 and
+2. Compatibility is an explicit tested set, never an inferred version range.
+No arbitrary skipped-release or zero-quorum availability guarantee is made.
 
-## Interfaces
+## Interfaces and separation
 
-Proposed neutral types in internal/dataformat (no storage, transport or feature imports):
+- `internal/dataformat.ContractState`, `Transition` and `Advance` implement the
+  deterministic state machine independently of storage, transport and features.
+- `Store.ContractState` and `applyUpgrade` persist it in the format metadata bucket.
+  Activation, feature schema changes and the replay watermark share one bbolt
+  transaction. A stale control command is a deterministic conflict, not an FSM
+  fatal error. Unsupported readers are refused before mutation.
+- `RaftNode.ChangeUpgrade` owns leader checks, member probes, membership fencing
+  and proposal admission. `SetUpgradeProbe` injects authenticated peer discovery.
+- `UpgradeService` exposes typed status/change messages. Node wiring owns mTLS
+  identity checks and explicit operator policy. Peers may inspect capabilities;
+  only operators with the configured role and grant may change the contract.
+- gRPC interceptors exchange the stable control protocol, required contract and
+  supported contract set. Both directions are checked before sending persisted
+  data. Compatibility metadata never substitutes for authentication.
+- The CLI provides `cluster upgrade status|prepare|finalize|abort|transfer`.
 
-```go
-type ContractID uint32
-type Capabilities struct {
-    ControlProtocol uint32
-    ReadContracts []ContractID
-    WriteContracts []ContractID
-    SnapshotContracts []ContractID
-}
-type ActiveContract struct {
-    Contract ContractID
-    Epoch uint64
-}
-type Transition struct {
-    ID string
-    From ActiveContract
-    Target ContractID
-    MembershipIndex uint64
-    MemberIDs []string
-}
+## Transition and failure semantics
+
+1. A binary rollout preserves the active storage/log contract. New-only writes
+   are rejected before proposal, including forwarded raw commands and team
+   archive imports. New team tools and execution remain disabled.
+2. Prepare runs after a Raft barrier and checks every configured member. It commits
+   a unique transition ID, expected epoch, target and membership fingerprint.
+   The pinned Raft library returns zero from `GetConfiguration().Index()`; the
+   stored membership index is therefore the applied barrier fence, and the full
+   fingerprint includes IDs, addresses and suffrage.
+3. Every applied preparation is a durable restart fence. Membership changes are
+   serialized with preparation and rejected while it is pending. A new leader
+   barriers before making these decisions; capability probes alone cannot
+   authorize a transition.
+4. Finalize checks that every member has applied that exact preparation. An
+   offline/old member blocks activation even if there is quorum. Finalization
+   activates the contract at a single log index. No automatic member removal.
+5. Abort retains the old active contract and advances the epoch. Lost responses
+   are handled by status and idempotent retries with the same ID. Prepared history
+   may remain in snapshots/logs, so supported binary rollback ends at preparation.
+6. Leadership transfer uses Raft's catch-up transfer to a verified configured
+   voter. It changes no contract and is permitted during a prepared transition.
+7. Snapshot bytes are captured at the FSM snapshot boundary into a private
+   temporary file, not copied from future state during Persist. This adds disk
+   space/copy cost and can briefly pause application while the image is captured.
+   Temporary images are removed on normal release; interrupted images are never
+   startup candidates. Their bytes remain encrypted.
+8. Installed snapshots may leave gaps among retained logs. Preflight tolerates
+   missing entries only at/below a fully validated snapshot index; unexplained
+   gaps and unsupported entries still fail. Original log bytes remain immutable.
+
+The team branch creates team buckets/indexes only at activation (or while
+migrating an already-team-capable historical directory), and keeps contract-1
+snapshots readable by baseline binaries. Restart configured team compute nodes
+one at a time after activation to wire their new services.
+
+## Validation
+
+`internal/memory/rolling_cluster_test.go` runs genuine separate baseline and
+candidate binaries over mTLS, with encrypted stores and real Raft transport. It
+covers old/new leaders, individual replacements, old-follower snapshot catch-up,
+new-only proposal refusal, old-member activation refusal, membership freeze,
+prepared-state restart, idempotent finalization, activated writes and old-binary
+refusal before/after activation without changing state bytes.
+
+Focused tests cover stale epochs/membership, abort, durable format refusal,
+configuration fingerprint identity, snapshot capture timing, snapshot-covered log
+gaps, ordinary-proposal control rejection and separate read/write operator grants.
+Existing snapshot I/O failure and rollback tests continue to run.
+
+To run against a supported baseline checkout:
+
+```sh
+# In the baseline checkout:
+go test -c -o /tmp/lobslaw-baseline.test ./internal/memory
+# In the candidate checkout:
+LOBSLAW_ROLLING_BASELINE=/tmp/lobslaw-baseline.test go test -count=1 -run '^TestRollingMixedBinaries$' ./internal/memory
 ```
 
-Use explicit tested contracts, not an assumption that all integers between a minimum and maximum are compatible. Each contract identifies log payload semantics, snapshot layout and available features. Local physical formats are tracked separately; a rolling binary update must not automatically make its directory unreadable by the previous binary if rollback is promised.
+The process harness is skipped without an explicit baseline binary. The team PR
+adds CI for the pinned baseline/candidate pair. Future compatibility claims must
+add an actual binary pair and the corresponding schema/command migration.
 
-Authenticated NodeService RPCs expose capabilities, active epoch and upgrade status. Operator-only status/prepare/finalize commands follow existing authorization. Capabilities identify the actual peer, boot incarnation and membership, not arbitrary discovery advertisements. Never expose activation as an agent tool or grant authority through the compatibility header.
+## Limits
 
-## Data flow
-
-1. Install baseline protocol support through the supported initial transition.
-2. Replace followers individually; require catch-up and healthy quorum before proceeding. Transfer leadership to a caught-up upgraded voter before replacing the leader.
-3. All versions continue writing the committed old contract. New features remain disabled; a new leader is not permission to switch formats.
-4. Leader plans activation against the authoritative Raft configuration and probes all configured members, including non-voters if later supported.
-5. A committed prepare record freezes membership changes for this transition. Every member durably installs a target-version restart fence and acknowledges the exact transition and membership generation after applying the prepare index. An offline member blocks finalization; removing it is a separate explicit operation before preparation.
-6. A committed finalize record advances the active contract at one log index. Epoch checks, membership serialization and leader-change recovery prevent stale probes or a concurrent AddVoter from authorizing activation. Duplicate prepare/finalize requests are idempotent; status resolves a lost response.
-7. Contract migration and epoch publication must be atomic and crash recoverable. New-format proposals cannot overtake activation. Snapshot output includes the committed contract and transition state. An incoming snapshot is accepted only if supported; replay retains the contract transition order.
-8. A binary below the durable restart fence cannot rejoin after activation. Abort semantics before finalization must be explicitly defined; after activation, restoring the original cluster backup is recovery, not an online downgrade.
-
-## Key decisions
-
-| Decision | Choice | Rationale |
-| --- | --- | --- |
-| Bootstrap | Coordinated first transition by default | Existing binaries do not implement this protocol |
-| Activation | Explicit, replicated operation | Binary rollout and irreversible data changes are separate |
-| Readiness | Every configured member, current membership generation | A temporarily offline voter must not be silently abandoned |
-| Contract | Explicit semantic compatibility table | A protobuf envelope number does not establish feature compatibility |
-| Snapshots | Emit active contract throughout mixed-version rollout | Old followers may need snapshot catch-up |
-| Rollback | Tested only before activation with compatible local storage | Current eager startup migration would otherwise prevent rollback |
-| Authentication | Existing peer/operator boundaries | Version negotiation is not authorization |
-| Historical data | Existing explicit provenance profiles | Negotiation cannot resolve tag collisions in old logs |
-
-## Acceptance criteria
-
-- Real three-node mixed-binary tests preserve writes across follower replacement and leader transfer, subject to quorum; two-node clusters cannot tolerate one voter being stopped.
-- Old and new leaders both emit the active old contract before finalization.
-- New-only commands are refused before proposal, including raw forwarded Propose; they never commit and halt an older FSM.
-- An old follower can install a snapshot produced by a newer node during the mixed-version phase.
-- All configured members must apply prepare and persist the restart fence before finalize; stale sessions, unknown capabilities, missing members and incompatible members block activation.
-- Membership changes, concurrent operators and leader failure cannot race activation. Prepared state survives snapshots and restart.
-- Crashes before/after prepare, fence persistence, finalize and migration publication are recoverable without falsely advancing the active contract.
-- A rolled-back binary can restart before activation only within its documented local-format compatibility; after activation it refuses before mutation or joining.
-- Lost RPC responses and retries never activate twice or silently perform membership changes.
-- Existing ownership, permission and external-effect recovery semantics are unchanged.
-- Upgrade status reports active/target contracts and actionable blockers without leaking secrets.
-- Explicit compatibility fixtures and CI matrix cover every advertised supported release pair; unsupported skipped releases fail closed.
-
-## Files to create/modify
-
-- internal/dataformat: pure contract catalogue, compatibility decisions and transition validation.
-- pkg/proto/lobslaw/v1/lobslaw.proto: stable control messages, capabilities/status RPCs and replicated transition records; regenerate Go/browser bindings as applicable.
-- internal/memory: persistent active contract/transition/fence state; serialized proposal admission and membership operations; atomic activation; snapshot contract handling.
-- internal/grpcinterceptors: replace exact binary protocol equality with stable control handshake plus active-contract compatibility. Admission must account for both sides and restore/catch-up state.
-- internal/discovery and internal/node: authenticated capability exchange, identity binding, readiness, membership fencing and lifecycle wiring.
-- cmd/lobslaw: operator upgrade status, prepare/finalize and explicit abort handling.
-- docs: operator runbook, supported pairs, quorum requirements, rollback boundary and initial transition limits.
-- #348 layer: team payload gates, lazy/contract-specific bucket creation and snapshots, main-contract operation while teams remain inactive.
-- Integration tests: actual baseline and target binaries, snapshots, elections, offline members, membership races and crash injection.
-
-## Dependencies
-
-Use the existing HashiCorp Raft, bbolt, protobuf, mTLS and operator authorization mechanisms. No new consensus algorithm. Validate the actual transport and snapshot lifecycle against pinned dependencies during implementation.
-
-## Delivery
-
-1. Define and test the baseline control contract and durable transition state.
-2. Implement command/snapshot compatibility and membership/activation fencing; expose operator tooling.
-3. Adapt #348 to remain on the main contract during rollout and activate team state explicitly.
-4. Validate real mixed-version clusters and crash/restart scenarios before advertising rolling support.
-
-Keep these reviewable commits or PRs above the migration foundation and below #348. Do not weaken the current exact-match guard until the whole path is enforced.
-
-## Out of scope
-
-Arbitrary historical mixed-tag reconciliation, automatic software deployment, unattended destructive membership changes, guaranteed uninterrupted service without quorum, automatic downgrade after contract activation, and an unbounded promise of rolling compatibility across all future versions.
+This is not a deployment controller, automatic historical-tag resolver or online
+downgrade mechanism. The old historical-profile/key/ownership constraints still
+apply. Two voters cannot tolerate stopping one voter. Rolling upgrades require
+quorum and may have brief leader-transfer/snapshot latency. Large future schema
+rewrites may require a different staged migration adapter and cannot be promised
+online simply by adding a contract number.

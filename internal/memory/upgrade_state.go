@@ -3,6 +3,7 @@ package memory
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	bolt "go.etcd.io/bbolt"
@@ -12,6 +13,8 @@ import (
 )
 
 const contractKey = "cluster_contract"
+
+var ErrUpgradeConflict = errors.New("upgrade transition conflict")
 
 func readContract(tx *bolt.Tx) (dataformat.ContractState, error) {
 	state := dataformat.ContractState{Active: 1}
@@ -40,7 +43,7 @@ func (s *Store) ContractState() (dataformat.ContractState, error) {
 }
 
 func commandTransition(c *pb.UpgradeCommand, index uint64) dataformat.Transition {
-	return dataformat.Transition{ID: c.TransitionId, Target: c.Target, Epoch: c.ExpectedEpoch, MembershipIndex: c.MembershipIndex, Members: c.MemberIds, Index: index}
+	return dataformat.Transition{ID: c.TransitionId, Target: c.Target, Epoch: c.ExpectedEpoch, MembershipIndex: c.MembershipIndex, MembershipFingerprint: c.MembershipFingerprint, Members: c.MemberIds, Index: index}
 }
 
 func (s *Store) applyUpgrade(c *pb.UpgradeCommand, index uint64) error {
@@ -51,7 +54,7 @@ func (s *Store) applyUpgrade(c *pb.UpgradeCommand, index uint64) error {
 		}
 		next, err := state.Advance(c.Action, commandTransition(c, index), dataformat.SupportedContracts())
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %v", ErrUpgradeConflict, err)
 		}
 		if next.Active != state.Active {
 			if err := activateContract(tx, next.Active); err != nil {

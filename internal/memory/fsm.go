@@ -2,6 +2,7 @@ package memory
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -214,6 +215,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 	}
 	if c := entry.GetUpgrade(); c != nil {
 		if err := f.store.applyUpgrade(c, l.Index); err != nil {
+			if errors.Is(err, ErrUpgradeConflict) {
+				f.setLastApplied(l.Index)
+				return err
+			}
 			return f.halt(l.Index, err)
 		}
 		f.lastAppliedMu.Lock()
