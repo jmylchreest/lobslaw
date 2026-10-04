@@ -81,10 +81,10 @@ func (n *RaftNode) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeReque
 	if req != nil && req.Action == "prepare" && dataformat.IsAutomaticID(req.TransitionId) {
 		return nil, errors.New("automatic transition IDs are reserved for cluster control")
 	}
-	return n.changeUpgrade(ctx, req, "")
+	return n.changeUpgrade(ctx, req, "", 0)
 }
 
-func (n *RaftNode) changeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest, automaticFence string) (*pb.UpgradeStatusResponse, error) {
+func (n *RaftNode) changeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest, automaticFence string, automaticIndex uint64) (*pb.UpgradeStatusResponse, error) {
 	if req == nil {
 		return nil, errors.New("upgrade request required")
 	}
@@ -132,7 +132,14 @@ func (n *RaftNode) changeUpgrade(ctx context.Context, req *pb.ChangeUpgradeReque
 		}
 	}
 	if automaticFence != "" {
-		if err := n.checkAutomaticMembers(ctx, before); err != nil {
+		// Audit admission and ordinary writes may advance the log after planning.
+		// Require the observed plan watermark, not a moving post-audit target.
+		readiness := before
+		if automaticIndex > before.applied {
+			return nil, errControlChanged
+		}
+		readiness.applied = automaticIndex
+		if err := n.checkAutomaticMembers(ctx, readiness); err != nil {
 			return nil, err
 		}
 	}

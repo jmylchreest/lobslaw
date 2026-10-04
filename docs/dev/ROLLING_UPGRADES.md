@@ -4,8 +4,8 @@
 
 This branch is the rolling-control baseline. The first move from an unversioned
 or migration-only binary remains coordinated. Subsequent supported binaries can
-coexist while retaining the active cluster contract. Activation is an explicit,
-replicated operator action, not a side effect of installing a binary.
+coexist while retaining the active cluster contract. Reviewed safe transitions activate automatically once every member is ready;
+manual operations remain available for recovery and non-automatic transitions.
 
 The baseline supports contract 1; the stacked team implementation supports 1 and
 2. Compatibility is an explicit tested set, never an inferred version range.
@@ -25,7 +25,9 @@ No arbitrary skipped-release or zero-quorum availability guarantee is made.
   identity checks and policy evaluation. Configured operators receive separate
   read/write fallback grants, overridden by stored policy; a verified operator
   certificate is still required for changes. Peers may inspect capabilities;
-  only operators with the configured role and grant may change the contract.
+  external changes require operators with the configured role and grant. The internal
+  automatic controller has separate code-defined authority limited to eligible plans.
+
 - gRPC interceptors exchange the stable control protocol, required contract and
   supported contract set. Both directions are checked before sending persisted
   data. Compatibility metadata never substitutes for authentication.
@@ -163,8 +165,7 @@ Automatic eligibility is an explicit reviewed catalogue, separate from the reada
 contract set. The first eligible edge is 1 → 2. Upgrade status advertises
 `automatic_targets` and `automatic_ready`; missing fields from older binaries mean
 not ready. The node lifecycle supplies readiness only after startup, outside restore
-mode, and clears it before shutdown. Installing this planning layer alone does not
-start a controller.
+mode, and clears it before shutdown. The node starts its automatic controller only after startup completes.
 
 A plan requires every configured member (including non-voters) to advertise the
 capability, be ready, and have applied the leader's observed FSM watermark. Plans
@@ -178,3 +179,27 @@ its exact persisted tuple; manual preparations are never taken over. An abort's
 existing completed record holds automatic activation of that target durably. To
 resume after an abort, an operator completes a normal manual prepare/finalize with
 a fresh ID and the current epoch. No new recovery store or configuration mode exists.
+
+## Automatic coordinator
+
+Every node hosts a dormant controller; only ready leaders plan transitions. It
+polls every five seconds and requires the same leadership/membership/state fence
+for thirty seconds before each phase. Failure or a changed fence resets that
+interval. The mutation adapter rechecks readiness before committing. Catch-up is
+measured against the plan watermark so the audit record itself cannot continually
+move the target ahead of followers.
+
+The controller reuses upgrade audit admission/outcome records with actor
+`cluster:<node-id>` and code-defined authority `automatic-contract-1-to-2`. It cannot
+be invoked through an RPC or tool, supplies no operator certificate, and changes
+only the reviewed transition selected from current durable state. An admission
+failure blocks mutation. A failed response or outcome audit is followed by a fresh
+state read, never a blind retry. Shutdown clears readiness, cancels and joins the
+loop before closing the audit log or store. Restore mode never starts it.
+
+`TestRollingAutomaticUpgrade` runs genuine pre-automatic contract-2 and candidate
+binaries. It proves that data compatibility without readiness blocks automation,
+then exercises offline members, upgraded leaders, persisted preparation through
+snapshot/restart, automatic finalization and new-contract writes. The existing
+contract-1 mixed-binary test remains in CI. Node tests separately exercise the
+controller's fixed stabilization period, audit boundary, restore mode and lifecycle.

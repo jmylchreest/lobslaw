@@ -81,8 +81,22 @@ and preserve a majority of healthy voters. Transfer leadership before replacing
 the leader using `lobslaw cluster upgrade transfer --context prod --member NODE_ID`. A two-voter cluster cannot retain quorum while one member is stopped.
 This feature does not install binaries or automatically remove unavailable members.
 
-New binaries continue using the active contract, including snapshot output. New
-features require explicit activation. A verified operator certificate whose
+During rollout, binaries continue using the active contract, including snapshot
+output. Once every configured member supports automatic activation, is ready and
+has caught up, the leader automatically prepares and finalizes reviewed safe
+transitions. Contract 1 → 2 is the first such transition. Each phase requires
+30 seconds of stable readiness, checked every 5 seconds. There is no configuration
+switch. Deployment tooling still installs binaries; Lobslaw advances its data contract.
+
+Installing eligible binaries authorizes this automatic transition. The supported
+old-binary rollback window ends at preparation, even before finalization. Unknown,
+destructive or operator-input-dependent transitions do not activate automatically.
+Use `cluster upgrade status` to inspect `automatic_targets`, `automatic_ready` and
+`automatic_blocker`. Older binaries without those capabilities block automatic
+activation even when they can read contract 2. Offline members and non-voters count.
+Restore mode suppresses the controller.
+
+Manual control remains available for recovery. A verified operator certificate whose
 identity has the configured `operator` role receives `cluster.upgrade.read` and
 `cluster.upgrade.write` on `cluster:*` by default, including on memory-only nodes.
 No extra allow rules are needed. The grants are separate policy fallbacks: matching
@@ -109,7 +123,9 @@ deny writes, or vice versa; deny both actions to restrict both permissions. Exis
 explicit grants continue to work; choose a deny priority above any matching explicit
 allow rule. During a mixed-version rollout, older binaries still need explicit
 grants, so retain those grants until every serving node has the new defaults.
-Default permissions do not activate a contract automatically.
+These rules govern operator requests. The automatic controller uses separate,
+code-defined cluster authority and is not disabled by an operator-role deny.
+
 
 ```sh
 lobslaw cluster upgrade status --context prod
@@ -131,6 +147,12 @@ To abandon a prepared transition while retaining the old active contract:
 lobslaw cluster upgrade abort --context prod --id teams-2026 --target 2 --epoch 0
 ```
 
+Aborting an automatic transition leaves a durable hold on its target: the
+controller will not undo the abort. Resume by completing the manual prepare/finalize
+sequence with a fresh ID and the observed epoch. The `auto-contract-v1-` ID namespace
+is reserved; choose a different ID for manual operations. The controller also leaves
+manual preparations for the operator to finish.
+
 Abort still requires quorum and the exact transition. It advances the epoch;
 future attempts need a new ID. Do not treat abort as permission to downgrade local
 data: prepared history may remain in logs/snapshots. Supported binary rollback is
@@ -143,8 +165,8 @@ finalization, configured team services become available in the same processes.
 The inbox worker observes activation on its next wake or idle tick (at most 30 seconds);
 no second restart is required. New empty data
 stores begin on contract 1; historical team stores retain contract 2 through the
-initial coordinated migration. Do not activate solely because binaries have
-changed: inspect status and check ordinary operations first.
+initial coordinated migration. Inspect status for blockers and check ordinary
+operations throughout the rollout.
 
 The upgrade RPC status is local to the addressed member; it reports its node ID,
 reader capabilities, active contract, epoch, preparation index and known leader.
@@ -152,7 +174,8 @@ A blocked preparation/finalization identifies the first member that is not ready
 Activation changes storage interpretation, not ownership or tool permissions.
 
 
-Upgrade mutations are audited with the verified operator and policy grant.
+Operator mutations are audited with the verified operator and policy grant;
+automatic mutations use the cluster identity and reviewed transition authority.
 Configure local audit as well as Raft audit to retain completion evidence after
 leadership transfer. If recording admission fails, the action is refused. If an
 outcome record fails after submission, the node warns; check upgrade status before

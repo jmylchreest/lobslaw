@@ -18,8 +18,9 @@ func (n *RaftNode) SetAutomaticUpgradeReady(ready func() bool) { n.automaticRead
 // AutomaticUpgradePlan is a read-only observation. Applying it rechecks the
 // durable state, every member and the leadership/membership fence.
 type AutomaticUpgradePlan struct {
-	Step  dataformat.AutomaticStep
-	Fence string
+	Step         dataformat.AutomaticStep
+	Fence        string
+	AppliedIndex uint64
 }
 
 func (v controlView) automaticFence() string {
@@ -56,7 +57,7 @@ func (n *RaftNode) PlanAutomaticUpgrade(ctx context.Context) (*AutomaticUpgradeP
 	if !before.matches(after) {
 		return nil, errControlChanged
 	}
-	return &AutomaticUpgradePlan{Step: step, Fence: before.automaticFence()}, nil
+	return &AutomaticUpgradePlan{Step: step, Fence: before.automaticFence(), AppliedIndex: before.applied}, nil
 }
 
 // ChangeAutomaticUpgrade is internal cluster control, never registered as an
@@ -66,7 +67,7 @@ func (n *RaftNode) ChangeAutomaticUpgrade(ctx context.Context, plan *AutomaticUp
 		return nil, errors.New("automatic plan required")
 	}
 	s := plan.Step
-	return n.changeUpgrade(ctx, &pb.ChangeUpgradeRequest{Action: s.Action, TransitionId: s.ID, Target: s.Target, ExpectedEpoch: s.Epoch}, plan.Fence)
+	return n.changeUpgrade(ctx, &pb.ChangeUpgradeRequest{Action: s.Action, TransitionId: s.ID, Target: s.Target, ExpectedEpoch: s.Epoch}, plan.Fence, plan.AppliedIndex)
 }
 
 func (n *RaftNode) checkAutomaticMembers(ctx context.Context, view controlView) error {

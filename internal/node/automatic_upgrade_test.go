@@ -1,0 +1,87 @@
+package node
+
+import (
+	"context"
+	"log/slog"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/hashicorp/raft"
+
+	"github.com/jmylchreest/lobslaw/internal/audit"
+	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/pkg/types"
+)
+
+func TestAutomaticControllerActivatesWithAuditAfterStability(t *testing.T) {
+	ctx := context.Background()
+	store := crossOwnerTestStore(t)
+	_, transport := raft.NewInmemTransport("auto-node")
+	rn, err := memory.NewRaft(memory.RaftConfig{NodeID: "auto-node", LocalAddr: "auto-node", DataDir: t.TempDir(), Bootstrap: true, Transport: transport}, memory.NewFSM(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rn.Shutdown() })
+	if err := rn.WaitForLeader(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	n := &Node{raft: rn, store: store, log: slog.Default()}
+	n.cfg.NodeID = "auto-node"
+	c := newAutomaticUpgradeController(n)
+	rn.SetAutomaticUpgradeReady(c.ready.Load)
+	c.ready.Store(true)
+	now := time.Now()
+	c.tick(ctx, now)
+	// Missing audit blocks a mutation even after the stability interval.
+	c.tick(ctx, now.Add(automaticUpgradeStable))
+	state, _ := store.ContractState()
+	if state.Prepared != nil || state.Active != 1 {
+		t.Fatal("unaudited mutation", state)
+	}
+	sink, err := audit.NewLocalSink(audit.LocalConfig{Path: filepath.Join(t.TempDir(), "audit.jsonl")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.auditLog, err = audit.NewAuditLog(ctx, audit.Config{Sinks: []audit.AuditSink{sink}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = n.auditLog.Close() })
+	for i := 1; i <= 4; i++ {
+		c.tick(ctx, now.Add(time.Duration(i)*automaticUpgradeStable))
+	}
+	state, _ = store.ContractState()
+	if state.Active != 2 || state.Prepared != nil || state.Epoch != 1 {
+		t.Fatal(state)
+	}
+	entries, err := n.auditLog.Query(ctx, "local", types.AuditFilter{Action: "cluster.upgrade.write"})
+	if err != nil || len(entries) != 4 {
+		t.Fatalf("%+v %v", entries, err)
+	}
+	for _, e := range entries {
+		if e.ActorScope != "cluster:auto-node" || e.PolicyRule != "automatic-contract-1-to-2" {
+			t.Fatal(e)
+		}
+	}
+	c.tick(ctx, now.Add(10*automaticUpgradeStable))
+	again, _ := n.auditLog.Query(ctx, "local", types.AuditFilter{Action: "cluster.upgrade.write"})
+	if len(again) != len(entries) {
+		t.Fatal("replayed completed upgrade")
+	}
+}
+
+func TestAutomaticControllerRecoveryModeAndStop(t *testing.T) {
+	n := &Node{cfg: Config{RestoreMode: true}, log: slog.Default()}
+	c := newAutomaticUpgradeController(n)
+	c.start(context.Background())
+	if c.ready.Load() || c.done != nil {
+		t.Fatal("restore started controller")
+	}
+	c.stop()
+	n.cfg.RestoreMode = false
+	c.start(context.Background())
+	if c.ready.Load() || c.done != nil {
+		t.Fatal("stopped controller restarted")
+	}
+}
