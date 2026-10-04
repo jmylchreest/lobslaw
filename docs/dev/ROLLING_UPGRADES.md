@@ -156,3 +156,25 @@ stateDiagram-v2
   Activated --> Activated: exact finalize retry
   Activated --> [*]
 ```
+
+## Automatic transition eligibility
+
+Automatic eligibility is an explicit reviewed catalogue, separate from the readable
+contract set. The first eligible edge is 1 → 2. Upgrade status advertises
+`automatic_targets` and `automatic_ready`; missing fields from older binaries mean
+not ready. The node lifecycle supplies readiness only after startup, outside restore
+mode, and clears it before shutdown. Installing this planning layer alone does not
+start a controller.
+
+A plan requires every configured member (including non-voters) to advertise the
+capability, be ready, and have applied the leader's observed FSM watermark. Plans
+carry a leadership-generation, complete-membership and durable-state fence; applying
+one rechecks that fence and member readiness through the existing control adapter.
+Preparation and finalization remain the existing replicated operations.
+
+Automatic IDs use the reserved `auto-contract-v1-` namespace with the source, target
+and epoch. External preparation cannot use it. An automatic preparation resumes by
+its exact persisted tuple; manual preparations are never taken over. An abort's
+existing completed record holds automatic activation of that target durably. To
+resume after an abort, an operator completes a normal manual prepare/finalize with
+a fresh ID and the current epoch. No new recovery store or configuration mode exists.

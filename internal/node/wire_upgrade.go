@@ -118,7 +118,7 @@ func (n *Node) probeUpgradeMember(ctx context.Context, server raft.Server) (*mem
 	if err := state.Validate(reply.SupportedContracts); err != nil {
 		return nil, err
 	}
-	return &memory.UpgradePeer{ID: reply.NodeId, Supported: reply.SupportedContracts, State: state}, nil
+	return &memory.UpgradePeer{ID: reply.NodeId, Supported: reply.SupportedContracts, State: state, AutomaticTargets: reply.AutomaticTargets, AutomaticReady: reply.AutomaticReady, AppliedIndex: reply.AppliedIndex}, nil
 }
 
 func (n *Node) dataContract() uint32 {

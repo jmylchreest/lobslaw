@@ -133,6 +133,7 @@ type controlView struct {
 	state      dataformat.ContractState
 	servers    []raft.Server
 	index      uint64
+	applied    uint64
 }
 
 // readControl returns a lease only on success; callers must release it. Probes
@@ -171,6 +172,7 @@ func (n *RaftNode) readControl(ctx context.Context) (*controlLease, controlView,
 	}
 	view.servers = cfg.Configuration().Servers
 	view.index = n.Raft.AppliedIndex()
+	view.applied = n.fsm.lastApplied()
 	if generation, err := n.controlGeneration(ctx); err != nil || generation != view.generation {
 		return nil, view, errControlChanged
 	}

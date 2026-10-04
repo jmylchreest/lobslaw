@@ -60,9 +60,10 @@ type RaftConfig struct {
 // operate on the inner fields directly — use the Apply/Shutdown
 // methods.
 type RaftNode struct {
-	control      chan struct{}
-	leadership   leadershipFence
-	upgradeProbe func(context.Context, raft.Server) (*UpgradePeer, error)
+	control        chan struct{}
+	leadership     leadershipFence
+	upgradeProbe   func(context.Context, raft.Server) (*UpgradePeer, error)
+	automaticReady func() bool
 
 	Raft      *raft.Raft
 	transport raft.Transport
