@@ -30,8 +30,6 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	computeOn := s.runner != nil
-	teamsOn := s.cfg.Bots != nil
 	uiOn := s.consoleEnabled()
 	if s.cfg.RemoteConsole != nil {
 		out, err := s.remoteCapabilities(r.Context(), authn.Claims)
@@ -56,12 +54,37 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(out)
 		return
 	}
-	out := capabilitiesResponse{
+	out := s.localCapabilities(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// computeAvailability is implemented by remote runners. Local agents
+// omit it and are treated as available whenever the runner is non-nil.
+type computeAvailability interface {
+	Available(context.Context) bool
+}
+
+func (s *Server) computeAvailable(ctx context.Context) bool {
+	if s.runner == nil {
+		return false
+	}
+	if p, ok := s.runner.(computeAvailability); ok {
+		return p.Available(ctx)
+	}
+	return true
+}
+
+func (s *Server) localCapabilities(ctx context.Context) capabilitiesResponse {
+	computeOn := s.runner != nil
+	teamsOn := s.cfg.Bots != nil
+	uiOn := s.consoleEnabled()
+	return capabilitiesResponse{
 		Compute: capabilityFlags{
 			Enabled:    computeOn,
 			Authorised: true,
 			Configured: computeOn,
-			Available:  s.computeAvailable(),
+			Available:  s.computeAvailable(ctx),
 		},
 		ComputeTeams: capabilityFlags{
 			Enabled:    teamsOn,
@@ -76,22 +99,4 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			Available:  uiOn,
 		},
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
-}
-
-// computeAvailability is implemented by remote runners. Local agents
-// omit it and are treated as available whenever the runner is non-nil.
-type computeAvailability interface {
-	Available(context.Context) bool
-}
-
-func (s *Server) computeAvailable() bool {
-	if s.runner == nil {
-		return false
-	}
-	if p, ok := s.runner.(computeAvailability); ok {
-		return p.Available(context.Background())
-	}
-	return true
 }

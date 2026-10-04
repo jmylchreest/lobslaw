@@ -39,8 +39,22 @@ memory or BoltDB; an architecture regression test enforces that boundary.
 4. Generate browser contracts from the existing protobuf/Buf workflow while
    retaining intentional REST/config projections and exact revision values.
 
-The first change deliberately retains the existing peer HTTP bridge until the
-second change switches dispatch; both paths already converge on the same owned
-operations through their handlers. Tests cover direct operation ownership,
-unowned resources, stale revisions, patch presence, cancellation, prompt ownership
-and expiry, plus the existing local/remote console regression suite.
+REST and gRPC now call the shared operations directly. Explicit protobuf
+projections retain integer precision and optional field presence without a
+protobuf/JSON round trip. Peer failures map domain errors to gRPC codes, including
+cancellation and revision conflicts. The browser adapter performs only its own
+HTTP decoding/encoding and calls a mutation once; an uncertain outcome is not
+automatically retried.
+
+Chat uses shared, transport-independent conversation routines in the gateway,
+alongside the existing turn runner, conversation cache, gate and prompt services.
+REST handles authentication, CSRF, uploads and SSE; peers supply verified user
+claims and a typed event sink. Both reuse the same history/approval/resume
+lifecycle. Stream send failure cancels the runner context, and progress goroutines
+finish before the adapter returns. Task evidence retains its generated JSON
+contract. No fake HTTP request, response writer, or backend handler dispatch
+remains.
+
+Tests cover direct operation ownership, unowned resources, stale revisions,
+patch presence and large revisions, cancellation, prompt ownership and expiry,
+stream failure, and existing local/remote console behavior.
