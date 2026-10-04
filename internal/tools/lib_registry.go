@@ -36,14 +36,16 @@ type Registry struct {
 	policies map[string]*sandbox.Policy
 	// disabled are glob patterns that suppress registration entirely.
 	// See SetDisabled.
-	disabled []string
+	disabled  []string
+	available map[string]func() bool
 }
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		tools:    make(map[string]*types.ToolDef),
-		policies: make(map[string]*sandbox.Policy),
+		tools:     make(map[string]*types.ToolDef),
+		policies:  make(map[string]*sandbox.Policy),
+		available: make(map[string]func() bool),
 	}
 }
 
@@ -133,7 +135,7 @@ func (r *Registry) Get(name string) (*types.ToolDef, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	t, ok := r.tools[name]
-	if !ok {
+	if !ok || !r.availableLocked(name) {
 		return nil, false
 	}
 	return r.withCrossRefsLocked(t), true
@@ -141,11 +143,35 @@ func (r *Registry) Get(name string) (*types.ToolDef, bool) {
 
 // List returns all registered tools sorted by name. Deterministic
 // order so a /v1/tools listing is stable between calls.
-func (r *Registry) List() []*types.ToolDef {
+func (r *Registry) List() []*types.ToolDef { return r.list(false) }
+
+// Registered includes dormant tools for policy seeding; callers discovering or
+// invoking tools must use List/Get, which apply runtime availability.
+func (r *Registry) Registered() []*types.ToolDef { return r.list(true) }
+
+// SetAvailability installs a trusted boot-time runtime gate. It does not grant
+// execution authority; the executor still evaluates policy for available tools.
+// The callback must not call back into this registry.
+func (r *Registry) SetAvailability(name string, ready func() bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.available == nil {
+		r.available = make(map[string]func() bool)
+	}
+	r.available[name] = ready
+}
+func (r *Registry) availableLocked(name string) bool {
+	ready := r.available[name]
+	return ready == nil || ready()
+}
+func (r *Registry) list(includeDormant bool) []*types.ToolDef {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]*types.ToolDef, 0, len(r.tools))
 	for _, t := range r.tools {
+		if !includeDormant && !r.availableLocked(t.Name) {
+			continue
+		}
 		out = append(out, r.withCrossRefsLocked(t))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

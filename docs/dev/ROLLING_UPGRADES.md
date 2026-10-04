@@ -64,8 +64,10 @@ No arbitrary skipped-release or zero-quorum availability guarantee is made.
 
 The team branch creates team buckets/indexes only at activation (or while
 migrating an already-team-capable historical directory), and keeps contract-1
-snapshots readable by baseline binaries. Restart configured team compute nodes
-one at a time after activation to wire their new services.
+snapshots readable by baseline binaries. Configured team services are wired once at boot and remain dormant until the
+replicated contract activates. Tool discovery/execution, console operations, routing
+and inbox draining check the live contract; no shared service pointers are replaced
+and no second restart is required. Policy seeding includes dormant tool definitions.
 
 ## Validation
 

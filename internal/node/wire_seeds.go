@@ -122,7 +122,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	//
 	// Skills get the same treatment — explicit allow per skill name.
 	seedTargets := []*types.ToolDef{}
-	for _, td := range n.toolRegistry.List() {
+	for _, td := range n.toolRegistry.Registered() {
 		if !strings.HasPrefix(td.Path, compute.BuiltinScheme) {
 			continue
 		}

@@ -9,28 +9,28 @@ import (
 )
 
 func (n *Node) teamRouterOrNil() gateway.TeamRouter {
-	if !n.teamsActive() || n.groupSvc == nil {
+	if !gateComputeTeams(n.cfg) || n.groupSvc == nil {
 		return nil
 	}
-	return &teamRouter{groups: n.groupSvc, prefs: n.userPrefsSvc}
+	return &teamRouter{groups: n.groupSvc, prefs: n.userPrefsSvc, ready: n.teamsActive}
 }
 
 func (n *Node) teamBotsOrNil() gateway.BotAPI {
-	if !n.teamsActive() {
+	if !gateComputeTeams(n.cfg) {
 		return nil
 	}
 	return n.botSvc
 }
 
 func (n *Node) teamGroupsOrNil() gateway.GroupAPI {
-	if !n.teamsActive() {
+	if !gateComputeTeams(n.cfg) {
 		return nil
 	}
 	return n.groupSvc
 }
 
 func (n *Node) teamInboxOrNil() gateway.InboxAPI {
-	if !n.teamsActive() || n.inboxSvc == nil {
+	if !gateComputeTeams(n.cfg) || n.inboxSvc == nil {
 		return nil
 	}
 	// The wrapper, not the plain service: posting work must wake the
@@ -39,12 +39,13 @@ func (n *Node) teamInboxOrNil() gateway.InboxAPI {
 }
 
 type teamRouter struct {
+	ready  func() bool
 	groups *memory.GroupService
 	prefs  *memory.UserPrefsService
 }
 
 func (r *teamRouter) BotForChannel(ctx context.Context, channel, address, userID string) string {
-	if r == nil || r.groups == nil {
+	if r == nil || r.groups == nil || (r.ready != nil && !r.ready()) {
 		return ""
 	}
 	owner := strings.TrimSpace(userID)
