@@ -47,5 +47,6 @@ The full schema lives in `pkg/config/config.go` — every field has a `koanf` ta
 - [Reference](/configuration/reference) — every section, every field, type and default
 - [Policy rules](/configuration/policy-rules) — how to write `[[policy.rules]]` entries
 - [Providers](/configuration/providers) — LLM provider router + capability discovery
+- [Google Calendar](/features/google-calendar) — OAuth client, read/write policies, and per-user setup
 - [Channels](/configuration/channels) — Telegram, REST, webhooks
 - [Storage mounts](/configuration/storage-mounts) — workspace, skill-tools, custom mounts

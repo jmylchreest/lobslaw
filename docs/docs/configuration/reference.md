@@ -101,6 +101,29 @@ client_id_ref     = "env:GITHUB_OAUTH_CLIENT_ID"
 client_secret_ref = "env:GITHUB_OAUTH_CLIENT_SECRET"
 ```
 
+### `[security.google_calendar]`
+
+Disabled by default. This is the per-user Calendar connector; it does not use the
+legacy device flow configured under `[security.oauth.google]`.
+
+```toml
+[security.google_calendar]
+enabled = true
+client_id_ref = "env:LOBSLAW_GOOGLE_CALENDAR_CLIENT_ID"
+client_secret_ref = "env:LOBSLAW_GOOGLE_CALENDAR_CLIENT_SECRET"
+callback_url = "https://assistant.example.com/integrations/google/callback"
+```
+
+The three string fields default to empty and are required when enabled. Both
+credential references accept `env:` or `file:`. The callback must be HTTPS with
+the exact path shown and no query or fragment. Enabling this block does not grant
+users access: configure independent `calendar:connect`, `calendar:read` and,
+optionally, `calendar:write` policies plus tool/command access. Writes always
+require exact confirmation.
+
+See [Google Calendar setup](/features/google-calendar) for the Google client,
+reverse-proxy requirements, copyable policies, and account-linking commands.
+
 ## `[policy]` + `[[policy.rules]]`
 
 ```toml

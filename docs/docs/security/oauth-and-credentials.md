@@ -6,6 +6,16 @@ sidebar_position: 10
 
 How the cluster takes the operator from "I have a Google account" to "skill subprocesses see fresh access tokens" without any token ever touching disk in plaintext.
 
+:::note Google Calendar uses a separate connector
+
+For Calendar, follow [Google Calendar setup](/features/google-calendar). Configure
+`[security.google_calendar]` and use the private `/calendar` command. Calendar uses
+an authorization-code flow with PKCE and per-user calendar grants; its tokens
+cannot be issued to skills. The device-flow and skill-credential instructions
+below describe the legacy credential subsystem, not Calendar setup.
+
+:::
+
 ## Flow overview
 
 ```
