@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/protobuf/types/known/durationpb"
+	"github.com/jmylchreest/lobslaw/internal/console"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/logging"
@@ -208,9 +208,7 @@ type RESTConfig struct {
 // PlanService is the subset of lobslawv1.PlanServiceServer that the
 // REST layer actually calls. Kept narrow so tests can pass a fake
 // without constructing a real Raft-backed service.
-type PlanService interface {
-	GetPlan(ctx context.Context, req *lobslawv1.GetPlanRequest) (*lobslawv1.GetPlanResponse, error)
-}
+type PlanService = console.PlanService
 
 // Server is the REST channel handler. Stateful only for lifecycle
 // bookkeeping (net.Listener, underlying http.Server).
@@ -934,6 +932,16 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id string, authn requestAuth) {
+	if s.cfg.RequireAuth || authn.FromPeer {
+		view, err := s.consoleOperations().Prompt(r.Context(), authn.Claims, id)
+		if err != nil {
+			s.consolePromptError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, view)
+		return
+	}
+
 	p, err := s.cfg.Prompts.Get(id)
 	if err != nil {
 		if errors.Is(err, ErrPromptNotFound) {
@@ -991,6 +999,16 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
+		return
+	}
+
+	if s.cfg.RequireAuth || authn.FromPeer {
+		decision, scope, err := s.consoleOperations().ResolvePrompt(r.Context(), authn.Claims, id, body.Approve, body.Scope)
+		if err != nil {
+			s.consolePromptError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]string{"decision": decision, "scope": scope})
 		return
 	}
 	decision := PromptDenied
@@ -1052,70 +1070,18 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	req := &lobslawv1.GetPlanRequest{}
-	if wq := r.URL.Query().Get("window"); wq != "" {
-		if d, err := time.ParseDuration(wq); err == nil && d > 0 {
-			req.Window = durationpb.New(d)
-		}
-	}
-	resp, err := s.cfg.Plan.GetPlan(r.Context(), req)
+	out, err := s.consoleOperations().Plan(r.Context(), s.consoleClaims(r), r.URL.Query().Get("window"))
 	if err != nil {
-		s.log.Error("plan: GetPlan failed", "err", err)
-		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		s.consoleOperationError(w, err, http.StatusInternalServerError)
 		return
 	}
-
-	out := planResponseJSON{
-		WindowSeconds: resp.Window.AsDuration().Seconds(),
-	}
-	for _, c := range resp.Commitments {
-		out.Commitments = append(out.Commitments, commitmentJSON{
-			ID:     c.Id,
-			DueAt:  c.DueAt.AsTime(),
-			Reason: c.Reason,
-			Status: c.Status,
-		})
-	}
-	for _, t := range resp.ScheduledTasks {
-		entry := scheduledTaskJSON{
-			ID:         t.Id,
-			Name:       t.Name,
-			Schedule:   t.Schedule,
-			HandlerRef: t.HandlerRef,
-		}
-		if t.NextRun != nil {
-			entry.NextRun = t.NextRun.AsTime()
-		}
-		out.ScheduledTasks = append(out.ScheduledTasks, entry)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	respondJSON(w, http.StatusOK, out)
 }
 
 // planResponseJSON mirrors the GetPlanResponse subset the REST API
 // exposes. Kept narrow so the public JSON surface doesn't accidentally
 // drag new proto fields into client expectations.
-type planResponseJSON struct {
-	WindowSeconds  float64             `json:"window_seconds"`
-	Commitments    []commitmentJSON    `json:"commitments,omitempty"`
-	ScheduledTasks []scheduledTaskJSON `json:"scheduled_tasks,omitempty"`
-}
-
-type commitmentJSON struct {
-	ID     string    `json:"id"`
-	DueAt  time.Time `json:"due_at"`
-	Reason string    `json:"reason,omitempty"`
-	Status string    `json:"status"`
-}
-
-type scheduledTaskJSON struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name,omitempty"`
-	Schedule   string    `json:"schedule"`
-	HandlerRef string    `json:"handler_ref"`
-	NextRun    time.Time `json:"next_run,omitempty"`
-}
+type planResponseJSON = console.PlanView
 
 // promptJSON is the on-the-wire shape for prompt state. Kept
 // narrow so the user-visible API doesn't accidentally leak

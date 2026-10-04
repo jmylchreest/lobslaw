@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // ErrClaimConflict is returned from FSM.Apply when a LOG_OP_CLAIM
@@ -25,6 +26,8 @@ import (
 var ErrClaimConflict error = claimConflictError{}
 
 type claimConflictError struct{}
+
+func (claimConflictError) Is(target error) bool { return target == types.ErrConflict }
 
 func (claimConflictError) Error() string { return "fsm: claim conflict" }
 func (claimConflictError) GRPCStatus() *status.Status {

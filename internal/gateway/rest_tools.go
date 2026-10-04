@@ -1,19 +1,16 @@
 package gateway
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/jmylchreest/lobslaw/internal/console"
+)
 
 // ToolCatalogue lists the tools a bot may be granted. An interface so
 // the gateway does not import the tool registry, matching the other
 // consumer-side contracts here.
-type ToolCatalogue interface {
-	List() []ToolInfo
-}
-
-// ToolInfo is the wire shape for one selectable tool.
-type ToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
+type ToolCatalogue = console.ToolCatalogue
+type ToolInfo = console.ToolInfo
 
 // handleTools serves the node's tool catalogue so the console can offer
 // the real set instead of asking somebody to type names from memory.
@@ -34,9 +31,10 @@ func (s *Server) handleTools(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not publish its tool catalogue")
 		return
 	}
-	tools := s.cfg.Tools.List()
-	if tools == nil {
-		tools = []ToolInfo{}
+	tools, err := s.consoleOperations().Tools(r.Context(), s.consoleClaims(r))
+	if err != nil {
+		s.consoleOperationError(w, err, http.StatusInternalServerError)
+		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/bots"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -52,13 +54,13 @@ const DefaultInboxMaxAttempts = 3
 const InboxClaimTTL = 10 * time.Minute
 
 // ErrInboxNotFound is returned for an unknown item id.
-var ErrInboxNotFound = errors.New("inbox: no such item")
+var ErrInboxNotFound = bots.ErrInboxNotFound
 
 // ErrInboxFull is returned when a recipient's pending queue is at the
 // cap. It reaches the SENDER, deliberately: a post that silently
 // vanished would be the exact failure the queue exists to prevent, and
 // the sender is the only party that can do anything about it.
-var ErrInboxFull = errors.New("inbox: recipient's queue is full")
+var ErrInboxFull = bots.ErrInboxFull
 
 // InboxService is a bot's durable work queue and journal.
 //
@@ -205,14 +207,7 @@ func (s *InboxService) Get(_ context.Context, recipient, id string) (*lobslawv1.
 }
 
 // InboxFilter narrows a listing.
-type InboxFilter struct {
-	// Statuses limits to these. Empty means every status — a queue view
-	// wants pending, the GUI's history view wants everything.
-	Statuses []lobslawv1.InboxStatus
-	Kinds    []lobslawv1.InboxKind
-	// Limit caps the result. Zero means no cap.
-	Limit int
-}
+type InboxFilter = bots.InboxFilter
 
 // List returns one bot's items, most urgent first.
 //

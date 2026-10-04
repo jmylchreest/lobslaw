@@ -5,6 +5,7 @@ import "errors"
 // Sentinel errors. Wrap with fmt.Errorf("context: %w", err) when
 // returning from functions; check with errors.Is at call sites.
 var (
+	ErrConflict              = errors.New("revision conflict")
 	ErrNotFound              = errors.New("not found")
 	ErrDenied                = errors.New("denied")
 	ErrConfirmationRequired  = errors.New("confirmation required")

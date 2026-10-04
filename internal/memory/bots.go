@@ -40,7 +40,7 @@ var botIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // ErrBotNotFound is returned for an unknown bot id. Distinct from a
 // store failure: callers routinely ask about a bot that may not exist.
-var ErrBotNotFound = errors.New("bots: no such bot")
+var ErrBotNotFound = bots.ErrNotFound
 
 // BotService is the raft-backed registry of named agents.
 //
@@ -231,18 +231,7 @@ func (s *BotService) AdoptUnowned(ctx context.Context, owner identity.Principal)
 // unowned-editable fallback — an unowned bot is inaccessible, not
 // public.
 func MayModify(rec *lobslawv1.BotRecord, principal string) bool {
-	principal = strings.TrimSpace(principal)
-	if principal == "" {
-		return false
-	}
-	if rec == nil {
-		return false
-	}
-	owner := strings.TrimSpace(rec.GetOwner())
-	if owner == "" {
-		return false
-	}
-	return owner == principal
+	return bots.MayModify(rec, principal)
 }
 
 func validateBot(rec *lobslawv1.BotRecord) error {

@@ -11,29 +11,16 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jmylchreest/lobslaw/internal/memory"
-	"github.com/jmylchreest/lobslaw/internal/turn"
+	"github.com/jmylchreest/lobslaw/internal/bots"
+	"github.com/jmylchreest/lobslaw/internal/console"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // BotAPI is what the REST layer needs from the bot registry. Narrow so
 // a test can pass a fake without standing up raft.
-type BotAPI interface {
-	List(ctx context.Context) ([]*lobslawv1.BotRecord, error)
-	Get(ctx context.Context, id string) (*lobslawv1.BotRecord, error)
-	Put(ctx context.Context, rec *lobslawv1.BotRecord, expectedRevision uint64) (*lobslawv1.BotRecord, error)
-	Delete(ctx context.Context, id string) error
-}
-
-// InboxAPI is the same for the queues.
-type InboxAPI interface {
-	List(ctx context.Context, recipient string, f memory.InboxFilter) ([]*lobslawv1.BotInboxItem, error)
-	Recent(ctx context.Context, recipient string, limit int) ([]*lobslawv1.ConsoleInboxItem, error)
-	Post(ctx context.Context, item *lobslawv1.BotInboxItem) (*lobslawv1.BotInboxItem, error)
-	Get(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
-	Cancel(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
-	Retry(ctx context.Context, recipient, id string) (*lobslawv1.BotInboxItem, error)
-}
+type BotAPI = console.BotAPI
+type InboxAPI = console.InboxAPI
 
 // botJSON is the wire shape.
 //
@@ -41,117 +28,8 @@ type InboxAPI interface {
 // planResponseJSON is: a new proto field would otherwise appear in the
 // API the moment somebody added it to the record, and the GUI would
 // start depending on something nobody decided to publish.
-type botJSON struct {
-	ID            string   `json:"id"`
-	DisplayName   string   `json:"display_name"`
-	Description   string   `json:"description"`
-	Instructions  string   `json:"instructions"`
-	IsCoordinator bool     `json:"is_coordinator"`
-	GroupID       string   `json:"group_id"`
-	Enabled       bool     `json:"enabled"`
-	Tools         []string `json:"tools"`
-	MayMessage    []string `json:"may_message"`
-	Revision      uint64   `json:"revision"`
-	CreatedAt     string   `json:"created_at,omitempty"`
-	UpdatedAt     string   `json:"updated_at,omitempty"`
-}
-
-type inboxItemJSON struct {
-	Revision        uint64   `json:"revision"`
-	TruncatedFields []string `json:"truncated_fields,omitempty"`
-	DetailPath      string   `json:"detail_path,omitempty"`
-	TaskID          string   `json:"task_id,omitempty"`
-	ID              string   `json:"id"`
-	Recipient       string   `json:"recipient"`
-	Sender          string   `json:"sender"`
-	Kind            string   `json:"kind"`
-	Subject         string   `json:"subject"`
-	Body            string   `json:"body,omitempty"`
-	Priority        int32    `json:"priority"`
-	Status          string   `json:"status"`
-	Result          string   `json:"result,omitempty"`
-	Error           string   `json:"error,omitempty"`
-	Attempts        int32    `json:"attempts"`
-	CorrelationID   string   `json:"correlation_id,omitempty"`
-	SessionID       string   `json:"session_id,omitempty"`
-	// Who asked for this, as against who put it in the queue.
-	RequestedBy string `json:"requested_by,omitempty"`
-	// What the turn actually did, as against what its result claims.
-	ToolsUsed   []string `json:"tools_used,omitempty"`
-	TokensUsed  uint64   `json:"tokens_used,omitempty"`
-	CostUSD     float64  `json:"cost_usd,omitempty"`
-	CreatedAt   string   `json:"created_at,omitempty"`
-	CompletedAt string   `json:"completed_at,omitempty"`
-}
-
-func botToJSON(rec *lobslawv1.BotRecord) botJSON {
-	out := botJSON{
-		ID:            rec.GetId(),
-		DisplayName:   rec.GetDisplayName(),
-		Description:   rec.GetDescription(),
-		Instructions:  rec.GetInstructions(),
-		IsCoordinator: rec.GetIsCoordinator(),
-		// Raw, not resolved to a default: memory.GroupOf is explicit
-		// that empty stays empty, because routing a bot into somebody
-		// else's team is the failure this exists to prevent. New bots
-		// always carry their owner's team id (see ensureOwnersTeam).
-		GroupID:    groupOfBot(rec),
-		Enabled:    rec.GetEnabled(),
-		Tools:      rec.GetTools(),
-		MayMessage: rec.GetMayMessage(),
-		Revision:   rec.GetRevision(),
-	}
-	if ts := rec.GetCreatedAt(); ts != nil {
-		out.CreatedAt = ts.AsTime().UTC().Format(rfc3339)
-	}
-	if ts := rec.GetUpdatedAt(); ts != nil {
-		out.UpdatedAt = ts.AsTime().UTC().Format(rfc3339)
-	}
-	// Non-nil slices so a JSON consumer gets [] rather than null and
-	// does not have to special-case "this bot has no edges".
-	if out.Tools == nil {
-		out.Tools = []string{}
-	}
-	if out.MayMessage == nil {
-		out.MayMessage = []string{}
-	}
-	return out
-}
-
-func inboxToJSON(item *lobslawv1.BotInboxItem, withBody bool) inboxItemJSON {
-	out := inboxItemJSON{
-		Revision:      item.GetRevision(),
-		TaskID:        item.GetTaskId(),
-		ID:            item.GetId(),
-		Recipient:     item.GetRecipient(),
-		Sender:        item.GetSender(),
-		Kind:          memory.InboxKindName(item.GetKind()),
-		Subject:       item.GetSubject(),
-		Priority:      item.GetPriority(),
-		Status:        memory.InboxStatusName(item.GetStatus()),
-		Result:        item.GetResult(),
-		Error:         item.GetError(),
-		Attempts:      item.GetAttempts(),
-		CorrelationID: item.GetCorrelationId(),
-		SessionID:     item.GetSessionId(),
-		RequestedBy:   item.GetRequestedBy(),
-		ToolsUsed:     item.GetToolsUsed(),
-		TokensUsed:    item.GetTokensUsed(),
-		CostUSD:       item.GetCostUsd(),
-	}
-	if withBody {
-		out.Body = item.GetBody()
-	}
-	if ts := item.GetCreatedAt(); ts != nil {
-		out.CreatedAt = ts.AsTime().UTC().Format(rfc3339)
-	}
-	if ts := item.GetCompletedAt(); ts != nil {
-		out.CompletedAt = ts.AsTime().UTC().Format(rfc3339)
-	}
-	return out
-}
-
-const rfc3339 = "2006-01-02T15:04:05Z07:00"
+type botJSON = console.BotView
+type inboxItemJSON = console.InboxItemView
 
 // handleBots serves /v1/bots and /v1/bots/{id}[/inbox].
 //
@@ -201,80 +79,27 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
+	claims := s.consoleClaims(r)
 	switch r.Method {
 	case http.MethodGet:
-		// The console reads the roster first and expects a coordinator
-		// to exist. Repair the caller's own team on that read: it is
-		// idempotent, scoped to them, and creates nothing for a node
-		// that does not host teams.
-		if s.cfg.Groups != nil {
-			if _, err := s.ensureOwnersTeam(r.Context(), s.principalOf(r)); err != nil {
-				s.log.Warn("rest: ensure owner team", "err", err)
-			}
-		}
-		records, err := s.cfg.Bots.List(r.Context())
+		rows, err := s.consoleOperations().Bots(r.Context(), claims)
 		if err != nil {
-			s.jsonErr(w, http.StatusInternalServerError, err.Error())
+			s.consoleOperationError(w, err, http.StatusInternalServerError)
 			return
 		}
-		out := make([]botJSON, 0, len(records))
-		for _, rec := range records {
-			if memory.MayModify(rec, s.principalOf(r)) {
-				out = append(out, botToJSON(rec))
-			}
-		}
-		respondJSON(w, http.StatusOK, map[string]any{"bots": out})
+		respondJSON(w, http.StatusOK, map[string]any{"bots": rows})
 	case http.MethodPost:
 		var body botJSON
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
 			return
 		}
-		principal := s.principalOf(r)
-		groupID := strings.TrimSpace(body.GroupID)
-		if groupID == "" {
-			// The console creates a bot without naming a team, which
-			// means "my own". Establish that team explicitly rather
-			// than leaving the bot unowned — an unowned bot is
-			// inaccessible, and an empty group is never a shared
-			// default.
-			gid, err := s.ensureOwnersTeam(r.Context(), principal)
-			if err != nil {
-				s.jsonErr(w, http.StatusForbidden, err.Error())
-				return
-			}
-			groupID = gid
-		}
-		// Creating a bot inside a team is writing to that team.
-		if !s.mayUseGroup(r, groupID) {
-			s.jsonErr(w, http.StatusForbidden,
-				"that team belongs to somebody else")
-			return
-		}
-		rec, err := s.cfg.Bots.Put(r.Context(), &lobslawv1.BotRecord{
-			Id:           body.ID,
-			DisplayName:  body.DisplayName,
-			Description:  body.Description,
-			Instructions: body.Instructions,
-			Tools:        body.Tools,
-			MayMessage:   body.MayMessage,
-			Enabled:      true,
-			GroupId:      groupID,
-			// Explicit ownership. A bot with no owner is inaccessible,
-			// so a bot created through the console must record who it
-			// belongs to or the creator cannot manage it afterwards.
-			Owner: principal,
-			// The real principal, not a placeholder. The session knows
-			// who is asking; recording "operator" threw that away at
-			// the one point where it is worth keeping.
-			CreatedBy: principal,
-		}, 0)
+		row, err := s.consoleOperations().CreateBot(r.Context(), claims, body)
 		if err != nil {
-			s.jsonErr(w, botStatusFor(err), err.Error())
+			s.consoleOperationError(w, err, botStatusFor(err))
 			return
 		}
-		s.auditRegistry(r, "bot:create", rec.GetId(), rec.GetDisplayName())
-		respondJSON(w, http.StatusCreated, botToJSON(rec))
+		respondJSON(w, http.StatusCreated, row)
 	default:
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET or POST")
 	}
@@ -283,28 +108,19 @@ func (s *Server) handleBotCollection(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBotItem(w http.ResponseWriter, r *http.Request, id string) {
 	switch r.Method {
 	case http.MethodGet:
-		rec, err := s.cfg.Bots.Get(r.Context(), id)
+		row, err := s.consoleOperations().Bot(r.Context(), s.consoleClaims(r), id)
 		if err != nil {
-			s.jsonErr(w, botStatusFor(err), err.Error())
+			s.consoleOperationError(w, err, botStatusFor(err))
 			return
 		}
-		respondJSON(w, http.StatusOK, botToJSON(rec))
+		respondJSON(w, http.StatusOK, row)
 	case http.MethodPatch:
 		s.patchBot(w, r, id)
 	case http.MethodDelete:
-		if !s.mayModifyBot(r, id) {
-			s.jsonErr(w, http.StatusForbidden,
-				"that bot belongs to somebody else's team")
+		if err := s.consoleOperations().DeleteBot(r.Context(), s.consoleClaims(r), id); err != nil {
+			s.consoleOperationError(w, err, botStatusFor(err))
 			return
 		}
-		if err := s.cfg.Bots.Delete(r.Context(), id); err != nil {
-			s.jsonErr(w, botStatusFor(err), err.Error())
-			return
-		}
-		// Deleting a bot destroys the record of what it did. Needing
-		// authorisation and leaving no trace of who exercised it is the
-		// worse half of the pair.
-		s.auditRegistry(r, "bot:delete", id, "")
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET, PATCH or DELETE")
@@ -349,83 +165,21 @@ func (s *Server) mayModifyBot(r *http.Request, botID string) bool {
 	if err != nil {
 		return false
 	}
-	return memory.MayModify(rec, s.principalOf(r))
+	return bots.MayModify(rec, s.principalOf(r))
 }
 
 func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
-	var body struct {
-		Revision     *uint64   `json:"revision"`
-		DisplayName  *string   `json:"display_name"`
-		Description  *string   `json:"description"`
-		Instructions *string   `json:"instructions"`
-		Tools        *[]string `json:"tools"`
-		MayMessage   *[]string `json:"may_message"`
-		Enabled      *bool     `json:"enabled"`
-		GroupID      *string   `json:"group_id"`
-	}
+	var body console.BotPatch
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
 		return
 	}
-	current, err := s.cfg.Bots.Get(r.Context(), id)
+	row, err := s.consoleOperations().UpdateBot(r.Context(), s.consoleClaims(r), id, body)
 	if err != nil {
-		s.jsonErr(w, botStatusFor(err), err.Error())
+		s.consoleOperationError(w, err, botStatusFor(err))
 		return
 	}
-	if !s.mayModifyBot(r, id) {
-		s.jsonErr(w, http.StatusForbidden, "that bot belongs to somebody else's team")
-		return
-	}
-	if body.Revision == nil || *body.Revision != current.GetRevision() {
-		s.jsonErr(w, http.StatusConflict, "bot changed; reload before saving")
-		return
-	}
-	if body.DisplayName != nil {
-		current.DisplayName = *body.DisplayName
-	}
-	if body.Description != nil {
-		current.Description = *body.Description
-	}
-	if body.Instructions != nil {
-		current.Instructions = *body.Instructions
-	}
-	if body.Tools != nil {
-		current.Tools = *body.Tools
-	}
-	if body.MayMessage != nil {
-		current.MayMessage = *body.MayMessage
-	}
-	if body.Enabled != nil {
-		current.Enabled = *body.Enabled
-	}
-	if body.GroupID != nil {
-		// Moving a bot between teams is an ordinary edit. The
-		// coordinator is the exception: it is what a channel reaches
-		// for its group, so moving it would leave that team
-		// unreachable and the next inbound message unanswered.
-		if current.GetIsCoordinator() {
-			s.jsonErr(w, http.StatusBadRequest,
-				"the coordinator belongs to its own team and cannot be moved; "+
-					"make another bot the coordinator there first")
-			return
-		}
-		// And the team it is going TO. The check above this block asks
-		// whether you may touch the bot, which is about where it is —
-		// on a move, the interesting team is the destination.
-		if !s.mayUseGroup(r, *body.GroupID) {
-			s.jsonErr(w, http.StatusForbidden,
-				"that team belongs to somebody else")
-			return
-		}
-		current.GroupId = *body.GroupID
-	}
-	updated, err := s.cfg.Bots.Put(r.Context(), current, *body.Revision)
-	if err != nil {
-		s.jsonErr(w, botStatusFor(err), err.Error())
-		return
-	}
-	s.auditRegistry(r, "bot:update", id, updated.GetDisplayName())
-	respondJSON(w, http.StatusOK, botToJSON(updated))
+	respondJSON(w, http.StatusOK, row)
 }
 
 func (s *Server) handleBotInbox(w http.ResponseWriter, r *http.Request, botID string) {
@@ -435,78 +189,33 @@ func (s *Server) handleBotInbox(w http.ResponseWriter, r *http.Request, botID st
 	}
 	switch r.Method {
 	case http.MethodGet:
-		filter := memory.InboxFilter{Limit: 100}
+		limit := 100
 		if raw := r.URL.Query().Get("limit"); raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-				filter.Limit = n
-			}
-		}
-		if raw := r.URL.Query().Get("status"); raw != "" && raw != "all" {
-			status, ok := parseRESTInboxStatus(raw)
-			if !ok {
-				s.jsonErr(w, http.StatusBadRequest, "unknown status "+strconv.Quote(raw))
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 {
+				s.jsonErr(w, http.StatusBadRequest, "invalid limit")
 				return
 			}
-			filter.Statuses = []lobslawv1.InboxStatus{status}
+			limit = n
 		}
-		items, err := s.cfg.Inbox.List(r.Context(), botID, filter)
+		rows, err := s.consoleOperations().Inbox(r.Context(), s.consoleClaims(r), botID, r.URL.Query().Get("status"), limit)
 		if err != nil {
-			s.jsonErr(w, http.StatusInternalServerError, err.Error())
+			s.consoleOperationError(w, err, http.StatusInternalServerError)
 			return
 		}
-		out := make([]inboxItemJSON, 0, len(items))
-		for _, item := range items {
-			out = append(out, inboxToJSON(item, false))
-		}
-		respondJSON(w, http.StatusOK, map[string]any{"bot": botID, "items": out})
+		respondJSON(w, http.StatusOK, map[string]any{"bot": botID, "items": rows})
 	case http.MethodPost:
-		var body struct {
-			Subject  string `json:"subject"`
-			Body     string `json:"body"`
-			Kind     string `json:"kind"`
-			Priority int32  `json:"priority"`
-		}
+		var body console.InboxInput
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
 			return
 		}
-		kind, ok := parseRESTInboxKind(body.Kind)
-		if !ok {
-			s.jsonErr(w, http.StatusBadRequest, "unknown kind "+strconv.Quote(body.Kind))
-			return
-		}
-		// Who assigned this, from the session rather than the body:
-		// the browser is not the authority on who is asking. Now that
-		// the console can tell people apart, an operator has a name,
-		// and it follows the work — so a report this produces can say
-		// who asked for it even after it has changed hands.
-		// principalOf, not a second authenticate: handleBots has
-		// already gated this path, so the error branch was
-		// unreachable and the "operator" fallback it guarded could
-		// never be taken. Two ways of asking the same question is how
-		// they come to disagree.
-		requester := s.principalOf(r)
-		authn, err := s.authenticateRequest(r)
+		row, err := s.consoleOperations().PostInbox(r.Context(), s.consoleClaims(r), botID, body)
 		if err != nil {
-			s.jsonErr(w, http.StatusUnauthorized, err.Error())
+			s.consoleOperationError(w, err, inboxStatusFor(err))
 			return
 		}
-		item, err := s.cfg.Inbox.Post(r.Context(), &lobslawv1.BotInboxItem{
-			Recipient: botID,
-			// An operator assigning work from the GUI is the sender.
-			Sender:      "operator",
-			RequestedBy: requester,
-			TaskClaims:  turn.ClaimsToProto(authn.Claims),
-			Kind:        kind,
-			Subject:     body.Subject,
-			Body:        body.Body,
-			Priority:    body.Priority,
-		})
-		if err != nil {
-			s.jsonErr(w, inboxStatusFor(err), err.Error())
-			return
-		}
-		respondJSON(w, http.StatusCreated, inboxToJSON(item, true))
+		respondJSON(w, http.StatusCreated, row)
 	default:
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET or POST")
 	}
@@ -541,12 +250,12 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		item, err := s.cfg.Inbox.Get(r.Context(), botID, itemID)
+		row, err := s.consoleOperations().InboxItem(r.Context(), authn.Claims, botID, itemID)
 		if err != nil {
-			s.jsonErr(w, inboxStatusFor(err), err.Error())
+			s.consoleOperationError(w, err, inboxStatusFor(err))
 			return
 		}
-		respondJSON(w, http.StatusOK, inboxToJSON(item, true))
+		respondJSON(w, http.StatusOK, row)
 	case http.MethodPatch:
 		var body struct {
 			Action string `json:"action"`
@@ -555,24 +264,12 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 			s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
 			return
 		}
-		var (
-			item *lobslawv1.BotInboxItem
-			err  error
-		)
-		switch strings.ToLower(strings.TrimSpace(body.Action)) {
-		case "retry":
-			item, err = s.cfg.Inbox.Retry(r.Context(), botID, itemID)
-		case "cancel":
-			item, err = s.cfg.Inbox.Cancel(r.Context(), botID, itemID)
-		default:
-			s.jsonErr(w, http.StatusBadRequest, `action must be "retry" or "cancel"`)
-			return
-		}
+		row, err := s.consoleOperations().ChangeInbox(r.Context(), authn.Claims, botID, itemID, body.Action)
 		if err != nil {
-			s.jsonErr(w, inboxStatusFor(err), err.Error())
+			s.consoleOperationError(w, err, inboxStatusFor(err))
 			return
 		}
-		respondJSON(w, http.StatusOK, inboxToJSON(item, true))
+		respondJSON(w, http.StatusOK, row)
 	default:
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET or PATCH")
 	}
@@ -580,7 +277,7 @@ func (s *Server) handleInboxItem(w http.ResponseWriter, r *http.Request) {
 
 const (
 	defaultActivityLimit int = 100
-	maxActivityLimit     int = memory.MaxInboxRecentItems
+	maxActivityLimit     int = bots.MaxInboxRecentItems
 )
 
 func activityLimit(raw string) (int, error) {
@@ -622,37 +319,12 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.cfg.Bots == nil {
-		s.jsonErr(w, http.StatusServiceUnavailable, "this node does not host the bot registry")
-		return
-	}
-	// The roster bounds discovery by bot count, not by historical inbox rows.
-	bots, err := s.cfg.Bots.List(r.Context())
+	rows, err := s.consoleOperations().Activity(r.Context(), s.consoleClaims(r), limit)
 	if err != nil {
-		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		s.consoleOperationError(w, err, http.StatusInternalServerError)
 		return
 	}
-	out := make([]inboxItemJSON, 0, 2*limit)
-	principal := s.principalOf(r)
-	for _, bot := range bots {
-		if !memory.MayModify(bot, principal) {
-			continue
-		}
-		items, err := s.cfg.Inbox.Recent(r.Context(), bot.GetId(), limit)
-		if err != nil {
-			s.jsonErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		out = collectActivity(out, items, limit)
-	}
-	// Newest first across every queue. Ids are ULIDs, so descending id
-	// is descending time without reading a clock or a timestamp that
-	// might be absent.
-	sortInboxDescending(out)
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	respondJSON(w, http.StatusOK, map[string]any{"items": out})
+	respondJSON(w, http.StatusOK, map[string]any{"items": rows})
 }
 
 func sortInboxDescending(items []inboxItemJSON) {
@@ -701,9 +373,9 @@ func respondJSON(w http.ResponseWriter, status int, body any) {
 // edited this while you had the form open".
 func botStatusFor(err error) int {
 	switch {
-	case errors.Is(err, memory.ErrBotNotFound):
+	case errors.Is(err, bots.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, memory.ErrClaimConflict):
+	case errors.Is(err, types.ErrConflict):
 		return http.StatusConflict
 	default:
 		return http.StatusBadRequest
@@ -712,48 +384,16 @@ func botStatusFor(err error) int {
 
 func inboxStatusFor(err error) int {
 	switch {
-	case errors.Is(err, memory.ErrInboxNotFound):
+	case errors.Is(err, bots.ErrInboxNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, memory.ErrInboxFull):
+	case errors.Is(err, bots.ErrInboxFull):
 		// 429, not 400: the request was well-formed and the answer is
 		// "come back when this bot has caught up".
 		return http.StatusTooManyRequests
-	case errors.Is(err, memory.ErrClaimConflict):
+	case errors.Is(err, types.ErrConflict):
 		return http.StatusConflict
 	default:
 		return http.StatusBadRequest
-	}
-}
-
-func parseRESTInboxStatus(s string) (lobslawv1.InboxStatus, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "pending":
-		return lobslawv1.InboxStatus_INBOX_STATUS_PENDING, true
-	case "waiting":
-		return lobslawv1.InboxStatus_INBOX_STATUS_WAITING, true
-	case "claimed":
-		return lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED, true
-	case "done":
-		return lobslawv1.InboxStatus_INBOX_STATUS_DONE, true
-	case "failed":
-		return lobslawv1.InboxStatus_INBOX_STATUS_FAILED, true
-	case "cancelled", "canceled":
-		return lobslawv1.InboxStatus_INBOX_STATUS_CANCELLED, true
-	default:
-		return lobslawv1.InboxStatus_INBOX_STATUS_UNSPECIFIED, false
-	}
-}
-
-func parseRESTInboxKind(s string) (lobslawv1.InboxKind, bool) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", "task":
-		return lobslawv1.InboxKind_INBOX_KIND_TASK, true
-	case "question":
-		return lobslawv1.InboxKind_INBOX_KIND_QUESTION, true
-	case "fyi":
-		return lobslawv1.InboxKind_INBOX_KIND_FYI, true
-	default:
-		return lobslawv1.InboxKind_INBOX_KIND_UNSPECIFIED, false
 	}
 }
 
@@ -768,14 +408,6 @@ func (s *Server) registerTeamRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("/v1/groups", s.consoleRoute(s.handleGroups))
 		mux.HandleFunc("/v1/groups/", s.consoleRoute(s.handleGroups))
 	}
-}
-
-func (s *Server) auditRegistry(r *http.Request, action, target, detail string) {
-	s.log.Info("registry audit",
-		"action", action,
-		"target", target,
-		"detail", detail,
-		"actor", s.principalOf(r))
 }
 
 func (s *Server) resolveTeamBot(ctx context.Context, channel, channelID, userID string) string {

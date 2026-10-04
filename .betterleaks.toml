@@ -61,3 +61,10 @@ condition = "AND"
 regexTarget = "match"
 paths = ['''^internal/workforce/browser_test\.go$''']
 regexes = ['''^https://name:password@example\.test/"?$''']
+
+[[allowlists]]
+description = "Exact dummy credential URL in the console URL rejection test; reviewed fixture from PR 348, not a service credential."
+condition = "AND"
+regexTarget = "match"
+paths = ['^pkg/config/console_url_test\.go$']
+regexes = ['^https://alice:secret@host"?$']
