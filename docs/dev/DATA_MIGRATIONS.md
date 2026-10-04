@@ -124,3 +124,21 @@ semantics require a compatible reader on every voter; this release enforces an
 exact protocol match rather than assuming that matching Go/protobuf compilation
 proves semantic compatibility. A future rolling-upgrade implementation must add
 cluster-wide capability negotiation and gate new writers until all voters agree.
+
+
+## Compatibility preflight performance
+
+The client currently performs a read-only `GetPeers` compatibility check before
+persisted-data unary RPCs and stream opens. This adds a serial network round-trip
+to Raft traffic; the five-second preflight timeout can exceed an election timeout
+on a stalled peer. Retained-log validation also decodes entries on replication
+reads, and startup scans every retained entry. These costs are deliberate safety
+checks, not a throughput guarantee for large or high-latency clusters.
+
+A future preflight optimization must bind cached capability evidence to the
+actual transport lifetime, not just the `grpc.ClientConn` object: that object can
+reconnect to a different binary. Rolling control additionally changes the local
+required contract during preparation/activation. Validate reconnect-to-old-peer,
+contract-change, concurrent unary/stream calls and stalled-handshake behavior
+before replacing the per-call checks. A permanent connection-object cache would
+weaken the old-peer refusal guarantee.
