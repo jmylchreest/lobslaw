@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/dataformat"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -60,6 +61,7 @@ func TestAutomaticUpgradeChecksEveryMemberAndLeadership(t *testing.T) {
 		t.Fatal(err)
 	}
 	mode := "old"
+	var observedIndex *uint64
 	leader.SetUpgradeProbe(func(ctx context.Context, member raft.Server) (*UpgradePeer, error) {
 		if member.ID == nodes[3].nodeID && mode == "offline" {
 			return nil, errors.New("offline")
@@ -69,6 +71,9 @@ func TestAutomaticUpgradeChecksEveryMemberAndLeadership(t *testing.T) {
 			return nil, err
 		}
 		peer := &UpgradePeer{ID: string(member.ID), State: state, Supported: dataformat.SupportedContracts(), AutomaticTargets: dataformat.AutomaticTargets(), AutomaticReady: true, AppliedIndex: leader.fsm.lastApplied()}
+		if observedIndex != nil {
+			peer.AppliedIndex = *observedIndex
+		}
 		if member.ID == nodes[3].nodeID {
 			switch mode {
 			case "old":
@@ -91,6 +96,24 @@ func TestAutomaticUpgradeChecksEveryMemberAndLeadership(t *testing.T) {
 	}
 	mode = "ready"
 	plan, err := leader.PlanAutomaticUpgrade(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An audit or unrelated write between observation and mutation must not
+	// move the catch-up target forever ahead of the followers.
+	observedIndex = &plan.AppliedIndex
+	raw, err := proto.Marshal(&pb.LogEntry{Op: pb.LogOp_LOG_OP_PUT, Payload: &pb.LogEntry_PolicyRule{PolicyRule: &pb.PolicyRule{Id: "after-plan", Subject: "user:test", Action: "memory:read", Resource: "*", Effect: "allow"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leader.Apply(raw, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := leader.ChangeAutomaticUpgrade(context.Background(), plan); err != nil {
+		t.Fatalf("post-plan audit/write prevented upgrade: %v", err)
+	}
+	observedIndex = nil
+	plan, err = leader.PlanAutomaticUpgrade(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

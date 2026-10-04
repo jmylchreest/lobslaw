@@ -68,7 +68,13 @@ func (s *upgradeService) UpgradeStatus(ctx context.Context, _ *pb.UpgradeStatusR
 	if err := s.authorize(ctx, false); err != nil {
 		return nil, err
 	}
-	return s.node.raft.UpgradeStatus()
+	out, err := s.node.raft.UpgradeStatus()
+	if err == nil && s.node.automaticUpgrade != nil {
+		if blocker := s.node.automaticUpgrade.blocker.Load(); blocker != nil {
+			out.AutomaticBlocker = *blocker
+		}
+	}
+	return out, err
 }
 func (s *upgradeService) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest) (*pb.ChangeUpgradeResponse, error) {
 	decision, err := s.authorizeDecision(ctx, true)
@@ -93,6 +99,8 @@ func (n *Node) wireUpgradeService() {
 		return
 	}
 	n.raft.SetUpgradeProbe(n.probeUpgradeMember)
+	n.automaticUpgrade = newAutomaticUpgradeController(n)
+	n.raft.SetAutomaticUpgradeReady(n.automaticUpgrade.ready.Load)
 	pb.RegisterUpgradeServiceServer(n.server, &upgradeService{node: n})
 }
 
