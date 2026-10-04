@@ -183,6 +183,8 @@ func configurationFingerprint(servers []raft.Server) string {
 }
 
 func (n *RaftNode) transferUpgradeLeader(ctx context.Context, id string) (*pb.UpgradeStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, upgradeTimeout)
+	defer cancel()
 	if id == "" {
 		return nil, errors.New("target node id required")
 	}
