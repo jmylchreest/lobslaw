@@ -13,7 +13,7 @@ import (
 
 // Valid JSON followed by whitespace must not bypass the response limit.
 func TestOversizedResponses(t *testing.T) {
-	const limit = 1 << 20
+	const limit = maxResponseBytes
 	cases := []struct {
 		name, body string
 		call       func(ProviderConfig) error

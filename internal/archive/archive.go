@@ -21,15 +21,27 @@ import (
 )
 
 const (
-	Format                = "lobslaw-knowledge"
-	SchemaVersion         = 2
-	MaxRecordBytes  int64 = 8 << 20
-	MaxArchiveBytes int64 = 256 << 20
-	MaxRecords            = 100000
-	manifestName          = "manifest.json"
-	privateMode           = 0o600
-	ageHeaderPrefix       = "age-encryption.org/"
+	Format = "lobslaw-knowledge"
+	// SchemaVersion is the manifest schema an archive is written with.
+	SchemaVersion = 2
+	// MinSchemaVersion is the oldest manifest schema a reader still accepts.
+	// Raising it drops support for generations written before the last bump.
+	MinSchemaVersion       = 1
+	MaxRecordBytes   int64 = 8 << 20
+	MaxArchiveBytes  int64 = 256 << 20
+	MaxRecords             = 100000
+	manifestName           = "manifest.json"
+	privateMode            = 0o600
+	ageHeaderPrefix        = "age-encryption.org/"
 )
+
+// SupportsSchema reports whether a manifest schema version is readable, from
+// MinSchemaVersion up to the current SchemaVersion. Every reader of archive
+// manifests, in this package and in internal/backup, must use this predicate
+// so they cannot drift apart on which schemas are accepted.
+func SupportsSchema(v int) bool {
+	return v >= MinSchemaVersion && v <= SchemaVersion
+}
 
 type Record struct {
 	Kind string          `json:"kind"`
@@ -288,7 +300,7 @@ func validateManifest(m Manifest) error {
 	if _, err := SourceIdentity(m, ""); err != nil {
 		return err
 	}
-	if m.Format != Format || (m.SchemaVersion != 1 && m.SchemaVersion != SchemaVersion) {
+	if m.Format != Format || !SupportsSchema(m.SchemaVersion) {
 		return errors.New("unsupported archive format or schema")
 	}
 	if m.SnapshotID == "" || m.CreatedAt.IsZero() || m.Counts == nil || m.Checksums == nil {
@@ -317,8 +329,8 @@ func SourceIdentity(manifest Manifest, override string) (string, error) {
 	if id == "" {
 		id = override
 	}
-	if strings.TrimSpace(id) != id || len(id) > 256 {
-		return "", errors.New("source id must be trimmed and at most 256 bytes")
+	if strings.TrimSpace(id) != id || len(id) > MaxSourceIDBytes {
+		return "", fmt.Errorf("source id must be trimmed and at most %d bytes", MaxSourceIDBytes)
 	}
 	return id, nil
 }

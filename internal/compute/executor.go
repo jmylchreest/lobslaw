@@ -41,6 +41,7 @@ type InvokeRequest struct {
 // Stderr are the captured (and possibly truncated) bytes — callers
 // check Truncated to know whether output was capped by MaxOutputBytes.
 type InvokeResult struct {
+	started   bool
 	ExitCode  int
 	Stdout    []byte
 	Stderr    []byte
@@ -131,10 +132,10 @@ func (e *Executor) SetSessionApprovals(a *SessionApprovals) { e.approvals = a }
 // which case Invoke returns codes.Unimplemented-equivalent errors.
 func NewExecutor(r ToolCatalogue, p *policy.Engine, h *hooks.Dispatcher, cfg ExecutorConfig, logger *slog.Logger) *Executor {
 	if cfg.MaxOutputBytes <= 0 {
-		cfg.MaxOutputBytes = 10 * 1024 * 1024
+		cfg.MaxOutputBytes = DefaultExecutorMaxOutputBytes
 	}
 	if cfg.DefaultTimeout <= 0 {
-		cfg.DefaultTimeout = 30 * time.Second
+		cfg.DefaultTimeout = DefaultExecutorTimeout
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = os.TempDir()
@@ -163,6 +164,9 @@ var (
 
 // Invoke executes the requested tool end-to-end.
 func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *InvokeResult, err error) {
+	if err := checkTaskExecution(ctx); err != nil {
+		return nil, err
+	}
 	req.Params = maps.Clone(req.Params)
 	if req.ToolName == "" {
 		return nil, fmt.Errorf("InvokeRequest: ToolName required")
@@ -278,7 +282,7 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *Invok
 		result, err = e.runSubprocess(ctx, req, resolvedPath, argv)
 	}
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 
 	// PostToolUse hook.
@@ -320,12 +324,14 @@ func (e *Executor) runBuiltin(ctx context.Context, req InvokeRequest, name strin
 	stdout, exitCode, err := fn(ctx, req.Params)
 	if err != nil {
 		return &InvokeResult{
+			started:  true,
 			ExitCode: exitCode,
 			Stdout:   stdout,
 			Stderr:   []byte(err.Error()),
 		}, nil
 	}
 	return &InvokeResult{
+		started:  true,
 		ExitCode: exitCode,
 		Stdout:   stdout,
 	}, nil
@@ -352,7 +358,7 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	// WaitDelay force-closes stdio after context cancel so a child
 	// process that inherited our pipes (e.g. sleep inside a shell)
 	// can't stall Wait().
-	cmd.WaitDelay = 500 * time.Millisecond
+	cmd.WaitDelay = executorWaitDelay
 
 	if err := sandbox.Apply(cmd, sbPolicy); err != nil {
 		return nil, fmt.Errorf("sandbox: %w", err)
@@ -366,6 +372,7 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	err := execretry.Run(runCtx, cmd)
 
 	result := &InvokeResult{
+		started:   cmd.Process != nil,
 		Stdout:    stdout.Bytes(),
 		Stderr:    stderr.Bytes(),
 		Truncated: stdout.truncated || stderr.truncated,
@@ -413,6 +420,9 @@ func (e *Executor) CheckPolicy(ctx context.Context, claims *types.Claims, action
 // — callers in Phase 6 will convert ErrRequireConfirm into a
 // Channel.Prompt flow.
 func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action, resource string) error {
+	if err := checkTaskExecution(ctx); err != nil {
+		return err
+	}
 	dec, err := e.policyDecision(ctx, claims, action, resource)
 	if err != nil {
 		return err
@@ -440,7 +450,7 @@ func (e *Executor) PolicyAllow(ctx context.Context, claims *types.Claims, action
 				"action", action, "resource", resource)
 			return nil
 		}
-		if e.approvals.Granted(ctx, action, resource) {
+		if e.approvalGranted(ctx, action, resource) {
 			e.logger.Debug("policy: confirmation already approved for this conversation",
 				"action", action, "resource", resource)
 			return nil

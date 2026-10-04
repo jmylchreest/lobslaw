@@ -73,6 +73,8 @@ type flags struct {
 	compute                   bool
 	gateway                   bool
 	storage                   bool
+	computeTeams              bool
+	uiWeb                     bool
 }
 
 func parseFlags(args []string, out *flags) error {
@@ -102,6 +104,8 @@ func parseFlags(args []string, out *flags) error {
 	fs.BoolVar(&out.compute, "compute", false, "enable compute function")
 	fs.BoolVar(&out.gateway, "gateway", false, "enable gateway function")
 	fs.BoolVar(&out.storage, "storage", false, "enable storage function")
+	fs.BoolVar(&out.computeTeams, "compute-teams", false, "enable compute-teams (also enabled by --all)")
+	fs.BoolVar(&out.uiWeb, "ui-web", false, "enable ui-web (also enabled by --all)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -137,10 +141,10 @@ func parseLogLevel(s string) slog.Level {
 
 // resolveFunctions picks the enabled node functions.
 // Precedence: --all > explicit per-function flags > config enabled
-// bits > default (all four).
+// bits > default (memory, compute, storage).
 func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 	if f.all {
-		return allFunctions()
+		return types.AllFunctions()
 	}
 
 	var explicit []types.NodeFunction
@@ -158,6 +162,12 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 	}
 	if f.storage {
 		explicit = append(explicit, types.FunctionStorage)
+	}
+	if f.computeTeams {
+		explicit = append(explicit, types.FunctionComputeTeams)
+	}
+	if f.uiWeb {
+		explicit = append(explicit, types.FunctionUIWeb)
 	}
 	if len(explicit) > 0 {
 		return explicit
@@ -179,21 +189,17 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 	if cfg.Storage.Enabled {
 		fromCfg = append(fromCfg, types.FunctionStorage)
 	}
+	if cfg.ComputeTeams.Enabled {
+		fromCfg = append(fromCfg, types.FunctionComputeTeams)
+	}
+	if cfg.UIWeb.Enabled {
+		fromCfg = append(fromCfg, types.FunctionUIWeb)
+	}
 	if len(fromCfg) > 0 {
 		return fromCfg
 	}
 
-	return allFunctions()
-}
-
-func allFunctions() []types.NodeFunction {
-	// The canonical set. policy and gateway are accepted in config and
-	// normalised away, so they are not offered here.
-	return []types.NodeFunction{
-		types.FunctionMemory,
-		types.FunctionCompute,
-		types.FunctionStorage,
-	}
+	return types.DefaultFunctions()
 }
 
 // applyLogFilters translates config-file filter entries into
@@ -423,7 +429,14 @@ func secretSchemes(c config.SecretsConfig) []string {
 
 func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFunction, logger *slog.Logger) (node.Config, error) {
 	stamp := resolveBuildStamp()
-	needsRaft := slices.Contains(funcs, types.FunctionMemory) || slices.Contains(funcs, types.FunctionPolicy)
+	// Resolve dependencies before deciding which boot secrets are required.
+	// In particular, storage implies memory even when only --storage was given.
+	// The second result lists rewritten aliases; node.New logs those warnings.
+	effectiveFunctions, _ := types.NormalizeFunctions(funcs)
+	if err := cfg.ValidateSelectedFunctions(effectiveFunctions); err != nil {
+		return node.Config{}, err
+	}
+	needsRaft := slices.Contains(effectiveFunctions, types.FunctionMemory)
 
 	// Merge .mcp.json from the same dir as config.toml. Trust model
 	// is identical to the [[mcp.servers]] block: operator-controlled
@@ -569,6 +582,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		Hooks:               cfg.Hooks,
 		Auth:                cfg.Auth,
 		Gateway:             cfg.Gateway,
+		UIWeb:               cfg.UIWeb,
 		Audit:               cfg.Audit,
 		Storage:             cfg.Storage,
 		Skills:              cfg.Skills,

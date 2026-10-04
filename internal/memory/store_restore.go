@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -130,6 +129,13 @@ func (s *Store) restoreSnapshot(r io.Reader, ops snapshotRestoreOps) (out snapsh
 			_ = fresh.Close()
 		}
 	}()
+	if err := upgradeStateDB(fresh, s.cipher); err != nil {
+		return out, fmt.Errorf("migrate snapshot: %w", err)
+	}
+	if err := fresh.Update(s.rebuildDerived); err != nil {
+		return out, fmt.Errorf("rebuild snapshot derived records: %w", err)
+	}
+
 	backup := tmp + ".previous"
 	if err := ops.link(s.path, backup); err != nil {
 		return out, fmt.Errorf("preserve current snapshot: %w", err)
@@ -193,7 +199,7 @@ func rollbackSnapshot(ops snapshotRestoreOps, path, tmp, backup string) error {
 func prepareSnapshotDB(path string) (*bolt.DB, error) {
 	// Read-only Open avoids loading a corrupt freelist before checking the
 	// snapshot's declared size against its real length.
-	check, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: 5 * time.Second})
+	check, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: storeOpenTimeout})
 	if err != nil {
 		return nil, err
 	}
@@ -215,12 +221,19 @@ func prepareSnapshotDB(path string) (*bolt.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	fresh, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
+	fresh, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: storeOpenTimeout})
 	if err != nil {
 		return nil, err
 	}
 	err = fresh.Update(func(tx *bolt.Tx) error {
+		state, err := readContract(tx)
+		if err != nil {
+			return err
+		}
 		for _, name := range allBuckets {
+			if state.Active < 2 && isTeamBucket(name) {
+				continue
+			}
 			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
 				return err
 			}

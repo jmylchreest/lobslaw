@@ -121,10 +121,10 @@ func (d *ImageDriver) Generate(ctx context.Context, req compute.ImageRequest) (*
 	if readErr != nil {
 		return nil, compute.Transient(fmt.Errorf("minimax image: read: %w", readErr))
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("minimax image: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
+			Err:   fmt.Errorf("minimax image: HTTP %d: %s", resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", compute.DiagnosticExcerptMaxBytes)),
 		}
 	}
 
@@ -158,9 +158,9 @@ func (d *ImageDriver) Generate(ctx context.Context, req compute.ImageRequest) (*
 func classifyStatus(b baseResp) error {
 	err := fmt.Errorf("minimax image: status %d: %s", b.StatusCode, b.StatusMsg)
 	switch b.StatusCode {
-	case 1002, 1039: // rate limited / concurrency limited
+	case statusRateLimited, statusConcurrencyLimited: // rate limited / concurrency limited
 		return compute.Transient(err)
-	case 1000, 1013: // unknown + internal error
+	case statusUnknownError, statusInternalError: // unknown + internal error
 		return compute.Transient(err)
 	default:
 		return compute.Permanent(err)

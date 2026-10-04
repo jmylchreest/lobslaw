@@ -39,15 +39,64 @@ const (
 	// FunctionStorage serves the object store and its sandboxed
 	// nested filesystem mounts.
 	FunctionStorage NodeFunction = "storage"
+	// FunctionComputeTeams is coordinator selection, specialist
+	// delegation and durable team work queues. Enabled explicitly or by --all.
+	// Requires compute (normalised in). Does not require ui-web.
+	FunctionComputeTeams NodeFunction = "compute-teams"
+	// FunctionUIWeb is the browser console. Enabled explicitly or by --all.
+	// Does NOT rewrite to compute — a web node may use remote compute.
+	FunctionUIWeb NodeFunction = "ui-web"
 )
+
+// nodeFunctionDefinition records the canonical functions and their default
+// selection in one place. Deprecated aliases are accepted by IsValid and
+// NormalizeFunctions but never advertised as additional functions by --all.
+type nodeFunctionDefinition struct {
+	function       NodeFunction
+	defaultEnabled bool
+}
+
+var nodeFunctions = [...]nodeFunctionDefinition{
+	{function: FunctionMemory, defaultEnabled: true},
+	{function: FunctionCompute, defaultEnabled: true},
+	{function: FunctionStorage, defaultEnabled: true},
+	{function: FunctionComputeTeams},
+	{function: FunctionUIWeb},
+}
+
+// AllFunctions returns every canonical node function. Each call returns a fresh
+// slice so callers cannot change the catalogue used by later selections.
+func AllFunctions() []NodeFunction {
+	functions := make([]NodeFunction, 0, len(nodeFunctions))
+	for _, definition := range nodeFunctions {
+		functions = append(functions, definition.function)
+	}
+	return functions
+}
+
+// DefaultFunctions returns the functions selected when neither flags nor config
+// selects any functions. Explicit --all uses AllFunctions instead.
+func DefaultFunctions() []NodeFunction {
+	var functions []NodeFunction
+	for _, definition := range nodeFunctions {
+		if definition.defaultEnabled {
+			functions = append(functions, definition.function)
+		}
+	}
+	return functions
+}
 
 // IsValid reports whether f is a known function, so an unrecognised
 // entry in [cluster].functions fails at boot rather than starting a
 // node that silently serves nothing.
 func (f NodeFunction) IsValid() bool {
-	switch f {
-	case FunctionMemory, FunctionPolicy, FunctionCompute, FunctionGateway, FunctionStorage:
+	if f == FunctionPolicy || f == FunctionGateway {
 		return true
+	}
+	for _, definition := range nodeFunctions {
+		if f == definition.function {
+			return true
+		}
 	}
 	return false
 }
@@ -134,6 +183,12 @@ func NormalizeFunctions(fns []NodeFunction) (out []NodeFunction, rewrote []NodeF
 	if seen[FunctionMemory] || seen[FunctionStorage] {
 		add(FunctionMemory)
 		add(FunctionStorage)
+	}
+	// Teams cannot run without an agent. Unlike gateway, the function
+	// bit is the real switch — [compute-teams].enabled maps onto it —
+	// so we add compute rather than rewriting the name away.
+	if seen[FunctionComputeTeams] {
+		add(FunctionCompute)
 	}
 	return out, rewrote
 }

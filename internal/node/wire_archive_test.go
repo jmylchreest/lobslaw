@@ -72,6 +72,30 @@ func TestArchiveRestoreModeDoesNotStartGatewaysOrScheduler(t *testing.T) {
 	}
 }
 
+func TestSharingAuthorizationScopesActionAndOwner(t *testing.T) {
+	store := crossOwnerTestStore(t)
+	n := &Node{policyEngine: policy.NewEngine(store, slog.Default())}
+	n.cfg.Users = []config.UserConfig{{ID: "alice", Roles: []string{"operator"}}}
+	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "alice", OrganizationalUnit: []string{mtls.OperatorOU}}}
+	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{cert}}}}})
+	if _, err := n.authorizeSharing(ctx, "skills:share:install", "user:alice"); err == nil {
+		t.Fatal("certificate granted data authority")
+	}
+	seedRule(t, store, &lobslawv1.PolicyRule{Id: "share-alice", Subject: "role:operator", Action: "skills:share:install", Resource: "user:alice", Effect: "allow", Priority: 50})
+	if actor, err := n.authorizeSharing(ctx, "skills:share:install", "user:alice"); err != nil || actor != "user:alice" {
+		t.Fatal("valid authorization failed", err)
+	}
+	if _, err := n.authorizeSharing(ctx, "skills:share:activate", "user:alice"); err == nil {
+		t.Fatal("install grant authorized activation")
+	}
+	if _, err := n.authorizeSharing(ctx, "skills:share:install", "user:bob"); err == nil {
+		t.Fatal("grant leaked across owners")
+	}
+	if _, err := n.authorizeSharing(context.Background(), "skills:share:install", "user:alice"); err == nil {
+		t.Fatal("unverified caller accepted")
+	}
+}
+
 func TestArchiveSkillsValidateOriginalSignatureAndIdentity(t *testing.T) {
 	public, private, err := ed25519.GenerateKey(nil)
 	if err != nil {

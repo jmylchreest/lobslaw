@@ -41,7 +41,8 @@ type Service struct {
 
 	// raft is optional — non-nil when this node runs the memory or
 	// policy function. AddMember returns Unimplemented when it's nil.
-	raft RaftMembership
+	raft         RaftMembership
+	verifyMember func(context.Context, string) error
 }
 
 // NewService constructs the gRPC server-side implementation. reload
@@ -59,6 +60,12 @@ func NewService(registry *Registry, local types.NodeInfo, logger *slog.Logger, r
 		reload:   reload,
 		raft:     raftMembership,
 	}
+}
+
+// SetMemberVerifier supplies the transport compatibility preflight from node wiring.
+// Configure before serving requests.
+func (s *Service) SetMemberVerifier(verify func(context.Context, string) error) {
+	s.verifyMember = verify
 }
 
 // Register adds the caller's node info to the local registry.
@@ -156,7 +163,20 @@ func (s *Service) AddMember(ctx context.Context, req *lobslawv1.AddMemberRequest
 		}, nil
 	}
 
-	if err := s.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.Address)); err != nil {
+	if s.verifyMember != nil {
+		if err := s.verifyMember(ctx, req.Address); err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition, "member compatibility: %v", err)
+		}
+	}
+	var addErr error
+	if contextual, ok := s.raft.(interface {
+		AddVoterContext(context.Context, raft.ServerID, raft.ServerAddress) error
+	}); ok {
+		addErr = contextual.AddVoterContext(ctx, raft.ServerID(req.NodeId), raft.ServerAddress(req.Address))
+	} else {
+		addErr = s.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.Address))
+	}
+	if err := addErr; err != nil {
 		return nil, status.Errorf(codes.Internal, "AddVoter: %v", err)
 	}
 	logging.From(ctx).Info("cluster member added",
@@ -201,7 +221,15 @@ func (s *Service) Propose(ctx context.Context, req *lobslawv1.ProposeRequest) (*
 			"not the raft leader; leader is %s", s.raft.LeaderAddress())
 	}
 
-	resp, err := s.raft.Apply(req.Entry, proposeTimeout)
+	var resp any
+	var err error
+	if contextual, ok := s.raft.(interface {
+		ApplyContext(context.Context, []byte, time.Duration) (any, error)
+	}); ok {
+		resp, err = contextual.ApplyContext(ctx, req.Entry, proposeTimeout)
+	} else {
+		resp, err = s.raft.Apply(req.Entry, proposeTimeout)
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "raft apply: %v", err)
 	}

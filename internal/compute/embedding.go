@@ -119,7 +119,7 @@ func NewEmbeddingClient(cfg EmbeddingClientConfig) (*EmbeddingClient, error) {
 		wrapped := *base
 		timeout := cfg.Timeout
 		if timeout <= 0 {
-			timeout = 30 * time.Second
+			timeout = DefaultEmbeddingTimeout
 		}
 		wrapped.Timeout = timeout
 		hc = &wrapped

@@ -11,25 +11,27 @@ import (
 // validates its own slice — this layer only parses and resolves
 // secret references.
 type Config struct {
-	Memory    MemoryConfig     `koanf:"memory"`
-	Storage   StorageConfig    `koanf:"storage"`
-	Policy    PolicyConfig     `koanf:"policy"`
-	Compute   ComputeConfig    `koanf:"compute"`
-	Hooks     HooksConfig      `koanf:"hooks"`
-	Gateway   GatewayConfig    `koanf:"gateway"`
-	Discovery DiscoveryConfig  `koanf:"discovery"`
-	Cluster   ClusterConfig    `koanf:"cluster"`
-	Soul      SoulLoaderConfig `koanf:"soul"`
-	Auth      AuthConfig       `koanf:"auth"`
-	Sandbox   SandboxConfig    `koanf:"sandbox"`
-	Audit     AuditConfig      `koanf:"audit"`
-	Skills    SkillsConfig     `koanf:"skills"`
-	Logging   LoggingConfig    `koanf:"logging"`
-	Debug     DebugConfig      `koanf:"debug"`
-	MCP       MCPConfig        `koanf:"mcp"`
-	Security  SecurityConfig   `koanf:"security"`
-	Secrets   SecretsConfig    `koanf:"secrets"`
-	Identity  IdentityConfig   `koanf:"identity"`
+	Memory       MemoryConfig       `koanf:"memory"`
+	Storage      StorageConfig      `koanf:"storage"`
+	Policy       PolicyConfig       `koanf:"policy"`
+	Compute      ComputeConfig      `koanf:"compute"`
+	ComputeTeams ComputeTeamsConfig `koanf:"compute-teams"`
+	UIWeb        UIWebConfig        `koanf:"ui-web"`
+	Hooks        HooksConfig        `koanf:"hooks"`
+	Gateway      GatewayConfig      `koanf:"gateway"`
+	Discovery    DiscoveryConfig    `koanf:"discovery"`
+	Cluster      ClusterConfig      `koanf:"cluster"`
+	Soul         SoulLoaderConfig   `koanf:"soul"`
+	Auth         AuthConfig         `koanf:"auth"`
+	Sandbox      SandboxConfig      `koanf:"sandbox"`
+	Audit        AuditConfig        `koanf:"audit"`
+	Skills       SkillsConfig       `koanf:"skills"`
+	Logging      LoggingConfig      `koanf:"logging"`
+	Debug        DebugConfig        `koanf:"debug"`
+	MCP          MCPConfig          `koanf:"mcp"`
+	Security     SecurityConfig     `koanf:"security"`
+	Secrets      SecretsConfig      `koanf:"secrets"`
+	Identity     IdentityConfig     `koanf:"identity"`
 	// Trace is turn tracing. Off by default.
 	Trace TraceConfig `koanf:"trace"`
 	// SelfLearning defaults to off — the zero value of Mode parses to
@@ -442,10 +444,13 @@ type PolicyConfig struct {
 	// Rules are operator-declared [[policy.rules]] entries seeded
 	// at boot via raft. Each rule mirrors lobslawv1.PolicyRule
 	// fields. Subjects MUST be "kind:value" (scope:owner,
-	// user:alice, role:admin) or "*" — bare strings like "owner"
-	// are treated as malformed (fail-closed) by the engine.
-	// Higher Priority wins. Default-deny seeds for builtins land
-	// at priority=10; operator allow rules typically use 20+.
+	// user:alice, role:admin), "*", or empty (both wildcards match
+	// everyone). A bare string like "owner", an empty value like
+	// "user:", or a kind the engine does not match fails the node
+	// at boot rather than seeding a rule that would silently never
+	// apply. Higher Priority wins. Sensitive built-ins get no seed
+	// at all (fall through to default-deny); operator allow rules
+	// typically use priority 20+.
 	Rules []PolicyRuleConfig `koanf:"rules,omitempty"`
 }
 
@@ -459,6 +464,25 @@ type PolicyRuleConfig struct {
 	Resource string `koanf:"resource"`
 	Effect   string `koanf:"effect"`             // "allow" | "deny"
 	Priority int32  `koanf:"priority,omitempty"` // higher wins
+}
+
+// ComputeTeamsConfig is the [compute-teams] section. Off by default;
+// --all enables it.
+type ComputeTeamsConfig struct {
+	Enabled bool `koanf:"enabled"`
+}
+
+// UIWebConfig is the [ui-web] section. Off by default; --all enables it.
+// Enabling ui-web alone does not imply local compute.
+type UIWebConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// PublicURL is the browser-reachable root URL used in notification links.
+	// May be a LAN HTTP address; never inferred from an inbound Host header.
+	PublicURL string `koanf:"public_url,omitempty"`
+	// Backend is the cluster gRPC address (host:port) of a compute
+	// node. Required when ui-web is on and compute is off — a web
+	// node has no local agent, so turns run there.
+	Backend string `koanf:"backend"`
 }
 
 // ComputeConfig is the [compute] section: LLM providers, the chains
@@ -1621,6 +1645,9 @@ type UserChannelAddrConfig struct {
 // determines which of the fields below are consulted.
 type GatewayChannelConfig struct {
 	Type string `koanf:"type"`
+	// NotifyTasks enables selective task/routine notices for Telegram DMs.
+	// Requires ui-web.public_url and numeric enrolled Telegram addresses.
+	NotifyTasks bool `koanf:"notify_tasks,omitempty"`
 	// Mode picks "webhook" (default) or "poll" for telegram. Poll
 	// mode needs no inbound network — right default for personal
 	// deployments behind NAT. secret_token_ref is only required in
@@ -1953,12 +1980,22 @@ type SkillsConfig struct {
 	DevSource string `koanf:"dev_source,omitempty"`
 }
 
+// GoogleCalendarConfig enables the trusted per-user Calendar connector.
+type GoogleCalendarConfig struct {
+	Enabled         bool   `koanf:"enabled"`
+	ClientIDRef     string `koanf:"client_id_ref"`
+	ClientSecretRef string `koanf:"client_secret_ref"`
+	CallbackURL     string `koanf:"callback_url"`
+}
+
 // SecurityConfig carries cross-cutting safety controls: the egress
 // filter's ACL inputs, future subprocess sandbox knobs, etc. Each
 // field is independently optional — empty struct is valid and
 // produces sensible-default behaviour (deny-by-default ACL with
 // permissive fetch_url).
 type SecurityConfig struct {
+	GoogleCalendar GoogleCalendarConfig `koanf:"google_calendar"`
+
 	// SessionGrantTTL bounds an "approve for the rest of this
 	// conversation" grant. Zero takes the default of 24h.
 	//
@@ -2001,20 +2038,11 @@ type SecurityConfig struct {
 	// supply-chain requirements declare their own.
 	ClawhubBinaryHosts []string `koanf:"clawhub_binary_hosts,omitempty"`
 
-	// ClawhubInstallMount names the storage mount where installed
-	// skill bundles land. Empty = "skill-tools" (the canonical
-	// label). Operators with custom layouts override.
+	// ClawhubInstallMount is deprecated. ClawHub entry points stage via Raft.
 	ClawhubInstallMount string `koanf:"clawhub_install_mount,omitempty"`
 
-	// ClawhubAutoEmitInstallRules controls whether a successful
-	// clawhub_install also writes a policy rule allowing the agent
-	// to call the newly-installed skill (resource = <skill_name>,
-	// subject = scope:owner, effect = allow, priority = 20). Default
-	// false — operator must explicitly opt in. When true, the
-	// emitted rule appears alongside operator-declared rules in the
-	// policy bucket and survives reload. Operators who want skills
-	// to require an explicit per-skill opt-in (e.g. for
-	// require_confirmation on writes) leave this false.
+	// ClawhubAutoEmitInstallRules is deprecated and ignored. Skill proposals
+	// never grant execution permission; enabling this logs a migration warning.
 	ClawhubAutoEmitInstallRules bool `koanf:"clawhub_auto_emit_install_rules,omitempty"`
 
 	// EgressUDSPath, when set, makes smokescreen also listen on a

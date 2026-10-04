@@ -21,9 +21,32 @@
 # Dockerfile.tools — that ships ~120MB with the broader runtime.
 
 ARG GO_VERSION=1.27
+# BuildKit skips the Node stage entirely for WEB_VARIANT=no-web.
+ARG WEB_VARIANT=with-web
+
+# ---- Web console ---------------------------------------------------
+# The console is a separate build with a separate toolchain, so it gets
+# its own stage: the Go layer does not need node, and the web layer
+# does not invalidate on a Go change.
+#
+# Without this the image shipped an EMPTY console.
+# internal/gateway/ui/dist is gitignored and embedded with go:embed, so
+# a `go build` that has not been preceded by the Vite build produces a
+# binary whose console answers ErrNotBuilt. Every published image and
+# release binary was in that state.
+FROM node:22-slim AS web
+
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY web/ ./
+# vite.config.ts writes to ../internal/gateway/ui/dist, so that path
+# has to exist relative to /web.
+RUN mkdir -p /internal/gateway/ui && npm run build
 
 # ---- Build stage ---------------------------------------------------
-FROM golang:${GO_VERSION} AS build
+FROM golang:${GO_VERSION} AS build-source
 
 WORKDIR /src
 
@@ -33,6 +56,19 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY . .
+
+FROM build-source AS build-input-no-web
+ARG GO_BUILD_TAGS=no_web
+
+FROM build-source AS build-input-with-web
+ARG GO_BUILD_TAGS=
+
+# The built console, over the gitignored empty directory that go:embed
+# would otherwise pick up.
+COPY --from=web /internal/gateway/ui/dist/ ./internal/gateway/ui/dist/
+
+FROM build-input-${WEB_VARIANT} AS build
+ARG GO_BUILD_TAGS
 
 ARG VERSION=dev
 ARG COMMIT=unknown
@@ -67,13 +103,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     BUILD_DATE=${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)} && \
     CGO_ENABLED=0 GOOS=linux GOEXPERIMENT=${GOEXPERIMENT} go build \
-        -trimpath \
+        -trimpath -tags "${GO_BUILD_TAGS}" \
         -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
         -o /out/lobslaw \
         ./cmd/lobslaw
 
 # ---- Runtime stage -------------------------------------------------
 FROM debian:12-slim
+
+COPY deploy/image-defaults.env /tmp/lobslaw-image-defaults.env
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -84,12 +122,20 @@ RUN apt-get update && \
         file \
         git && \
     rm -rf /var/lib/apt/lists/* && \
-    groupadd --system --gid 65532 nonroot && \
-    useradd --system --uid 65532 --gid 65532 \
+    . /tmp/lobslaw-image-defaults.env && \
+    groupadd --system --gid "$GID_IN_IMAGE" nonroot && \
+    useradd --system --uid "$UID_IN_IMAGE" --gid "$GID_IN_IMAGE" \
         --home-dir /lobslaw --create-home --shell /usr/sbin/nologin \
         nonroot && \
     mkdir -p /lobslaw/usr/local/bin && \
-    chown -R 65532:65532 /lobslaw
+    chown -R "$UID_IN_IMAGE:$GID_IN_IMAGE" /lobslaw && \
+    mkdir -p /var/lobslaw/data /var/lobslaw/audit /var/lobslaw/skills && \
+    chown -R "$UID_IN_IMAGE:$GID_IN_IMAGE" /var/lobslaw && \
+    rm /tmp/lobslaw-image-defaults.env
+# /var/lobslaw/{data,audit,skills} exist in the image, owned by
+# nonroot, so a named volume mounted there starts out writable: Docker
+# copies a mount point's ownership into a new empty volume, and with no
+# directory in the image it creates the volume root-owned instead.
 # git is in the apt-install above because brew's bootstrap clones
 # the brew repo (and homebrew-core tap) via git rather than curl+tar.
 # Brew installs at /lobslaw/usr/local (Satisfier's prefix); the manual

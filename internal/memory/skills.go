@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -554,7 +553,7 @@ func (s *SkillStore) apply(_ context.Context, op lobslawv1.LogOp, id string, pay
 	if err != nil {
 		return fmt.Errorf("skills: marshal: %w", err)
 	}
-	res, err := s.raft.Apply(data, 5*time.Second)
+	res, err := s.raft.Apply(data, skillApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("skills: apply: %w", err)
 	}

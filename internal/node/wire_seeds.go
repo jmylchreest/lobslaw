@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -60,6 +59,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	// skills with destructive actions (e.g. clear_workspace) extend
 	// this map.
 	noSeedTools := map[string]bool{
+		"calendar_settings": true, "calendar_settings_update": true, "calendar_agenda": true, "calendar_list": true, "calendar_events": true, "calendar_event": true, "calendar_event_create": true, "calendar_event_update": true,
 		"soul_get":              true,
 		"soul_reset":            true,
 		"soul_tune":             true,
@@ -94,6 +94,12 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		"slack_read_channel": true,
 		"slack_search":       true,
 	}
+	// The team tools (bot_list, bot_create, bot_update, ask_bot,
+	// tell_bot, inbox_*) are deliberately NOT here. A team whose
+	// coordinator cannot list, add or reach its own bots is not a team,
+	// and seeding them default-deny made the first "create a bot" fail
+	// with "no rule matched". They are curated builtins like any other;
+	// an operator tightens them with [[policy.rules]].
 
 	// Seed default-allow rules ONLY for builtins (Path prefix
 	// BuiltinScheme). Builtins are lobslaw-curated — operators get
@@ -116,7 +122,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	//
 	// Skills get the same treatment — explicit allow per skill name.
 	seedTargets := []*types.ToolDef{}
-	for _, td := range n.toolRegistry.List() {
+	for _, td := range n.toolRegistry.Registered() {
 		if !strings.HasPrefix(td.Path, compute.BuiltinScheme) {
 			continue
 		}
@@ -139,11 +145,11 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	seeded := []string{}
 	for _, td := range seedTargets {
 		effect := "allow"
-		priority := int32(1)
+		priority := builtinAllowSeedPriority
 		ruleID := "lobslaw-builtin-" + td.Name
 		if defaultDenyBuiltins[td.Name] {
 			effect = "deny"
-			priority = 10
+			priority = builtinDenySeedPriority
 			ruleID = "lobslaw-builtin-deny-" + td.Name
 		}
 		want := &lobslawv1.PolicyRule{
@@ -196,7 +202,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 			n.log.Warn("policy: marshal GC entry failed", "id", id, "err", err)
 			return
 		}
-		if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 			n.log.Warn("policy: GC stale seed rule failed", "id", id, "err", err)
 			return
 		}
@@ -459,7 +465,7 @@ func (n *Node) seedDreamTask(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("marshal dream task: %w", err)
 	}
-	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+	if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 		return fmt.Errorf("apply dream task: %w", err)
 	}
 	n.log.Info("memory: seeded dream task", "id", dreamTaskID, "schedule", schedule)

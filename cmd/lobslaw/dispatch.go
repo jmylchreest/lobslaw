@@ -132,6 +132,7 @@ func topLevelDispatchers() []topLevelCommand {
 	return []topLevelCommand{
 		{name: "archive", dispatch: dispatchArchive},
 		{name: "backup", dispatch: dispatchBackup},
+		{name: "data", dispatch: dispatchData},
 		{name: "cluster", dispatch: dispatchCluster},
 		{name: "plugin", dispatch: dispatchPlugin},
 		{name: "audit", dispatch: dispatchAudit},
@@ -144,6 +145,7 @@ func topLevelDispatchers() []topLevelCommand {
 		{name: "memory", dispatch: dispatchMemory},
 		{name: "session", dispatch: dispatchSession},
 		{name: "init", dispatch: dispatchInit},
+		{name: "login", dispatch: dispatchLogin},
 		{name: "enrol", dispatch: dispatchEnrol},
 		{name: "nodeid", dispatch: dispatchNodeID},
 		{name: "context", dispatch: dispatchContext},

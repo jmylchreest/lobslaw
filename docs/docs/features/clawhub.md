@@ -4,132 +4,97 @@ sidebar_position: 2
 
 # ClawHub
 
-[ClawHub](https://clawhub.ai) is a community skills hub — discover, install, and verify skills.
+ClawHub retrieval feeds the same [reviewed installation pipeline](./skill-sharing.md)
+as local portable packages. Both the CLI compatibility command and the agent tool
+stage skills in Raft; neither installs directly into a watched directory.
 
-It's the recommended distribution channel because:
-
-- **Signed bundles.** Maintainers sign their releases with ed25519; the install pipeline verifies before extraction.
-- **Versioned.** `clawhub:gws-workspace@1.0.0` pins exactly. Upgrades are explicit.
-- **Sandboxed by default.** Bundles ship with a manifest declaring mounts, networks, credentials — the operator can review before installing.
-
-## Enable it
+## Configure retrieval
 
 ```toml
 [security]
-clawhub_base_url       = "https://clawhub.ai"
-clawhub_install_mount  = "skill-tools"
-clawhub_signing_policy = "prefer"      # off | prefer | require
+clawhub_base_url = "https://clawhub.ai"
 ```
 
-Setting `clawhub_base_url` does two things:
+Requests use the `clawhub` egress role. The node needs Raft-backed skill storage;
+a dedicated ClawHub storage mount is no longer required. Signing requirements
+come from `[skills] signing_policy` and `trusted_publishers`.
 
-1. Adds `clawhub.ai` to the smokescreen `clawhub` egress role.
-2. Enables the `clawhub_install` builtin (still policy-gated separately).
+The slug API retrieves `clawhub:<name>` or `clawhub:<owner>/<name>`; the owner
+prefix is informational. A native catalogue can supply versioned metadata via
+`clawhub:<name>@<version>`. Its advertised digest and any present catalogue
+signature are checked. Retrieved files are converted into a portable artifact
+with provenance; catalogue metadata does not grant sharing-signature trust.
 
-Then add a policy rule so the operator can call it:
+## CLI installation
+
+```bash
+# Preview without writing.
+lobslaw skills install clawhub:gog --context home --owner user:alice
+
+# Compatibility spelling: identical options and staging behavior.
+lobslaw plugin install clawhub:gog --context home --owner user:alice
+```
+
+Repeat with `--apply --expected-plan <preview-digest>` to stage the reviewed
+artifact. Then use `skills activate-install <installation-id> --owner user:alice`
+for a separate activation preview and apply. The full manifest, requested
+permissions, binary requirements and schedules are available for review.
+
+The former ClawHub `--root` and `--yes` options are rejected with migration
+instructions. Neither is converted into activation permission. Local-directory
+plugin commands retain their separate local-plugin behavior.
+
+## Agent proposals
+
+`clawhub_install` accepts `slug`, or `name` plus `version`. It retrieves, validates
+and stages a proposal for the authenticated turn's canonical user. The tool
+returns an installation ID, owner, plan and human review instructions. It has no
+activation operation and does not accept an owner supplied by the model.
+
+Two explicit policy grants are required: permission to call the tool and
+permission to stage proposals for that owner. For example:
 
 ```toml
 [[policy.rules]]
-id       = "owner-clawhub-install"
-priority = 20
-effect   = "allow"
-subject  = "scope:owner"
-action   = "tool:exec"
+id = "alice-clawhub-tool"
+subject = "user:alice"
+action = "tool:exec"
 resource = "clawhub_install"
+effect = "allow"
+priority = 20
+
+[[policy.rules]]
+id = "alice-clawhub-proposal"
+subject = "user:alice"
+action = "skills:share:propose"
+resource = "user:alice"
+effect = "allow"
+priority = 20
 ```
 
-## Signing policy
+Proposal permission does not confer activation permission. An operator reviews
+and activates with the CLI using an operator certificate, the configured operator
+data role and a `skills:share:activate` grant. Agent retries reuse the installation
+ID. An already-active identical installation is reported as such; newly staged
+content receives no approval.
 
-```toml
-clawhub_signing_policy = "off"        # accept unsigned (DEV ONLY)
-clawhub_signing_policy = "prefer"     # accept unsigned but warn
-clawhub_signing_policy = "require"    # reject unsigned bundles
-```
+## Permissions and dependencies
 
-The signature scheme:
+Retrieval and staging never download host binaries, bootstrap package managers or
+create execution policy rules. Review required binaries and permissions in the
+manifest; operators must arrange dependency installation and tool permissions
+separately. Missing dependencies remain subject to normal runtime checks.
 
-- ed25519 signature of `SHA-256(bundle.tar.gz)`.
-- Trust anchored by clawhub's published platform key.
-- A bundle ships `manifest.sig` + `manifest.pub`. The platform key validates the manifest publisher's pubkey; the publisher's key validates the bundle.
+The old `mount`, `subpath` and `bootstrap_managers` tool arguments are rejected.
+`clawhub_auto_emit_install_rules` is retained as a deprecated config field for
+compatibility, but has no effect and emits a startup warning when enabled.
+`clawhub_install_mount` is also deprecated and unused by the new installation flow.
+Existing installed skills and policy rules are not automatically revoked.
 
-This is the standard delegated-trust model — clawhub signs the publisher, the publisher signs the bundle. Operators don't manage individual publisher keys.
+## Implementation
 
-## Install via CLI
-
-```bash
-lobslaw plugin install clawhub:gws-workspace@1.0.0
-```
-
-What happens:
-
-1. Resolves `gws-workspace@1.0.0` → bundle URL on clawhub.
-2. Fetches via the `clawhub` egress role (so `clawhub.ai` must be in the ACL).
-3. Verifies SHA-256 + ed25519 per signing policy.
-4. Extracts to `skill-tools` mount with tar-slip defence (`guardEntryPath` + escape-prefix check).
-5. `chmod +x` on declared binaries.
-6. Watcher picks up the new manifest.yaml; the registry registers each tool.
-
-## Install via the agent
-
-If `clawhub_install` is policy-allowed for your scope:
-
-> install gws-workspace from clawhub
-
-The agent calls `clawhub_install(bundle="gws-workspace@1.0.0")` directly. Output:
-
-> Installed gws-workspace 1.0.0. 6 new tools available: gmail.search, gmail.send, calendar.list_events, calendar.create_event, drive.list, drive.read.
->
-> Note: skills require explicit allow rules. To enable, add:
->
->     [[policy.rules]]
->     id       = "owner-can-call-gws-workspace"
->     priority = 20
->     effect   = "allow"
->     subject  = "scope:owner"
->     action   = "tool:exec"
->     resource = "gws-workspace.*"
-
-## Binaries
-
-Skills sometimes need binaries that aren't in the bundle (e.g. a skill that wraps `gh` needs `gh` installed on the host). ClawHub's binary manifest declares them:
-
-```yaml
-binaries:
-  - name: gh
-    versions:
-      - os: linux
-        arch: amd64
-        url: https://github.com/cli/cli/releases/download/v2.50.0/gh_2.50.0_linux_amd64.tar.gz
-        sha256: abc123...
-```
-
-The install pipeline downloads matching binaries to the skill's `bin/` and `chmod +x`. ClawHub binary URLs are matched against `[security] clawhub_binary_hosts` (default: github.com release hosts) — operators with stricter supply-chain requirements declare their own.
-
-A more general OS-package binary install path (`apt`, `brew`, `pacman`, `pipx`) is on the roadmap — see [Roadmap → Binary Registry](#).
-
-## Authoring a bundle
-
-For skill authors:
-
-1. Write the manifest + binary.
-2. Sign the manifest with your publisher key.
-3. Submit to clawhub.
-
-Full author docs: [clawhub.ai/docs/publishing](https://clawhub.ai).
-
-## Self-hosting
-
-You don't need clawhub. Skills can be installed manually (drop into `skill-tools`), or you can run a self-hosted clawhub-compatible registry by setting:
-
-```toml
-[security]
-clawhub_base_url = "https://your-internal-hub.example.com"
-```
-
-The same install pipeline works as long as the API surface matches.
-
-## Reference
-
-- `internal/clawhub/` — fetch, signing, install pipeline
-- `internal/compute/builtin_clawhub.go` — agent-callable installer
-- `cmd/lobslaw/plugin_clawhub.go` — CLI install
+- `internal/clawhub/share.go`: retrieval and portable conversion.
+- `internal/node/clawhub_proposal.go`: turn ownership, proposal policy and staging.
+- `internal/node/skill_sharing.go`: common validation and operator activation.
+- `internal/tools/clawhub.go`: proposal-only agent interface.
+- `cmd/lobslaw/plugin_clawhub.go`: CLI compatibility wrapper.

@@ -27,6 +27,9 @@ import (
 // by hand; and the whole pass must precede Agent construction, which
 // snapshots the tool registry.
 func (n *Node) registerAgentTools(builtins *tools.Builtins, embedder compute.EmbeddingProvider) (func() []promptgen.BinaryInfo, error) {
+	if n.cfg.Security.GoogleCalendar.Enabled && (n.raft == nil || n.store == nil) {
+		return nil, fmt.Errorf("google calendar requires local memory and policy services")
+	}
 	var binariesProvider func() []promptgen.BinaryInfo
 
 	// Everything in this block persists through Raft and reads back
@@ -253,7 +256,7 @@ func (n *Node) wireMemoryTools(builtins *tools.Builtins, embedder compute.Embedd
 	return n.registerSessionTools()
 }
 
-// wireScheduleTools registers schedule_create / list / get / delete.
+// wireScheduleTools registers schedule_create / list / get / update / delete.
 // The agent-turn handler for the actual dispatch is registered
 // separately via registerAgentTurnHandlers().
 func (n *Node) wireScheduleTools(builtins *tools.Builtins) error {
@@ -268,7 +271,7 @@ func (n *Node) wireScheduleTools(builtins *tools.Builtins) error {
 			return fmt.Errorf("register schedule tool %q: %w", td.Name, err)
 		}
 	}
-	n.log.Debug("compute: schedule_create/list/get/delete registered")
+	n.log.Debug("compute: schedule_create/list/get/update/delete registered")
 	return nil
 }
 
@@ -299,6 +302,9 @@ func (n *Node) wireCommitmentTools(builtins *tools.Builtins) error {
 // surfaces "not configured" at call time. Default-deny policy seed
 // gates these to scope:owner.
 func (n *Node) wireCredentialsTools(builtins *tools.Builtins) error {
+	if err := n.wireCalendar(builtins); err != nil {
+		return err
+	}
 	if n.credentialSvc == nil || n.oauthTracker == nil {
 		return nil
 	}
@@ -423,7 +429,7 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 				"name", name, "panic", r)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), toolBootstrapTimeout)
 	defer cancel()
 
 	// Resolve version="latest" against GitHub's releases API, then
@@ -506,7 +512,7 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 		currentOut := runDetect(ctx, decl.Detect)
 		if !strings.Contains(currentOut, declVersion) {
 			force = true
-			reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, 80) + ")"
+			reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, toolVersionPreviewRunes) + ")"
 		} else {
 			n.log.Debug("binary: auto-install skip (version match)",
 				"name", name, "version", declVersion)
@@ -541,20 +547,13 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 	captureHelp(true)
 }
 
-// wireClawhubTools registers the clawhub install builtin. Only
-// registered when the operator configured a clawhub base URL (i.e.
-// wireClawhub built an installer). Default-deny — owner-only via the
-// noSeed list.
+// wireClawhubTools exposes only proposal staging, with no activation capability.
 func (n *Node) wireClawhubTools(builtins *tools.Builtins) error {
-	if n.clawhubInstaller == nil {
+	if n.clawhubSource == nil {
 		return nil
 	}
 	if err := tools.RegisterClawhubBuiltin(builtins, tools.ClawhubConfig{
-		Installer:            n.clawhubInstaller,
-		DefaultMount:         n.cfg.Security.ClawhubInstallMount,
-		AutoEmitInstallRules: n.cfg.Security.ClawhubAutoEmitInstallRules,
-		PolicyAdder:          n.policySvc,
-		Logger:               n.log,
+		Propose: n.proposeClawhubShare,
 	}); err != nil {
 		return fmt.Errorf("register clawhub builtin: %w", err)
 	}
@@ -949,6 +948,7 @@ func (n *Node) wireSoulTools(builtins *tools.Builtins) error {
 	}
 	if err := tools.RegisterSoulBuiltins(builtins, tools.SoulBuiltinsConfig{
 		Mutator: n.soulAdjuster,
+		ForBot:  func(id string) (tools.SoulMutator, error) { return n.soulAdjuster.ForBot(id) },
 	}); err != nil {
 		return fmt.Errorf("register soul builtins: %w", err)
 	}

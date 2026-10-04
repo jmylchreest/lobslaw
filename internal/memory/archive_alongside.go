@@ -64,8 +64,8 @@ func PlanArchiveImport(existing, incoming []archive.Record, opts ArchiveImportOp
 		}
 		return planArchiveRecords(existing, incoming, opts)
 	}
-	if strings.TrimSpace(opts.SourceID) != opts.SourceID || len(opts.SourceID) > 256 {
-		return ArchiveImportPlan{}, errors.New("source id must be nonempty, trimmed and at most 256 bytes")
+	if strings.TrimSpace(opts.SourceID) != opts.SourceID || len(opts.SourceID) > archive.MaxSourceIDBytes {
+		return ArchiveImportPlan{}, fmt.Errorf("source id must be nonempty, trimmed and at most %d bytes", archive.MaxSourceIDBytes)
 	}
 	return planTrackedArchive(existing, incoming, opts)
 }
@@ -276,9 +276,27 @@ func archiveImportTargets(source, destination map[archiveRecordKey]proto.Message
 }
 
 func remapArchiveReferences(msg proto.Message, key archiveRecordKey, targets map[archiveRecordKey]string) error {
+	switch rec := msg.(type) {
+	case *lobslawv1.ShareInstallation:
+		for i, id := range rec.ScheduleIds {
+			if target, ok := targets[archiveRecordKey{"scheduled-tasks", id}]; ok {
+				rec.ScheduleIds[i] = target
+			}
+		}
+	case *lobslawv1.ScheduledTaskRecord:
+		if target, ok := targets[archiveRecordKey{"skill-installations", rec.Params["share_installation"]}]; ok {
+			rec.Params["share_installation"] = target
+		}
+	}
 	m := msg.ProtoReflect()
 	fields := m.Descriptor().Fields()
-	if f := fields.ByName("id"); f != nil {
+	if inbox, ok := msg.(*lobslawv1.BotInboxItem); ok {
+		id, matches := strings.CutPrefix(targets[key], inbox.GetRecipient()+":")
+		if !matches || id == "" {
+			return errors.New("inbox destination key disagrees with recipient")
+		}
+		inbox.Id = id
+	} else if f := fields.ByName("id"); f != nil {
 		m.Set(f, protoreflect.ValueOfString(targets[key]))
 	}
 	for _, name := range []protoreflect.Name{"session_id", "parent_id"} {

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/jmylchreest/lobslaw/internal/archive"
+	"github.com/jmylchreest/lobslaw/internal/sharing"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -206,6 +207,8 @@ func validateArchiveRecordID(record archive.Record, msg proto.Message) error {
 		}
 	case *lobslawv1.SessionMessage:
 		id = sessionMessageKey(rec.SessionId, rec.Seq)
+	case *lobslawv1.BotInboxItem:
+		id = inboxKey(rec.Recipient, rec.Id)
 	case *lobslawv1.UserPreferences:
 		id = rec.UserId
 	default:
@@ -254,6 +257,21 @@ func mapArchiveOwner(id string, msg proto.Message, owners map[string]string) (st
 
 func pauseArchiveRecord(kind string, msg proto.Message, timezone string) (bool, error) {
 	switch rec := msg.(type) {
+	case *lobslawv1.BotInboxItem:
+		rec.TaskClaims = nil
+		if rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_PENDING || rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED || rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_WAITING {
+			rec.Status = lobslawv1.InboxStatus_INBOX_STATUS_CANCELLED
+			rec.ClaimedBy, rec.ClaimExpiresAt = "", nil
+			rec.Error = "paused by archive import; assign new work with fresh authority after reviewing possible prior effects"
+			return true, nil
+		}
+	case *lobslawv1.ShareInstallation:
+		paused := rec.Active
+		rec.Active = false
+		rec.ApprovedRoot = ""
+		rec.ApprovedBy = ""
+		rec.ApprovedAt = nil
+		return paused, nil
 	case *lobslawv1.ScheduledTaskRecord:
 		if !strings.HasPrefix(rec.Schedule, "CRON_TZ=") && !strings.HasPrefix(rec.Schedule, "TZ=") {
 			if timezone == "" {
@@ -301,6 +319,17 @@ func pauseArchiveRecord(kind string, msg proto.Message, timezone string) (bool, 
 func validateArchiveDependencies(records map[archiveRecordKey]proto.Message) error {
 	for key, msg := range records {
 		switch rec := msg.(type) {
+		case *lobslawv1.ShareInstallation:
+			if err := validateSharedArchive(rec, records); err != nil {
+				return err
+			}
+		case *lobslawv1.ScheduledTaskRecord:
+			if id := rec.Params["share_installation"]; id != "" {
+				install, ok := records[archiveRecordKey{"skill-installations", id}].(*lobslawv1.ShareInstallation)
+				if !ok || install.Owner != rec.Owner {
+					return errors.New("shared schedule requires its installation with matching owner")
+				}
+			}
 		case *lobslawv1.SelfTaughtRecord:
 			for _, files := range []map[string]string{rec.Files, rec.GetPending().GetFiles()} {
 				for path := range files {
@@ -332,4 +361,35 @@ func validateArchiveDependencies(records map[archiveRecordKey]proto.Message) err
 		}
 	}
 	return nil
+}
+
+func validateSharedArchive(rec *lobslawv1.ShareInstallation, records map[archiveRecordKey]proto.Message) error {
+	a, err := sharing.Decode(rec.Artifact)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(rec.Owner, "user:") || len(rec.Owner) <= 5 {
+		return errors.New("shared installation requires user owner")
+	}
+	bound, err := sharing.Bind(a.Package(), rec.Inputs)
+	if err != nil {
+		return err
+	}
+	sk, ok := records[archiveRecordKey{"skills", SkillKey(a.Package().Name, a.Package().Version)}].(*lobslawv1.SkillRecord)
+	if !ok || !sameSharedSkill(sk, artifactSkill(a)) {
+		return errors.New("shared installation requires its exact skill")
+	}
+	snap := make(shareSnapshot)
+	for _, id := range rec.ScheduleIds {
+		task, ok := records[archiveRecordKey{"scheduled-tasks", id}].(*lobslawv1.ScheduledTaskRecord)
+		if !ok {
+			return errors.New("shared installation requires its schedules")
+		}
+		raw, err := proto.Marshal(task)
+		if err != nil {
+			return err
+		}
+		snap[shareKey("scheduled-tasks", id)] = raw
+	}
+	return checkSharedTasks(snap, rec, bound, false)
 }

@@ -22,7 +22,7 @@ import (
 // function for cleanup.
 func startREST(t *testing.T, agent *compute.Agent) (string, func()) {
 	t.Helper()
-	srv := NewServer(RESTConfig{Addr: "127.0.0.1:0"}, agent)
+	srv := NewServer(RESTConfig{Addr: "127.0.0.1:0"}, compute.Adapt(agent))
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() {

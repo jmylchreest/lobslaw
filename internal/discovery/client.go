@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jmylchreest/lobslaw/internal/logging"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -57,7 +59,7 @@ func (c *Client) DialSeeds(ctx context.Context, seeds []string, perDialTimeout t
 		return nil, nil
 	}
 	if perDialTimeout <= 0 {
-		perDialTimeout = 5 * time.Second
+		perDialTimeout = DefaultDialTimeout
 	}
 
 	// Expand srv:/dns: prefixed entries via DNS. Plain host:port
@@ -93,7 +95,7 @@ func (c *Client) JoinCluster(ctx context.Context, seeds []string, perDialTimeout
 		return fmt.Errorf("no seeds configured for join")
 	}
 	if perDialTimeout <= 0 {
-		perDialTimeout = 5 * time.Second
+		perDialTimeout = DefaultDialTimeout
 	}
 	expanded := ExpandSeeds(ctx, seeds, c.resolver, c.logger)
 	if len(expanded) == 0 {
@@ -118,6 +120,9 @@ func (c *Client) JoinCluster(ctx context.Context, seeds []string, perDialTimeout
 		if err == nil {
 			logging.From(ctx).Info("cluster join accepted", "via", addr)
 			return nil
+		}
+		if status.Code(err) == codes.FailedPrecondition {
+			return err
 		}
 		lastErr = err
 		if leaderAddr != "" && !tried[leaderAddr] {

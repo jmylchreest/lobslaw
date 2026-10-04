@@ -20,11 +20,12 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jmylchreest/lobslaw/internal/audit"
-	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
+	"github.com/jmylchreest/lobslaw/internal/google/calendar"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -35,6 +36,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/plan"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/sharing"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/soul"
@@ -243,6 +245,11 @@ type Config struct {
 	// (otherwise the node skips gateway wiring entirely).
 	Gateway config.GatewayConfig
 
+	// UIWeb is the [ui-web] block. Backend is read here — not only
+	// parsed in pkg/config — so a web node without compute fails at
+	// boot naming the missing address rather than serving 503.
+	UIWeb config.UIWebConfig
+
 	// Audit configures the tamper-evident log. Both sinks can be
 	// disabled (no-op log); enabling both gives defence-in-depth
 	// where tampering one side fails the cross-sink VerifyChain.
@@ -308,8 +315,9 @@ type Config struct {
 // New, started via Start, stopped via Shutdown. Shutdown is safe to
 // call multiple times.
 type Node struct {
-	cfg Config
-	log *slog.Logger
+	automaticUpgrade *automaticUpgradeController
+	cfg              Config
+	log              *slog.Logger
 
 	listener net.Listener
 	server   *grpc.Server
@@ -327,12 +335,14 @@ type Node struct {
 
 	policySvc        *policy.Service
 	memorySvc        *memory.Service
+	calendarSvc      *calendar.Service
+	integrationState *memory.IntegrationStateStore
 	credentialSvc    *memory.CredentialService
 	userPrefsSvc     *memory.UserPrefsService
 	notifySvc        *notify.Service
 	oauthTracker     *oauth.Tracker
 	oauthProviders   map[string]oauth.ProviderConfig
-	clawhubInstaller *clawhub.Installer
+	clawhubSource    sharing.Source
 	planSvc          *plan.Service
 	storageSvc       *storage.Service
 	storageMgr       *storage.Manager
@@ -349,6 +359,16 @@ type Node struct {
 	soul         atomic.Pointer[soul.Soul]
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
+	botSvc       *memory.BotService
+	// botOwner is the unique operator unowned bots are adopted onto.
+	// Adoption is an Apply, so it waits for leadership in Start rather
+	// than running at wire time where there is no leader yet.
+	botOwner identity.Principal
+	groupSvc *memory.GroupService
+	inboxSvc *memory.InboxService
+	// inboxAPI is inboxSvc wrapped so a post wakes the drain.
+	inboxAPI     wakingInbox
+	inboxWake    chan struct{}
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -419,10 +439,13 @@ type Node struct {
 	// traces records what each turn did. Nil when tracing is off, and
 	// a nil recorder is usable — so instrumented paths record
 	// unconditionally rather than branching.
-	traces   *trace.Recorder
-	agent    *compute.Agent
-	embedder compute.EmbeddingProvider
-	roleMap  *compute.RoleMap
+	traces *trace.Recorder
+	agent  *compute.Agent
+	// remoteTurnConn is the cluster gRPC client a ui-web node holds
+	// onto a compute backend. Nil when turns run locally.
+	remoteTurnConn *grpc.ClientConn
+	embedder       compute.EmbeddingProvider
+	roleMap        *compute.RoleMap
 
 	// reviewFork decides whether a finished turn taught anything.
 	// Nil when self-learning is off — there is no fork to disable
@@ -470,7 +493,8 @@ type Node struct {
 	// promptRegistry, kept separately because the sweeper needs the
 	// concrete type. Nil on a gateway node that does not host raft —
 	// there, confirmations stay process-local.
-	promptStore *memory.PromptStore
+	promptStore   *memory.PromptStore
+	taskApprovals *taskApprovalServer
 
 	// leaderGate fans raft leadership transitions out to leader-pinned
 	// singleton workloads (currently just the telegram long-poller).
@@ -483,7 +507,8 @@ type Node struct {
 	auditLog *audit.AuditLog
 	auditSvc *audit.Service
 
-	shutdownOnce chan struct{}
+	shutdownOnce       chan struct{}
+	unprotectRaftPaths func()
 
 	// Boot-time state that wire stages need to read. Set by New
 	// before runWireStages and unused after. Lives on the struct
@@ -547,6 +572,13 @@ func New(cfg Config) (*Node, error) {
 		advertise = listener.Addr().String()
 	}
 
+	var n *Node
+	contract := func() uint32 {
+		if n == nil {
+			return 0
+		}
+		return n.dataContract()
+	}
 	server := grpc.NewServer(
 		grpc.Creds(cfg.Creds.ServerCreds()),
 		// A skill bundle is capped at DefaultMaxSkillTotalBytes, which
@@ -555,8 +587,8 @@ func New(cfg Config) (*Node, error) {
 		// large" instead of the store's message naming the offending
 		// file, so the transport ceiling is raised above the one that
 		// carries meaning.
-		grpc.MaxRecvMsgSize(3*memory.DefaultMaxSkillTotalBytes),
-		grpc.MaxSendMsgSize(3*memory.DefaultMaxSkillTotalBytes),
+		grpc.MaxRecvMsgSize(maxNodeGRPCMessageBytes),
+		grpc.MaxSendMsgSize(maxNodeGRPCMessageBytes),
 		grpc.ChainUnaryInterceptor(
 			grpcinterceptors.RequestID(log),
 			grpcinterceptors.Recovery(log),
@@ -565,6 +597,7 @@ func New(cfg Config) (*Node, error) {
 			// because a check on the client is one the attacker
 			// controls.
 			grpcinterceptors.OperatorNotAPeer(),
+			grpcinterceptors.DataFormat(contract),
 		),
 		grpc.ChainStreamInterceptor(
 			grpcinterceptors.RequestIDStream(log),
@@ -572,6 +605,7 @@ func New(cfg Config) (*Node, error) {
 			// Raft's transport is streaming, so without this half the
 			// guard covers nothing that matters.
 			grpcinterceptors.OperatorNotAPeerStream(),
+			grpcinterceptors.DataFormatStream(contract),
 		),
 	)
 
@@ -584,7 +618,7 @@ func New(cfg Config) (*Node, error) {
 
 	registry := discovery.NewRegistry()
 
-	n := &Node{
+	n = &Node{
 		cfg:          cfg,
 		log:          log,
 		listener:     listener,
@@ -653,7 +687,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// AddVoter) is a separate flow handled by establishRaftMembership
 	// below.
 	if len(n.cfg.SeedNodes) > 0 {
-		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, 5*time.Second); err != nil {
+		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, discovery.DefaultDialTimeout); err != nil {
 			n.log.Warn("seed-list bootstrap incomplete", "err", err)
 		}
 	}
@@ -708,6 +742,9 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
 	// cancel. Only present on Raft-hosting nodes (the construction
 	// branch in New gated that).
+	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
+		go n.runInboxDrain(ctx)
+	}
 	if n.scheduler != nil {
 		go func() {
 			if err := n.scheduler.Run(ctx); err != nil {
@@ -766,7 +803,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// level, not fatal — the node still boots; the first user turn
 	// hits default-deny and the operator sees the warning.
 	if n.raft != nil {
-		if err := n.raft.WaitForLeader(5 * time.Second); err == nil {
+		if err := n.raft.WaitForLeader(startupLeaderWait); err == nil {
 			if err := n.seedDefaultPolicyRules(ctx); err != nil {
 				n.log.Warn("policy: seed defaults failed", "err", err)
 			}
@@ -781,6 +818,11 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 			}
 			if err := n.seedUserPrefsFromConfig(ctx); err != nil {
 				n.log.Warn("user_prefs: seed from config failed", "err", err)
+			}
+			if n.botSvc != nil && !n.botOwner.IsZero() {
+				if err := n.botSvc.AdoptUnowned(ctx, n.botOwner); err != nil {
+					n.log.Warn("bots: adopt unowned failed", "err", err)
+				}
 			}
 		}
 	}
@@ -836,6 +878,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 		}()
 	}
 
+	n.automaticUpgrade.start(ctx)
 	select {
 	case err := <-errCh:
 		return err
@@ -859,6 +902,10 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	default:
 	}
 	close(n.shutdownOnce)
+	n.automaticUpgrade.stop()
+	if n.unprotectRaftPaths != nil {
+		defer n.unprotectRaftPaths()
+	}
 
 	// Drained first, before the gRPC stop. A shutdown that discards the
 	// buffer loses precisely the spans from the turn that was in flight
@@ -873,7 +920,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
+	case <-time.After(nodeGracefulStopTimeout):
 		n.log.Warn("gRPC graceful-stop timed out; forcing")
 		n.server.Stop()
 	}
@@ -899,10 +946,15 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		}
 	}
 	if n.egressProvider != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), egressStopTimeout)
 		defer cancel()
 		if err := n.egressProvider.Stop(stopCtx); err != nil {
 			n.log.Warn("egress proxy shutdown", "err", err)
+		}
+	}
+	if n.remoteTurnConn != nil {
+		if err := n.remoteTurnConn.Close(); err != nil {
+			n.log.Warn("remote turn conn close", "err", err)
 		}
 	}
 	return nil
@@ -995,7 +1047,7 @@ func (n *Node) runSoulWatcher(ctx context.Context) {
 
 func (n *Node) dialer() discovery.Dialer {
 	return func(ctx context.Context, addr string) (*grpc.ClientConn, error) {
-		return grpc.NewClient(addr, grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()))
+		return grpc.NewClient(addr, grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient(n.dataContract)), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient(n.dataContract)))
 	}
 }
 
@@ -1003,12 +1055,18 @@ func (n *Node) dialer() discovery.Dialer {
 // resources but hit an error. Best-effort cleanup; errors swallowed
 // because we're already returning a failure.
 func (n *Node) closePartial() {
+	if n.unprotectRaftPaths != nil {
+		defer n.unprotectRaftPaths()
+	}
 	n.stopTracing()
 	if n.store != nil {
 		_ = n.store.Close()
 	}
 	if n.listener != nil {
 		_ = n.listener.Close()
+	}
+	if n.remoteTurnConn != nil {
+		_ = n.remoteTurnConn.Close()
 	}
 }
 
@@ -1043,7 +1101,38 @@ func validateConfig(cfg Config) error {
 		return errors.New("node.Config: memory-enabled nodes without seeds must configure memory.snapshot.target " +
 			"(a single-node cluster with no off-cluster backup risks total data loss on disk failure)")
 	}
+	if err := validateUIWebBackend(cfg); err != nil {
+		return err
+	}
+	// A [[policy.rules]] subject the engine cannot match is a rule that
+	// looks like it works and does nothing: subjectMatches fails closed
+	// on an unknown kind, so a deny never applies and an allow never
+	// grants. Rejected here rather than seeded and silently ignored;
+	// see policy.ValidateSubject.
+	for _, r := range cfg.Policy.Rules {
+		if err := policy.ValidateSubject(r.Subject); err != nil {
+			return fmt.Errorf("node.Config: [[policy.rules]] %q: %w", r.ID, err)
+		}
+	}
 	return nil
+}
+
+// ErrUIWebBackendRequired is the boot failure when FunctionUIWeb is
+// on, FunctionCompute is off, and [ui-web].backend is empty. Named so
+// tests and the error string cannot drift.
+var ErrUIWebBackendRequired = errors.New("ui-web without compute requires [ui-web].backend")
+
+func validateUIWebBackend(cfg Config) error {
+	if !ui.Supported || !slices.Contains(cfg.Functions, types.FunctionUIWeb) {
+		return nil
+	}
+	if slices.Contains(cfg.Functions, types.FunctionCompute) {
+		return nil
+	}
+	if strings.TrimSpace(cfg.UIWeb.Backend) != "" {
+		return nil
+	}
+	return fmt.Errorf("node.Config: %w (cluster gRPC address of a compute node)", ErrUIWebBackendRequired)
 }
 
 func needsRaft(fns []types.NodeFunction) bool {
@@ -1290,6 +1379,17 @@ func (n *Node) soulSnapshot(ctx context.Context) (*soul.Soul, error) {
 		return n.Soul(), nil
 	}
 	snapshot, err := n.soulAdjuster.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func (n *Node) soulSnapshotFor(ctx context.Context, botID string) (*soul.Soul, error) {
+	if n.soulAdjuster == nil {
+		return n.Soul(), nil
+	}
+	snapshot, err := n.soulAdjuster.SnapshotFor(ctx, botID)
 	if err != nil {
 		return nil, err
 	}

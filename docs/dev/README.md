@@ -17,6 +17,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Policy engine | *(tbd — linked from MEMORY.md + SANDBOX.md for now)* | Rule walk, conditions, evaluator injection |
 | Executor | *(tbd)* | Tool invocation pipeline, env whitelist, capped output |
 | Agent loop | [AGENT.md](AGENT.md) | RunToolCallLoop, resolver, promptgen, LLM client, budget |
+| Bots | [BOTS.md](BOTS.md) | Named agents as principals, ownership, per-bot soul overlay |
 | Providers | [PROVIDERS.md](PROVIDERS.md) | **Design.** Drivers vs providers, modalities as tools, per-modality failover, external drivers as skills |
 | Tracing | [TRACE.md](TRACE.md) | **Design.** Per-turn spans, tool context-cost attribution, OTel / file / webhook export |
 | Gateway (channels) | [GATEWAY.md](GATEWAY.md) | REST server, Telegram webhook, confirmation prompts, JWT validator |
@@ -29,6 +30,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 - **Diagrams stay in sync with code** ([decision `lobslaw-documentation-diagrams`](../../)). If you change a flow documented with mermaid, update the diagram in the same commit.
 - **Audience split** ([decision `lobslaw-documentation-audiences`](../../)). Dev docs describe *how it works*. User docs describe *how to use it*. Keep them separate.
 - **Architectural decisions** go in aide (`./.aide/bin/aide decision set ...`), not freeform markdown. Subsystem docs link to the decision by topic.
+- **Numeric defaults and limits** follow `code-magic-numbers`: keep shared values in the owning package's `defaults.go` or `constants.go`, and reuse existing constants. Export only when another package consumes the same contract. Equal values with different purposes keep separate names; arithmetic, indices and independent test vectors need no wrapper. Render tool schemas, help and generated configuration from the runtime constants, with tests checking that they agree. Container identity is shared through [`deploy/image-defaults.env`](../../deploy/image-defaults.env).
 
 ## Shared aide context
 
@@ -106,3 +108,5 @@ read that diff. Everything else in a commit, you wrote and reviewed.
 - [Soul implementation and format review](SOUL.md) — effective state, prompt separation, field audit, and proposed extensions.
 
 - [Logging and secret redaction](LOGGING.md) — shared filtering pipeline, dependency adapters, and safe errors.
+
+- [Google Calendar](GOOGLE_CALENDAR.md): per-user OAuth, independent read/write grants, exact event confirmations, and deployment setup.

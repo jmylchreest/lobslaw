@@ -3,12 +3,13 @@ package node
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
-	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
-	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/oauth"
 	"github.com/jmylchreest/lobslaw/internal/plan"
@@ -106,6 +107,7 @@ func (n *Node) wireCredentials() error {
 		return fmt.Errorf("credentials service: %w", err)
 	}
 	n.credentialSvc = cs
+	n.integrationState = memory.NewIntegrationStateStore(n.raft, n.store, n.cfg.MemoryKey)
 	n.oauthTracker = oauth.NewTracker(n.log)
 	providers, err := n.resolveOAuthProviders()
 	if err != nil {
@@ -142,6 +144,45 @@ func (n *Node) wireSoulRaft() error {
 			}
 		}()
 	})
+	return nil
+}
+
+// wireBots constructs the raft-backed bot registry and adopts any
+// unowned records onto the unique [[user]] with role:operator. None
+// or more than one operator leaves those records inaccessible.
+func (n *Node) wireBots() error {
+	n.botSvc = memory.NewBotService(n.raft, n.store)
+	state, err := n.store.ContractState()
+	if err != nil {
+		return err
+	}
+	if state.Active < 2 {
+		return nil
+	}
+	var operatorIDs []string
+	for _, u := range n.cfg.Users {
+		if slices.Contains(u.Roles, identity.RoleOperator) {
+			operatorIDs = append(operatorIDs, u.ID)
+		}
+	}
+	owner := identity.UniqueOperator(operatorIDs)
+	if owner.IsZero() {
+		list, err := n.botSvc.List(context.Background())
+		if err != nil {
+			return fmt.Errorf("list bots: %w", err)
+		}
+		for _, rec := range list {
+			if strings.TrimSpace(rec.GetOwner()) == "" {
+				n.log.Warn("bots: unowned record left inaccessible; need exactly one [[user]] with role:operator",
+					"bot", rec.GetId(), "operators", len(operatorIDs))
+			}
+		}
+		return nil
+	}
+	// Adoption applies through raft, so it runs after leadership in
+	// Start. Doing it here failed the whole boot with "no leader
+	// elected" whenever the store held an unowned record.
+	n.botOwner = owner
 	return nil
 }
 
@@ -239,42 +280,28 @@ func (n *Node) wireSkills() error {
 	return nil
 }
 
-// wireClawhub constructs the clawhub catalog client + installer when
-// the operator declared a base URL. No-op when ClawhubBaseURL is
-// empty — operators with no clawhub access just don't configure it.
-//
-// Signing defaults to "off". The verifying half exists — a trust store
-// of minisign keys and allowed prefixes, see trusted_publishers.toml —
-// but nothing here signs a bundle, so an operator cannot produce one
-// their own policy would accept.
+// wireClawhub wires retrieval only; all writes use the shared Raft staging path.
 func (n *Node) wireClawhub() error {
 	base := strings.TrimSpace(n.cfg.Security.ClawhubBaseURL)
 	if base == "" {
 		return nil
 	}
-	if n.storageMgr == nil {
-		return nil
+	var verifier clawhub.BundleVerifier
+	if n.skillVerifier != nil {
+		verifier = n.skillVerifier
 	}
-	c, err := clawhub.NewClient(base)
+	source, err := clawhub.NewShareSource(base, verifier)
 	if err != nil {
-		return fmt.Errorf("clawhub client: %w", err)
+		return err
 	}
-	satisfier := binaries.New(binaries.Config{
-		HTTPClient:    egress.For("binaries-install").HTTPClient(),
-		Logger:        n.log,
-		InstallPrefix: n.cfg.Security.BinaryInstallPrefix,
-	})
-	inst, err := clawhub.NewInstaller(clawhub.InstallerConfig{
-		Client:    c,
-		Storage:   n.storageMgr,
-		Policy:    clawhub.SigningOff,
-		Satisfier: satisfier,
-	})
-	if err != nil {
-		return fmt.Errorf("clawhub installer: %w", err)
+	n.clawhubSource = source
+	if n.cfg.Security.ClawhubInstallMount != "" {
+		n.log.Warn("clawhub_install_mount is retired; skill proposals are staged in Raft and no mount is written")
 	}
-	n.clawhubInstaller = inst
-	n.log.Info("clawhub: installer wired", "base", base, "binary_prefix", n.cfg.Security.BinaryInstallPrefix)
+	if n.cfg.Security.ClawhubAutoEmitInstallRules {
+		n.log.Warn("clawhub_auto_emit_install_rules is retired; staged skills require explicit operator policy and activation")
+	}
+	n.log.Info("clawhub: retrieval and proposal staging wired", "base", base)
 	return nil
 }
 
@@ -348,7 +375,16 @@ func (n *Node) wireDiscoveryStage() error {
 		raftMembership = n.raft
 	}
 	n.discSvc = discovery.NewService(n.registry, n.localInfo, n.log, n.reloadSections, raftMembership)
-	lobslawv1.RegisterNodeServiceServer(n.server, n.discSvc)
+	n.discSvc.SetMemberVerifier(func(ctx context.Context, addr string) error {
+		conn, err := n.dialer()(ctx, addr)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = conn.Close() }()
+		return grpcinterceptors.VerifyDataPeer(ctx, conn, n.dataContract)
+	})
+	lobslawv1.RegisterNodeServiceServer(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: n.server}, n.discSvc)
+	n.wireUpgradeService()
 	n.discCli = discovery.NewClient(n.localInfo, n.registry, n.dialer(), n.log)
 	return nil
 }

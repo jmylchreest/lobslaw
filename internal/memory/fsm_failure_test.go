@@ -14,8 +14,9 @@ import (
 
 func TestUnsupportedEntryStopsRaft(t *testing.T) {
 	node, fsm := newTestRaft(t)
+	// Inject committed input below proposal admission to test replay safety.
 	data := mustMarshalEntry(t, &lobslawv1.LogEntry{Op: lobslawv1.LogOp(999)})
-	response, err := node.Apply(data, 5*time.Second)
+	response, err := node.applyRaw(data, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

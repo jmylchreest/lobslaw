@@ -3,35 +3,18 @@ package compute
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"sync"
 
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // PreparedToolCall is server-owned continuation data, never an LLM argument or
 // a provider wire field. It freezes effective input while a confirmation waits.
 // Saved answers never override current policy denials or safety checks.
-type PreparedToolCall struct {
-	CallID            string
-	ToolName          string
-	TurnID            string
-	OriginalArguments string
-	Params            map[string]string
-	Approvals         []PreparedApproval
-}
-
-func (p *PreparedToolCall) clone() *PreparedToolCall {
-	if p == nil {
-		return nil
-	}
-	next := *p
-	next.Params = maps.Clone(p.Params)
-	next.Approvals = slices.Clone(p.Approvals)
-	return &next
-}
+type PreparedToolCall = turn.PreparedToolCall
 
 type preparedConfirmation struct {
 	err       error
@@ -61,10 +44,7 @@ func (e *Executor) policyDecision(ctx context.Context, claims *types.Claims, act
 
 // PreparedApproval records an answered gate for this exact prepared call only.
 // PolicyAllow consults it only after current policy requests confirmation.
-type PreparedApproval struct {
-	Action   string
-	Resource string
-}
+type PreparedApproval = turn.PreparedApproval
 
 type invocationApprovalKey struct{}
 type invocationApprovals struct {

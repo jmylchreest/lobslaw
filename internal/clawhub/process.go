@@ -17,9 +17,8 @@ import (
 )
 
 // ProcessResult captures what came out of processing a clawhub
-// bundle: the canonical artefacts on disk + the install specs the
-// caller (Installer.Install) should hand to binaries.Satisfier
-// before promoting the staging dir into place.
+// bundle: the canonical artefacts on disk and declared dependency metadata.
+// Retrieval never executes install specs or promotes the directory to a mount.
 type ProcessResult struct {
 	// Name is the skill name from SKILL.md front-matter (or the
 	// manifest.yaml's Name field when the bundle is lobslaw-native).
@@ -31,8 +30,8 @@ type ProcessResult struct {
 	Format string
 
 	// RequiresBins is the host-binary names declared in
-	// clawdbot.requires.bins. Satisfier.Satisfy(name, InstallSpecs)
-	// is the next step. Empty for native bundles (their
+	// clawdbot.requires.bins. Execution nodes must provide them;
+	// retrieval does not install them. Empty for native bundles (their
 	// requires_binary lives in the manifest itself).
 	RequiresBins []string
 
@@ -54,9 +53,8 @@ type ProcessResult struct {
 
 // ProcessBundle extracts bundle bytes into stagingDir, detects format,
 // and (for clawhub-format bundles) synthesizes a manifest.yaml the
-// existing skills watcher will pick up. Caller is responsible for
-// promoting stagingDir → installDir via os.Rename and for calling
-// Satisfier.Satisfy on the returned RequiresBins+InstallSpecs.
+// portable sharing path can validate and preserve. The directory is temporary;
+// the destination validates and stages its bytes through Raft before activation.
 //
 // Format precedence: a bundle containing both SKILL.md and
 // manifest.yaml is treated as native (manifest.yaml wins). The
@@ -115,10 +113,10 @@ func ProcessBundle(bundle []byte, stagingDir string) (*ProcessResult, error) {
 // catalogs (the actual clawhub.ai serves zip; signed lobslaw-native
 // bundles use tar.gz). Detection is by magic bytes only.
 func extractAny(bundle []byte, dst string) error {
-	if len(bundle) >= 2 && bundle[0] == 0x1f && bundle[1] == 0x8b {
+	if len(bundle) >= len(gzipMagic) && string(bundle[:len(gzipMagic)]) == gzipMagic {
 		return extractTarGzBytes(bundle, dst)
 	}
-	if len(bundle) >= 4 && bundle[0] == 0x50 && bundle[1] == 0x4b && (bundle[2] == 0x03 || bundle[2] == 0x05 || bundle[2] == 0x07) {
+	if len(bundle) >= zipSignatureBytes && string(bundle[:len(zipMagicPrefix)]) == zipMagicPrefix && (bundle[len(zipMagicPrefix)] == zipLocalFileMarker || bundle[len(zipMagicPrefix)] == zipEmptyArchiveMarker || bundle[len(zipMagicPrefix)] == zipSpannedArchiveMarker) {
 		return extractZipBytes(bundle, dst)
 	}
 	return errors.New("clawhub: bundle is neither tar.gz nor zip")

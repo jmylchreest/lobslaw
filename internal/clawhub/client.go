@@ -91,16 +91,19 @@ func (c *Client) GetSkill(ctx context.Context, name, version string) (*SkillEntr
 		return nil, fmt.Errorf("clawhub: GET %s: %w", endpoint, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("clawhub: read response: %w", err)
+	}
+	if int64(len(body)) > maxMetadataBytes {
+		return nil, fmt.Errorf("clawhub: catalogue metadata exceeds %d MiB limit", maxMetadataBytes>>20)
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("clawhub: skill %q version %q not in catalog", name, version)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("clawhub: GET %s HTTP %d: %s",
-			endpoint, resp.StatusCode, textutil.Truncate(string(body), "…", 256))
+			endpoint, resp.StatusCode, textutil.Truncate(string(body), "…", maxErrorOutputRunes))
 	}
 	var entry SkillEntry
 	if err := json.Unmarshal(body, &entry); err != nil {
@@ -152,8 +155,8 @@ func (c *Client) DownloadBundle(ctx context.Context, entry *SkillEntry) (io.Read
 // the name. Owner prefixes are stripped here for operators who paste
 // the full page URL slug ("steipete/gog") instead of the API slug.
 //
-// Caller (typically Installer.InstallBySlug) is responsible for
-// ProcessBundle on the returned bytes.
+// ShareSource bounds, validates and converts the returned bytes into a
+// portable artifact; the destination owns installation and activation.
 func (c *Client) DownloadBundleBySlug(ctx context.Context, slug string) (io.ReadCloser, error) {
 	apiSlug, err := normalizeSlug(slug)
 	if err != nil {

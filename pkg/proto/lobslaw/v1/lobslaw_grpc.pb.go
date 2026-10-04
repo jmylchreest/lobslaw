@@ -383,6 +383,9 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	SkillService_ExportShare_FullMethodName   = "/lobslaw.v1.SkillService/ExportShare"
+	SkillService_InstallShare_FullMethodName  = "/lobslaw.v1.SkillService/InstallShare"
+	SkillService_ActivateShare_FullMethodName = "/lobslaw.v1.SkillService/ActivateShare"
 	SkillService_ImportSkill_FullMethodName   = "/lobslaw.v1.SkillService/ImportSkill"
 	SkillService_ExportSkill_FullMethodName   = "/lobslaw.v1.SkillService/ExportSkill"
 	SkillService_ListSkills_FullMethodName    = "/lobslaw.v1.SkillService/ListSkills"
@@ -402,6 +405,9 @@ const (
 // somebody's laptop and the cluster is elsewhere, so a service taking a
 // directory would be reading one that does not exist on the node.
 type SkillServiceClient interface {
+	ExportShare(ctx context.Context, in *ExportShareRequest, opts ...grpc.CallOption) (*ExportShareResponse, error)
+	InstallShare(ctx context.Context, in *InstallShareRequest, opts ...grpc.CallOption) (*InstallShareResponse, error)
+	ActivateShare(ctx context.Context, in *ActivateShareRequest, opts ...grpc.CallOption) (*ActivateShareResponse, error)
 	ImportSkill(ctx context.Context, in *ImportSkillRequest, opts ...grpc.CallOption) (*ImportSkillResponse, error)
 	ExportSkill(ctx context.Context, in *ExportSkillRequest, opts ...grpc.CallOption) (*ExportSkillResponse, error)
 	ListSkills(ctx context.Context, in *ListSkillsRequest, opts ...grpc.CallOption) (*ListSkillsResponse, error)
@@ -418,6 +424,36 @@ type skillServiceClient struct {
 
 func NewSkillServiceClient(cc grpc.ClientConnInterface) SkillServiceClient {
 	return &skillServiceClient{cc}
+}
+
+func (c *skillServiceClient) ExportShare(ctx context.Context, in *ExportShareRequest, opts ...grpc.CallOption) (*ExportShareResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportShareResponse)
+	err := c.cc.Invoke(ctx, SkillService_ExportShare_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skillServiceClient) InstallShare(ctx context.Context, in *InstallShareRequest, opts ...grpc.CallOption) (*InstallShareResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallShareResponse)
+	err := c.cc.Invoke(ctx, SkillService_InstallShare_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skillServiceClient) ActivateShare(ctx context.Context, in *ActivateShareRequest, opts ...grpc.CallOption) (*ActivateShareResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActivateShareResponse)
+	err := c.cc.Invoke(ctx, SkillService_ActivateShare_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *skillServiceClient) ImportSkill(ctx context.Context, in *ImportSkillRequest, opts ...grpc.CallOption) (*ImportSkillResponse, error) {
@@ -482,6 +518,9 @@ func (c *skillServiceClient) ActivateSkill(ctx context.Context, in *ActivateSkil
 // somebody's laptop and the cluster is elsewhere, so a service taking a
 // directory would be reading one that does not exist on the node.
 type SkillServiceServer interface {
+	ExportShare(context.Context, *ExportShareRequest) (*ExportShareResponse, error)
+	InstallShare(context.Context, *InstallShareRequest) (*InstallShareResponse, error)
+	ActivateShare(context.Context, *ActivateShareRequest) (*ActivateShareResponse, error)
 	ImportSkill(context.Context, *ImportSkillRequest) (*ImportSkillResponse, error)
 	ExportSkill(context.Context, *ExportSkillRequest) (*ExportSkillResponse, error)
 	ListSkills(context.Context, *ListSkillsRequest) (*ListSkillsResponse, error)
@@ -499,6 +538,15 @@ type SkillServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedSkillServiceServer struct{}
 
+func (UnimplementedSkillServiceServer) ExportShare(context.Context, *ExportShareRequest) (*ExportShareResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExportShare not implemented")
+}
+func (UnimplementedSkillServiceServer) InstallShare(context.Context, *InstallShareRequest) (*InstallShareResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method InstallShare not implemented")
+}
+func (UnimplementedSkillServiceServer) ActivateShare(context.Context, *ActivateShareRequest) (*ActivateShareResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ActivateShare not implemented")
+}
 func (UnimplementedSkillServiceServer) ImportSkill(context.Context, *ImportSkillRequest) (*ImportSkillResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ImportSkill not implemented")
 }
@@ -532,6 +580,60 @@ func RegisterSkillServiceServer(s grpc.ServiceRegistrar, srv SkillServiceServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&SkillService_ServiceDesc, srv)
+}
+
+func _SkillService_ExportShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportShareRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ExportShare(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ExportShare_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ExportShare(ctx, req.(*ExportShareRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkillService_InstallShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallShareRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).InstallShare(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_InstallShare_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).InstallShare(ctx, req.(*InstallShareRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkillService_ActivateShare_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateShareRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ActivateShare(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ActivateShare_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ActivateShare(ctx, req.(*ActivateShareRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _SkillService_ImportSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -631,6 +733,18 @@ var SkillService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "lobslaw.v1.SkillService",
 	HandlerType: (*SkillServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ExportShare",
+			Handler:    _SkillService_ExportShare_Handler,
+		},
+		{
+			MethodName: "InstallShare",
+			Handler:    _SkillService_InstallShare_Handler,
+		},
+		{
+			MethodName: "ActivateShare",
+			Handler:    _SkillService_ActivateShare_Handler,
+		},
 		{
 			MethodName: "ImportSkill",
 			Handler:    _SkillService_ImportSkill_Handler,
@@ -3623,5 +3737,985 @@ var ArchiveService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
+	AgentService_RunTurn_FullMethodName    = "/lobslaw.v1.AgentService/RunTurn"
+	AgentService_ResumeTurn_FullMethodName = "/lobslaw.v1.AgentService/ResumeTurn"
+	AgentService_Ping_FullMethodName       = "/lobslaw.v1.AgentService/Ping"
+)
+
+// AgentServiceClient is the client API for AgentService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// -----------------------------------------------------------------------------
+// AgentService — run a turn on a compute node for a peer that has none
+// -----------------------------------------------------------------------------
+//
+// A ui-web node authenticates users over HTTP, then asks a compute node
+// to run the turn. Cluster mTLS authenticates the PEER NODE, not the
+// person. The authenticated user travels on the request as Claims and
+// Principal. An empty user is refused: the web node's machine identity
+// must not become the unrestricted audience over every user's data
+// (operator-role-and-cluster-authorization).
+type AgentServiceClient interface {
+	RunTurn(ctx context.Context, in *RunTurnRequest, opts ...grpc.CallOption) (*RunTurnResponse, error)
+	ResumeTurn(ctx context.Context, in *ResumeTurnRequest, opts ...grpc.CallOption) (*ResumeTurnResponse, error)
+	// Ping is the availability probe. Failure is "compute.available =
+	// false", not a deleted capability — sessions and records stay.
+	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+}
+
+type agentServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAgentServiceClient(cc grpc.ClientConnInterface) AgentServiceClient {
+	return &agentServiceClient{cc}
+}
+
+func (c *agentServiceClient) RunTurn(ctx context.Context, in *RunTurnRequest, opts ...grpc.CallOption) (*RunTurnResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunTurnResponse)
+	err := c.cc.Invoke(ctx, AgentService_RunTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ResumeTurn(ctx context.Context, in *ResumeTurnRequest, opts ...grpc.CallOption) (*ResumeTurnResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResumeTurnResponse)
+	err := c.cc.Invoke(ctx, AgentService_ResumeTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PingResponse)
+	err := c.cc.Invoke(ctx, AgentService_Ping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AgentServiceServer is the server API for AgentService service.
+// All implementations should embed UnimplementedAgentServiceServer
+// for forward compatibility.
+//
+// -----------------------------------------------------------------------------
+// AgentService — run a turn on a compute node for a peer that has none
+// -----------------------------------------------------------------------------
+//
+// A ui-web node authenticates users over HTTP, then asks a compute node
+// to run the turn. Cluster mTLS authenticates the PEER NODE, not the
+// person. The authenticated user travels on the request as Claims and
+// Principal. An empty user is refused: the web node's machine identity
+// must not become the unrestricted audience over every user's data
+// (operator-role-and-cluster-authorization).
+type AgentServiceServer interface {
+	RunTurn(context.Context, *RunTurnRequest) (*RunTurnResponse, error)
+	ResumeTurn(context.Context, *ResumeTurnRequest) (*ResumeTurnResponse, error)
+	// Ping is the availability probe. Failure is "compute.available =
+	// false", not a deleted capability — sessions and records stay.
+	Ping(context.Context, *PingRequest) (*PingResponse, error)
+}
+
+// UnimplementedAgentServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAgentServiceServer struct{}
+
+func (UnimplementedAgentServiceServer) RunTurn(context.Context, *RunTurnRequest) (*RunTurnResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunTurn not implemented")
+}
+func (UnimplementedAgentServiceServer) ResumeTurn(context.Context, *ResumeTurnRequest) (*ResumeTurnResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResumeTurn not implemented")
+}
+func (UnimplementedAgentServiceServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedAgentServiceServer) testEmbeddedByValue() {}
+
+// UnsafeAgentServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AgentServiceServer will
+// result in compilation errors.
+type UnsafeAgentServiceServer interface {
+	mustEmbedUnimplementedAgentServiceServer()
+}
+
+func RegisterAgentServiceServer(s grpc.ServiceRegistrar, srv AgentServiceServer) {
+	// If the following call pancis, it indicates UnimplementedAgentServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&AgentService_ServiceDesc, srv)
+}
+
+func _AgentService_RunTurn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunTurnRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).RunTurn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_RunTurn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).RunTurn(ctx, req.(*RunTurnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ResumeTurn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResumeTurnRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ResumeTurn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ResumeTurn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ResumeTurn(ctx, req.(*ResumeTurnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).Ping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_Ping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).Ping(ctx, req.(*PingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var AgentService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.AgentService",
+	HandlerType: (*AgentServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "RunTurn",
+			Handler:    _AgentService_RunTurn_Handler,
+		},
+		{
+			MethodName: "ResumeTurn",
+			Handler:    _AgentService_ResumeTurn_Handler,
+		},
+		{
+			MethodName: "Ping",
+			Handler:    _AgentService_Ping_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
+	TaskApprovalService_CreateTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/CreateTaskApproval"
+	TaskApprovalService_PauseTaskApproval_FullMethodName      = "/lobslaw.v1.TaskApprovalService/PauseTaskApproval"
+	TaskApprovalService_GetTaskApproval_FullMethodName        = "/lobslaw.v1.TaskApprovalService/GetTaskApproval"
+	TaskApprovalService_ListTaskApproval_FullMethodName       = "/lobslaw.v1.TaskApprovalService/ListTaskApproval"
+	TaskApprovalService_DecideTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/DecideTaskApproval"
+	TaskApprovalService_ClaimTaskApproval_FullMethodName      = "/lobslaw.v1.TaskApprovalService/ClaimTaskApproval"
+	TaskApprovalService_FinishTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/FinishTaskApproval"
+	TaskApprovalService_CancelTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/CancelTaskApproval"
+	TaskApprovalService_RecoverTaskApproval_FullMethodName    = "/lobslaw.v1.TaskApprovalService/RecoverTaskApproval"
+	TaskApprovalService_CheckGrantTaskApproval_FullMethodName = "/lobslaw.v1.TaskApprovalService/CheckGrantTaskApproval"
+)
+
+// TaskApprovalServiceClient is the client API for TaskApprovalService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// TaskApprovalService is peer-only. Gateways assert the authenticated owner;
+// runners assert their task actor. Neither identity comes from tool arguments.
+type TaskApprovalServiceClient interface {
+	CreateTaskApproval(ctx context.Context, in *CreateTaskApprovalRequest, opts ...grpc.CallOption) (*CreateTaskApprovalResponse, error)
+	PauseTaskApproval(ctx context.Context, in *PauseTaskApprovalRequest, opts ...grpc.CallOption) (*PauseTaskApprovalResponse, error)
+	GetTaskApproval(ctx context.Context, in *GetTaskApprovalRequest, opts ...grpc.CallOption) (*GetTaskApprovalResponse, error)
+	ListTaskApproval(ctx context.Context, in *ListTaskApprovalRequest, opts ...grpc.CallOption) (*ListTaskApprovalResponse, error)
+	DecideTaskApproval(ctx context.Context, in *DecideTaskApprovalRequest, opts ...grpc.CallOption) (*DecideTaskApprovalResponse, error)
+	ClaimTaskApproval(ctx context.Context, in *ClaimTaskApprovalRequest, opts ...grpc.CallOption) (*ClaimTaskApprovalResponse, error)
+	FinishTaskApproval(ctx context.Context, in *FinishTaskApprovalRequest, opts ...grpc.CallOption) (*FinishTaskApprovalResponse, error)
+	CancelTaskApproval(ctx context.Context, in *CancelTaskApprovalRequest, opts ...grpc.CallOption) (*CancelTaskApprovalResponse, error)
+	RecoverTaskApproval(ctx context.Context, in *RecoverTaskApprovalRequest, opts ...grpc.CallOption) (*RecoverTaskApprovalResponse, error)
+	CheckGrantTaskApproval(ctx context.Context, in *CheckGrantTaskApprovalRequest, opts ...grpc.CallOption) (*CheckGrantTaskApprovalResponse, error)
+}
+
+type taskApprovalServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewTaskApprovalServiceClient(cc grpc.ClientConnInterface) TaskApprovalServiceClient {
+	return &taskApprovalServiceClient{cc}
+}
+
+func (c *taskApprovalServiceClient) CreateTaskApproval(ctx context.Context, in *CreateTaskApprovalRequest, opts ...grpc.CallOption) (*CreateTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_CreateTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) PauseTaskApproval(ctx context.Context, in *PauseTaskApprovalRequest, opts ...grpc.CallOption) (*PauseTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PauseTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_PauseTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) GetTaskApproval(ctx context.Context, in *GetTaskApprovalRequest, opts ...grpc.CallOption) (*GetTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_GetTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) ListTaskApproval(ctx context.Context, in *ListTaskApprovalRequest, opts ...grpc.CallOption) (*ListTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_ListTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) DecideTaskApproval(ctx context.Context, in *DecideTaskApprovalRequest, opts ...grpc.CallOption) (*DecideTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecideTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_DecideTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) ClaimTaskApproval(ctx context.Context, in *ClaimTaskApprovalRequest, opts ...grpc.CallOption) (*ClaimTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClaimTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_ClaimTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) FinishTaskApproval(ctx context.Context, in *FinishTaskApprovalRequest, opts ...grpc.CallOption) (*FinishTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FinishTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_FinishTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) CancelTaskApproval(ctx context.Context, in *CancelTaskApprovalRequest, opts ...grpc.CallOption) (*CancelTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_CancelTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) RecoverTaskApproval(ctx context.Context, in *RecoverTaskApprovalRequest, opts ...grpc.CallOption) (*RecoverTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecoverTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_RecoverTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskApprovalServiceClient) CheckGrantTaskApproval(ctx context.Context, in *CheckGrantTaskApprovalRequest, opts ...grpc.CallOption) (*CheckGrantTaskApprovalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckGrantTaskApprovalResponse)
+	err := c.cc.Invoke(ctx, TaskApprovalService_CheckGrantTaskApproval_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// TaskApprovalServiceServer is the server API for TaskApprovalService service.
+// All implementations should embed UnimplementedTaskApprovalServiceServer
+// for forward compatibility.
+//
+// TaskApprovalService is peer-only. Gateways assert the authenticated owner;
+// runners assert their task actor. Neither identity comes from tool arguments.
+type TaskApprovalServiceServer interface {
+	CreateTaskApproval(context.Context, *CreateTaskApprovalRequest) (*CreateTaskApprovalResponse, error)
+	PauseTaskApproval(context.Context, *PauseTaskApprovalRequest) (*PauseTaskApprovalResponse, error)
+	GetTaskApproval(context.Context, *GetTaskApprovalRequest) (*GetTaskApprovalResponse, error)
+	ListTaskApproval(context.Context, *ListTaskApprovalRequest) (*ListTaskApprovalResponse, error)
+	DecideTaskApproval(context.Context, *DecideTaskApprovalRequest) (*DecideTaskApprovalResponse, error)
+	ClaimTaskApproval(context.Context, *ClaimTaskApprovalRequest) (*ClaimTaskApprovalResponse, error)
+	FinishTaskApproval(context.Context, *FinishTaskApprovalRequest) (*FinishTaskApprovalResponse, error)
+	CancelTaskApproval(context.Context, *CancelTaskApprovalRequest) (*CancelTaskApprovalResponse, error)
+	RecoverTaskApproval(context.Context, *RecoverTaskApprovalRequest) (*RecoverTaskApprovalResponse, error)
+	CheckGrantTaskApproval(context.Context, *CheckGrantTaskApprovalRequest) (*CheckGrantTaskApprovalResponse, error)
+}
+
+// UnimplementedTaskApprovalServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedTaskApprovalServiceServer struct{}
+
+func (UnimplementedTaskApprovalServiceServer) CreateTaskApproval(context.Context, *CreateTaskApprovalRequest) (*CreateTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) PauseTaskApproval(context.Context, *PauseTaskApprovalRequest) (*PauseTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PauseTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) GetTaskApproval(context.Context, *GetTaskApprovalRequest) (*GetTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) ListTaskApproval(context.Context, *ListTaskApprovalRequest) (*ListTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) DecideTaskApproval(context.Context, *DecideTaskApprovalRequest) (*DecideTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DecideTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) ClaimTaskApproval(context.Context, *ClaimTaskApprovalRequest) (*ClaimTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) FinishTaskApproval(context.Context, *FinishTaskApprovalRequest) (*FinishTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FinishTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) CancelTaskApproval(context.Context, *CancelTaskApprovalRequest) (*CancelTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CancelTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) RecoverTaskApproval(context.Context, *RecoverTaskApprovalRequest) (*RecoverTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecoverTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) CheckGrantTaskApproval(context.Context, *CheckGrantTaskApprovalRequest) (*CheckGrantTaskApprovalResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckGrantTaskApproval not implemented")
+}
+func (UnimplementedTaskApprovalServiceServer) testEmbeddedByValue() {}
+
+// UnsafeTaskApprovalServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to TaskApprovalServiceServer will
+// result in compilation errors.
+type UnsafeTaskApprovalServiceServer interface {
+	mustEmbedUnimplementedTaskApprovalServiceServer()
+}
+
+func RegisterTaskApprovalServiceServer(s grpc.ServiceRegistrar, srv TaskApprovalServiceServer) {
+	// If the following call pancis, it indicates UnimplementedTaskApprovalServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&TaskApprovalService_ServiceDesc, srv)
+}
+
+func _TaskApprovalService_CreateTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).CreateTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_CreateTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).CreateTaskApproval(ctx, req.(*CreateTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_PauseTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PauseTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).PauseTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_PauseTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).PauseTaskApproval(ctx, req.(*PauseTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_GetTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).GetTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_GetTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).GetTaskApproval(ctx, req.(*GetTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_ListTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).ListTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_ListTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).ListTaskApproval(ctx, req.(*ListTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_DecideTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecideTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).DecideTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_DecideTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).DecideTaskApproval(ctx, req.(*DecideTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_ClaimTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).ClaimTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_ClaimTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).ClaimTaskApproval(ctx, req.(*ClaimTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_FinishTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FinishTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).FinishTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_FinishTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).FinishTaskApproval(ctx, req.(*FinishTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_CancelTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).CancelTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_CancelTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).CancelTaskApproval(ctx, req.(*CancelTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_RecoverTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecoverTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).RecoverTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_RecoverTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).RecoverTaskApproval(ctx, req.(*RecoverTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskApprovalService_CheckGrantTaskApproval_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckGrantTaskApprovalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskApprovalServiceServer).CheckGrantTaskApproval(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskApprovalService_CheckGrantTaskApproval_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskApprovalServiceServer).CheckGrantTaskApproval(ctx, req.(*CheckGrantTaskApprovalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// TaskApprovalService_ServiceDesc is the grpc.ServiceDesc for TaskApprovalService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var TaskApprovalService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.TaskApprovalService",
+	HandlerType: (*TaskApprovalServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateTaskApproval",
+			Handler:    _TaskApprovalService_CreateTaskApproval_Handler,
+		},
+		{
+			MethodName: "PauseTaskApproval",
+			Handler:    _TaskApprovalService_PauseTaskApproval_Handler,
+		},
+		{
+			MethodName: "GetTaskApproval",
+			Handler:    _TaskApprovalService_GetTaskApproval_Handler,
+		},
+		{
+			MethodName: "ListTaskApproval",
+			Handler:    _TaskApprovalService_ListTaskApproval_Handler,
+		},
+		{
+			MethodName: "DecideTaskApproval",
+			Handler:    _TaskApprovalService_DecideTaskApproval_Handler,
+		},
+		{
+			MethodName: "ClaimTaskApproval",
+			Handler:    _TaskApprovalService_ClaimTaskApproval_Handler,
+		},
+		{
+			MethodName: "FinishTaskApproval",
+			Handler:    _TaskApprovalService_FinishTaskApproval_Handler,
+		},
+		{
+			MethodName: "CancelTaskApproval",
+			Handler:    _TaskApprovalService_CancelTaskApproval_Handler,
+		},
+		{
+			MethodName: "RecoverTaskApproval",
+			Handler:    _TaskApprovalService_RecoverTaskApproval_Handler,
+		},
+		{
+			MethodName: "CheckGrantTaskApproval",
+			Handler:    _TaskApprovalService_CheckGrantTaskApproval_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
+	ConsoleService_QueryConsole_FullMethodName  = "/lobslaw.v1.ConsoleService/QueryConsole"
+	ConsoleService_MutateConsole_FullMethodName = "/lobslaw.v1.ConsoleService/MutateConsole"
+	ConsoleService_ChatConsole_FullMethodName   = "/lobslaw.v1.ConsoleService/ChatConsole"
+)
+
+// ConsoleServiceClient is the client API for ConsoleService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+type ConsoleServiceClient interface {
+	QueryConsole(ctx context.Context, in *QueryConsoleRequest, opts ...grpc.CallOption) (*QueryConsoleResponse, error)
+	MutateConsole(ctx context.Context, in *MutateConsoleRequest, opts ...grpc.CallOption) (*MutateConsoleResponse, error)
+	ChatConsole(ctx context.Context, in *ChatConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatConsoleResponse], error)
+}
+
+type consoleServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewConsoleServiceClient(cc grpc.ClientConnInterface) ConsoleServiceClient {
+	return &consoleServiceClient{cc}
+}
+
+func (c *consoleServiceClient) QueryConsole(ctx context.Context, in *QueryConsoleRequest, opts ...grpc.CallOption) (*QueryConsoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryConsoleResponse)
+	err := c.cc.Invoke(ctx, ConsoleService_QueryConsole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *consoleServiceClient) MutateConsole(ctx context.Context, in *MutateConsoleRequest, opts ...grpc.CallOption) (*MutateConsoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MutateConsoleResponse)
+	err := c.cc.Invoke(ctx, ConsoleService_MutateConsole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *consoleServiceClient) ChatConsole(ctx context.Context, in *ChatConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatConsoleResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ConsoleService_ServiceDesc.Streams[0], ConsoleService_ChatConsole_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ChatConsoleRequest, ChatConsoleResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConsoleService_ChatConsoleClient = grpc.ServerStreamingClient[ChatConsoleResponse]
+
+// ConsoleServiceServer is the server API for ConsoleService service.
+// All implementations should embed UnimplementedConsoleServiceServer
+// for forward compatibility.
+//
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+type ConsoleServiceServer interface {
+	QueryConsole(context.Context, *QueryConsoleRequest) (*QueryConsoleResponse, error)
+	MutateConsole(context.Context, *MutateConsoleRequest) (*MutateConsoleResponse, error)
+	ChatConsole(*ChatConsoleRequest, grpc.ServerStreamingServer[ChatConsoleResponse]) error
+}
+
+// UnimplementedConsoleServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedConsoleServiceServer struct{}
+
+func (UnimplementedConsoleServiceServer) QueryConsole(context.Context, *QueryConsoleRequest) (*QueryConsoleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) MutateConsole(context.Context, *MutateConsoleRequest) (*MutateConsoleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MutateConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) ChatConsole(*ChatConsoleRequest, grpc.ServerStreamingServer[ChatConsoleResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ChatConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) testEmbeddedByValue() {}
+
+// UnsafeConsoleServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ConsoleServiceServer will
+// result in compilation errors.
+type UnsafeConsoleServiceServer interface {
+	mustEmbedUnimplementedConsoleServiceServer()
+}
+
+func RegisterConsoleServiceServer(s grpc.ServiceRegistrar, srv ConsoleServiceServer) {
+	// If the following call pancis, it indicates UnimplementedConsoleServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ConsoleService_ServiceDesc, srv)
+}
+
+func _ConsoleService_QueryConsole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryConsoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConsoleServiceServer).QueryConsole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConsoleService_QueryConsole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConsoleServiceServer).QueryConsole(ctx, req.(*QueryConsoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConsoleService_MutateConsole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MutateConsoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConsoleServiceServer).MutateConsole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConsoleService_MutateConsole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConsoleServiceServer).MutateConsole(ctx, req.(*MutateConsoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConsoleService_ChatConsole_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ChatConsoleRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ConsoleServiceServer).ChatConsole(m, &grpc.GenericServerStream[ChatConsoleRequest, ChatConsoleResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConsoleService_ChatConsoleServer = grpc.ServerStreamingServer[ChatConsoleResponse]
+
+// ConsoleService_ServiceDesc is the grpc.ServiceDesc for ConsoleService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ConsoleService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.ConsoleService",
+	HandlerType: (*ConsoleServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "QueryConsole",
+			Handler:    _ConsoleService_QueryConsole_Handler,
+		},
+		{
+			MethodName: "MutateConsole",
+			Handler:    _ConsoleService_MutateConsole_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ChatConsole",
+			Handler:       _ConsoleService_ChatConsole_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
+	UpgradeService_UpgradeStatus_FullMethodName = "/lobslaw.v1.UpgradeService/UpgradeStatus"
+	UpgradeService_ChangeUpgrade_FullMethodName = "/lobslaw.v1.UpgradeService/ChangeUpgrade"
+)
+
+// UpgradeServiceClient is the client API for UpgradeService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Upgrade control is deliberately stable across supported data contracts.
+type UpgradeServiceClient interface {
+	UpgradeStatus(ctx context.Context, in *UpgradeStatusRequest, opts ...grpc.CallOption) (*UpgradeStatusResponse, error)
+	ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*ChangeUpgradeResponse, error)
+}
+
+type upgradeServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewUpgradeServiceClient(cc grpc.ClientConnInterface) UpgradeServiceClient {
+	return &upgradeServiceClient{cc}
+}
+
+func (c *upgradeServiceClient) UpgradeStatus(ctx context.Context, in *UpgradeStatusRequest, opts ...grpc.CallOption) (*UpgradeStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpgradeStatusResponse)
+	err := c.cc.Invoke(ctx, UpgradeService_UpgradeStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *upgradeServiceClient) ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*ChangeUpgradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeUpgradeResponse)
+	err := c.cc.Invoke(ctx, UpgradeService_ChangeUpgrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpgradeServiceServer is the server API for UpgradeService service.
+// All implementations should embed UnimplementedUpgradeServiceServer
+// for forward compatibility.
+//
+// Upgrade control is deliberately stable across supported data contracts.
+type UpgradeServiceServer interface {
+	UpgradeStatus(context.Context, *UpgradeStatusRequest) (*UpgradeStatusResponse, error)
+	ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*ChangeUpgradeResponse, error)
+}
+
+// UnimplementedUpgradeServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedUpgradeServiceServer struct{}
+
+func (UnimplementedUpgradeServiceServer) UpgradeStatus(context.Context, *UpgradeStatusRequest) (*UpgradeStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpgradeStatus not implemented")
+}
+func (UnimplementedUpgradeServiceServer) ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*ChangeUpgradeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChangeUpgrade not implemented")
+}
+func (UnimplementedUpgradeServiceServer) testEmbeddedByValue() {}
+
+// UnsafeUpgradeServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to UpgradeServiceServer will
+// result in compilation errors.
+type UnsafeUpgradeServiceServer interface {
+	mustEmbedUnimplementedUpgradeServiceServer()
+}
+
+func RegisterUpgradeServiceServer(s grpc.ServiceRegistrar, srv UpgradeServiceServer) {
+	// If the following call pancis, it indicates UnimplementedUpgradeServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&UpgradeService_ServiceDesc, srv)
+}
+
+func _UpgradeService_UpgradeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpgradeStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UpgradeServiceServer).UpgradeStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UpgradeService_UpgradeStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UpgradeServiceServer).UpgradeStatus(ctx, req.(*UpgradeStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UpgradeService_ChangeUpgrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeUpgradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UpgradeServiceServer).ChangeUpgrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UpgradeService_ChangeUpgrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UpgradeServiceServer).ChangeUpgrade(ctx, req.(*ChangeUpgradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// UpgradeService_ServiceDesc is the grpc.ServiceDesc for UpgradeService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var UpgradeService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.UpgradeService",
+	HandlerType: (*UpgradeServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "UpgradeStatus",
+			Handler:    _UpgradeService_UpgradeStatus_Handler,
+		},
+		{
+			MethodName: "ChangeUpgrade",
+			Handler:    _UpgradeService_ChangeUpgrade_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "lobslaw/v1/lobslaw.proto",
 }

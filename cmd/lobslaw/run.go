@@ -92,6 +92,7 @@ func printCommandList(w *os.File) {
 var commandSummaries = map[string]string{
 	"archive":      "export, verify and import portable knowledge archives",
 	"backup":       "create, restore and prune encrypted backup generations",
+	"data":         "inspect and migrate physical data formats offline",
 	"cluster":      "certificates, node signing, operator export",
 	"plugin":       "install and manage plugins",
 	"audit":        "query and verify the audit chain",
@@ -104,6 +105,7 @@ var commandSummaries = map[string]string{
 	"memory":       "browse, search and forget records",
 	"session":      "stored conversations",
 	"init":         "write a starting config",
+	"login":        "print a one-time code for the web console",
 	"enrol":        "ask a cluster for an operator credential",
 	"nodeid":       "print this machine's node id",
 	"context":      "named clusters this CLI can reach",

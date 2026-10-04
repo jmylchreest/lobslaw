@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -29,12 +29,6 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 	if !ok {
 		h.log.Warn("slack: unknown user, UnknownUserScope empty — dropping",
 			"slack_user_id", ev.User, "channel", ev.Channel)
-		return
-	}
-
-	budget, err := compute.NewTurnBudget(h.cfg.DefaultBudget)
-	if err != nil {
-		h.log.Error("slack: budget init failed", "err", err)
 		return
 	}
 
@@ -109,17 +103,19 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		body = "(no comment — please inspect the attached file and respond)"
 	}
 
-	agentReq := compute.ProcessMessageRequest{
+	userID := claims.UserID
+	agentReq := turn.Request{
 		Message:             body,
 		Attachments:         im.Attachments,
 		Claims:              claims,
 		TurnID:              turnID,
-		Budget:              budget,
+		Caps:                h.cfg.DefaultBudget,
 		ConversationHistory: prior.Messages,
 		ConversationSummary: prior.Summary,
 		Channel:             ChannelSlack,
 		ChannelID:           convID,
 		SharedConversation:  shared,
+		BotID:               resolveTeamBot(ctx, h.cfg.TeamRouter, ChannelSlack, convID, userID),
 	}
 
 	// The placeholder goes up here, before the agent runs, and every
@@ -127,7 +123,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 	turnCtx, responder, cleanup := h.startResponsivenessGuards(ctx, ev.Channel, thread, statusThread(ev))
 	defer cleanup()
 
-	resp, err := h.agent.RunToolCallLoop(turnCtx, agentReq)
+	resp, err := h.runner.Run(turnCtx, agentReq)
 	if err != nil {
 		h.log.Error("slack: agent error", "turn_id", turnID, "err", err)
 		// Into the placeholder: an error left beside a stale "working

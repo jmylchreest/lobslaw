@@ -7,14 +7,16 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/console"
 )
 
 // Sentinel errors for the prompt flow. Callers map these to HTTP
 // status codes / user-visible messages.
 var (
-	ErrPromptNotFound = errors.New("prompt: not found")
-	ErrPromptExpired  = errors.New("prompt: expired")
-	ErrPromptResolved = errors.New("prompt: already resolved")
+	ErrPromptNotFound = console.ErrPromptNotFound
+	ErrPromptExpired  = console.ErrPromptExpired
+	ErrPromptResolved = console.ErrPromptResolved
 )
 
 // PromptDecision is how a user responded to a confirmation.
@@ -213,10 +215,6 @@ type PromptRegistry struct {
 	prompts map[string]*Prompt
 }
 
-// defaultPromptTTL bounds a confirmation that arrives with no TTL of
-// its own. A prompt with no expiry is a turn that waits forever.
-const defaultPromptTTL = 5 * time.Minute
-
 // NewPromptRegistry constructs an empty registry.
 func NewPromptRegistry() *PromptRegistry {
 	return &PromptRegistry{prompts: make(map[string]*Prompt)}
@@ -235,7 +233,7 @@ func (r *PromptRegistry) Create(np NewPrompt) (*Prompt, error) {
 	}
 	ttl := np.TTL
 	if ttl <= 0 {
-		ttl = defaultPromptTTL
+		ttl = DefaultPromptTTL
 	}
 	now := time.Now()
 	p := &Prompt{
@@ -376,7 +374,7 @@ func (r *PromptRegistry) transitionLocked(p *Prompt, decision PromptDecision) {
 // randomHexID returns 32 hex chars (16 random bytes) — unguessable
 // across any realistic in-flight set without being unwieldy in URLs.
 func randomHexID() (string, error) {
-	var b [16]byte
+	var b [promptIDBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}

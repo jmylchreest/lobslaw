@@ -16,6 +16,9 @@ import (
 // a fresh ACLInputs from the current config and calls Build again,
 // then swaps via SmokescreenProvider.SetACL.
 type ACLInputs struct {
+	// WebPush permits only the browser vendors used by the web console.
+	WebPush        bool
+	GoogleCalendar bool
 	// Providers is [[compute.providers]] from config.toml. Each
 	// provider's endpoint host becomes an allowed host under role
 	// "llm" (and per-role "llm/<label>" for callers that want
@@ -124,6 +127,10 @@ func Build(in ACLInputs) Rules {
 		Permissive: make(map[string]bool),
 	}
 
+	if in.GoogleCalendar {
+		rules.Roles["integration/google-calendar"] = []string{"www.googleapis.com", "oauth2.googleapis.com", "openidconnect.googleapis.com"}
+	}
+
 	// LLM provider endpoints — collected under "llm" (broad), plus
 	// per-label "llm/<label>" for future fine-grained restriction.
 	llmHosts := uniqueHosts{}
@@ -168,6 +175,9 @@ func Build(in ACLInputs) Rules {
 	// proxy rather than by nothing.
 	if len(in.CallbackHosts) > 0 {
 		rules.Roles["gateway/callback"] = in.CallbackHosts
+	}
+	if in.WebPush {
+		rules.Roles["gateway/web-push"] = []string{"fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com"}
 	}
 
 	for _, ch := range in.Channels {

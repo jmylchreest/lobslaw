@@ -3,6 +3,9 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"slices"
+
+	"github.com/jmylchreest/lobslaw/internal/dataformat"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -42,10 +45,22 @@ func (f *FSM) halt(index uint64, cause error) error {
 // Check support before mutation. Unknown optional protobuf fields on known
 // payloads remain compatible; an unknown oneof variant decodes with no payload.
 func validateLogEntrySupport(entry *lobslawv1.LogEntry) error {
+	if entry.SchemaVersion > dataformat.LogVersion {
+		return fmt.Errorf("unsupported log schema %d", entry.SchemaVersion)
+	}
+	if entry.GetUpgrade() != nil {
+		if !slices.Contains(dataformat.SupportedContracts(), entry.GetUpgrade().Target) {
+			return fmt.Errorf("unsupported upgrade contract %d", entry.GetUpgrade().Target)
+		}
+		if entry.Op != lobslawv1.LogOp_LOG_OP_PUT {
+			return errors.New("upgrade requires PUT")
+		}
+		return nil
+	}
 	switch entry.Op {
 	case lobslawv1.LogOp_LOG_OP_PUT:
 		switch entry.Payload.(type) {
-		case *lobslawv1.LogEntry_ArchiveBatch, *lobslawv1.LogEntry_SessionAppend:
+		case *lobslawv1.LogEntry_ArchiveBatch, *lobslawv1.LogEntry_SessionAppend, *lobslawv1.LogEntry_ShareBatch, *lobslawv1.LogEntry_TaskAdmission:
 			return nil
 		}
 	case lobslawv1.LogOp_LOG_OP_DELETE, lobslawv1.LogOp_LOG_OP_CLAIM:

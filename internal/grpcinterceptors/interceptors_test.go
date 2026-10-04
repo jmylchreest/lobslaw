@@ -162,6 +162,17 @@ func TestAnOperatorIsRefusedOnTheRaftTransport(t *testing.T) {
 	}
 }
 
+func TestOperatorCannotAssertTurnIdentity(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"/lobslaw.v1.AgentService/RunTurn", "/lobslaw.v1.AgentService/ResumeTurn", "/lobslaw.v1.ConsoleService/QueryConsole", "/lobslaw.v1.ConsoleService/MutateConsole", "/lobslaw.v1.ConsoleService/ChatConsole"} {
+		called := false
+		_, err := OperatorNotAPeer()(ctxWithCert(certWithOU(t, mtls.OperatorOU)), nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+		if status.Code(err) != codes.PermissionDenied || called {
+			t.Fatalf("%s accepted operator assertion", method)
+		}
+	}
+}
+
 // Raft's transport is STREAMING. Without this half the guard covers
 // nothing that matters.
 func TestAnOperatorIsRefusedOnTheRaftStream(t *testing.T) {
@@ -257,3 +268,20 @@ type fakeStream struct {
 }
 
 func (f fakeStream) Context() context.Context { return f.ctx }
+
+func TestTaskApprovalRPCRequiresPeerNotOperator(t *testing.T) {
+	for _, method := range []string{"Create", "Pause", "Get", "List", "Decide", "Claim", "Finish", "Cancel", "Recover", "CheckGrant"} {
+		info := &grpc.UnaryServerInfo{FullMethod: "/lobslaw.v1.TaskApprovalService/" + method + "TaskApproval"}
+		for name, ctx := range map[string]context.Context{"anonymous": context.Background(), "operator": ctxWithCert(certWithOU(t, mtls.OperatorOU))} {
+			called := false
+			_, err := OperatorNotAPeer()(ctx, nil, info, func(context.Context, any) (any, error) { called = true; return nil, nil })
+			if err == nil || called {
+				t.Errorf("%s reached %s", name, method)
+			}
+		}
+		_, err := OperatorNotAPeer()(ctxWithCert(certWithOU(t)), nil, info, func(context.Context, any) (any, error) { return nil, nil })
+		if err != nil {
+			t.Errorf("peer refused %s: %v", method, err)
+		}
+	}
+}

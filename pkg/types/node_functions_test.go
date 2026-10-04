@@ -74,6 +74,21 @@ func TestNormalizeFunctions(t *testing.T) {
 			in:   nil,
 			want: nil,
 		},
+		{
+			name: "compute-teams pulls in compute",
+			in:   []NodeFunction{FunctionComputeTeams},
+			want: []NodeFunction{FunctionComputeTeams, FunctionCompute},
+		},
+		{
+			name: "ui-web does not become compute",
+			in:   []NodeFunction{FunctionUIWeb},
+			want: []NodeFunction{FunctionUIWeb},
+		},
+		{
+			name: "default set does not imply optional functions",
+			in:   []NodeFunction{FunctionMemory, FunctionCompute, FunctionStorage},
+			want: []NodeFunction{FunctionMemory, FunctionCompute, FunctionStorage},
+		},
 	}
 
 	for _, tc := range cases {
@@ -113,5 +128,36 @@ func TestPolicyAliasKeepsTheNodeOnRaft(t *testing.T) {
 	}
 	if !hasMemory {
 		t.Fatalf("got %v, want memory — a policy-only node must still host raft", got)
+	}
+}
+
+// Selections may be edited by callers without changing future selections.
+func TestFunctionSelectionsAreIndependent(t *testing.T) {
+	t.Parallel()
+	for _, selection := range []struct {
+		name      string
+		functions func() []NodeFunction
+	}{{"all", AllFunctions}, {"default", DefaultFunctions}} {
+		t.Run(selection.name, func(t *testing.T) {
+			first := selection.functions()
+			for _, function := range first {
+				if !function.IsValid() {
+					t.Fatalf("selected invalid function %q", function)
+				}
+				if function == FunctionPolicy || function == FunctionGateway {
+					t.Fatalf("selected deprecated alias %q", function)
+				}
+			}
+			first[0] = "invalid"
+			if !selection.functions()[0].IsValid() {
+				t.Fatal("caller changed the function catalogue")
+			}
+		})
+	}
+	if NodeFunction("invalid").IsValid() {
+		t.Fatal("unknown function accepted")
+	}
+	if !FunctionPolicy.IsValid() || !FunctionGateway.IsValid() {
+		t.Fatal("deprecated aliases must remain accepted")
 	}
 }

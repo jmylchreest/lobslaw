@@ -9,13 +9,32 @@ import (
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/jmylchreest/lobslaw/internal/dataformat"
+	"github.com/jmylchreest/lobslaw/internal/discovery"
+	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/rafttransport"
 )
 
 func (n *Node) wireRaft(advertise string) error {
+	manifest, err := dataformat.ReadManifest(n.cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	if manifest.RestoreRequired && !n.cfg.RestoreMode {
+		return fmt.Errorf("copied physical data requires memory.restore_mode=true; inspect pending work before explicitly accepting recovery")
+	}
+
+	unprotect, err := policy.ProtectRaftPaths(n.cfg.DataDir)
+	if err != nil {
+		return fmt.Errorf("protect raft paths: %w", err)
+	}
+	n.unprotectRaftPaths = unprotect
 	store, err := memory.OpenStore(filepath.Join(n.cfg.DataDir, "state.db"), n.cfg.MemoryKey)
 	if err != nil {
 		return fmt.Errorf("open state.db: %w", err)
@@ -24,13 +43,13 @@ func (n *Node) wireRaft(advertise string) error {
 
 	transport, err := rafttransport.New(rafttransport.Config{
 		LocalAddr: raft.ServerAddress(advertise),
-		DialOpts:  []grpc.DialOption{grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds())},
+		DialOpts:  []grpc.DialOption{grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient(n.dataContract)), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient(n.dataContract))},
 	})
 	if err != nil {
 		_ = store.Close()
 		return fmt.Errorf("rafttransport.New: %w", err)
 	}
-	transport.Register(n.server)
+	transport.Register(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: n.server})
 
 	rNode, err := memory.NewRaft(memory.RaftConfig{
 		NodeID:    n.cfg.NodeID,
@@ -109,7 +128,7 @@ func (n *Node) wireRaft(advertise string) error {
 func (n *Node) establishRaftMembership(ctx context.Context) error {
 	timeout := n.cfg.BootstrapTimeout
 	if timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = defaultRaftJoinTimeout
 	}
 
 	if n.raft.HadStateOnBoot() {
@@ -130,21 +149,24 @@ func (n *Node) establishRaftMembership(ctx context.Context) error {
 	// either source is enough to find a peer to dial. Brief wait
 	// (≤2s) gives the broadcast listener a chance to populate the
 	// registry on container/LAN startups where everyone races up.
-	candidates := n.collectJoinCandidates(ctx, 2*time.Second)
+	candidates := n.collectJoinCandidates(ctx, joinCandidateWait)
 	if len(candidates) > 0 {
 		joinCtx, cancel := context.WithTimeout(ctx, timeout)
-		err := n.discCli.JoinCluster(joinCtx, candidates, 5*time.Second)
+		err := n.discCli.JoinCluster(joinCtx, candidates, discovery.DefaultDialTimeout)
 		cancel()
 		if err == nil {
 			waitCtx, waitCancel := context.WithTimeout(ctx, timeout)
 			defer waitCancel()
-			if err := n.raft.WaitForConfigInclusion(waitCtx, 200*time.Millisecond); err != nil {
+			if err := n.raft.WaitForConfigInclusion(waitCtx, membershipPollInterval); err != nil {
 				return fmt.Errorf("joined via candidates but never observed self in committed config within %s: %w", timeout, err)
 			}
 			n.log.Info("raft: joined existing cluster",
 				"node_id", n.cfg.NodeID,
 				"candidates", candidates)
 			return nil
+		}
+		if status.Code(err) == codes.FailedPrecondition {
+			return fmt.Errorf("refusing bootstrap after incompatible peer rejected join: %w", err)
 		}
 		n.log.Warn("raft: join via discovered candidates failed",
 			"err", err,

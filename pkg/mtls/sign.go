@@ -31,6 +31,14 @@ type SignOpts struct {
 	IPs      []net.IP
 }
 
+// LoopbackIPs returns the IPv4 and IPv6 loopback addresses as a single
+// named set, so every caller that wants a node certificate to verify
+// for a CLI dialling this machine shares one definition instead of
+// retyping the pair.
+func LoopbackIPs() []net.IP {
+	return []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback}
+}
+
 // LoadCA reads the CA cert + private key from disk. This function is
 // only called by the `lobslaw cluster sign-node` subcommand — the main
 // binary never invokes it.
@@ -78,7 +86,7 @@ func SignNodeCert(caCert *x509.Certificate, caKey ed25519.PrivateKey, opts SignO
 		return nil, nil, errors.New("NodeID required")
 	}
 	if opts.ValidFor == 0 {
-		opts.ValidFor = 365 * 24 * time.Hour
+		opts.ValidFor = DefaultNodeCertValidity
 	}
 	now := opts.Now
 	if now.IsZero() {
@@ -186,7 +194,7 @@ func SignOperatorCert(caCert *x509.Certificate, caKey ed25519.PrivateKey, opts S
 		// Shorter than a node's year by default. A person's credential
 		// lives on a laptop that travels; a node's lives on a host
 		// somebody controls.
-		opts.ValidFor = 90 * 24 * time.Hour
+		opts.ValidFor = DefaultOperatorCertValidity
 	}
 	now := opts.Now
 	if now.IsZero() {

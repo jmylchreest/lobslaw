@@ -1,20 +1,35 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 func TestResolveFunctionsAll(t *testing.T) {
 	t.Parallel()
-	got := resolveFunctions(flags{all: true}, &config.Config{})
-	want := allFunctions()
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("--all → %v, want %v", got, want)
+	want := []types.NodeFunction{types.FunctionMemory, types.FunctionCompute, types.FunctionStorage, types.FunctionComputeTeams, types.FunctionUIWeb}
+	for _, args := range [][]string{{"--all"}, {"--all", "--memory"}, {"--all", "--compute-teams", "--ui-web"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var f flags
+			if err := parseFlags(args, &f); err != nil {
+				t.Fatal(err)
+			}
+			for _, cfg := range []*config.Config{{}, {ComputeTeams: config.ComputeTeamsConfig{Enabled: true}, UIWeb: config.UIWebConfig{Enabled: true}}} {
+				got := resolveFunctions(f, cfg)
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("%v → %v, want %v", args, got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -40,12 +55,21 @@ func TestResolveFunctionsFromConfig(t *testing.T) {
 	}
 }
 
+func TestResolveFunctionsOptInFlags(t *testing.T) {
+	t.Parallel()
+	got := resolveFunctions(flags{computeTeams: true, uiWeb: true}, &config.Config{})
+	want := []types.NodeFunction{types.FunctionComputeTeams, types.FunctionUIWeb}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("--compute-teams --ui-web → %v, want %v", got, want)
+	}
+}
+
 func TestResolveFunctionsDefault(t *testing.T) {
 	t.Parallel()
 	got := resolveFunctions(flags{}, &config.Config{})
-	want := allFunctions()
+	want := []types.NodeFunction{types.FunctionMemory, types.FunctionCompute, types.FunctionStorage}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("nothing specified → %v, want %v (all)", got, want)
+		t.Errorf("nothing specified → %v, want %v (defaults)", got, want)
 	}
 }
 
@@ -183,5 +207,62 @@ func TestPolicyDirsSourceLabels(t *testing.T) {
 	}
 	if got := policyDirsSource(nil, &config.Config{}); got != "default-discovery" {
 		t.Errorf("default source label: got %q", got)
+	}
+}
+
+func TestBuildNodeConfigLoadsImpliedMemoryKey(t *testing.T) {
+	creds := backupTestCredentials(t, "storage-node", "operator")
+	const encodedKey = "0101010101010101010101010101010101010101010101010101010101010101"
+	t.Setenv("LOBSLAW_TEST_IMPLIED_MEMORY_KEY", encodedKey)
+	want, err := crypto.ParseKey(encodedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Cluster.MTLS = config.MTLSConfig{CACert: creds.ca, NodeCert: filepath.Join(filepath.Dir(creds.ca), "node.pem"), NodeKey: filepath.Join(filepath.Dir(creds.ca), "node-key.pem")}
+	cfg.Memory.Encryption.KeyRef = "env:LOBSLAW_TEST_IMPLIED_MEMORY_KEY"
+	for _, function := range []types.NodeFunction{types.FunctionStorage, types.FunctionMemory, types.FunctionPolicy} {
+		nodeCfg, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{function}, slog.Default())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nodeCfg.MemoryKey != want {
+			t.Errorf("%s did not load its required memory key", function)
+		}
+	}
+	cfg.Memory.Encryption.KeyRef = ""
+	if _, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{types.FunctionStorage}, slog.Default()); err == nil {
+		t.Fatal("storage-only selection silently skipped missing memory key")
+	}
+	cfg.Auth.RequireAuth = true
+	if _, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{types.FunctionUIWeb}, slog.Default()); err != nil {
+		t.Fatalf("web-only selection acquired a memory dependency: %v", err)
+	}
+}
+
+func TestBuildNodeConfigSelectedConsoleRequiresAuth(t *testing.T) {
+	creds := backupTestCredentials(t, "console-node", "operator")
+	t.Setenv("LOBSLAW_TEST_CONSOLE_MEMORY_KEY", "0101010101010101010101010101010101010101010101010101010101010101")
+	for _, flag := range []string{"--all", "--ui-web"} {
+		for _, authenticated := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/auth=%t", flag, authenticated), func(t *testing.T) {
+				cfg := &config.Config{}
+				cfg.Cluster.MTLS = config.MTLSConfig{CACert: creds.ca, NodeCert: filepath.Join(filepath.Dir(creds.ca), "node.pem"), NodeKey: filepath.Join(filepath.Dir(creds.ca), "node-key.pem")}
+				cfg.Memory.Encryption.KeyRef = "env:LOBSLAW_TEST_CONSOLE_MEMORY_KEY"
+				cfg.Auth.RequireAuth = authenticated
+				var f flags
+				if err := parseFlags([]string{flag}, &f); err != nil {
+					t.Fatal(err)
+				}
+				_, err := buildNodeConfig(cfg, "console-node", resolveFunctions(f, cfg), slog.Default())
+				if authenticated {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if !errors.Is(err, types.ErrInvalidConfig) || !strings.Contains(err.Error(), "require_auth") {
+					t.Fatalf("unauthenticated console should be refused, got %v", err)
+				}
+			})
+		}
 	}
 }

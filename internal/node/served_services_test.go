@@ -53,6 +53,8 @@ func TestEveryDeclaredServiceIsServed(t *testing.T) {
 // somebody checked, which is what the generated code cannot tell us.
 // Grep for Register<name>Server to verify an entry.
 var servedServices = map[string]bool{
+	"UpgradeService":      true,
+	"TaskApprovalService": true,
 	"ArchiveService":      true,
 	"SoulTuneService":     true,
 	"NodeService":         true,
@@ -67,4 +69,6 @@ var servedServices = map[string]bool{
 	"TraceService":        true,
 	"IdentityService":     true,
 	"SessionService":      true,
+	"AgentService":        true,
+	"ConsoleService":      true,
 }

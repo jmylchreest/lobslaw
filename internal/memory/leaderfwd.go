@@ -117,7 +117,7 @@ func (n *RaftNode) SetLeaderDialer(dial LeaderDialer) {
 // cannot log usefully.
 func (n *RaftNode) ApplyOrForward(ctx context.Context, data []byte, timeout time.Duration) (any, error) {
 	if n.IsLeader() {
-		res, err := n.Apply(data, timeout)
+		res, err := n.ApplyContext(ctx, data, timeout)
 		if err == nil {
 			return res, nil
 		}

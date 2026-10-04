@@ -50,6 +50,6 @@ func (t *Transport) RaftTransport() raft.Transport {
 // Register mounts the raft gRPC service on s so that peers can reach
 // this node's raft endpoint over the same server that hosts every
 // other cluster service.
-func (t *Transport) Register(s *grpc.Server) {
+func (t *Transport) Register(s grpc.ServiceRegistrar) {
 	t.mgr.Register(s)
 }

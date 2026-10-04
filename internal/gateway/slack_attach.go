@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -241,7 +240,7 @@ func isSlackIDBody(s string) bool {
 }
 
 func (h *SlackHandler) downloadOne(ctx context.Context, turnDir string, a *types.Attachment) (string, error) {
-	getCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	getCtx, cancel := context.WithTimeout(ctx, slackDownloadTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(getCtx, http.MethodGet, a.Reference, nil)

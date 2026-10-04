@@ -23,6 +23,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute/research"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
@@ -536,6 +537,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Executor:             n.executor,
 		Registry:             n.toolRegistry,
 		SoulSnapshot:         n.soulSnapshot,
+		SoulSnapshotFor:      n.soulSnapshotFor,
 		Soul: func() *types.SoulConfig {
 			s := n.Soul()
 			if s == nil {
@@ -558,6 +560,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		}),
 		Skills:            skillDispatcherOrNil(n.skillAdapter),
 		SkillsProvider:    n.skillIndexProvider(),
+		SkillAllowed:      n.skillAllowed,
 		PinnedProvider:    n.pinnedProvider(),
 		ProposalsProvider: n.proposalsProvider(),
 		// Populated after this stage by wire-review-fork, which needs
@@ -566,12 +569,16 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		TimezoneResolver: n.resolveUserTimezone,
 		BinariesProvider: binariesProvider,
 		ContextBudget:    contextBudgetFromConfig(n.cfg.Compute.Context),
+		Bots:             botResolverOrNil(n.botSvc),
 		Logger:           n.log,
 	})
 	if err != nil {
 		return fmt.Errorf("agent: %w", err)
 	}
 	n.agent = a
+	if n.server != nil {
+		lobslawv1.RegisterAgentServiceServer(n.server, compute.NewTurnServer(a))
+	}
 	return nil
 }
 
@@ -631,7 +638,7 @@ func (n *Node) attachDreamSummarizer() {
 			break
 		}
 	}
-	s := compute.NewDreamSummarizer(n.roleMap.For(compute.RoleSummariser), model, n.log, n.embedder)
+	s := compute.NewDreamSummarizer(n.roleMap.ForWithTimeout(compute.RoleSummariser), model, n.log, n.embedder)
 	if s == nil {
 		return
 	}
@@ -642,7 +649,7 @@ func (n *Node) attachDreamSummarizer() {
 	// own would be a config field nobody sets, which is how the
 	// reranker came to be advertised and never called; when the two
 	// jobs want different models, that is the moment to split them.
-	if a := compute.NewDreamAdjudicator(n.roleMap.For(compute.RoleSummariser), model, n.log); a != nil {
+	if a := compute.NewDreamAdjudicator(n.roleMap.ForWithTimeout(compute.RoleSummariser), model, n.log); a != nil {
 		runner.SetAdjudicator(a, n.embedder)
 		n.log.Info("dream: near-duplicate adjudication enabled", "provider", label, "model", model)
 	}
@@ -1093,7 +1100,7 @@ func (n *Node) seedSessionPruneTask(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("marshal session prune task: %w", err)
 	}
-	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+	if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 		return fmt.Errorf("apply session prune task: %w", err)
 	}
 	n.log.Info("memory: seeded session prune task", "id", taskID, "schedule", schedule)
@@ -1141,7 +1148,7 @@ func (n *Node) runResearchCommitment(ctx context.Context, c *lobslawv1.AgentComm
 	if question == "" {
 		return fmt.Errorf("research: commitment %q missing question", c.Id)
 	}
-	depth := 3
+	depth := research.DefaultDepth
 	if d := c.Params["depth"]; d != "" {
 		if n, err := strconv.Atoi(d); err == nil {
 			depth = n
@@ -1213,7 +1220,7 @@ func (a *researchMemoryAdapter) WriteEpisodic(ctx context.Context, content strin
 		Event:      "research-finding",
 		Context:    content,
 		Tags:       tags,
-		Importance: 7, // research output ranks above default-5
+		Importance: researchFindingImportance, // research output ranks above default-5
 	}
 	resp, err := a.svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{Record: rec})
 	if err != nil {
@@ -1253,6 +1260,23 @@ func schedulerClaims() *types.Claims {
 // return instead of running an empty turn (which would waste a
 // provider call).
 func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.ScheduledTaskRecord) error {
+	if strings.HasPrefix(task.Owner, "bot:") {
+		err := n.dispatchBotSchedule(ctx, task)
+		if err != nil {
+			n.reportScheduleError(ctx, task, err)
+		}
+		return err
+	}
+	shared := task.Params["share_installation"] != "" || strings.HasPrefix(task.Id, "share-")
+	claims, botID, principal := schedulerIdentity(task.Owner)
+	if shared {
+		if err := n.checkSharedTask(ctx, task); err != nil {
+			return err
+		}
+		// Activation delegates the bound owner’s authority. Resolve current
+		// roles on every run so later grants and revocations take effect.
+		claims.Roles = n.resolveUserRoles(claims.UserID)
+	}
 	prompt := task.Params["prompt"]
 	if prompt == "" {
 		return fmt.Errorf("scheduled task %q: params.prompt missing", task.Id)
@@ -1263,7 +1287,9 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 	}
 	req := compute.ProcessMessageRequest{
 		Message:   prompt,
-		Claims:    n.schedulerClaims(task.CreatedBy),
+		Claims:    claims,
+		BotID:     botID,
+		Principal: principal,
 		TurnID:    fmt.Sprintf("task-%s-%d", task.Id, time.Now().UnixNano()),
 		Budget:    budget,
 		Channel:   task.Params["channel"],
@@ -1272,6 +1298,9 @@ func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.Scheduled
 	resp, err := n.agent.RunToolCallLoop(ctx, req)
 	if err != nil {
 		return fmt.Errorf("agent loop: %w", err)
+	}
+	if shared && resp.NeedsConfirmation {
+		return fmt.Errorf("shared task %q requires interactive approval; scheduled run did not complete", task.Id)
 	}
 	n.log.Info("scheduler: agent task completed",
 		"task_id", task.Id,
@@ -1298,9 +1327,12 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 	if err != nil {
 		return fmt.Errorf("budget: %w", err)
 	}
+	claims, botID, principal := schedulerIdentity(c.Owner)
 	req := compute.ProcessMessageRequest{
 		Message:   prompt,
-		Claims:    n.schedulerClaims(c.CreatedFor),
+		Claims:    claims,
+		BotID:     botID,
+		Principal: principal,
 		TurnID:    fmt.Sprintf("commitment-%s-%d", c.Id, time.Now().UnixNano()),
 		Budget:    budget,
 		Channel:   c.Params["channel"],
@@ -1378,15 +1410,32 @@ func serverToolsFromConfig(in []config.ServerToolSpec) []compute.ServerTool {
 	return out
 }
 
-func (n *Node) schedulerClaims(creator string) *types.Claims {
-	if creator == "" {
-		creator = defaultSchedulerCreator
-	}
-	return &types.Claims{
-		UserID: creator,
-		Scope:  "scheduler",
+// schedulerIdentity resolves who a scheduled record runs as.
+//
+// A task or commitment carries its owner, and that owner is the
+// authority the work was created under: a routine a bot created must
+// run AS that bot (its brief, its tools, its memory), and one a person
+// created must run as that person. Previously only CreatedBy was read,
+// which nothing sets, so every routine ran as a generic scheduler turn
+// with no bot profile and no owner.
+func schedulerIdentity(owner string) (*types.Claims, string, identity.Principal) {
+	owner = strings.TrimSpace(owner)
+	switch {
+	case strings.HasPrefix(owner, identity.KindBot+":"):
+		id := strings.TrimPrefix(owner, identity.KindBot+":")
+		principal := identity.Bot(id)
+		return &types.Claims{UserID: principal.String(), Scope: schedulerScope}, id, principal
+	case owner != "":
+		return &types.Claims{
+			UserID: strings.TrimPrefix(owner, identity.KindUser+":"),
+			Scope:  schedulerScope,
+		}, "", ""
+	default:
+		return &types.Claims{UserID: defaultSchedulerCreator, Scope: schedulerScope}, "", ""
 	}
 }
+
+const schedulerScope = "scheduler"
 
 // wireGateway builds the REST server + any channel handlers listed
 // in cfg.Gateway.Channels. The channel list is the extension point:

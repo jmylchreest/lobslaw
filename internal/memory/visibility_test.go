@@ -84,6 +84,15 @@ func TestAudienceAllows(t *testing.T) {
 
 		{"everyone sees private", Everyone(),
 			vec("user:alice", lobslawv1.Visibility_VISIBILITY_PRIVATE), true},
+
+		// A bot reads its own diary and the memory of the human it
+		// serves, and nothing else.
+		{"bot sees own", ForWith(identity.Bot("designer"), alice),
+			vec("bot:designer", lobslawv1.Visibility_VISIBILITY_PRIVATE), true},
+		{"bot sees its owner", ForWith(identity.Bot("designer"), alice),
+			vec("user:alice", lobslawv1.Visibility_VISIBILITY_PRIVATE), true},
+		{"bot does not see another person", ForWith(identity.Bot("designer"), alice),
+			vec("user:bob", lobslawv1.Visibility_VISIBILITY_PRIVATE), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

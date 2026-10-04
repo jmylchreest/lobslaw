@@ -16,9 +16,12 @@ import (
 // PROPOSED artefact and a refinement staged against a live one are
 // both "somebody has to look at this", and the second is invisible in
 // a state filter because the record itself is ACTIVE.
-type pendingReviewSource struct{ store *memory.SelfTaughtStore }
+type pendingReviewSource struct {
+	store *memory.SelfTaughtStore
+	owns  func(context.Context, string, string) bool
+}
 
-func (p pendingReviewSource) Notices(_ context.Context, principal string) ([]gateway.Notice, error) {
+func (p pendingReviewSource) Notices(ctx context.Context, principal string) ([]gateway.Notice, error) {
 	if p.store == nil {
 		return nil, nil
 	}
@@ -29,7 +32,11 @@ func (p pendingReviewSource) Notices(_ context.Context, principal string) ([]gat
 	var proposals, refinements int
 	for _, rec := range live {
 		// Match the review queue: an unowned record is readable by nobody.
-		if principal == "" || rec.GetOwner() != principal {
+		owned := principal != "" && rec.GetOwner() == principal
+		if p.owns != nil {
+			owned = p.owns(ctx, principal, rec.GetOwner())
+		}
+		if !owned {
 			continue
 		}
 		if rec.GetState() == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED {
@@ -84,7 +91,7 @@ func (n *challengeSource) Notices(_ context.Context, principal string) ([]gatewa
 
 	// Capped low. The nudge names one and counts the rest, so
 	// gathering more than a handful is work whose result is a number.
-	found, err := memory.UnresolvedChallenges(n.store, principal, 5)
+	found, err := memory.UnresolvedChallenges(n.store, principal, noticeChallengeLimit)
 	if err != nil {
 		return nil, err
 	}

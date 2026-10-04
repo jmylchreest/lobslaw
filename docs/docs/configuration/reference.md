@@ -101,6 +101,29 @@ client_id_ref     = "env:GITHUB_OAUTH_CLIENT_ID"
 client_secret_ref = "env:GITHUB_OAUTH_CLIENT_SECRET"
 ```
 
+### `[security.google_calendar]`
+
+Disabled by default. This is the per-user Calendar connector; it does not use the
+legacy device flow configured under `[security.oauth.google]`.
+
+```toml
+[security.google_calendar]
+enabled = true
+client_id_ref = "env:LOBSLAW_GOOGLE_CALENDAR_CLIENT_ID"
+client_secret_ref = "env:LOBSLAW_GOOGLE_CALENDAR_CLIENT_SECRET"
+callback_url = "https://assistant.example.com/integrations/google/callback"
+```
+
+The three string fields default to empty and are required when enabled. Both
+credential references accept `env:` or `file:`. The callback must be HTTPS with
+the exact path shown and no query or fragment. Enabling this block does not grant
+users access: configure independent `calendar:connect`, `calendar:read` and,
+optionally, `calendar:write` policies plus tool/command access. Writes always
+require exact confirmation.
+
+See [Google Calendar setup](/features/google-calendar) for the Google client,
+reverse-proxy requirements, copyable policies, and account-linking commands.
+
 ## `[policy]` + `[[policy.rules]]`
 
 ```toml
@@ -707,6 +730,10 @@ roles        = ["operator"]
 [[user.channels]]
 type    = "telegram"
 address = "123456789"
+
+[[user.channels]]
+type    = "rest"
+address = "alice@idp"
 ```
 
 `id` is the canonical principal id — the same value `[identity.aliases]`
@@ -795,6 +822,50 @@ The last one is Go 1.27's leak profile: goroutines blocked on a primitive that
 can no longer be unblocked, found by the garbage collector's reachability
 analysis. Nothing registers it here — `pprof.Index` looks profiles up when the
 request arrives, so profiles a newer Go adds appear on their own.
+
+Environment overrides use `__` between sections and keys. For hyphenated
+sections, use underscores in shell variable names: `LOBSLAW__COMPUTE_TEAMS__ENABLED=true`
+and `LOBSLAW__UI_WEB__ENABLED=true`. `LOBSLAW__UI_WEB__PUBLIC_URL` sets `ui-web.public_url`.
+Existing underscore sections and keys keep their spelling, such as
+`LOBSLAW__SELF_LEARNING__MODE`. Literal hyphenated section names remain accepted
+when supplied by an environment manager; supplying both spellings for the same
+key is an error. Enabling the console through the environment requires the same
+authentication configuration as TOML.
+
+## `[compute-teams]`
+
+Off by default. Enable explicitly with `--compute-teams` or this section;
+`--all` enables it.
+
+```toml
+[compute-teams]
+enabled = true
+```
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `enabled` | `false` | Enable team coordinators, specialist delegation and durable bot inbox processing. Implies local `compute`. |
+
+Ordinary `compute` runs the single assistant without team tools, team seeding or
+inbox draining. Teams remain disabled during restore mode. Team ownership is
+explicit: an unowned team is inaccessible, and channel routing uses an explicit
+binding or the caller's own coordinator.
+
+This gate is independent of `[ui-web]`: enabling teams does not enable the browser
+console. For a web-only node, enable teams on its configured compute backend;
+the backend's gate controls availability of the remote team console.
+
+## `[ui-web]`
+
+Off by default. `--all` enables it. Enabling it does not imply local compute.
+
+```toml
+[ui-web]
+enabled = true
+backend  = "compute-1:7443"   # cluster gRPC of a compute node; required when compute is off
+```
+
+`backend` is the cluster gRPC `host:port` serving `AgentService` and `ConsoleService`. A ui-web node without FunctionCompute fails at boot if this is empty. The browser's data routes, chat streams and approvals are forwarded to the backend; its `compute-teams` gate controls the remote team console. The web node needs neither local compute nor a local team registry.
 
 ## Other sections
 

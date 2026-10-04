@@ -32,6 +32,7 @@ const sidebars: SidebarsConfig = {
       items: [
         "security/threat-model",
         "security/policy-engine",
+        "security/task-approvals",
         "security/hardline-floor",
         "security/trust-tiers",
         "security/sandbox",
@@ -64,6 +65,7 @@ const sidebars: SidebarsConfig = {
         "features/notifications",
         "features/research",
         "features/web-search",
+        "features/google-calendar",
         "features/scheduler",
         "features/council",
         "features/memory",
@@ -77,6 +79,7 @@ const sidebars: SidebarsConfig = {
         "operating/doctor",
         "operating/cert-rotation",
         "operating/cluster-membership",
+        "operating/data-migrations",
       ],
     },
     {

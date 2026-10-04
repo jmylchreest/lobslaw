@@ -43,6 +43,11 @@ type liveNode struct {
 
 // bind registers the shared flags on fs. Call before fs.Parse.
 func (l *liveNode) bind(fs *flag.FlagSet) {
+	l.bindWithTimeout(fs, defaultRPCTimeout)
+}
+
+// bindWithTimeout registers the command default for both execution and help.
+func (l *liveNode) bindWithTimeout(fs *flag.FlagSet, timeout time.Duration) {
 	fs.StringVar(&l.configPath, "config", envOr("LOBSLAW_CONFIG", ""),
 		"path to config.toml; supplies [cluster] advertise_addr and [cluster.mtls] paths")
 	fs.StringVar(&l.contextName, "context", envOr("LOBSLAW_CONTEXT", ""),
@@ -53,7 +58,7 @@ func (l *liveNode) bind(fs *flag.FlagSet) {
 	fs.StringVar(&l.caCert, "ca-cert", "", "CA cert; overrides --config")
 	fs.StringVar(&l.nodeCert, "node-cert", "", "client cert; overrides --config")
 	fs.StringVar(&l.nodeKey, "node-key", "", "client key; overrides --config")
-	fs.DurationVar(&l.timeout, "timeout", 10*time.Second, "per-call timeout")
+	fs.DurationVar(&l.timeout, "timeout", timeout, "per-call timeout")
 }
 
 // dial opens an mTLS connection to the node.

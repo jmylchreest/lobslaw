@@ -136,9 +136,9 @@ func mustNewWebhookWithStub(t *testing.T, secret, reply string) webhookTestEnv {
 	// the test goes through the interface-shaped RunToolCallLoop we
 	// injected via agentShim.
 	h := &WebhookHandler{
-		cfg:   WebhookConfig{Name: "x", SharedSecret: secret, Scope: "test"},
-		agent: agentFromStub(stub),
-		log:   slog.Default(),
+		cfg:    WebhookConfig{Name: "x", SharedSecret: secret, Scope: "test"},
+		runner: agentFromStub(stub),
+		log:    slog.Default(),
 	}
 	return webhookTestEnv{h: h, stub: stub}
 }

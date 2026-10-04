@@ -39,6 +39,7 @@ const MemoryWriteAction = "memory:write"
 
 // gatedTool is what an extra approval check needs to know.
 type gatedTool struct {
+	check    func(context.Context, *types.Claims, map[string]string) error
 	action   string
 	resource string
 	// resolve derives the resource THIS CALL is about from its
@@ -155,6 +156,9 @@ func (e *Executor) CheckGate(ctx context.Context, claims *types.Claims, tool str
 	gate, ok := e.approvalFor(tool)
 	if !ok {
 		return nil
+	}
+	if gate.check != nil {
+		return gate.check(ctx, claims, params)
 	}
 	action, resource, grantable := gate.action, gate.resource, true
 	var labels []commandrisk.RiskLabel
@@ -318,7 +322,7 @@ func MemoryWriteSummary(_ context.Context, params map[string]string) string {
 // mint an allow that outranks it, and it shows up wherever rules show
 // up rather than being invisible behaviour.
 //
-// Priority is deliberately the lowest the type allows. A default that
+// Priority is deliberately below ordinary operator rules. A default that
 // could outrank an operator's rule would not be a default.
 func MemoryWriteApprovalDefault() types.PolicyRule {
 	return types.PolicyRule{
@@ -327,7 +331,7 @@ func MemoryWriteApprovalDefault() types.PolicyRule {
 		Action:   MemoryWriteAction,
 		Resource: "*",
 		Effect:   types.EffectRequireConfirmation,
-		Priority: -1 << 30,
+		Priority: defaultApprovalPriority,
 	}
 }
 
@@ -339,13 +343,13 @@ func MemoryWriteApprovalDefault() types.PolicyRule {
 // to. A nil approvals store subtracts nothing, so the zero value is
 // the safe one.
 func (e *Executor) unapprovedLabels(ctx context.Context, action string, labels []commandrisk.RiskLabel) []commandrisk.RiskLabel {
-	if e.approvals == nil || len(labels) == 0 {
+	if len(labels) == 0 {
 		return labels
 	}
 	remaining := make([]commandrisk.RiskLabel, 0, len(labels))
 	for _, l := range labels {
 		key := RiskGrantResource(l)
-		if key != "" && e.approvals.Granted(ctx, action, key) {
+		if key != "" && e.approvalGranted(ctx, action, key) {
 			continue
 		}
 		remaining = append(remaining, l)

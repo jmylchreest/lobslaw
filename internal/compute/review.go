@@ -82,7 +82,7 @@ type ArtefactSummary struct {
 type ArtefactStore interface {
 	// Existing lists what is already stored, so the fork can name a
 	// refinement target rather than inventing a near-duplicate.
-	Existing(kind string) ([]ArtefactSummary, error)
+	Existing(kind, owner string) ([]ArtefactSummary, error)
 	// Propose records the artefact.
 	Propose(ctx context.Context, a ProposedArtefact) error
 }
@@ -144,7 +144,7 @@ func (f *ReviewFork) shouldReview(req ProcessMessageRequest, toolCalls int) revi
 	// firing, or a research worker. No human in the loop means nothing
 	// to learn about the user — and the fork is expensive enough that
 	// spending it on a cron tick is the wrong trade twice over.
-	if req.Channel == "" {
+	if req.Channel == "" && req.BotID == "" {
 		return out
 	}
 
@@ -157,6 +157,9 @@ func (f *ReviewFork) shouldReview(req ProcessMessageRequest, toolCalls int) revi
 
 	if n := f.skillThreshold(); n > 0 && toolCalls >= n {
 		out.skills = true
+	}
+	if req.BotID != "" {
+		return out
 	}
 	if n := f.memoryThreshold(); n > 0 {
 		key := req.Channel + ":" + req.ChannelID
@@ -203,7 +206,7 @@ func (f *ReviewFork) memoryThreshold() int {
 // review is an LLM call: without the turn's values on it, a failure in
 // the fork is unattributable to the turn that caused it.
 func (f *ReviewFork) Consider(ctx context.Context, req ProcessMessageRequest, messages []Message, toolCalls int) {
-	if f == nil {
+	if f == nil || containsCalendarData(messages) {
 		return
 	}
 	axes := f.shouldReview(req, toolCalls)
@@ -230,7 +233,10 @@ func (f *ReviewFork) Consider(ctx context.Context, req ProcessMessageRequest, me
 }
 
 func (f *ReviewFork) run(ctx context.Context, req ProcessMessageRequest, messages []Message, axes reviewAxes) error {
-	existing, err := f.cfg.Store.Existing(ArtefactSkill)
+	if containsCalendarData(messages) {
+		return nil
+	}
+	existing, err := f.cfg.Store.Existing(ArtefactSkill, ownerOf(req))
 	if err != nil {
 		return fmt.Errorf("read existing artefacts: %w", err)
 	}
@@ -345,6 +351,12 @@ func truncateForDigest(s string) string {
 }
 
 func ownerOf(req ProcessMessageRequest) string {
+	if req.BotID != "" {
+		return "bot:" + req.BotID
+	}
+	if req.Principal != "" {
+		return req.Principal.String()
+	}
 	if req.Claims == nil {
 		return ""
 	}
@@ -392,4 +404,18 @@ func parseReviewDecision(content string) (*reviewDecision, error) {
 		return nil, fmt.Errorf("refine with no target")
 	}
 	return &out, nil
+}
+
+// Calendar results are personal data and may also carry hostile instructions.
+// Do not send a transcript containing these calls to the self-learning fork.
+// This guards identifiable tool data, not arbitrary later user paraphrases.
+func containsCalendarData(messages []Message) bool {
+	for _, m := range messages {
+		for _, call := range m.ToolCalls {
+			if strings.HasPrefix(call.Name, "calendar_") {
+				return true
+			}
+		}
+	}
+	return false
 }

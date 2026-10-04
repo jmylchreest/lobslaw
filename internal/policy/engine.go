@@ -46,7 +46,7 @@ type Engine struct {
 	evalMu     sync.RWMutex
 	evaluators map[string]ConditionEvaluator
 
-	// defaults are config-derived rules held in memory, evaluated
+	// defaults are shipped or config-derived rules held in memory, evaluated
 	// AFTER everything in the store.
 	//
 	// Not written to the rule bucket, deliberately. That bucket is
@@ -167,7 +167,7 @@ func (e *Engine) Evaluate(ctx context.Context, claims *types.Claims, action, res
 	}, nil
 }
 
-// SetDefaults installs config-derived fallback rules.
+// SetDefaults installs shipped or config-derived fallback rules.
 //
 // Replaces rather than appends, so a reload cannot accumulate
 // duplicates of the same setting.
@@ -239,7 +239,11 @@ func (e *Engine) conditionsHold(ctx context.Context, conds []types.Condition) (b
 }
 
 // subjectMatches compares a rule subject like "user:alice",
-// "role:admin", "scope:default", or "*" against the claims.
+// "role:admin", "scope:default", or "*" against the claims. The kinds
+// it knows are matchableSubjectKinds. ValidateSubject checks a rule
+// against that same list before it is written, so a kind that falls
+// through to the default case below should never reach here from a
+// rule this process wrote itself.
 func subjectMatches(subject string, claims *types.Claims) bool {
 	if subject == "" || subject == "*" {
 		return true

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -25,12 +27,12 @@ import (
 
 var (
 	// ErrPromptNotFound is returned for an unknown or purged id.
-	ErrPromptNotFound = errors.New("prompt: not found")
+	ErrPromptNotFound = turn.ErrPromptNotFound
 
 	// ErrPromptResolved means somebody else answered first. Expected
 	// under a double-tap or two channels racing, not an error worth
 	// alarming about.
-	ErrPromptResolved = errors.New("prompt: already resolved")
+	ErrPromptResolved = turn.ErrPromptResolved
 )
 
 // DefaultPromptTTL bounds how long a question waits for an answer.
@@ -240,7 +242,7 @@ func (p *PromptStore) SweepLoop(ctx context.Context, interval time.Duration) err
 // it is short.
 func (p *PromptStore) Wait(ctx context.Context, id string, poll time.Duration) (*lobslawv1.PromptRecord, error) {
 	if poll <= 0 {
-		poll = 250 * time.Millisecond
+		poll = DefaultPromptPollInterval
 	}
 	t := time.NewTicker(poll)
 	defer t.Stop()
@@ -287,7 +289,7 @@ func (p *PromptStore) apply(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("prompt: marshal: %w", err)
 	}
-	res, err := p.raft.Apply(data, 5*time.Second)
+	res, err := p.raft.Apply(data, promptApplyTimeout)
 	if err != nil {
 		return fmt.Errorf("prompt: raft apply: %w", err)
 	}

@@ -97,7 +97,7 @@ func RecoveryStream(logger *slog.Logger) grpc.StreamServerInterceptor {
 // is plenty — request IDs don't need to be globally unique, just
 // distinct across concurrent RPCs on this process.
 func newRequestID() string {
-	var b [8]byte
+	var b [requestIDBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		// rand.Read should never fail on a sane OS; fall back to a
 		// constant so logging keeps functioning.
@@ -121,7 +121,7 @@ func (w *wrappedStream) Context() context.Context { return w.ctx }
 // RaftTransport carries replication: append-entries, votes, snapshot
 // installs. A caller reaching it is participating in consensus, not
 // administering the cluster.
-var PeerOnlyPrefixes = []string{"/RaftTransport/"}
+var PeerOnlyPrefixes = []string{"/RaftTransport/", "/lobslaw.v1.AgentService/", "/lobslaw.v1.ConsoleService/", "/lobslaw.v1.TaskApprovalService/"}
 
 // ErrOperatorNotAPeer is returned when a person's credential is used
 // on a peer-only service.
@@ -174,6 +174,7 @@ func OperatorNotAPeerStream() grpc.StreamServerInterceptor {
 }
 
 func isPeerOnly(fullMethod string) bool {
+	fullMethod = originalPersistenceMethod(fullMethod)
 	for _, p := range PeerOnlyPrefixes {
 		if strings.HasPrefix(fullMethod, p) {
 			return true

@@ -82,7 +82,7 @@ func (s *CredentialService) claimCredential(ctx context.Context, before, after *
 }
 
 func waitCredential(ctx context.Context) error {
-	timer := time.NewTimer(20 * time.Millisecond)
+	timer := time.NewTimer(credentialRefreshPollInterval)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -101,6 +101,9 @@ func (s *CredentialService) editCredentialACL(ctx context.Context, provider, sub
 		}
 		before, err := s.loadCredential(provider, subject)
 		if err != nil {
+			return err
+		}
+		if err := authorizeCredential(ctx, before); err != nil {
 			return err
 		}
 		after := proto.Clone(before).(*lobslawv1.CredentialRecord)

@@ -12,11 +12,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/secrets"
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 )
 
@@ -208,10 +208,10 @@ func (d doctorEnv) checkMemoryKey() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decode base64: %w", err)
 	}
-	if len(raw) != 32 {
-		return "", fmt.Errorf("%d bytes decoded; want 32", len(raw))
+	if len(raw) != crypto.KeySize {
+		return "", fmt.Errorf("%d bytes decoded; want %d", len(raw), crypto.KeySize)
 	}
-	return "32-byte key resolved via " + ref, nil
+	return fmt.Sprintf("%d-byte key resolved via %s", crypto.KeySize, ref), nil
 }
 
 func (d doctorEnv) checkCACert() (string, error) {
@@ -304,7 +304,7 @@ func (d doctorEnv) checkOAuthProviders() (string, error) {
 
 func (d doctorEnv) checkSkillMounts() (string, error) {
 	if len(d.cfg.Storage.Mounts) == 0 {
-		return "no [[storage.mounts]] (skills + clawhub install will fail)", nil
+		return "no [[storage.mounts]] (filesystem skill discovery unavailable; Raft skill staging is independent)", nil
 	}
 	labels := make(map[string]bool, len(d.cfg.Storage.Mounts))
 	for _, m := range d.cfg.Storage.Mounts {
@@ -316,15 +316,7 @@ func (d doctorEnv) checkSkillMounts() (string, error) {
 		}
 		labels[m.Label] = true
 	}
-	if d.cfg.Security.ClawhubBaseURL != "" {
-		target := d.cfg.Security.ClawhubInstallMount
-		if target == "" {
-			target = config.DefaultSkillMountLabel
-		}
-		if !labels[target] {
-			return "", fmt.Errorf("clawhub install mount %q not in [[storage.mounts]]", target)
-		}
-	}
+
 	out := make([]string, 0, len(labels))
 	for l := range labels {
 		out = append(out, l)
@@ -350,7 +342,7 @@ func (d doctorEnv) checkLLMReachable() (string, error) {
 	if first.Endpoint == "" {
 		return "", fmt.Errorf("provider %q has empty endpoint", first.Label)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), doctorProviderProbeTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, first.Endpoint, nil)
 	if err != nil {
