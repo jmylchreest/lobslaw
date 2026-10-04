@@ -82,10 +82,34 @@ the leader using `lobslaw cluster upgrade transfer --context prod --member NODE_
 This feature does not install binaries or automatically remove unavailable members.
 
 New binaries continue using the active contract, including snapshot output. New
-features require explicit activation. Operator certificates need the configured
-`operator` role and explicit policy grants for `cluster.upgrade.read` and
-`cluster.upgrade.write` on `cluster:*`. Peer credentials can inspect local upgrade
-status but cannot request activation. These actions are not agent tools.
+features require explicit activation. A verified operator certificate whose
+identity has the configured `operator` role receives `cluster.upgrade.read` and
+`cluster.upgrade.write` on `cluster:*` by default, including on memory-only nodes.
+No extra allow rules are needed. The grants are separate policy fallbacks: matching
+stored rules take precedence over them, using the normal policy priority order.
+A role claim or JWT alone cannot authorize these RPCs. Peer credentials can inspect
+local upgrade status but cannot request activation. These actions are not agent tools.
+Every mutation still requires an audit admission record and the upgrade safety checks.
+
+For example, keep operator status access but disable upgrade mutations:
+
+```toml
+[[policy.rules]]
+id = "deny-operator-cluster-upgrade-write"
+subject = "role:operator"
+action = "cluster.upgrade.write"
+resource = "cluster:*"
+effect = "deny"
+priority = 100
+```
+
+Use `subject = "user:alice"` to restrict one operator instead. Writes include
+prepare, finalize, abort and leadership transfer. A read deny does not implicitly
+deny writes, or vice versa; deny both actions to restrict both permissions. Existing
+explicit grants continue to work; choose a deny priority above any matching explicit
+allow rule. During a mixed-version rollout, older binaries still need explicit
+grants, so retain those grants until every serving node has the new defaults.
+Default permissions do not activate a contract automatically.
 
 ```sh
 lobslaw cluster upgrade status --context prod
