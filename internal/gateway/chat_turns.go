@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -26,10 +27,21 @@ const (
 )
 
 type chatTurnRequest struct {
-	ID        string `json:"id"`
-	Bot       string `json:"bot,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	Message   string `json:"message"`
+	ID        string   `json:"id"`
+	Bot       string   `json:"bot,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
+	Message   string   `json:"message"`
+	UploadIDs []string `json:"upload_ids,omitempty"`
+}
+
+type chatFile struct {
+	Name string `json:"name"`
+	MIME string `json:"mime"`
+	Size int    `json:"size"`
+}
+
+func sameChatRequest(a, b chatTurnRequest) bool {
+	return a.ID == b.ID && a.Bot == b.Bot && a.SessionID == b.SessionID && a.Message == b.Message && slices.Equal(a.UploadIDs, b.UploadIDs)
 }
 
 type chatTurn struct {
@@ -40,6 +52,7 @@ type chatTurn struct {
 	Data      json.RawMessage `json:"data,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
 	UpdatedAt time.Time       `json:"updated_at"`
+	Files     []chatFile      `json:"files,omitempty"`
 	cancel    context.CancelFunc
 }
 
@@ -180,6 +193,8 @@ func (t *chatTurns) save(turn *chatTurn) error {
 func copyChatTurn(turn *chatTurn) *chatTurn {
 	copy := *turn
 	copy.Data = append(json.RawMessage(nil), turn.Data...)
+	copy.UploadIDs = append([]string(nil), turn.UploadIDs...)
+	copy.Files = append([]chatFile(nil), turn.Files...)
 	copy.cancel = nil
 	return &copy
 }
@@ -213,12 +228,12 @@ func (t *chatTurns) latest(owner, bot, session string) *chatTurn {
 }
 
 // Create is idempotent before execution starts, including after a lost HTTP response.
-func (t *chatTurns) create(owner string, request chatTurnRequest, cancel context.CancelFunc) (*chatTurn, bool, error) {
+func (t *chatTurns) create(owner string, request chatTurnRequest, cancel context.CancelFunc, files ...chatFile) (*chatTurn, bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := chatTurnKey(owner, request.ID)
 	if old := t.entries[key]; old != nil {
-		if old.chatTurnRequest != request {
+		if !sameChatRequest(old.chatTurnRequest, request) {
 			return nil, false, errors.New("request id already used for a different message")
 		}
 		return copyChatTurn(old), false, nil
@@ -247,6 +262,7 @@ func (t *chatTurns) create(owner string, request chatTurnRequest, cancel context
 	}
 	now := time.Now().UTC()
 	turn := &chatTurn{chatTurnRequest: request, Owner: owner, State: "running", CreatedAt: now, UpdatedAt: now, cancel: cancel}
+	turn.Files = files
 	if err := t.save(turn); err != nil {
 		return nil, false, err
 	}

@@ -428,6 +428,32 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .composer .ta { resize: none; max-height: 136px; }
 .stop-response { color: var(--mid); }
 .stop-icon { display: inline-block; width: 9px; height: 9px; border-radius: 1px; background: currentColor; }
+.attach-button { width: 40px; padding: 8px; align-self: flex-end; }
+.attach-button svg { width: 22px; height: 22px; }
+.attach-button svg path, .file-icon path { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.attachment-tray { max-width: 720px; margin: 0 auto 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(270px, 100%), 1fr)); gap: 8px; max-height: 220px; overflow-y: auto; }
+.attachment-card { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 9px; border: 1px solid var(--edge-hi); border-radius: var(--r); background: var(--s2); }
+.attachment-card.failed { border-color: var(--bad); }
+.attachment-name { display: block; font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+.attachment-meta { display: block; font-size: 11px; color: var(--low); margin-top: 3px; }
+.file-preview, .file-icon { width: 44px; height: 44px; flex-shrink: 0; border-radius: 5px; object-fit: cover; }
+.file-icon { padding: 8px; background: var(--s3); color: var(--mid); }
+.attachment-remove { padding: 0 5px; width: 28px; min-height: 28px !important; font-size: 20px; }
+.attachment-card progress { display: block; width: 100%; height: 5px; margin-top: 8px; accent-color: var(--brand); }
+.attachment-error, .upload-error { display: block; font-size: 12px; color: var(--bad); line-height: 1.5; overflow-wrap: anywhere; }
+.upload-error { max-width: 720px; margin: 0 auto 8px; }
+.drop-active { box-shadow: inset 0 0 0 2px var(--brand); background: var(--s2); }
+.message-files { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; white-space: normal; }
+.message-file { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.message-file b { display: block; font-weight: 550; font-size: 12px; overflow-wrap: anywhere; }
+.message-file small { display: block; font-size: 11px; color: var(--low); }
+.message-file .file-preview { width: 56px; height: 56px; }
+@media (max-width: 860px) {
+  .composer-in { gap: 7px; }
+  .attach-button { width: 36px; padding: 6px; }
+  .attachment-tray { max-height: 142px; }
+  .attachment-remove { min-width: 36px; min-height: 36px !important; }
+}
 .chat-error .btn { margin-top: 8px; }
 .chat-reconnecting { padding: 8px 20px; background: var(--s2); color: var(--warn); font-size: 12px; flex-shrink: 0; }
 .thread { overscroll-behavior-y: contain; }

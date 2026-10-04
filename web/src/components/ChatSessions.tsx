@@ -1,12 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError, api, botReply, type ChatTurn, type TaskMessage, type ToolReceipt } from "../api";
 import { useFeedback } from "./Motion";
+import type { MessageFile } from "../uploads";
+import { useUploadAcceptance } from "./Uploads";
 
 export interface ChatMessage {
   kind: "said"; id: string; from: "me" | "bot"; text: string; at: number;
   notice?: boolean; animate?: boolean; pending?: boolean; recovered?: boolean;
   tools?: string[]; attempts?: string[]; tokens?: number; cost?: number; sessionId?: string;
   transcript?: TaskMessage[]; receipts?: ToolReceipt[];
+  files?: MessageFile[];
 }
 interface ChatSession {
   messages: ChatMessage[]; historyLoaded: boolean; busy: boolean; working: boolean; draft: string;
@@ -17,7 +20,7 @@ interface ChatSession {
 const empty: ChatSession = { messages: [], historyLoaded: false, busy: false, working: false, draft: "", partial: "", liveReply: null, turnId: null, notice: "", error: null, ask: null, reconnecting: false };
 const ChatContext = createContext<{
   sessions: Record<string, ChatSession>;
-  send: (botId: string, text: string, name: string) => Promise<void>;
+  send: (botId: string, text: string, name: string, uploadIDs?: string[], files?: MessageFile[]) => Promise<void>;
   stop: (botId: string) => void;
   recover: (botId: string, name: string) => Promise<void>;
   history: (botId: string, messages: ChatMessage[]) => void;
@@ -42,6 +45,7 @@ export function ChatSessionsProvider({ children }: { children: ReactNode }) {
   const discovered = useRef(new Set<string>());
   const mounted = useRef(true);
   const notify = useFeedback();
+  const acceptUploads = useUploadAcceptance();
   const update = useCallback((id: string, fn: (session: ChatSession) => ChatSession) => {
     if (mounted.current) setSessions((current) => ({ ...current, [id]: fn(current[id] ?? empty) }));
   }, []);
@@ -60,7 +64,7 @@ export function ChatSessionsProvider({ children }: { children: ReactNode }) {
       const recordedReply = String(data.text ?? data.reply ?? "");
       const recordedPair = recovered && s.historyLoaded && turn.state === "completed" && messages.at(-2)?.from === "me" && messages.at(-2)?.text === turn.message && messages.at(-1)?.from === "bot" && messages.at(-1)?.text === recordedReply;
       if (!messages.some((message) => message.id === `message-${turn.id}`) && !recordedPair) {
-        messages = [...messages, { kind: "said", id: `message-${turn.id}`, from: "me", text: turn.message, at, recovered, animate: !recovered }];
+        messages = [...messages, { kind: "said", id: `message-${turn.id}`, from: "me", text: turn.message, at, recovered, animate: !recovered, files: turn.files }];
       }
       const active = turn.state === "running" || turn.state === "waiting";
       const common = { ...s, messages, turnId: turn.id, busy: active, working: active, reconnecting: false, error: null,
@@ -120,15 +124,15 @@ export function ChatSessionsProvider({ children }: { children: ReactNode }) {
     } catch { discovered.current.delete(botId); }
   }, [watch]);
 
-  const send = useCallback(async (botId: string, text: string, name: string) => {
-    if (!text.trim() || watchers.current.has(botId)) return;
+  const send = useCallback(async (botId: string, text: string, name: string, uploadIDs: string[] = [], files: MessageFile[] = []) => {
+    if ((!text.trim() && !uploadIDs.length) || watchers.current.has(botId)) return;
     const controller = new AbortController(); watchers.current.set(botId, controller);
     update(botId, (s) => ({ ...s, busy: true, working: true, error: null, notice: "Sending your message…" }));
     const id = requestID();
     try {
       // Retrying the same id recovers a lost creation response, never a second turn.
       let turn: ChatTurn;
-      try { turn = await api.createChatTurn(id, botId, text); }
+      try { turn = await api.createChatTurn(id, botId, text, undefined, uploadIDs); }
       catch (error) {
         if (error instanceof ApiError && error.status === 409) {
           const latest = await api.latestChatTurn(botId);
@@ -136,16 +140,17 @@ export function ChatSessionsProvider({ children }: { children: ReactNode }) {
           await watch(botId, latest.turn, name, controller, true); return;
         }
         if (error instanceof ApiError) throw error;
-        try { turn = await api.createChatTurn(id, botId, text); }
+        try { turn = await api.createChatTurn(id, botId, text, undefined, uploadIDs); }
         catch { turn = await api.chatTurn(id); }
       }
       if (!mounted.current) return;
-      update(botId, (s) => ({ ...s, draft: "" }));
+      acceptUploads(botId ? `bot:${botId}` : "assistant", uploadIDs);
+      update(botId, (s) => ({ ...s, draft: "", messages: [...s.messages, { kind: "said", id: `message-${turn.id}`, from: "me", text, at: Date.parse(turn.created_at), animate: true, files }] }));
       await watch(botId, turn, name, controller, false);
     } catch (error) {
       if (mounted.current) update(botId, (s) => ({ ...s, busy: false, liveReply: null, error: error as Error }));
     } finally { if (watchers.current.get(botId) === controller) watchers.current.delete(botId); }
-  }, [update, watch]);
+  }, [update, watch, acceptUploads]);
 
   const stop = useCallback((botId: string) => {
     const id = sessionsRef.current[botId]?.turnId;

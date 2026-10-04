@@ -46,6 +46,7 @@ const server = createServer(async (req, res) => {
       if (req.method === "DELETE") Object.assign(turn, { state: "cancelled", data: { message: "Response stopped" } });
       return respond(turn);
     }
+    if (path === "/v1/uploads") return respond({ enabled: false, max_bytes: 33554432, max_files: 16, media_types: [] });
     if (path === "/v1/capabilities") return respond({ compute: { available: true }, "compute-teams": { enabled: true }, "ui-web": { enabled: true } });
     if (path === "/v1/groups") return respond({ groups });
     if (path === "/v1/activity") return respond({ items: feed });

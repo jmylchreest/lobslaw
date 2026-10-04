@@ -47,7 +47,7 @@ func (s *Server) ChatConsole(in *pb.ChatConsoleRequest, stream grpc.ServerStream
 	claims, _ := ctx.Value(forwardedConsoleIdentity{}).(*types.Claims)
 	sink := &consoleEvents{stream: stream, cancel: cancel}
 	if in.GetBot() != "" {
-		err = s.runBotChat(ctx, claims, in.Bot, in.Message, func() (chatEmitter, error) {
+		err = s.runBotChat(ctx, claims, in.Bot, in.Message, nil, func() (chatEmitter, error) {
 			return func(name string, payload proto.Message) { _ = sink.event(name, payload) }, nil
 		})
 	} else {

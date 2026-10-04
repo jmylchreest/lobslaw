@@ -22,7 +22,7 @@ type taskEvidenceEvent struct{ *pb.ConsoleBotReply }
 
 type chatEmitter func(string, proto.Message)
 
-func (s *Server) runBotChat(ctx context.Context, claims *types.Claims, botID, message string, begin func() (chatEmitter, error)) error {
+func (s *Server) runBotChat(ctx context.Context, claims *types.Claims, botID, message string, attachments []types.Attachment, begin func() (chatEmitter, error)) error {
 	if s.runner == nil {
 		return status.Error(codes.Unavailable, "this node cannot run turns")
 	}
@@ -38,7 +38,7 @@ func (s *Server) runBotChat(ctx context.Context, claims *types.Claims, botID, me
 		userID = claims.UserID
 	}
 	sessionRef := SessionRef{Channel: botChannel, ChannelID: botID, UserID: userID}
-	lease, disposition := s.gate.Acquire(ctx, cacheKey(sessionRef), turnID, message)
+	lease, disposition := s.gate.acquire(ctx, cacheKey(sessionRef), turnID, message, len(attachments) > 0)
 	if disposition == Folded {
 		return errChatFolded
 	}
@@ -83,8 +83,9 @@ func (s *Server) runBotChat(ctx context.Context, claims *types.Claims, botID, me
 	prior := s.conv.Load(ctx, sessionRef)
 
 	req := turn.Request{
-		Message: message,
-		Claims:  claims,
+		Attachments: attachments,
+		Message:     message,
+		Claims:      claims,
 		// The bot's principal, so its memory belongs to it; the claims
 		// stay the operator's, so policy still answers to the person
 		// who asked.

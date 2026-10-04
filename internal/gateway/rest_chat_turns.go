@@ -68,8 +68,13 @@ func (s *Server) handleChatTurns(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusMethodNotAllowed, "GET or POST required")
 		return
 	}
+	s.createRetainedChatTurn(w, r, authn)
+}
+
+func (s *Server) createRetainedChatTurn(w http.ResponseWriter, r *http.Request, authn requestAuth) {
+	owner := authn.Claims.UserID
 	var request chatTurnRequest
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, restMessageBodyLimit)).Decode(&request) != nil || !chatRequestID.MatchString(request.ID) || strings.TrimSpace(request.Message) == "" || len(request.Message) > chatTurnMaxBytes/2 {
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, restMessageBodyLimit)).Decode(&request) != nil || !chatRequestID.MatchString(request.ID) || (strings.TrimSpace(request.Message) == "" && len(request.UploadIDs) == 0) || len(request.Message) > chatTurnMaxBytes/2 || len(request.UploadIDs) > restMessageMaxUploads {
 		s.jsonErr(w, http.StatusBadRequest, "request id and a bounded message are required")
 		return
 	}
@@ -92,6 +97,29 @@ func (s *Server) handleChatTurns(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusServiceUnavailable, "chat unavailable")
 		return
 	}
+	// Replays can outlive temporary uploads. Recover admitted work before pinning
+	// files again; never execute another copy after an upload expires.
+	if existing := s.chatTurns.get(owner, request.ID); existing != nil {
+		if !sameChatRequest(existing.chatTurnRequest, request) {
+			s.jsonErr(w, http.StatusConflict, "request id already used for a different message")
+			return
+		}
+		respondJSON(w, http.StatusAccepted, existing)
+		return
+	}
+	if len(request.UploadIDs) > 0 && s.cfg.RemoteConsole != nil {
+		s.jsonErr(w, http.StatusServiceUnavailable, "uploads are unavailable on remote console gateways")
+		return
+	}
+	attachments, releaseUploads, err := s.uploads.acquire(owner, request.UploadIDs, time.Now())
+	if err != nil {
+		s.jsonErr(w, http.StatusNotFound, errUploadUnavailable.Error())
+		return
+	}
+	files := make([]chatFile, 0, len(attachments))
+	for _, attachment := range attachments {
+		files = append(files, chatFile{Name: attachment.Filename, MIME: attachment.MimeType, Size: attachment.Size})
+	}
 	ctx, timeout := context.WithTimeout(s.chatTurns.ctx, chatTurnTimeout)
 	expiry := authn.Claims.ExpiresAt
 	if authn.LoginID != "" {
@@ -109,16 +137,18 @@ func (s *Server) handleChatTurns(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, untrack := s.bindStream(ctx, authn.LoginID)
 	stop := func() { untrack(); timeout() }
-	turn, created, err := s.chatTurns.create(owner, request, stop)
+	turn, created, err := s.chatTurns.create(owner, request, stop, files...)
 	if err != nil {
 		stop()
+		releaseUploads()
 		s.jsonErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	if !created {
 		stop()
+		releaseUploads()
 	} else {
-		go s.executeChatTurn(ctx, authn.Claims, request, stop)
+		go s.executeChatTurn(ctx, authn.Claims, request, attachments, releaseUploads, stop)
 	}
 	respondJSON(w, http.StatusAccepted, turn)
 }
@@ -144,9 +174,13 @@ func (s *Server) chatTurnVisible(ctx context.Context, claims *types.Claims, bot 
 	return true
 }
 
-func (s *Server) executeChatTurn(ctx context.Context, claims *types.Claims, request chatTurnRequest, stop context.CancelFunc) {
+func (s *Server) executeChatTurn(ctx context.Context, claims *types.Claims, request chatTurnRequest, attachments []types.Attachment, releaseUploads func(), stop context.CancelFunc) {
 	defer s.chatTurns.wg.Done()
 	defer stop()
+	defer releaseUploads()
+	if strings.TrimSpace(request.Message) == "" {
+		request.Message = "Please examine the attached files."
+	}
 	emit := func(event string, payload proto.Message) {
 		if ctx.Err() != nil {
 			return
@@ -187,10 +221,10 @@ func (s *Server) executeChatTurn(ctx context.Context, claims *types.Claims, requ
 			}
 		}
 	case request.Bot != "":
-		err = s.runBotChat(ctx, claims, request.Bot, request.Message, func() (chatEmitter, error) { return emit, nil })
+		err = s.runBotChat(ctx, claims, request.Bot, request.Message, attachments, func() (chatEmitter, error) { return emit, nil })
 	default:
 		var result messageResponse
-		result, err = s.runConsoleChat(ctx, claims, messageRequest{Message: request.Message, SessionID: request.SessionID, TurnID: request.ID}, nil, func() chatResponder { return &retainedResponder{emit: emit} })
+		result, err = s.runConsoleChat(ctx, claims, messageRequest{Message: request.Message, SessionID: request.SessionID, TurnID: request.ID}, attachments, func() chatResponder { return &retainedResponder{emit: emit} })
 		if err == nil {
 			emit("final", protoMessageResponse(result))
 		}

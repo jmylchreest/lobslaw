@@ -12,6 +12,8 @@ import { CheckIcon, Chevron, Collapse, Disclosure, StateText, StatusMark, useFee
 import { useBotChat, type ChatMessage } from "../components/ChatSessions";
 import { Composer } from "../components/Composer";
 import { SourceText } from "../components/SourceContent";
+import { MessageFiles } from "../components/Uploads";
+import type { MessageFile } from "../uploads";
 
 /** One bot, one room.
  *
@@ -129,7 +131,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
     if (settings) threadPane.current?.scrollTo({ top: 0, behavior: "auto" });
   }, [settings]);
 
-  const send = () => void sendMessage(botId, draft.trim(), bot?.display_name || botId);
+  const send = (ids: string[] = [], files: MessageFile[] = []) => void sendMessage(botId, draft.trim(), bot?.display_name || botId, ids, files);
 
   if (error) return <div className="wrap"><Err error={error} /></div>;
   if (loading && !bot) return <Spinner />;
@@ -219,7 +221,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
       </div>
 
       <Collapse open={!settings} className="composer-reveal">
-        <Composer draft={draft} onChange={setDraft} onSend={send} busy={busy} onStop={() => stop(botId)} placeholder={`Message ${bot.display_name || bot.id}…`} />
+        <Composer conversation={`bot:${botId}`} draft={draft} onChange={setDraft} onSend={send} busy={busy} onStop={() => stop(botId)} placeholder={`Message ${bot.display_name || bot.id}…`} />
       </Collapse>
     </div>
   );
@@ -368,7 +370,7 @@ function Working({ active }: { active: boolean }) {
 
 function Said({ e, bot }: { e: Extract<Entry, { kind: "said" }>; bot: Bot }) {
   if (e.from === "me") {
-    return <div className={`msg me${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}><div className="bubble">{e.text}</div></div>;
+    return <div className={`msg me${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}><div className="bubble"><MessageFiles files={e.files} />{e.text}</div></div>;
   }
   return (
     <div className={`msg${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}>

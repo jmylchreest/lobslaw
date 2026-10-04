@@ -18,9 +18,11 @@ import { FeedbackProvider, NavigationMarker, switchView, useFeedback } from "./c
 import { ChatSessionsProvider, useBotChat, useChatSessions } from "./components/ChatSessions";
 import { Composer } from "./components/Composer";
 import { BotDirectory } from "./components/BotDirectory";
+import { MessageFiles, UploadsProvider } from "./components/Uploads";
+import type { MessageFile } from "./uploads";
 
 export function App() {
-  return <FeedbackProvider><LoginGate><ChatSessionsProvider><Console /></ChatSessionsProvider></LoginGate></FeedbackProvider>;
+  return <FeedbackProvider><LoginGate><UploadsProvider><ChatSessionsProvider><Console /></ChatSessionsProvider></UploadsProvider></LoginGate></FeedbackProvider>;
 }
 
 /** Console decides which console this node can render.
@@ -411,7 +413,7 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
     bottom.current?.scrollIntoView({ block: "end" });
   }, [lines, notice]);
 
-  const send = () => void sendMessage("", draft.trim(), "Assistant");
+  const send = (ids: string[] = [], files: MessageFile[] = []) => void sendMessage("", draft.trim(), "Assistant", ids, files);
 
   return (
     <Frame>
@@ -426,7 +428,7 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
       <div className="thread" tabIndex={0} aria-label="Conversation"><div className="thread-in">
         {lines.map((line, i) => (
           <div key={i} className={`msg message-arrival${line.from === "me" ? " me" : ""}`} data-role={line.from}>
-            {line.from === "bot" ? <><Mascot id="assistant" size={30} /><div className="grow txt"><Markdown>{line.text}</Markdown></div></> : <div className="bubble">{line.text}</div>}
+            {line.from === "bot" ? <><Mascot id="assistant" size={30} /><div className="grow txt"><Markdown>{line.text}</Markdown></div></> : <div className="bubble"><MessageFiles files={line.files} />{line.text}</div>}
           </div>
         ))}
         {busy && <div className="msg message-arrival"><Mascot id="assistant" size={30} working /><div className="waiting"><span className="dots" aria-hidden="true"><i /><i /><i /></span>{notice || "Working"}</div></div>}
@@ -441,7 +443,7 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
             : <Err error={error} />}
         </div>
       )}
-      <Composer draft={draft} onChange={(value) => setDraft("", value)} onSend={send} busy={busy} onStop={() => stop("")} disabled={!computeOn} />
+      <Composer conversation="assistant" draft={draft} onChange={(value) => setDraft("", value)} onSend={send} busy={busy} onStop={() => stop("")} disabled={!computeOn} />
       </div>
     </Frame>
   );

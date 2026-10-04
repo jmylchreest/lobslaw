@@ -32,6 +32,7 @@ try {
     let json;
     const allowed = actor === "owner-user" || actor === "owner-operator";
     if (path === "/v1/session") json = { user_id: actor };
+    else if (path === "/v1/uploads") json = { enabled: false, max_bytes: 33554432, max_files: 16, media_types: [] };
     else if (path === "/v1/capabilities") json = { compute: { available: true }, "compute-teams": { enabled: teams }, "ui-web": { enabled: true } };
     else if (path === "/v1/bots") json = { bots: [] };
     else if (path === "/v1/groups") json = { groups: [] };
