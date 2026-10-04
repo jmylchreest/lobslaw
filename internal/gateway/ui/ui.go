@@ -1,3 +1,5 @@
+//go:build !no_web
+
 // Package ui serves the embedded web console.
 //
 // The React build is compiled into the binary, so an operator gets the
@@ -14,6 +16,9 @@ import (
 	"path"
 	"strings"
 )
+
+// Supported is independent of whether the assets were built before compiling.
+const Supported = true
 
 //go:embed all:dist
 var dist embed.FS

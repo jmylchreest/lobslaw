@@ -2710,6 +2710,7 @@ message QueryConsoleRequest {
   }
 }
 message ConsoleCapability {
+  bool supported = 5;
   bool enabled = 1;
   bool authorised = 2;
   bool configured = 3;

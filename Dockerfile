@@ -21,6 +21,8 @@
 # Dockerfile.tools — that ships ~120MB with the broader runtime.
 
 ARG GO_VERSION=1.27
+# BuildKit skips the Node stage entirely for WEB_VARIANT=no-web.
+ARG WEB_VARIANT=with-web
 
 # ---- Web console ---------------------------------------------------
 # The console is a separate build with a separate toolchain, so it gets
@@ -44,7 +46,7 @@ COPY web/ ./
 RUN mkdir -p /internal/gateway/ui && npm run build
 
 # ---- Build stage ---------------------------------------------------
-FROM golang:${GO_VERSION} AS build
+FROM golang:${GO_VERSION} AS build-source
 
 WORKDIR /src
 
@@ -55,9 +57,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY . .
 
+FROM build-source AS build-input-no-web
+ARG GO_BUILD_TAGS=no_web
+
+FROM build-source AS build-input-with-web
+ARG GO_BUILD_TAGS=
+
 # The built console, over the gitignored empty directory that go:embed
 # would otherwise pick up.
 COPY --from=web /internal/gateway/ui/dist/ ./internal/gateway/ui/dist/
+
+FROM build-input-${WEB_VARIANT} AS build
+ARG GO_BUILD_TAGS
 
 ARG VERSION=dev
 ARG COMMIT=unknown
@@ -92,7 +103,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     BUILD_DATE=${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)} && \
     CGO_ENABLED=0 GOOS=linux GOEXPERIMENT=${GOEXPERIMENT} go build \
-        -trimpath \
+        -trimpath -tags "${GO_BUILD_TAGS}" \
         -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
         -o /out/lobslaw \
         ./cmd/lobslaw

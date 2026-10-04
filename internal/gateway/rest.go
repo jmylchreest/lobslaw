@@ -31,6 +31,8 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	// UIWebEnabled records runtime intent even when this binary excludes web support.
+	UIWebEnabled  bool
 	RemoteConsole lobslawv1.ConsoleServiceClient
 	// IncomingDir holds temporary, owner-bound REST media uploads.
 	IncomingDir string
