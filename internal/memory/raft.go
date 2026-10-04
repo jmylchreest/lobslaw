@@ -60,6 +60,9 @@ type RaftConfig struct {
 // operate on the inner fields directly — use the Apply/Shutdown
 // methods.
 type RaftNode struct {
+	controlMu    sync.Mutex
+	upgradeProbe func(context.Context, raft.Server) (*UpgradePeer, error)
+
 	Raft      *raft.Raft
 	transport raft.Transport
 	logStore  *raftboltdb.BoltStore
@@ -440,6 +443,28 @@ func nonZeroDur(v, fallback time.Duration) time.Duration {
 // raft.ServerAddress) join as a voting member. Must be called on the
 // leader.
 func (n *RaftNode) AddVoter(id raft.ServerID, addr raft.ServerAddress) error {
+	n.controlMu.Lock()
+	defer n.controlMu.Unlock()
+	if err := n.Raft.Barrier(addVoterTimeout).Error(); err != nil {
+		return err
+	}
+	state, err := n.fsm.store.ContractState()
+	if err != nil {
+		return err
+	}
+	if state.Prepared != nil {
+		return fmt.Errorf("membership is frozen by upgrade %s", state.Prepared.ID)
+	}
+	if n.upgradeProbe != nil {
+		peer, err := n.upgradeProbe(context.Background(), raft.Server{ID: id, Address: addr})
+		if err != nil {
+			return err
+		}
+		if err := peer.supports(state.Required()); err != nil {
+			return err
+		}
+	}
+
 	future := n.Raft.AddVoter(id, addr, 0, addVoterTimeout)
 	return future.Error()
 }
@@ -509,6 +534,18 @@ func (n *RaftNode) LeaderAddress() raft.ServerAddress {
 // Apply serialises data through Raft consensus. Returns the FSM's
 // Apply return value on success.
 func (n *RaftNode) Apply(data []byte, timeout time.Duration) (any, error) {
+	n.controlMu.Lock()
+	defer n.controlMu.Unlock()
+	if err := n.Raft.Barrier(timeout).Error(); err != nil {
+		return nil, err
+	}
+	if err := n.validateProposal(data); err != nil {
+		return nil, err
+	}
+	return n.applyRaw(data, timeout)
+}
+
+func (n *RaftNode) applyRaw(data []byte, timeout time.Duration) (any, error) {
 	var err error
 	data, err = dataformat.CurrentLog(data)
 	if err != nil {

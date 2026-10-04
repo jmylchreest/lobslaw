@@ -47,6 +47,12 @@ func validateLogEntrySupport(entry *lobslawv1.LogEntry) error {
 	if entry.SchemaVersion > dataformat.LogVersion {
 		return fmt.Errorf("unsupported log schema %d", entry.SchemaVersion)
 	}
+	if entry.GetUpgrade() != nil {
+		if entry.Op != lobslawv1.LogOp_LOG_OP_PUT {
+			return errors.New("upgrade requires PUT")
+		}
+		return nil
+	}
 	switch entry.Op {
 	case lobslawv1.LogOp_LOG_OP_PUT:
 		switch entry.Payload.(type) {

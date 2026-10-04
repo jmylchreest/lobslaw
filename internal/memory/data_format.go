@@ -41,6 +41,9 @@ func readStateFormat(tx *bolt.Tx) (StateFormat, error) {
 }
 
 func validateStateFormat(tx *bolt.Tx, cipher *crypto.Cipher, validateRecords bool) (StateFormat, error) {
+	if _, err := readContract(tx); err != nil {
+		return StateFormat{}, err
+	}
 	format, err := readStateFormat(tx)
 	if err != nil {
 		return format, err

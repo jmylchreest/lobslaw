@@ -2055,6 +2055,7 @@ message LogEntry {
     // Durable encrypted connector preferences; no expiry, separate from flows.
     IntegrationStateRecord integration_settings = 39;
     TaskApprovalRecord task_approval = 50;
+    UpgradeCommand upgrade = 1001;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -2551,4 +2552,37 @@ message RecoverTaskApprovalResponse {
 }
 message CheckGrantTaskApprovalResponse {
   bool granted = 1;
+}
+
+// Upgrade control is deliberately stable across supported data contracts.
+service UpgradeService {
+  rpc UpgradeStatus(UpgradeStatusRequest) returns (UpgradeStatusResponse);
+  rpc ChangeUpgrade(ChangeUpgradeRequest) returns (UpgradeStatusResponse);
+}
+message UpgradeStatusRequest {}
+message UpgradeStatusResponse {
+  string node_id = 1;
+  repeated uint32 supported_contracts = 2;
+  uint32 active_contract = 3;
+  uint64 epoch = 4;
+  UpgradeCommand prepared = 5;
+  uint64 prepared_index = 6;
+  uint64 applied_index = 7;
+  string leader_address = 8;
+}
+// Only an authenticated operator can request a transition. The leader supplies
+// membership fields; callers cannot supply their own readiness attestations.
+message ChangeUpgradeRequest {
+  string action = 1;
+  string transition_id = 2;
+  uint64 expected_epoch = 3;
+  uint32 target = 4;
+}
+message UpgradeCommand {
+  string action = 1;
+  string transition_id = 2;
+  uint64 expected_epoch = 3;
+  uint32 target = 4;
+  uint64 membership_index = 5;
+  repeated string member_ids = 6;
 }
