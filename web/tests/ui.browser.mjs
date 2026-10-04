@@ -46,6 +46,7 @@ try {
       "/v1/activity": { items: [] },
       "/v1/learned-reviews": { reviews: [] },
       "/v1/task-approvals": { records: [] },
+      "/v1/chat-turns": { turn: null },
     };
     assert.ok(path in responses, `Unexpected API request: ${path}`);
     await route.fulfill({ json: responses[path] });

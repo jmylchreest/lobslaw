@@ -429,6 +429,7 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .stop-response { color: var(--mid); }
 .stop-icon { display: inline-block; width: 9px; height: 9px; border-radius: 1px; background: currentColor; }
 .chat-error .btn { margin-top: 8px; }
+.chat-reconnecting { padding: 8px 20px; background: var(--s2); color: var(--warn); font-size: 12px; flex-shrink: 0; }
 .thread { overscroll-behavior-y: contain; }
 .settings-actions { flex-wrap: wrap; }
 .btn.danger { color: var(--bad); border-color: rgba(255, 90, 95, 0.25); }

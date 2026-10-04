@@ -36,6 +36,11 @@ export type InboxItem = Require<Omit<REST<ConsoleInboxItemJson>, "revision" | "t
 }, "id" | "recipient" | "sender" | "subject" | "priority" | "attempts">;
 
 export interface SessionInfo { user_id: string }
+export interface ChatTurn {
+  id: string; bot?: string; session_id?: string; message: string;
+  state: "running" | "waiting" | "completed" | "failed" | "cancelled" | "interrupted";
+  event?: string; data?: Record<string, unknown>; created_at: string; updated_at: string;
+}
 export type LearnedChange = ConsoleLearnedChangeJson;
 export type LearnedReview = Require<ConsoleLearnedReviewJson, "id" | "name" | "revision" | "digest">;
 export type TaskApproval = Require<Pick<TaskApprovalRecordJson,
@@ -173,6 +178,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  createChatTurn: (id: string, bot: string, message: string, session_id?: string) => request<ChatTurn>("/v1/chat-turns", { method: "POST", body: JSON.stringify({ id, bot, message, session_id }) }),
+  chatTurn: (id: string) => request<ChatTurn>(`/v1/chat-turns/${encodeURIComponent(id)}`),
+  latestChatTurn: (bot: string, session_id = bot ? "" : "console") => request<{ turn: ChatTurn | null }>(`/v1/chat-turns?bot=${encodeURIComponent(bot)}&session_id=${encodeURIComponent(session_id)}`),
+  stopChatTurn: (id: string) => request<ChatTurn>(`/v1/chat-turns/${encodeURIComponent(id)}`, { method: "DELETE" }),
   pushConfig: () => request<{ public_key: string }>("/v1/push"),
   subscribePush: (subscription: PushSubscriptionJSON) => request<{ binding_id: string; expires_at: string; user_id: string }>("/v1/push", { method: "POST", body: JSON.stringify({ ...subscription, protocol_version: 1 }) }),
   unsubscribePush: (endpoint: string) => request("/v1/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
