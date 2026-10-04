@@ -179,12 +179,12 @@ func (c *rollingChild) start(t *testing.T, binary string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		if t.Failed() {
 			raw, _ := os.ReadFile(log.Name())
 			t.Logf("child %s: %s", c.cfg.ID, raw)
 		}
-	}()
+	})
 	cmd.Stdout = log
 	cmd.Stderr = log
 	if err := cmd.Start(); err != nil {
@@ -211,6 +211,16 @@ func rollingWait(t *testing.T, ready func() bool) {
 	}
 	t.Fatal("rolling cluster did not become ready")
 }
+func currentRollingLeader(nodes []*rollingChild) *rollingChild {
+	for _, member := range nodes {
+		status, err := member.status()
+		if err == nil && status.LeaderAddress == member.cfg.Addr {
+			return member
+		}
+	}
+	return nil
+}
+
 func (c *rollingChild) change(r *pb.ChangeUpgradeRequest) (*pb.UpgradeStatusResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -471,28 +481,64 @@ func TestRollingAutomaticUpgrade(t *testing.T) {
 		t.Fatal("offline member did not block automatic activation")
 	}
 	nodes[2].start(t, candidate)
+	// A rollout can elect a different leader while followers restart. Force
+	// another handoff so preparation cannot rely on the earlier leader.
+	rollingWait(t, func() bool {
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
+		target := nodes[0]
+		if leader == target {
+			target = nodes[1]
+		}
+		_, err := leader.change(&pb.ChangeUpgradeRequest{Action: "transfer", TargetNodeId: target.cfg.ID})
+		return err == nil
+	})
 	var prepared *pb.UpgradeStatusResponse
 	rollingWait(t, func() bool {
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
 		prepared, err = leader.change(&pb.ChangeUpgradeRequest{Action: "test-auto-step"})
+		if err != nil {
+			t.Log("automatic prepare", err)
+		}
 		return err == nil
 	})
 	if prepared.ActiveContract != 1 || prepared.Prepared == nil {
 		t.Fatal(prepared)
 	}
 	id := prepared.Prepared.TransitionId
+	follower := nodes[2]
+	if follower == leader {
+		follower = nodes[0]
+	}
 	rollingWait(t, func() bool {
-		s, e := nodes[2].status()
+		s, e := follower.status()
 		return e == nil && s.Prepared != nil && s.Prepared.TransitionId == id
 	})
-	if _, err := nodes[2].change(&pb.ChangeUpgradeRequest{Action: "test-snapshot"}); err != nil {
+	if _, err := follower.change(&pb.ChangeUpgradeRequest{Action: "test-snapshot"}); err != nil {
 		t.Fatal(err)
 	}
-	nodes[2].stop()
-	nodes[2].start(t, candidate)
-	if _, err := leader.change(&pb.ChangeUpgradeRequest{Action: "transfer", TargetNodeId: nodes[0].cfg.ID}); err != nil {
-		t.Fatal(err)
-	}
-	leader = nodes[0]
+	follower.stop()
+	follower.start(t, candidate)
+	rollingWait(t, func() bool {
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
+		nextLeader := nodes[0]
+		if leader == nextLeader {
+			nextLeader = nodes[1]
+		}
+		if _, err := leader.change(&pb.ChangeUpgradeRequest{Action: "transfer", TargetNodeId: nextLeader.cfg.ID}); err != nil {
+			return false
+		}
+		leader = nextLeader
+		return true
+	})
 	rollingWait(t, func() bool { s, e := leader.status(); return e == nil && s.LeaderAddress == leader.cfg.Addr })
 	rollingWait(t, func() bool {
 		s, e := leader.change(&pb.ChangeUpgradeRequest{Action: "test-auto-step"})
