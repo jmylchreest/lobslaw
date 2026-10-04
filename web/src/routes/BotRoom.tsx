@@ -169,7 +169,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           setSaid((p) => [...p, {
             kind: "said", from: "bot", text: reply.text ?? "", at: Date.now(),
             tools: reply.toolsUsed ?? [], attempts: reply.toolsAttempted ?? [],
-            tokens: Number(reply.tokensUsed ?? 0), cost: reply.costUsd ?? 0,
+            tokens: Number(reply.tokensUsed ?? 0), cost: Number(reply.costUsd ?? 0),
             sessionId: reply.sessionId, transcript: reply.transcript, receipts: reply.receipts,
           }]);
         }
@@ -595,7 +595,7 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
         <InboxSummaryNotice item={d} />
         {item.result && !open && <div className="ev-body"><Markdown>{item.result}</Markdown></div>}
         {item.status === "done" && (
-          <Receipt attempts={d.tools_used} tokens={d.tokens_used} cost={d.cost_usd} />
+          <Receipt attempts={d.tools_used} tokens={d.tokens_used == null ? undefined : Number(d.tokens_used)} cost={d.cost_usd == null ? undefined : Number(d.cost_usd)} />
         )}
         {/* A failed item keeps its error, visibly. A task that vanished
             quietly is the failure the queue exists to prevent. */}

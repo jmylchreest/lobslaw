@@ -11,9 +11,11 @@
     "test": "vitest run",
     "test:browser": "node tests/approvals.browser.mjs && node tests/learned.browser.mjs && node tests/pwa.browser.mjs",
     "test:pwa": "node tests/pwa.browser.mjs",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "proto": "cd .. && buf generate --template buf.gen.web.yaml"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "2.16.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
@@ -21,6 +23,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@bufbuild/protoc-gen-es": "2.16.0",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.1",
     "@vitejs/plugin-react": "^4.3.4",

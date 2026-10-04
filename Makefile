@@ -156,3 +156,12 @@ docker-no-web:
 	@docker build --build-arg WEB_VARIANT=no-web -t lobslaw:no-web .
 
 .PHONY: build-no-web test-no-web docker-no-web
+
+# Browser contracts use the same schema with an explicitly pinned npm generator.
+proto-web: web-deps
+	@buf generate --template buf.gen.web.yaml
+
+proto-web-check: proto-web
+	@git diff --exit-code -- web/src/gen
+
+.PHONY: proto-web proto-web-check

@@ -56,7 +56,7 @@ describe("durable task decisions", () => {
   it("preserves the exact revision, bounded extra budget and explicit recovery acknowledgement", async () => {
     const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response('{"record":{}}')));
     vi.stubGlobal("fetch", fetch);
-    const task = { id: "task", actor: "bot:worker", state: "TASK_APPROVAL_STATE_WAITING", revision: "9007199254740993" };
+    const task = { id: "task", actor: "bot:worker", state: "TASK_APPROVAL_STATE_WAITING", revision: "9007199254740993" } as const;
     await api.decideTask(task, "budget_extension", { tool_calls: 3, spend_usd: 0.5, egress_bytes: 4096 });
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ revision: task.revision, choice: "budget_extension", extra_budget: { tool_calls: 3, spend_usd: 0.5, egress_bytes: 4096 } });
     await api.recoverTask(task, true);
@@ -116,4 +116,15 @@ describe("discovery", () => {
     expect(isUnavailable(new ApiError(503, "down"))).toBe(true);
     expect(isUnavailable(new ApiError(404, "missing"))).toBe(false);
   });
+});
+
+describe("REST revision compatibility", () => {
+ it.each([42, "9007199254740993", "18446744073709551615"])("returns revision %s unchanged on writes", async (revision) => {
+  const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response("{}")));
+  vi.stubGlobal("fetch", fetch);
+  await api.updateBot("worker", {revision, enabled:false,tools:[]});
+  expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({revision,enabled:false,tools:[]});
+  await api.renameGroup("team","renamed",revision);
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({revision,name:"renamed"});
+ });
 });

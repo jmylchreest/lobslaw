@@ -2,10 +2,13 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -83,6 +86,41 @@ func TestConsoleChatHasNoSyntheticHTTP(t *testing.T) {
 				}
 			}
 			return true
+		})
+	}
+}
+
+func TestRESTRevisionStringsWorkLocallyAndOverPeers(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		t.Run(fmt.Sprint(remote), func(t *testing.T) {
+			const rev = uint64(9007199254740993)
+			bots := &memBots{recs: map[string]*pb.BotRecord{"worker": {Id: "worker", Owner: "user:alice", Revision: rev, Enabled: true, Description: "keep"}}}
+			backend := startWebREST(t, &captureRunner{}, func(c *RESTConfig) { c.Bots = bots })
+			front := backend
+			if remote {
+				client := testConsoleClient(t, backend)
+				front = startWebREST(t, nil, func(c *RESTConfig) { c.RemoteConsole = client })
+			}
+			auth := http.Header{"Authorization": {"Bearer " + mintJWTWith(t, "alice@idp", nil)}}
+			response := doJSON(t, http.MethodGet, webBaseURL(front)+"/v1/bots/worker", "", auth)
+			var body map[string]any
+			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["revision"] != "9007199254740993" {
+				t.Fatalf("unsafe revision: %#v", body["revision"])
+			}
+			response = doJSON(t, http.MethodPatch, webBaseURL(front)+"/v1/bots/worker", `{"revision":"9007199254740993","enabled":false,"tools":[]}`, auth)
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("patch status: %d", response.StatusCode)
+			}
+			if bots.recs["worker"].Enabled || bots.recs["worker"].Description != "keep" {
+				t.Fatal("patch lost presence")
+			}
+			response = doJSON(t, http.MethodPatch, webBaseURL(front)+"/v1/bots/worker", `{"revision":"9007199254740993","enabled":true}`, auth)
+			if response.StatusCode != http.StatusConflict {
+				t.Fatalf("stale revision accepted: %d", response.StatusCode)
+			}
 		})
 	}
 }

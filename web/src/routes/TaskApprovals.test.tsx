@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { TaskCard } from "./TaskApprovals";
 import type { TaskApproval } from "../api";
 
-function render(state: string, operation?: TaskApproval["operation"], recoverable?: boolean) {
+type StateSuffix = TaskApproval["state"] extends `TASK_APPROVAL_STATE_${infer S}` ? S : never;
+function render(state: StateSuffix, operation?: TaskApproval["operation"], recoverable?: boolean) {
   return renderToStaticMarkup(<TaskCard task={{ id: "task", actor: "bot:worker", revision: "1", state: `TASK_APPROVAL_STATE_${state}`, operation, recoverable }} reload={() => {}} />);
 }
 
@@ -37,7 +38,7 @@ describe("owner task approval states", () => {
     expect(html).not.toContain("checkbox");
   });
 
-  it.each(["DENIED", "EXPIRED", "COMPLETED", "CANCELLED"])("does not offer stale decisions on %s", (state) => {
+  it.each(["DENIED", "EXPIRED", "COMPLETED", "CANCELLED"] as const)("does not offer stale decisions on %s", (state) => {
     const html = render(state);
     expect(html).not.toContain("Approve once");
     expect(html).not.toContain("Recover for fresh approval");
