@@ -803,3 +803,18 @@ operation and goes through the running node.
 ## `lobslaw sandbox-exec`
 
 Hidden subcommand — invoked only by the sandbox reexec helper, never by the operator directly. Reads `LOBSLAW_SANDBOX_POLICY` env, installs NoNewPrivs + Landlock + seccomp, then `execve`s the target. See [Sandbox](/security/sandbox).
+
+## `lobslaw data`
+
+Inspect or migrate a stopped node's complete physical data directory. This is
+separate from portable `backup restore`. Migration publishes a new directory and
+retains the source for rollback.
+
+```sh
+lobslaw data inspect --data-dir /srv/lobslaw --legacy-format main-v0
+lobslaw data migrate --data-dir /srv/lobslaw --output /srv/lobslaw-upgraded --legacy-format main-v0
+```
+
+Use `--memory-key-ref` or the existing configured memory key. Follow
+[Data upgrades and recovery](data-migrations.md) for supported historical formats,
+coordinated cluster upgrades, restore mode and explicit recovery acknowledgement.

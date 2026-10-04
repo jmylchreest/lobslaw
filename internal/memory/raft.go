@@ -12,6 +12,8 @@ import (
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
+
+	"github.com/jmylchreest/lobslaw/internal/dataformat"
 )
 
 const (
@@ -151,7 +153,17 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 		return nil, fmt.Errorf("check raft state: %w", err)
 	}
 
-	r, err := raft.NewRaft(raftCfg, fsm, boltStore, boltStore, snapStore, cfg.Transport)
+	manifest, err := dataformat.ReadManifest(cfg.DataDir)
+	if err != nil {
+		_ = boltStore.Close()
+		return nil, err
+	}
+	logs, err := preflightLogs(context.Background(), boltStore, manifest.LegacyFormat)
+	if err != nil {
+		_ = boltStore.Close()
+		return nil, fmt.Errorf("data compatibility preflight: %w", err)
+	}
+	r, err := raft.NewRaft(raftCfg, fsm, logs, boltStore, snapStore, cfg.Transport)
 	if err != nil {
 		_ = boltStore.Close()
 		return nil, fmt.Errorf("construct raft: %w", err)
@@ -497,6 +509,11 @@ func (n *RaftNode) LeaderAddress() raft.ServerAddress {
 // Apply serialises data through Raft consensus. Returns the FSM's
 // Apply return value on success.
 func (n *RaftNode) Apply(data []byte, timeout time.Duration) (any, error) {
+	var err error
+	data, err = dataformat.CurrentLog(data)
+	if err != nil {
+		return nil, err
+	}
 	future := n.Raft.Apply(data, timeout)
 	if err := future.Error(); err != nil {
 		return nil, err

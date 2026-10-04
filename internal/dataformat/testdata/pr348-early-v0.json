@@ -1,0 +1,10 @@
+{
+  "op": "LOG_OP_PUT",
+  "id": "worker",
+  "bot": {
+    "id": "worker",
+    "owner": "user:alice",
+    "enabled": true,
+    "revision": "9007199254740993"
+  }
+}

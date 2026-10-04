@@ -83,6 +83,10 @@ func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
 	}
 	s := &Store{key: key, cipher: c, path: path, readOnly: readOnly, failed: make(chan struct{})}
 	s.db.Store(db)
+	if err := s.prepareFormat(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("prepare state format: %w", err)
+	}
 	return s, nil
 }
 

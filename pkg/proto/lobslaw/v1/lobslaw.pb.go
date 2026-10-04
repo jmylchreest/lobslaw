@@ -12058,7 +12058,9 @@ func (x *IntegrationStateRecord) GetClaimedBy() string {
 
 type LogEntry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Op    LogOp                  `protobuf:"varint,1,opt,name=op,proto3,enum=lobslaw.v1.LogOp" json:"op,omitempty"`
+	// Persisted envelope version; zero denotes an unversioned historical entry.
+	SchemaVersion uint32 `protobuf:"varint,1000,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Op            LogOp  `protobuf:"varint,1,opt,name=op,proto3,enum=lobslaw.v1.LogOp" json:"op,omitempty"`
 	// Target record id for DELETE; same id also duplicates the record's
 	// id field for PUT (eases indexing without fully decoding the payload).
 	Id string `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
@@ -12145,6 +12147,13 @@ func (x *LogEntry) ProtoReflect() protoreflect.Message {
 // Deprecated: Use LogEntry.ProtoReflect.Descriptor instead.
 func (*LogEntry) Descriptor() ([]byte, []int) {
 	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{170}
+}
+
+func (x *LogEntry) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
 }
 
 func (x *LogEntry) GetOp() LogOp {
@@ -16530,8 +16539,9 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x1a\n" +
 	"\brevision\x18\x06 \x01(\x04R\brevision\x12\x1d\n" +
 	"\n" +
-	"claimed_by\x18\a \x01(\tR\tclaimedBy\"\xa8\x10\n" +
-	"\bLogEntry\x12!\n" +
+	"claimed_by\x18\a \x01(\tR\tclaimedBy\"\xd0\x10\n" +
+	"\bLogEntry\x12&\n" +
+	"\x0eschema_version\x18\xe8\a \x01(\rR\rschemaVersion\x12!\n" +
 	"\x02op\x18\x01 \x01(\x0e2\x11.lobslaw.v1.LogOpR\x02op\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x129\n" +
 	"\vpolicy_rule\x18\n" +

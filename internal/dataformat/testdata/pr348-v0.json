@@ -1,0 +1,14 @@
+{
+  "op": "LOG_OP_CLAIM",
+  "id": "worker/item",
+  "expected_revision": "9007199254740993",
+  "bot_inbox": {
+    "id": "item",
+    "recipient": "worker",
+    "sender": "bot:chief",
+    "requested_by": "user:alice",
+    "status": "INBOX_STATUS_DONE",
+    "revision": "9007199254740993",
+    "result": "completed"
+  }
+}
