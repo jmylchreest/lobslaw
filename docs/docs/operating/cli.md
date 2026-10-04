@@ -98,6 +98,21 @@ lobslaw --config /etc/lobslaw/config.toml
 
 Foreground process. SIGTERM for graceful shutdown, SIGHUP for config reload + cert reload.
 
+`--all` explicitly selects every node function: `memory`, `compute`, `storage`,
+`compute-teams` and `ui-web`. It takes precedence over individual function flags
+and config `enabled` settings. Without function flags, enabled config sections
+select the functions; if none are enabled, the defaults are `memory`, `compute`
+and `storage`. Use `--memory --compute --storage` to request that subset explicitly.
+Memory and storage imply each other; `--storage` therefore also requires the
+configured memory encryption key.
+
+Feature selection does not supply provider credentials, bypass authentication,
+activate a new cluster data contract, or add browser assets to a `no_web` build.
+Selecting the console with `--all` or `--ui-web` requires `[auth] require_auth = true`;
+startup fails if it is absent.
+Teams still require the documented contract-2 activation before their services
+start. See [Data migrations](/operating/data-migrations).
+
 ## `lobslaw init`
 
 Interactive scaffold — walks through prompts, writes `config.toml`, `.env`, `data/`, `audit/`, `certs/`. See [Getting Started → From Source](/getting-started/from-source) for the full walkthrough.
@@ -831,8 +846,9 @@ lobslaw cluster upgrade finalize --context prod --id rollout-1 --target 2 --epoc
 lobslaw cluster upgrade abort --context prod --id rollout-1 --target 2 --epoch 0
 ```
 
-Use the actual epoch from status. These require an operator certificate and an
-explicit cluster upgrade policy grant. See [data migrations](./data-migrations)
+Use the actual epoch from status. Changes require an operator certificate and
+cluster upgrade policy permission. Configured operators receive separate read/write
+fallback grants by default; explicit rules can override them. See [data migrations](./data-migrations)
 for the initial coordinated transition, quorum and rollback limits.
 
 Transfer leadership to a caught-up configured voter before replacing the leader:

@@ -93,6 +93,9 @@ func (n *Node) wakeInboxDrain() {
 // item is itself an inbox write, so the wake it fires brings the loop
 // straight back for the next one and a backlog still clears promptly.
 func (n *Node) drainBotInboxes(ctx context.Context) {
+	if n.cfg.RestoreMode || !n.teamContractActive() {
+		return
+	}
 	recipients, err := n.inboxSvc.Recipients(ctx)
 	if err != nil {
 		n.log.Warn("inbox: list recipients failed", "err", err)

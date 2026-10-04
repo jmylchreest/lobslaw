@@ -22,6 +22,16 @@ import (
 
 type upgradeService struct{ node *Node }
 
+// upgradePolicyDefaults grants configured operators separate read and write
+// permissions. These are policy fallbacks, not an authorization bypass: stored
+// rules override them, and RPCs still require a verified operator certificate.
+func upgradePolicyDefaults() []types.PolicyRule {
+	return []types.PolicyRule{
+		{ID: "default-operator-cluster-upgrade-read", Subject: "role:operator", Action: "cluster.upgrade.read", Resource: "cluster:*", Effect: types.EffectAllow, Priority: -1 << 30},
+		{ID: "default-operator-cluster-upgrade-write", Subject: "role:operator", Action: "cluster.upgrade.write", Resource: "cluster:*", Effect: types.EffectAllow, Priority: -1 << 30},
+	}
+}
+
 func (s *upgradeService) authorize(ctx context.Context, write bool) error {
 	_, err := s.authorizeDecision(ctx, write)
 	return err
@@ -49,7 +59,7 @@ func (s *upgradeService) authorizeDecision(ctx context.Context, write bool) (pol
 	}
 	decision, err := n.policyEngine.Evaluate(ctx, &types.Claims{UserID: cert.Subject.CommonName, Roles: roles}, action, "cluster:*")
 	if err != nil || decision.Effect != types.EffectAllow {
-		return decision, status.Error(codes.PermissionDenied, "explicit cluster upgrade policy grant required")
+		return decision, status.Error(codes.PermissionDenied, "cluster upgrade denied by policy")
 	}
 	return decision, nil
 }
@@ -58,7 +68,13 @@ func (s *upgradeService) UpgradeStatus(ctx context.Context, _ *pb.UpgradeStatusR
 	if err := s.authorize(ctx, false); err != nil {
 		return nil, err
 	}
-	return s.node.raft.UpgradeStatus()
+	out, err := s.node.raft.UpgradeStatus()
+	if err == nil && s.node.automaticUpgrade != nil {
+		if blocker := s.node.automaticUpgrade.blocker.Load(); blocker != nil {
+			out.AutomaticBlocker = *blocker
+		}
+	}
+	return out, err
 }
 func (s *upgradeService) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest) (*pb.ChangeUpgradeResponse, error) {
 	decision, err := s.authorizeDecision(ctx, true)
@@ -83,6 +99,8 @@ func (n *Node) wireUpgradeService() {
 		return
 	}
 	n.raft.SetUpgradeProbe(n.probeUpgradeMember)
+	n.automaticUpgrade = newAutomaticUpgradeController(n)
+	n.raft.SetAutomaticUpgradeReady(n.automaticUpgrade.ready.Load)
 	pb.RegisterUpgradeServiceServer(n.server, &upgradeService{node: n})
 }
 
@@ -108,7 +126,7 @@ func (n *Node) probeUpgradeMember(ctx context.Context, server raft.Server) (*mem
 	if err := state.Validate(reply.SupportedContracts); err != nil {
 		return nil, err
 	}
-	return &memory.UpgradePeer{ID: reply.NodeId, Supported: reply.SupportedContracts, State: state}, nil
+	return &memory.UpgradePeer{ID: reply.NodeId, Supported: reply.SupportedContracts, State: state, AutomaticTargets: reply.AutomaticTargets, AutomaticReady: reply.AutomaticReady, AppliedIndex: reply.AppliedIndex}, nil
 }
 
 func (n *Node) dataContract() uint32 {

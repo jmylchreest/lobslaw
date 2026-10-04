@@ -315,8 +315,9 @@ type Config struct {
 // New, started via Start, stopped via Shutdown. Shutdown is safe to
 // call multiple times.
 type Node struct {
-	cfg Config
-	log *slog.Logger
+	automaticUpgrade *automaticUpgradeController
+	cfg              Config
+	log              *slog.Logger
 
 	listener net.Listener
 	server   *grpc.Server
@@ -741,7 +742,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
 	// cancel. Only present on Raft-hosting nodes (the construction
 	// branch in New gated that).
-	if n.inboxSvc != nil && n.agent != nil && n.teamsActive() {
+	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
 		go n.runInboxDrain(ctx)
 	}
 	if n.scheduler != nil {
@@ -877,6 +878,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 		}()
 	}
 
+	n.automaticUpgrade.start(ctx)
 	select {
 	case err := <-errCh:
 		return err
@@ -900,6 +902,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	default:
 	}
 	close(n.shutdownOnce)
+	n.automaticUpgrade.stop()
 	if n.unprotectRaftPaths != nil {
 		defer n.unprotectRaftPaths()
 	}

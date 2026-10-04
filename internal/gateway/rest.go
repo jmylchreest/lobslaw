@@ -181,9 +181,11 @@ type RESTConfig struct {
 
 	// Bots, Groups and Inbox are the compute-teams registries. Nil
 	// leaves /v1/bots and /v1/groups unmounted — ordinary compute.
-	Bots   BotAPI
-	Groups GroupAPI
-	Inbox  InboxAPI
+	// TeamsReady is a runtime readiness check, nil when no activation gate is needed.
+	TeamsReady func() bool
+	Bots       BotAPI
+	Groups     GroupAPI
+	Inbox      InboxAPI
 
 	// TeamRouter picks which bot answers a channel message. Nil
 	// leaves BotID empty.

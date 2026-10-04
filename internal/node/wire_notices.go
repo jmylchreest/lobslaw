@@ -31,7 +31,7 @@ func (n *Node) wireNotices() error {
 	}
 
 	var tasks gateway.NoticeSource
-	if n.teamsActive() {
+	if gateComputeTeams(n.cfg) {
 		tasks = taskNoticeSource{n: n}
 	}
 	src := gateway.CombineNoticeSources(review, challenges, tasks)

@@ -11,7 +11,7 @@ import (
 type taskNoticeSource struct{ n *Node }
 
 func (s taskNoticeSource) Notices(ctx context.Context, principal string) ([]gateway.Notice, error) {
-	if principal == "" {
+	if principal == "" || s.n.cfg.RestoreMode || !s.n.teamContractActive() {
 		return nil, nil
 	}
 	after := ""
