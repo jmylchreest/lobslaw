@@ -100,3 +100,55 @@ apply. Two voters cannot tolerate stopping one voter. Rolling upgrades require
 quorum and may have brief leader-transfer/snapshot latency. Large future schema
 rewrites may require a different staged migration adapter and cannot be promised
 online simply by adding a contract number.
+
+
+## Admission and leadership fences
+
+Peer probes run outside the cancellable control lease. Before submission, the
+leader reacquires that lease, barriers, and revalidates the generation, durable
+contract and complete membership. A synchronous Raft state observer fences the
+final enqueue against a leadership change; merely comparing terms before a
+network call is insufficient. The integration explicitly uses unbuffered apply
+submission and holds the generation guard only through the bounded enqueue,
+never while waiting for commitment. This relies on the pinned HashiCorp observer
+filter running synchronously on state transitions and is regression-tested.
+
+If a caller times out after submission, the outcome may already be committed.
+Admission remains serialized until that future resolves; waiting callers can
+cancel. Inspect status and reuse the exact transition tuple on retry. Completed
+transitions retain their target and membership tuple, so a changed target is an
+error even when the ID and epoch match.
+
+Operator mutations record verified actor, granting policy, action and transition
+before admission, plus an outcome event afterwards. Admission audit failure
+refuses the mutation. A failed outcome audit never retries an already submitted
+mutation: it emits a warning. Configure local audit alongside Raft audit to retain
+outcome evidence when a successful leadership transfer removes this node's
+ability to append to the Raft sink. Explicitly disabled audit sinks retain the
+existing deployment behavior.
+
+```mermaid
+flowchart LR
+  O[Operator CLI] --> T[Typed upgrade service]
+  T --> A[Certificate, role and action policy]
+  A --> U[Audit admission]
+  U --> C[Leader control adapter]
+  C --> P[Bounded peer probes]
+  C --> F[Leadership generation fence]
+  F --> R[Raft log]
+  R --> S[Deterministic contract state machine]
+  S --> B[Atomic storage adapter]
+```
+
+```mermaid
+stateDiagram-v2
+  [*] --> Active
+  Active --> Probing: prepare request
+  Probing --> Active: timeout, stale leadership or member mismatch
+  Probing --> Prepared: fenced replicated preparation
+  Prepared --> Prepared: membership changes refused
+  Prepared --> Active: exact abort
+  Prepared --> Activated: all configured members durably prepared
+  Activated --> Activated: exact finalize retry
+  Activated --> [*]
+```

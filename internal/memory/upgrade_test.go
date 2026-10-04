@@ -162,3 +162,36 @@ func TestUpgradeConfigurationFingerprintIncludesAddressAndSuffrage(t *testing.T)
 		t.Fatal("voting change ignored")
 	}
 }
+
+func TestUpgradeCompletedRetryChecksTarget(t *testing.T) {
+	node, fsm := newTestRaft(t)
+	completed := dataformat.ContractState{
+		Active: 1, Epoch: 1, CompletedID: "aborted", CompletedAction: "abort",
+		Completed: &dataformat.Transition{ID: "aborted", Target: 2, MembershipIndex: 1, MembershipFingerprint: configurationFingerprint(node.ConfigurationServers()), Members: []string{"test-node"}, Index: 2},
+	}
+	raw, err := json.Marshal(completed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsm.store.loadDB().Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte(formatBucket)).Put([]byte(contractKey), raw) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.ChangeUpgrade(context.Background(), &pb.ChangeUpgradeRequest{Action: "abort", TransitionId: "aborted", Target: 3}); err == nil {
+		t.Fatal("different target accepted as completed retry")
+	}
+	if _, err := node.ChangeUpgrade(context.Background(), &pb.ChangeUpgradeRequest{Action: "abort", TransitionId: "aborted", Target: 2}); err != nil {
+		t.Fatal("exact retry rejected", err)
+	}
+	completed.Completed.MembershipFingerprint = "prior membership"
+	raw, err = json.Marshal(completed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fsm.store.loadDB().Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte(formatBucket)).Put([]byte(contractKey), raw) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.ChangeUpgrade(context.Background(), &pb.ChangeUpgradeRequest{Action: "abort", TransitionId: "aborted", Target: 2}); err == nil {
+		t.Fatal("retry accepted after membership changed")
+	}
+
+}

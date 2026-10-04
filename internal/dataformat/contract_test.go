@@ -73,3 +73,36 @@ func TestContractAbortAndUnsupportedTarget(t *testing.T) {
 		t.Fatal("finalized aborted transition")
 	}
 }
+
+func TestCompletedTransitionRejectsChangedTuple(t *testing.T) {
+	for _, action := range []string{"finalize", "abort"} {
+		t.Run(action, func(t *testing.T) {
+			supported := []uint32{1, 2, 3}
+			tr := Transition{ID: "rollout", Target: 2, MembershipIndex: 1, MembershipFingerprint: "members", Members: []string{"a"}, Index: 2}
+			state, err := (ContractState{Active: 1}).Advance("prepare", tr, supported)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err = state.Advance(action, tr, supported)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(state)
+			if err := json.Unmarshal(raw, &state); err != nil {
+				t.Fatal(err)
+			}
+			for _, change := range []func(*Transition){
+				func(t *Transition) { t.Target = 3 },
+				func(t *Transition) { t.MembershipIndex++ },
+				func(t *Transition) { t.MembershipFingerprint = "other" },
+				func(t *Transition) { t.Members = []string{"b"} },
+			} {
+				other := tr
+				change(&other)
+				if _, err := state.Advance(action, other, supported); err == nil {
+					t.Fatal("accepted changed completed tuple", other)
+				}
+			}
+		})
+	}
+}

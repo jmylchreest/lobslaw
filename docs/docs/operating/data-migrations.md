@@ -33,7 +33,9 @@ The output preserves state.db, raft.db, snapshots and membership. Keep the origi
 memory key, configuration and certificates separately; filesystem attachments and
 other machine-local files are not copied. Never run source and copied directories
 as two instances of the same node. Allow space for the source, destination and
-staging copies. An interrupted migration never activates a partial directory.
+staging copies. Snapshot inspection also needs temporary disk space for a private
+copy of the snapshot repository and one validation image, even for `inspect`.
+An interrupted migration never activates a partial directory.
 
 When an unversioned populated state database is upgraded, the destination also
 retains an encrypted `state-before-migration-*.db` image created by the state
@@ -123,3 +125,16 @@ The upgrade RPC status is local to the addressed member; it reports its node ID,
 reader capabilities, active contract, epoch, preparation index and known leader.
 A blocked preparation/finalization identifies the first member that is not ready.
 Activation changes storage interpretation, not ownership or tool permissions.
+
+
+Upgrade mutations are audited with the verified operator and policy grant.
+Configure local audit as well as Raft audit to retain completion evidence after
+leadership transfer. If recording admission fails, the action is refused. If an
+outcome record fails after submission, the node warns; check upgrade status before
+retrying, because the action may already have committed. Reuse the exact ID,
+epoch and target for a lost-response retry; changing the target is refused.
+
+Joining-member probes have a bounded timeout and do not hold the write-admission
+lease during the network call. Cancelled or expired requests waiting for admission
+return without submitting. A timeout after submission still has an uncertain
+outcome: inspect status/configuration rather than assuming it did not happen.

@@ -14,6 +14,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/dataformat"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -22,20 +23,25 @@ import (
 type upgradeService struct{ node *Node }
 
 func (s *upgradeService) authorize(ctx context.Context, write bool) error {
+	_, err := s.authorizeDecision(ctx, write)
+	return err
+}
+
+func (s *upgradeService) authorizeDecision(ctx context.Context, write bool) (policy.Decision, error) {
 	cert := grpcinterceptors.VerifiedPeerCert(ctx)
 	if cert == nil {
-		return status.Error(codes.PermissionDenied, "upgrade control requires a verified certificate")
+		return policy.Decision{Effect: types.EffectDeny}, status.Error(codes.PermissionDenied, "upgrade control requires a verified certificate")
 	}
 	if !write && !mtls.IsOperatorCert(cert) {
-		return nil
+		return policy.Decision{}, nil
 	}
 	n := s.node
 	if !mtls.IsOperatorCert(cert) || n.policyEngine == nil {
-		return status.Error(codes.PermissionDenied, "upgrade control requires an operator certificate and policy grant")
+		return policy.Decision{Effect: types.EffectDeny}, status.Error(codes.PermissionDenied, "upgrade control requires an operator certificate and policy grant")
 	}
 	roles := n.resolveUserRoles(cert.Subject.CommonName)
 	if !slices.Contains(roles, "operator") {
-		return status.Error(codes.PermissionDenied, "operator role required")
+		return policy.Decision{Effect: types.EffectDeny}, status.Error(codes.PermissionDenied, "operator role required")
 	}
 	action := "cluster.upgrade.read"
 	if write {
@@ -43,9 +49,9 @@ func (s *upgradeService) authorize(ctx context.Context, write bool) error {
 	}
 	decision, err := n.policyEngine.Evaluate(ctx, &types.Claims{UserID: cert.Subject.CommonName, Roles: roles}, action, "cluster:*")
 	if err != nil || decision.Effect != types.EffectAllow {
-		return status.Error(codes.PermissionDenied, "explicit cluster upgrade policy grant required")
+		return decision, status.Error(codes.PermissionDenied, "explicit cluster upgrade policy grant required")
 	}
-	return nil
+	return decision, nil
 }
 
 func (s *upgradeService) UpgradeStatus(ctx context.Context, _ *pb.UpgradeStatusRequest) (*pb.UpgradeStatusResponse, error) {
@@ -55,10 +61,17 @@ func (s *upgradeService) UpgradeStatus(ctx context.Context, _ *pb.UpgradeStatusR
 	return s.node.raft.UpgradeStatus()
 }
 func (s *upgradeService) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest) (*pb.ChangeUpgradeResponse, error) {
-	if err := s.authorize(ctx, true); err != nil {
+	decision, err := s.authorizeDecision(ctx, true)
+	if err != nil {
+		s.auditUpgrade(ctx, req, decision, "denied", err)
 		return nil, err
 	}
+	// Record the authority before a transfer can make this node lose Raft writes.
+	if err := s.recordUpgrade(ctx, req, decision, "admitted", nil); err != nil {
+		return nil, status.Error(codes.Unavailable, "cannot audit upgrade admission")
+	}
 	out, err := s.node.raft.ChangeUpgrade(ctx, req)
+	s.auditUpgrade(ctx, req, decision, "completed", err)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "upgrade blocked: %v", err)
 	}
