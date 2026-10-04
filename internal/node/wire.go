@@ -179,7 +179,7 @@ func nodeWireStages() []WireStage {
 		{Name: "soul-fallback", Wire: (*Node).wireSoulFallback},
 		{Name: "compute", Gate: gateCompute, Wire: (*Node).wireComputeStage},
 		{Name: "compute-teams", Gate: gateComputeTeams, Wire: (*Node).wireComputeTeamsStage},
-		{Name: "approval-gates", Gate: gateCompute, Wire: (*Node).wireApprovalGates},
+		{Name: "policy-defaults", Wire: (*Node).wirePolicyDefaults},
 		// After compute, which builds the RoleMap the fork routes
 		// through; before gateway, which is where turns start arriving.
 		{Name: "review-fork", Gate: gateCompute, Wire: (*Node).wireReviewFork},

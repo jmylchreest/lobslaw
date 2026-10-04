@@ -133,3 +133,22 @@ func TestDefaultsDisableTheRemoteAndDebugFamilies(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeAvailabilityKeepsDormantDefinitionsForSeeds(t *testing.T) {
+	r := NewRegistry()
+	ready := false
+	r.SetAvailability("shell_command", func() bool { return ready })
+	if err := r.Register(ShellToolDef()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.Get("shell_command"); ok || len(r.List()) != 0 || len(r.LLMTools()) != 0 {
+		t.Fatal("dormant tool exposed")
+	}
+	if len(r.Registered()) != 1 {
+		t.Fatal("dormant policy seed lost")
+	}
+	ready = true
+	if _, ok := r.Get("shell_command"); !ok || len(r.List()) != 1 {
+		t.Fatal("tool did not activate")
+	}
+}

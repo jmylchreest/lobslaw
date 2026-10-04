@@ -9,10 +9,6 @@ import (
 )
 
 func (n *Node) wireComputeTeamsStage() error {
-	if !n.teamContractActive() {
-		n.log.Info("team tools await data contract 2 activation and restart")
-		return nil
-	}
 	if n.botSvc != nil && n.groupSvc == nil {
 		n.groupSvc = memory.NewGroupService(n.raft, n.store)
 	}
@@ -68,6 +64,7 @@ func (n *Node) wireTeamTools() error {
 		return err
 	}
 	for _, td := range append(tools.BotToolDefs(), tools.InboxToolDefs()...) {
+		n.toolRegistry.SetAvailability(td.Name, n.teamContractActive)
 		if err := n.toolRegistry.Register(td); err != nil {
 			return fmt.Errorf("register team tool %q: %w", td.Name, err)
 		}

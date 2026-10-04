@@ -60,6 +60,14 @@ func (s *rollingRPC) UpgradeStatus(context.Context, *pb.UpgradeStatusRequest) (*
 	return s.node.UpgradeStatus()
 }
 func (s *rollingRPC) ChangeUpgrade(ctx context.Context, r *pb.ChangeUpgradeRequest) (*pb.ChangeUpgradeResponse, error) {
+	if r.Action == "test-auto-step" {
+		plan, err := s.node.PlanAutomaticUpgrade(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out, err := s.node.ChangeAutomaticUpgrade(ctx, plan)
+		return &pb.ChangeUpgradeResponse{Status: out}, err
+	}
 	if r.Action == "test-snapshot" {
 		if err := s.node.Raft.Snapshot().Error(); err != nil {
 			return nil, err
@@ -120,6 +128,7 @@ func TestRollingProcessHelper(t *testing.T) {
 	if err := node.Raft.ReloadConfig(reload); err != nil {
 		t.Fatal(err)
 	}
+	node.SetAutomaticUpgradeReady(func() bool { return true })
 	node.SetUpgradeProbe(func(ctx context.Context, member raft.Server) (*memory.UpgradePeer, error) {
 		conn, err := grpc.NewClient(string(member.Address), opts...)
 		if err != nil {
@@ -134,7 +143,7 @@ func TestRollingProcessHelper(t *testing.T) {
 		if p := status.Prepared; p != nil {
 			state.Prepared = &dataformat.Transition{ID: p.TransitionId, Target: p.Target, Epoch: p.ExpectedEpoch, MembershipIndex: p.MembershipIndex, MembershipFingerprint: p.MembershipFingerprint, Members: p.MemberIds, Index: status.PreparedIndex}
 		}
-		return &memory.UpgradePeer{ID: status.NodeId, Supported: status.SupportedContracts, State: state}, nil
+		return &memory.UpgradePeer{ID: status.NodeId, Supported: status.SupportedContracts, State: state, AutomaticTargets: status.AutomaticTargets, AutomaticReady: status.AutomaticReady, AppliedIndex: status.AppliedIndex}, nil
 	})
 	rpc := &rollingRPC{node: node}
 	pb.RegisterNodeServiceServer(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: server}, rpc)
@@ -170,12 +179,12 @@ func (c *rollingChild) start(t *testing.T, binary string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		if t.Failed() {
 			raw, _ := os.ReadFile(log.Name())
 			t.Logf("child %s: %s", c.cfg.ID, raw)
 		}
-	}()
+	})
 	cmd.Stdout = log
 	cmd.Stderr = log
 	if err := cmd.Start(); err != nil {
@@ -202,6 +211,16 @@ func rollingWait(t *testing.T, ready func() bool) {
 	}
 	t.Fatal("rolling cluster did not become ready")
 }
+func currentRollingLeader(nodes []*rollingChild) *rollingChild {
+	for _, member := range nodes {
+		status, err := member.status()
+		if err == nil && status.LeaderAddress == member.cfg.Addr {
+			return member
+		}
+	}
+	return nil
+}
+
 func (c *rollingChild) change(r *pb.ChangeUpgradeRequest) (*pb.UpgradeStatusResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -417,4 +436,118 @@ func snapshotCatchup(t *testing.T, leader, follower *rollingChild, old string) {
 		return err == nil && s.AppliedIndex >= latest.AppliedIndex && s.ActiveContract == 1
 	})
 
+}
+
+// The baseline for this test already understands contract 2. Its lack of
+// automatic readiness must still block the candidate; format support is not
+// permission to take over a rollout.
+func TestRollingAutomaticUpgrade(t *testing.T) {
+	old := os.Getenv("LOBSLAW_AUTOMATIC_BASELINE")
+	if old == "" {
+		t.Skip("set LOBSLAW_AUTOMATIC_BASELINE to the pre-automatic contract-2 memory test binary")
+	}
+	candidate, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := newRollingChildren(t, old)
+	leader := nodes[0]
+	rollingWait(t, func() bool { s, e := leader.status(); return e == nil && s.LeaderAddress == leader.cfg.Addr })
+	for _, n := range nodes[1:] {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, err := pb.NewNodeServiceClient(leader.conn).AddMember(ctx, &pb.AddMemberRequest{NodeId: n.cfg.ID, Address: n.cfg.Addr, Voter: true})
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodes[1].stop()
+	nodes[1].start(t, candidate)
+	if _, err := leader.change(&pb.ChangeUpgradeRequest{Action: "transfer", TargetNodeId: nodes[1].cfg.ID}); err != nil {
+		t.Fatal(err)
+	}
+	leader = nodes[1]
+	rollingWait(t, func() bool { s, e := leader.status(); return e == nil && s.LeaderAddress == leader.cfg.Addr })
+	if _, err := leader.change(&pb.ChangeUpgradeRequest{Action: "test-auto-step"}); err == nil {
+		t.Fatal("old contract-2 members did not block automatic activation")
+	}
+	if err := leader.write("mixed-auto"); err != nil {
+		t.Fatal(err)
+	}
+	nodes[0].stop()
+	nodes[0].start(t, candidate)
+	nodes[2].stop()
+	if _, err := leader.change(&pb.ChangeUpgradeRequest{Action: "test-auto-step"}); err == nil {
+		t.Fatal("offline member did not block automatic activation")
+	}
+	nodes[2].start(t, candidate)
+	// A rollout can elect a different leader while followers restart. Force
+	// another handoff so preparation cannot rely on the earlier leader.
+	rollingWait(t, func() bool {
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
+		target := nodes[0]
+		if leader == target {
+			target = nodes[1]
+		}
+		_, err := leader.change(&pb.ChangeUpgradeRequest{Action: "transfer", TargetNodeId: target.cfg.ID})
+		return err == nil
+	})
+	var prepared *pb.UpgradeStatusResponse
+	rollingWait(t, func() bool {
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
+		prepared, err = leader.change(&pb.ChangeUpgradeRequest{Action: "test-auto-step"})
+		if err != nil {
+			t.Log("automatic prepare", err)
+		}
+		return err == nil
+	})
+	if prepared.ActiveContract != 1 || prepared.Prepared == nil {
+		t.Fatal(prepared)
+	}
+	id := prepared.Prepared.TransitionId
+	follower := nodes[2]
+	if follower == leader {
+		follower = nodes[0]
+	}
+	rollingWait(t, func() bool {
+		s, e := follower.status()
+		return e == nil && s.Prepared != nil && s.Prepared.TransitionId == id
+	})
+	if _, err := follower.change(&pb.ChangeUpgradeRequest{Action: "test-snapshot"}); err != nil {
+		t.Fatal(err)
+	}
+	follower.stop()
+	follower.start(t, candidate)
+	rollingWait(t, func() bool {
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
+		nextLeader := nodes[0]
+		if leader == nextLeader {
+			nextLeader = nodes[1]
+		}
+		if _, err := leader.change(&pb.ChangeUpgradeRequest{Action: "transfer", TargetNodeId: nextLeader.cfg.ID}); err != nil {
+			return false
+		}
+		leader = nextLeader
+		return true
+	})
+	rollingWait(t, func() bool { s, e := leader.status(); return e == nil && s.LeaderAddress == leader.cfg.Addr })
+	rollingWait(t, func() bool {
+		s, e := leader.change(&pb.ChangeUpgradeRequest{Action: "test-auto-step"})
+		return e == nil && s.ActiveContract == 2
+	})
+	for _, n := range nodes {
+		rollingWait(t, func() bool { s, e := n.status(); return e == nil && s.ActiveContract == 2 && s.Epoch == 1 })
+	}
+	if err := leader.writeGroup(); err != nil {
+		t.Fatal(err)
+	}
 }

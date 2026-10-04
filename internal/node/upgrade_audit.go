@@ -28,6 +28,13 @@ func (s *upgradeService) recordUpgrade(ctx context.Context, req *pb.ChangeUpgrad
 			actor = "operator:" + cert.Subject.CommonName
 		}
 	}
+	return s.recordUpgradeActor(ctx, actor, req, decision, phase, result)
+}
+
+func (s *upgradeService) recordUpgradeActor(ctx context.Context, actor string, req *pb.ChangeUpgradeRequest, decision policy.Decision, phase string, result error) error {
+	if s.node.auditLog == nil {
+		return errors.New("upgrade audit unavailable")
+	}
 	effect := decision.Effect
 	if phase == "denied" {
 		effect = types.EffectDeny

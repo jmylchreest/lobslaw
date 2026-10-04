@@ -22,7 +22,7 @@ import (
 type teamTaskRunner struct{ n *Node }
 
 func (n *Node) botTaskStarter() func(context.Context, turn.Request) (*pb.TaskApprovalRecord, error) {
-	if !n.teamsActive() || n.agent == nil || n.inboxSvc == nil {
+	if !gateComputeTeams(n.cfg) || n.agent == nil || n.inboxSvc == nil {
 		return nil
 	}
 	return n.startBotChatTask
@@ -114,7 +114,7 @@ func (n *Node) startTeamTask(ctx context.Context, req compute.ProcessMessageRequ
 }
 
 func (n *Node) startTask(ctx context.Context, req compute.ProcessMessageRequest, item *pb.BotInboxItem, conversation bool) (*compute.ProcessMessageResponse, error) {
-	if n.agent == nil || n.inboxSvc == nil || req.Bot == nil || req.Claims == nil {
+	if n.cfg.RestoreMode || !n.teamContractActive() || n.agent == nil || n.inboxSvc == nil || req.Bot == nil || req.Claims == nil {
 		return nil, errors.New("team task runner is not wired or lacks authority")
 	}
 	actor, owner := req.Bot.Principal().String(), req.Bot.Owner
