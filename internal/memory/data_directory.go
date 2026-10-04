@@ -157,7 +157,12 @@ func inspectSnapshots(ctx context.Context, dir string, key crypto.Key) (int, err
 		if info, err := os.Lstat(filepath.Join(snapdir, "snapshots")); err != nil || !info.IsDir() {
 			return 0, errors.New("snapshot repository missing or not a directory")
 		}
-		store, err := raft.NewFileSnapshotStore(snapdir, retainedSnapshots, io.Discard)
+		staged, err := stageSnapshotRepository(ctx, snapdir)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = os.RemoveAll(staged) }()
+		store, err := raft.NewFileSnapshotStore(filepath.Join(staged, SnapshotDir), retainedSnapshots, io.Discard)
 		if err != nil {
 			return 0, err
 		}

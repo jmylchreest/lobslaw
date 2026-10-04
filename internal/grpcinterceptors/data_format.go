@@ -18,6 +18,7 @@ const dataProtocolHeader = "lobslaw-data-protocol"
 const compatibilityTimeout = 5 * time.Second
 
 func persistenceMethod(method string) bool {
+	method = originalPersistenceMethod(method)
 	return strings.HasPrefix(method, "/RaftTransport/") || method == pb.NodeService_AddMember_FullMethodName || method == pb.NodeService_Propose_FullMethodName
 }
 
@@ -82,27 +83,26 @@ func VerifyDataPeer(ctx context.Context, conn *grpc.ClientConn) error {
 	return nil
 }
 
-// DataFormatClient preflights BEFORE sending any log or snapshot to an old server. Merely
-// attaching a header is insufficient: old servers would ignore it and mutate.
+// DataFormatClient sends mutations only to versioned endpoints whose server
+// enforces compatibility. Reconnects to older binaries fail before dispatch.
 func DataFormatClient() grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, conn *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		if persistenceMethod(method) {
-			if err := VerifyDataPeer(ctx, conn); err != nil {
-				return err
-			}
-			ctx = dataContext(ctx)
+		if !persistenceMethod(method) {
+			return invoke(ctx, method, req, reply, conn, opts...)
 		}
-		return invoke(ctx, method, req, reply, conn, opts...)
+		err := invoke(dataContext(ctx), persistenceEndpoint(method), req, reply, conn, opts...)
+		if status.Code(err) == codes.Unimplemented {
+			return status.Error(codes.FailedPrecondition, "peer lacks versioned persistence endpoint; coordinated upgrade required")
+		}
+		return err
 	}
 }
 
 func DataFormatStreamClient() grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, conn *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 		if persistenceMethod(method) {
-			if err := VerifyDataPeer(ctx, conn); err != nil {
-				return nil, err
-			}
 			ctx = dataContext(ctx)
+			method = persistenceEndpoint(method)
 		}
 		return streamer(ctx, desc, conn, method, opts...)
 	}

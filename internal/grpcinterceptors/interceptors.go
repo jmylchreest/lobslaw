@@ -174,6 +174,7 @@ func OperatorNotAPeerStream() grpc.StreamServerInterceptor {
 }
 
 func isPeerOnly(fullMethod string) bool {
+	fullMethod = originalPersistenceMethod(fullMethod)
 	for _, p := range PeerOnlyPrefixes {
 		if strings.HasPrefix(fullMethod, p) {
 			return true

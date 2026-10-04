@@ -342,7 +342,7 @@ func (n *Node) wireDiscoveryStage() error {
 		defer func() { _ = conn.Close() }()
 		return grpcinterceptors.VerifyDataPeer(ctx, conn)
 	})
-	lobslawv1.RegisterNodeServiceServer(n.server, n.discSvc)
+	lobslawv1.RegisterNodeServiceServer(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: n.server}, n.discSvc)
 	n.discCli = discovery.NewClient(n.localInfo, n.registry, n.dialer(), n.log)
 	return nil
 }

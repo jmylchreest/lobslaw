@@ -49,7 +49,7 @@ func (n *Node) wireRaft(advertise string) error {
 		_ = store.Close()
 		return fmt.Errorf("rafttransport.New: %w", err)
 	}
-	transport.Register(n.server)
+	transport.Register(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: n.server})
 
 	rNode, err := memory.NewRaft(memory.RaftConfig{
 		NodeID:    n.cfg.NodeID,

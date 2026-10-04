@@ -26,7 +26,7 @@ pre-upgrade source using its original binary and keys instead.
   checked; version changes use staged snapshot publication and a retained backup.
 - `archive.Upgrade`: normalizes authenticated portable records in memory before
   the existing import planner applies ownership mappings and paused restore rules.
-- gRPC compatibility guards: both client preflight and server enforcement, in
+- gRPC compatibility guards: versioned mutation endpoints and server enforcement, in
   addition to mTLS. The leader also checks a proposed member before adding it.
 
 ## Supported formats
@@ -111,7 +111,7 @@ are not portable archive content. Missing keys cannot be repaired by migration.
 - Physical migration preserves original state/log bytes and refuses existing output.
 - Cancellation, bad keys, symlinks and corrupt snapshots cannot replace live state.
 - Snapshot publication retains the existing interrupted-restore recovery behavior.
-- Old peers are refused before a client sends a Raft mutation; new peers interoperate.
+- Old peers cannot dispatch versioned Raft mutations; new peers interoperate.
 - Portable schema 1 imports retain explicit identity/ownership requirements.
 - Recovery requires deliberate acknowledgement before normal execution.
 
@@ -125,19 +125,51 @@ proves semantic compatibility. A future rolling-upgrade implementation must add
 cluster-wide capability negotiation and gate new writers until all voters agree.
 
 
-## Compatibility preflight performance
+## Compatibility dispatch and performance
 
-The client currently performs a read-only `GetPeers` compatibility check before
-persisted-data unary RPCs and stream opens. This adds a serial network round-trip
-to Raft traffic; the five-second preflight timeout can exceed an election timeout
-on a stalled peer. Retained-log validation also decodes entries on replication
-reads, and startup scans every retained entry. These costs are deliberate safety
-checks, not a throughput guarantee for large or high-latency clusters.
+Persistence mutations use the typed service descriptors under a versioned gRPC
+service name (`lobslaw.persistence.v1.*`). Pre-control servers do not register
+these names, so reconnecting to an older process cannot dispatch a mutation after
+a successful handshake with a different process. Server interceptors still check
+protocol metadata and mTLS peer authority on every call, including streams.
+Discovery and membership checks retain explicit `GetPeers` negotiation; ordinary
+Raft RPCs no longer pay a separate serial negotiation round-trip.
 
-A future preflight optimization must bind cached capability evidence to the
-actual transport lifetime, not just the `grpc.ClientConn` object: that object can
-reconnect to a different binary. Rolling control additionally changes the local
-required contract during preparation/activation. Validate reconnect-to-old-peer,
-contract-change, concurrent unary/stream calls and stalled-handshake behavior
-before replacing the per-call checks. A permanent connection-object cache would
-weaken the old-peer refusal guarantee.
+Retained-log validation decodes entries on replication reads and startup scans
+every retained entry. Snapshot inspection first copies the repository into a
+private temporary directory because the HashiCorp constructor writes a permission
+test file. Source repositories are never passed to that constructor. Budget space
+for this repository copy plus the individual validation image. Symlinks and
+special files are rejected before library access.
+
+```mermaid
+flowchart LR
+  CLI[Operator CLI] --> A[Storage adapter]
+  A --> F[Neutral format transformations]
+  A --> C[Private candidate]
+  C --> V[Validate and sync]
+  V --> P[Publish new directory]
+  S[Read-only source under locks] --> A
+  N[Typed gRPC clients] --> E[Versioned persistence endpoint]
+  E --> G[mTLS and protocol gate]
+  G --> R[Raft admission and FSM]
+```
+
+```mermaid
+sequenceDiagram
+  participant O as Operator
+  participant A as Migration adapter
+  participant S as Locked source
+  participant T as Private staging
+  O->>A: inspect or migrate
+  A->>S: Read state, logs and snapshot repository
+  A->>T: Copy snapshots before library inspection
+  A->>T: Validate versions, framing and ciphertext
+  alt migrate
+    A->>T: Build and validate full candidate
+    A->>T: Sync and rename to new destination
+    A-->>O: Recovery acknowledgement required
+  else inspect
+    A-->>O: Format report; source unchanged
+  end
+```
