@@ -33,7 +33,9 @@ The output preserves state.db, raft.db, snapshots and membership. Keep the origi
 memory key, configuration and certificates separately; filesystem attachments and
 other machine-local files are not copied. Never run source and copied directories
 as two instances of the same node. Allow space for the source, destination and
-staging copies. An interrupted migration never activates a partial directory.
+staging copies. Snapshot inspection also needs temporary disk space for a private
+copy of the snapshot repository and one validation image, even for `inspect`.
+An interrupted migration never activates a partial directory.
 
 When an unversioned populated state database is upgraded, the destination also
 retains an encrypted `state-before-migration-*.db` image created by the state

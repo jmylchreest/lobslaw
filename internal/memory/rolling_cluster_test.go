@@ -109,7 +109,7 @@ func TestRollingProcessHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer(grpc.Creds(creds.ServerCreds()), grpc.ChainUnaryInterceptor(grpcinterceptors.OperatorNotAPeer(), grpcinterceptors.DataFormat(required)), grpc.ChainStreamInterceptor(grpcinterceptors.OperatorNotAPeerStream(), grpcinterceptors.DataFormatStream(required)))
-	transport.Register(server)
+	transport.Register(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: server})
 	node, err := memory.NewRaft(memory.RaftConfig{NodeID: cfg.ID, LocalAddr: raft.ServerAddress(cfg.Addr), DataDir: cfg.Dir, Bootstrap: cfg.Bootstrap, Transport: transport.RaftTransport()}, memory.NewFSM(store))
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestRollingProcessHelper(t *testing.T) {
 		return &memory.UpgradePeer{ID: status.NodeId, Supported: status.SupportedContracts, State: state}, nil
 	})
 	rpc := &rollingRPC{node: node}
-	pb.RegisterNodeServiceServer(server, rpc)
+	pb.RegisterNodeServiceServer(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: server}, rpc)
 	pb.RegisterUpgradeServiceServer(server, rpc)
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {

@@ -11,6 +11,8 @@ import (
 
 const ManifestName = "data-migration.json"
 
+const maxManifestBytes = 1 << 20
+
 type Manifest struct {
 	StateVersion int    `json:"state_version"`
 	LogVersion   int    `json:"log_version"`
@@ -39,7 +41,7 @@ func ReadManifest(dir string) (Manifest, error) {
 		return m, err
 	}
 	defer func() { _ = file.Close() }()
-	d := json.NewDecoder(io.LimitReader(file, 1<<20))
+	d := json.NewDecoder(io.LimitReader(file, maxManifestBytes))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&m); err != nil {
 		return m, err

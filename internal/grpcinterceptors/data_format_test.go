@@ -18,9 +18,13 @@ import (
 
 type formatPeer struct {
 	pb.UnimplementedNodeServiceServer
+	preflights *atomic.Int32
 }
 
-func (formatPeer) GetPeers(context.Context, *pb.GetPeersRequest) (*pb.GetPeersResponse, error) {
+func (p formatPeer) GetPeers(context.Context, *pb.GetPeersRequest) (*pb.GetPeersResponse, error) {
+	if p.preflights != nil {
+		p.preflights.Add(1)
+	}
 	return &pb.GetPeersResponse{}, nil
 }
 
@@ -33,9 +37,14 @@ func TestDataProtocolPreflightBeforeMutation(t *testing.T) {
 				serverOptions = []grpc.ServerOption{grpc.UnaryInterceptor(DataFormat()), grpc.StreamInterceptor(DataFormatStream())}
 			}
 			server := grpc.NewServer(serverOptions...)
-			pb.RegisterNodeServiceServer(server, formatPeer{})
+			var preflights atomic.Int32
+			pb.RegisterNodeServiceServer(server, formatPeer{preflights: &preflights})
 			var mutations atomic.Int32
-			server.RegisterService(&grpc.ServiceDesc{ServiceName: "RaftTransport", HandlerType: (*interface{})(nil), Methods: []grpc.MethodDesc{{MethodName: "AppendEntries", Handler: func(srv any, ctx context.Context, decode func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+			registrar := grpc.ServiceRegistrar(server)
+			if compatible {
+				registrar = PersistenceRegistrar{ServiceRegistrar: server}
+			}
+			registrar.RegisterService(&grpc.ServiceDesc{ServiceName: "RaftTransport", HandlerType: (*interface{})(nil), Methods: []grpc.MethodDesc{{MethodName: "AppendEntries", Handler: func(srv any, ctx context.Context, decode func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 				request := new(emptypb.Empty)
 				if err := decode(request); err != nil {
 					return nil, err
@@ -54,6 +63,9 @@ func TestDataProtocolPreflightBeforeMutation(t *testing.T) {
 			}
 			defer func() { _ = conn.Close() }()
 			err = conn.Invoke(context.Background(), "/RaftTransport/AppendEntries", &emptypb.Empty{}, &emptypb.Empty{})
+			if preflights.Load() != 0 {
+				t.Fatal("per-mutation preflight returned to consensus path")
+			}
 			if compatible {
 				if err != nil || mutations.Load() != 1 {
 					t.Fatal(err, mutations.Load())
@@ -62,8 +74,12 @@ func TestDataProtocolPreflightBeforeMutation(t *testing.T) {
 				if status.Code(err) != codes.FailedPrecondition || mutations.Load() != 0 {
 					t.Fatal("sent mutation to old peer", err, mutations.Load())
 				}
-				if _, err := conn.NewStream(context.Background(), &grpc.StreamDesc{ClientStreams: true}, "/RaftTransport/InstallSnapshot"); status.Code(err) != codes.FailedPrecondition {
-					t.Fatal("opened stream to old peer", err)
+				stream, err := conn.NewStream(context.Background(), &grpc.StreamDesc{ClientStreams: true}, "/RaftTransport/InstallSnapshot")
+				if err == nil {
+					err = stream.RecvMsg(new(emptypb.Empty))
+				}
+				if status.Code(err) != codes.Unimplemented {
+					t.Fatal("old peer accepted snapshot endpoint", err)
 				}
 			}
 		})
@@ -83,6 +99,17 @@ func TestForwardedRaftProposalRequiresProtocol(t *testing.T) {
 	_, err := DataFormat()(context.Background(), &pb.ProposeRequest{}, &grpc.UnaryServerInfo{FullMethod: pb.NodeService_Propose_FullMethodName}, func(context.Context, any) (any, error) { called = true; return nil, nil })
 	if status.Code(err) != codes.FailedPrecondition || called {
 		t.Fatal("accepted old serialized proposal", err)
+	}
+}
+
+func TestVersionedPersistenceRetainsOperatorGuard(t *testing.T) {
+	for _, method := range []string{"/RaftTransport/AppendEntries", "/RaftTransport/InstallSnapshot"} {
+		if !isPeerOnly(persistenceEndpoint(method)) {
+			t.Fatalf("versioned endpoint bypasses peer guard: %s", method)
+		}
+		if !persistenceMethod(persistenceEndpoint(method)) {
+			t.Fatalf("versioned endpoint bypasses data guard: %s", method)
+		}
 	}
 }
 
