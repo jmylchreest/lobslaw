@@ -295,6 +295,11 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	if err := f.checkInboxCapacity(entry); err != nil {
 		return err
 	}
+	if p, ok := payload.(*lobslawv1.CredentialRecord); ok {
+		if err := f.credentialBoundary(entry.Id, p); err != nil {
+			return err
+		}
+	}
 	// Derived state is computed here rather than at each producer, so a
 	// new write path can't forget it. Deterministic: same embedding, same
 	// float ops in the same order, same result on every replica.
@@ -368,6 +373,8 @@ func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
 // interface because protoc-gen-go emits getters but no setters.
 func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
+	case *lobslawv1.IntegrationStateRecord:
+		return p.Revision, true
 	case *lobslawv1.CredentialRecord:
 		return p.Revision, true
 	case *lobslawv1.SoulTuneRecord:
@@ -405,6 +412,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
+	case *lobslawv1.IntegrationStateRecord:
+		p.Revision = rev
 	case *lobslawv1.CredentialRecord:
 		p.Revision = rev
 	case *lobslawv1.SoulTuneRecord:
@@ -455,7 +464,7 @@ func (f *FSM) currentRevision(bucket, id string) (uint64, error) {
 }
 
 func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
-	bucket, _, err := bucketAndPayload(entry)
+	bucket, payload, err := bucketAndPayload(entry)
 	if err != nil {
 		// DELETE is allowed to carry just the id + a typed discriminator
 		// in payload (to know which bucket). If payload is absent, reject.
@@ -475,6 +484,11 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 		}
 		if item.GetRevision() != entry.GetExpectedRevision() || !isTerminalInbox(item.GetStatus()) {
 			return ErrClaimConflict
+		}
+	}
+	if p, ok := payload.(*lobslawv1.CredentialRecord); ok {
+		if err := f.credentialBoundary(entry.Id, p); err != nil {
+			return err
 		}
 	}
 	// Deleting a session must also drop its transcript, else the
@@ -547,6 +561,43 @@ func (f *FSM) purgeSession(sessionID string) error {
 	return f.store.Delete(BucketSessions, sessionID)
 }
 
+func checkCredentialClaim(raw []byte, getErr error, next *lobslawv1.CredentialRecord) error {
+	// A credential CLAIM can only modify the same existing account generation.
+	// A delete/recreate may reset the revision; it must not admit an old claim.
+	if getErr != nil {
+		return fmt.Errorf("%w: credential unavailable", ErrClaimConflict)
+	}
+	var current lobslawv1.CredentialRecord
+	if err := proto.Unmarshal(raw, &current); err != nil {
+		return err
+	}
+	if current.Generation != next.Generation || current.Owner != next.Owner || current.Connector != next.Connector {
+		return fmt.Errorf("%w: credential replaced", ErrClaimConflict)
+	}
+	return nil
+}
+
+func (f *FSM) checkIntegrationStateCapacity(owner string) error {
+	count, owned := 0, 0
+	if err := f.store.ForEach(BucketIntegrationState, func(_ string, b []byte) error {
+		var r lobslawv1.IntegrationStateRecord
+		if err := proto.Unmarshal(b, &r); err != nil {
+			return err
+		}
+		count++
+		if r.Owner == owner {
+			owned++
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if count >= 10000 || owned >= 100 {
+		return fmt.Errorf("integration state limit reached; wait for expiry cleanup")
+	}
+	return nil
+}
+
 // applyClaim is the CAS primitive: the write goes through only when
 // the record's current claimed_by field matches entry.ExpectedClaimer.
 //
@@ -569,9 +620,8 @@ func (f *FSM) purgeSession(sessionID string) error {
 // internal/scheduler/scheduler.go is the right place — it runs
 // only at scan time on the leader and uses time.Now() correctly.
 //
-// Only ScheduledTaskRecord and AgentCommitment are claimable today;
-// other payload types return an error so a misrouted CLAIM can't
-// silently overwrite a record that doesn't support CAS.
+// Only buckets listed in claimableBucket support CLAIM; other payloads
+// are rejected rather than silently bypassing compare-and-swap semantics.
 func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	if rec := entry.GetSelfTaught(); rec != nil && rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ARCHIVED {
 		return f.applyReviewedArchive(entry, rec)
@@ -599,18 +649,17 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	expectedRev := entry.GetExpectedRevision()
 
 	raw, getErr := f.store.Get(bucket, entry.Id)
-	if bucket == BucketCredentials {
-		// A credential CLAIM can only modify the same existing account generation.
-		// A delete/recreate may reset the revision; it must not admit an old claim.
-		if getErr != nil {
-			return fmt.Errorf("%w: credential unavailable", ErrClaimConflict)
+	if bucket == BucketIntegrationState && getErr != nil {
+		if !IsCredentialNotFound(getErr) {
+			return getErr
 		}
-		var current lobslawv1.CredentialRecord
-		if err := proto.Unmarshal(raw, &current); err != nil {
+		if err := f.checkIntegrationStateCapacity(newPayload.(*lobslawv1.IntegrationStateRecord).Owner); err != nil {
 			return err
 		}
-		if current.Generation != newPayload.(*lobslawv1.CredentialRecord).Generation {
-			return fmt.Errorf("%w: credential replaced", ErrClaimConflict)
+	}
+	if bucket == BucketCredentials {
+		if err := checkCredentialClaim(raw, getErr, newPayload.(*lobslawv1.CredentialRecord)); err != nil {
+			return err
 		}
 	}
 	if getErr != nil {
@@ -734,18 +783,12 @@ type claimable interface {
 // holder's id as expected_claimer.
 func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
+	case BucketIntegrationState, BucketIntegrationSettings:
+		return decodeClaimRecord(raw, &lobslawv1.IntegrationStateRecord{})
 	case BucketCredentials:
-		var r lobslawv1.CredentialRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.CredentialRecord{})
 	case BucketSoulTune:
-		var r lobslawv1.SoulTuneRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SoulTuneRecord{})
 	case BucketBots:
 		return decodeClaimRecord(raw, &lobslawv1.BotRecord{})
 	case BucketGroups:
@@ -754,71 +797,27 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 		return decodeClaimRecord(raw, &lobslawv1.BotInboxItem{})
 
 	case BucketScheduledTasks:
-		var r lobslawv1.ScheduledTaskRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.ScheduledTaskRecord{})
 	case BucketCommitments:
-		var r lobslawv1.AgentCommitment
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.AgentCommitment{})
 	case BucketSessionLeases:
-		var r lobslawv1.SessionLease
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SessionLease{})
 	case BucketEnrolments:
-		var r lobslawv1.EnrolmentRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.EnrolmentRecord{})
 	case BucketTaskApprovals:
-		var r lobslawv1.TaskApprovalRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.TaskApprovalRecord{})
 	case BucketPrompts:
-		var r lobslawv1.PromptRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.PromptRecord{})
 	case BucketPinned:
-		var r lobslawv1.PinnedMemory
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.PinnedMemory{})
 	case BucketSelfTaught:
-		var r lobslawv1.SelfTaughtRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SelfTaughtRecord{})
 	case BucketSessionGrants:
-		var r lobslawv1.SessionGrant
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SessionGrant{})
 	case BucketSkills:
-		var r lobslawv1.SkillRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SkillRecord{})
 	case BucketSkillBlobs:
-		var r lobslawv1.SkillBlob
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SkillBlob{})
 	default:
 		return nil, fmt.Errorf("bucket %q not claimable", bucket)
 	}
@@ -830,7 +829,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
+	case BucketIntegrationState, BucketIntegrationSettings, BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
 		BucketBots, BucketGroups, BucketBotInbox:
 		return true
@@ -871,6 +870,10 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketChannelState, p.ChannelState, nil
 	case *lobslawv1.LogEntry_SoulTune:
 		return BucketSoulTune, p.SoulTune, nil
+	case *lobslawv1.LogEntry_IntegrationSettings:
+		return BucketIntegrationSettings, p.IntegrationSettings, nil
+	case *lobslawv1.LogEntry_IntegrationState:
+		return BucketIntegrationState, p.IntegrationState, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:
@@ -1058,3 +1061,23 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 // doesn't need any release logic — the View transaction closes with
 // Persist's return.
 func (s *snapshot) Release() {}
+
+// Ownership and connector binding cannot change at a reused credential key.
+// Enforced during deterministic application, including stale follower proposals.
+func (f *FSM) credentialBoundary(id string, next *lobslawv1.CredentialRecord) error {
+	raw, err := f.store.Get(BucketCredentials, id)
+	if IsCredentialNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var current lobslawv1.CredentialRecord
+	if err := proto.Unmarshal(raw, &current); err != nil {
+		return err
+	}
+	if current.Owner != next.Owner || current.Connector != next.Connector {
+		return fmt.Errorf("credential ownership boundary changed")
+	}
+	return nil
+}

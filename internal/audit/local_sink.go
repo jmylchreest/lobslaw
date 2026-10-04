@@ -29,8 +29,8 @@ import (
 // the point where keeping more should be the operator's decision
 // rather than ours.
 const (
-	defaultMaxSizeMB = 100
-	defaultMaxFiles  = 10
+	DefaultMaxSizeMB int = 100
+	DefaultMaxFiles  int = 10
 )
 
 type LocalSink struct {
@@ -58,10 +58,10 @@ func NewLocalSink(cfg LocalConfig) (*LocalSink, error) {
 		return nil, errors.New("audit.LocalSink: Path required")
 	}
 	if cfg.MaxSizeMB == 0 {
-		cfg.MaxSizeMB = defaultMaxSizeMB
+		cfg.MaxSizeMB = DefaultMaxSizeMB
 	}
 	if cfg.MaxFiles == 0 {
-		cfg.MaxFiles = defaultMaxFiles
+		cfg.MaxFiles = DefaultMaxFiles
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.Path), 0o755); err != nil {
 		return nil, fmt.Errorf("audit.LocalSink: mkdir parent: %w", err)
@@ -279,7 +279,7 @@ func readEntries(path string) ([]types.AuditEntry, error) {
 // byte buffer without touching the filesystem.
 func decodeJSONL(r io.Reader) ([]types.AuditEntry, error) {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	scanner.Buffer(make([]byte, 0, initialScanBufferBytes), maxAuditEntryBytes)
 	var out []types.AuditEntry
 	for scanner.Scan() {
 		line := scanner.Bytes()

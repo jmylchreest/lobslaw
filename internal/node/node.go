@@ -25,6 +25,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
+	"github.com/jmylchreest/lobslaw/internal/google/calendar"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -331,18 +332,20 @@ type Node struct {
 	transport *rafttransport.Transport
 	raft      *memory.RaftNode
 
-	policySvc      *policy.Service
-	memorySvc      *memory.Service
-	credentialSvc  *memory.CredentialService
-	userPrefsSvc   *memory.UserPrefsService
-	notifySvc      *notify.Service
-	oauthTracker   *oauth.Tracker
-	oauthProviders map[string]oauth.ProviderConfig
-	clawhubSource  sharing.Source
-	planSvc        *plan.Service
-	storageSvc     *storage.Service
-	storageMgr     *storage.Manager
-	skillRegistry  *skills.Registry
+	policySvc        *policy.Service
+	memorySvc        *memory.Service
+	calendarSvc      *calendar.Service
+	integrationState *memory.IntegrationStateStore
+	credentialSvc    *memory.CredentialService
+	userPrefsSvc     *memory.UserPrefsService
+	notifySvc        *notify.Service
+	oauthTracker     *oauth.Tracker
+	oauthProviders   map[string]oauth.ProviderConfig
+	clawhubSource    sharing.Source
+	planSvc          *plan.Service
+	storageSvc       *storage.Service
+	storageMgr       *storage.Manager
+	skillRegistry    *skills.Registry
 	// jobDrivers maps a generation driver's name to its
 	// implementation. The name is embedded in every JobHandle the
 	// driver mints, so a handle polled after a crash takeover is
@@ -503,7 +506,8 @@ type Node struct {
 	auditLog *audit.AuditLog
 	auditSvc *audit.Service
 
-	shutdownOnce chan struct{}
+	shutdownOnce       chan struct{}
+	unprotectRaftPaths func()
 
 	// Boot-time state that wire stages need to read. Set by New
 	// before runWireStages and unused after. Lives on the struct
@@ -575,8 +579,8 @@ func New(cfg Config) (*Node, error) {
 		// large" instead of the store's message naming the offending
 		// file, so the transport ceiling is raised above the one that
 		// carries meaning.
-		grpc.MaxRecvMsgSize(3*memory.DefaultMaxSkillTotalBytes),
-		grpc.MaxSendMsgSize(3*memory.DefaultMaxSkillTotalBytes),
+		grpc.MaxRecvMsgSize(maxNodeGRPCMessageBytes),
+		grpc.MaxSendMsgSize(maxNodeGRPCMessageBytes),
 		grpc.ChainUnaryInterceptor(
 			grpcinterceptors.RequestID(log),
 			grpcinterceptors.Recovery(log),
@@ -673,7 +677,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// AddVoter) is a separate flow handled by establishRaftMembership
 	// below.
 	if len(n.cfg.SeedNodes) > 0 {
-		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, 5*time.Second); err != nil {
+		if _, err := n.discCli.DialSeeds(ctx, n.cfg.SeedNodes, discovery.DefaultDialTimeout); err != nil {
 			n.log.Warn("seed-list bootstrap incomplete", "err", err)
 		}
 	}
@@ -789,7 +793,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// level, not fatal — the node still boots; the first user turn
 	// hits default-deny and the operator sees the warning.
 	if n.raft != nil {
-		if err := n.raft.WaitForLeader(5 * time.Second); err == nil {
+		if err := n.raft.WaitForLeader(startupLeaderWait); err == nil {
 			if err := n.seedDefaultPolicyRules(ctx); err != nil {
 				n.log.Warn("policy: seed defaults failed", "err", err)
 			}
@@ -887,6 +891,9 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	default:
 	}
 	close(n.shutdownOnce)
+	if n.unprotectRaftPaths != nil {
+		defer n.unprotectRaftPaths()
+	}
 
 	// Drained first, before the gRPC stop. A shutdown that discards the
 	// buffer loses precisely the spans from the turn that was in flight
@@ -901,7 +908,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	}()
 	select {
 	case <-stopped:
-	case <-time.After(10 * time.Second):
+	case <-time.After(nodeGracefulStopTimeout):
 		n.log.Warn("gRPC graceful-stop timed out; forcing")
 		n.server.Stop()
 	}
@@ -927,7 +934,7 @@ func (n *Node) Shutdown(ctx context.Context) error {
 		}
 	}
 	if n.egressProvider != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), egressStopTimeout)
 		defer cancel()
 		if err := n.egressProvider.Stop(stopCtx); err != nil {
 			n.log.Warn("egress proxy shutdown", "err", err)
@@ -1036,6 +1043,9 @@ func (n *Node) dialer() discovery.Dialer {
 // resources but hit an error. Best-effort cleanup; errors swallowed
 // because we're already returning a failure.
 func (n *Node) closePartial() {
+	if n.unprotectRaftPaths != nil {
+		defer n.unprotectRaftPaths()
+	}
 	n.stopTracing()
 	if n.store != nil {
 		_ = n.store.Close()
@@ -1081,6 +1091,16 @@ func validateConfig(cfg Config) error {
 	}
 	if err := validateUIWebBackend(cfg); err != nil {
 		return err
+	}
+	// A [[policy.rules]] subject the engine cannot match is a rule that
+	// looks like it works and does nothing: subjectMatches fails closed
+	// on an unknown kind, so a deny never applies and an allow never
+	// grants. Rejected here rather than seeded and silently ignored;
+	// see policy.ValidateSubject.
+	for _, r := range cfg.Policy.Rules {
+		if err := policy.ValidateSubject(r.Subject); err != nil {
+			return fmt.Errorf("node.Config: [[policy.rules]] %q: %w", r.ID, err)
+		}
 	}
 	return nil
 }

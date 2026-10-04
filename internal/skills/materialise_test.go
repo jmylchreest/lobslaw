@@ -280,7 +280,12 @@ func TestNamesThatWouldEscapeTheCacheAreRefused(t *testing.T) {
 
 func TestBundledFilesCannotEscapeOrOverwrite(t *testing.T) {
 	t.Parallel()
-	for _, path := range []string{"../out.md", "/etc/passwd", BodyFile, "manifest.yaml", ""} {
+	for _, path := range []string{
+		"../out.md", "/etc/passwd", "",
+		BodyFile, "skill.md", "Skill.MD", "./sKiLl.Md", "nested/../skill.md",
+		manifestFile, "MANIFEST.YAML", "./Manifest.Yaml", "nested/../MANIFEST.YAML",
+		signatureFile, "MANIFEST.YAML.SIG", "./Manifest.Yaml.Sig", "nested/../MANIFEST.YAML.SIG",
+	} {
 		m := materialiser(t)
 		a := artefact("tidy", "body", 1)
 		a.Files = map[string]string{path: "payload"}

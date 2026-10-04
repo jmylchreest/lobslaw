@@ -112,7 +112,7 @@ func WatchOn(ctx context.Context, root string, opts WatchOpts) (<-chan Event, er
 		opts.Logger = slog.Default()
 	}
 
-	events := make(chan Event, 128)
+	events := make(chan Event, watchEventBuffer)
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("storage: fsnotify: %w", err)
@@ -143,9 +143,9 @@ func defaultPollInterval(backend string) time.Duration {
 	case "local":
 		return -1 // disable polling; fsnotify is complete
 	case "nfs", "rclone":
-		return 5 * time.Minute
+		return DefaultRemotePollInterval
 	default:
-		return 5 * time.Minute
+		return DefaultRemotePollInterval
 	}
 }
 

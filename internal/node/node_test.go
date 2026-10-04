@@ -144,6 +144,20 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 				MemoryKey:  mustKey(t),
 			},
 		},
+		{
+			name: "operator policy rule with a subject the engine cannot match",
+			cfg: node.Config{
+				NodeID:     "node-1",
+				ListenAddr: "127.0.0.1:0",
+				Creds:      creds,
+				Policy: config.PolicyConfig{
+					Rules: []config.PolicyRuleConfig{
+						{ID: "deny-telegram-write-file", Subject: "channel:telegram",
+							Action: "tool:exec", Resource: "write_file", Effect: "deny", Priority: 20},
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -153,6 +167,62 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A config with a subject the policy engine cannot match must fail
+// boot loudly enough that the operator can fix it: the rule id, the
+// subject that was rejected, and what would have worked instead.
+//
+// Precedent: PR #299 rejected a blank trigger.domains entry at boot
+// rather than let a routing rule silently match nothing. A policy
+// rule that never applies is the same failure mode, worse here
+// because it can be a deny the operator believes is in force.
+func TestNewOperatorRuleSubjectErrorNamesRuleSubjectAndKinds(t *testing.T) {
+	t.Parallel()
+	creds := signNodeCert(t, t.TempDir(), "node-1")
+
+	_, err := node.New(node.Config{
+		NodeID:     "node-1",
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		Policy: config.PolicyConfig{
+			Rules: []config.PolicyRuleConfig{
+				{ID: "deny-telegram-write-file", Subject: "channel:telegram",
+					Action: "tool:exec", Resource: "write_file", Effect: "deny", Priority: 20},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("New should have refused a rule with an unmatchable subject")
+	}
+	for _, want := range []string{"deny-telegram-write-file", "channel:telegram", "user:", "role:", "scope:"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// Every subject the engine can actually match must still boot: this
+// is not a case of rejecting operator config wholesale.
+func TestNewAcceptsOperatorRulesWithMatchableSubjects(t *testing.T) {
+	t.Parallel()
+	creds := signNodeCert(t, t.TempDir(), "node-1")
+
+	n, err := node.New(node.Config{
+		NodeID:     "node-1",
+		ListenAddr: "127.0.0.1:0",
+		Creds:      creds,
+		Policy: config.PolicyConfig{
+			Rules: []config.PolicyRuleConfig{
+				{ID: "owner-allow-x", Subject: "scope:owner", Action: "tool:exec", Resource: "x", Effect: "allow", Priority: 20},
+				{ID: "everyone-allow-y", Subject: "*", Action: "tool:exec", Resource: "y", Effect: "allow", Priority: 1},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New(...) with matchable subjects should not fail config validation: %v", err)
+	}
+	t.Cleanup(func() { _ = n.Shutdown(context.Background()) })
 }
 
 // TestSingleNodeStartAndPolicyRoundTrip is the Phase 2.6 headline

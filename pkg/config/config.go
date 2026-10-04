@@ -444,10 +444,13 @@ type PolicyConfig struct {
 	// Rules are operator-declared [[policy.rules]] entries seeded
 	// at boot via raft. Each rule mirrors lobslawv1.PolicyRule
 	// fields. Subjects MUST be "kind:value" (scope:owner,
-	// user:alice, role:admin) or "*" — bare strings like "owner"
-	// are treated as malformed (fail-closed) by the engine.
-	// Higher Priority wins. Default-deny seeds for builtins land
-	// at priority=10; operator allow rules typically use 20+.
+	// user:alice, role:admin), "*", or empty (both wildcards match
+	// everyone). A bare string like "owner", an empty value like
+	// "user:", or a kind the engine does not match fails the node
+	// at boot rather than seeding a rule that would silently never
+	// apply. Higher Priority wins. Sensitive built-ins get no seed
+	// at all (fall through to default-deny); operator allow rules
+	// typically use priority 20+.
 	Rules []PolicyRuleConfig `koanf:"rules,omitempty"`
 }
 
@@ -1977,12 +1980,22 @@ type SkillsConfig struct {
 	DevSource string `koanf:"dev_source,omitempty"`
 }
 
+// GoogleCalendarConfig enables the trusted per-user Calendar connector.
+type GoogleCalendarConfig struct {
+	Enabled         bool   `koanf:"enabled"`
+	ClientIDRef     string `koanf:"client_id_ref"`
+	ClientSecretRef string `koanf:"client_secret_ref"`
+	CallbackURL     string `koanf:"callback_url"`
+}
+
 // SecurityConfig carries cross-cutting safety controls: the egress
 // filter's ACL inputs, future subprocess sandbox knobs, etc. Each
 // field is independently optional — empty struct is valid and
 // produces sensible-default behaviour (deny-by-default ACL with
 // permissive fetch_url).
 type SecurityConfig struct {
+	GoogleCalendar GoogleCalendarConfig `koanf:"google_calendar"`
+
 	// SessionGrantTTL bounds an "approve for the rest of this
 	// conversation" grant. Zero takes the default of 24h.
 	//

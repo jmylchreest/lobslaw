@@ -98,12 +98,12 @@ func TestSlackLimitsAreClamped(t *testing.T) {
 	read, search := slackTools(t, s)
 
 	read(context.Background(), map[string]string{"channel": "C1", "limit": "100000"}) //nolint:errcheck // asserting the clamp, not the call
-	if s.gotLimit > 200 {
-		t.Errorf("read limit = %d, above the 200 ceiling", s.gotLimit)
+	if s.gotLimit > maxSlackReadLimit {
+		t.Errorf("read limit = %d, above the %d ceiling", s.gotLimit, maxSlackReadLimit)
 	}
 	search(context.Background(), map[string]string{"query": "q", "limit": "100000"}) //nolint:errcheck // as above
-	if s.gotLimit > 25 {
-		t.Errorf("search limit = %d, above the 25 ceiling", s.gotLimit)
+	if s.gotLimit > maxSlackSearchLimit {
+		t.Errorf("search limit = %d, above the %d ceiling", s.gotLimit, maxSlackSearchLimit)
 	}
 }
 

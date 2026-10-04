@@ -3,7 +3,6 @@ package policy
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -86,6 +85,14 @@ func (s *Service) AddRule(ctx context.Context, req *lobslawv1.AddRuleRequest) (*
 	if req.Rule.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "rule.id is required (auto-generation lands with Phase 4)")
 	}
+	// Config seeding and approval minting both validate a subject
+	// before they ever call this, but AddRule is the gRPC surface
+	// underneath both of them, and any other authenticated caller can
+	// reach it directly. Checked here too, so a rule the engine will
+	// never match cannot be stored at all, over any path.
+	if err := ValidateSubject(req.Rule.Subject); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	entry := &lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -99,7 +106,7 @@ func (s *Service) AddRule(ctx context.Context, req *lobslawv1.AddRuleRequest) (*
 		return nil, status.Errorf(codes.Internal, "marshal log entry: %v", err)
 	}
 
-	res, err := s.raft.Apply(data, 5*time.Second)
+	res, err := s.raft.Apply(data, policyApplyTimeout)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "raft apply: %v", err)
 	}

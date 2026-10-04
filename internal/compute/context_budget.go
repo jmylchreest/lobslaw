@@ -196,9 +196,9 @@ func truncateAtRune(s string, n int) string {
 // budget just needs to be in the right order of magnitude.
 func estimateTokens(m Message) int {
 	const perMessageOverhead = 4
-	n := len(m.Content) / 4
+	n := len(m.Content) / estimatedBytesPerToken
 	for _, tc := range m.ToolCalls {
-		n += (len(tc.Name) + len(tc.Arguments)) / 4
+		n += (len(tc.Name) + len(tc.Arguments)) / estimatedBytesPerToken
 		n += perMessageOverhead
 	}
 	if m.ToolCallID != "" {

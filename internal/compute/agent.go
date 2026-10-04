@@ -1545,7 +1545,7 @@ func ErrorText(err error) string {
 // bareDispatch is the no-registry path: one injected provider, no
 // chain, no label to attribute a cost to.
 func (a *Agent) bareDispatch(ctx context.Context, req ChatRequest) (*dispatchResult, error) {
-	resp, err := a.cfg.Provider.Chat(ctx, req)
+	resp, err := chatWithTimeout(ctx, a.cfg.Provider, req, a.cfg.Roles.TimeoutFor(RoleMain))
 	if err != nil {
 		return nil, err
 	}
@@ -1689,7 +1689,7 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 			continue
 		}
 		started := time.Now()
-		resp, err := entry.Client.Chat(ctx, req)
+		resp, err := chatWithTimeout(ctx, entry.Client, req, a.cfg.Roles.TimeoutFor(RoleMain))
 		elapsed := time.Since(started)
 		if err == nil {
 			a.cfg.Health.RecordSuccess(entry.Label)

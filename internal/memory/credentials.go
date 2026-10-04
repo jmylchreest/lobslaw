@@ -78,6 +78,10 @@ func CredentialKey(provider, subject string) (string, error) {
 // AccessToken / RefreshToken are decrypted bytes.
 type PlaintextCredential struct {
 	ID                    string
+	Generation            string
+	Owner                 string
+	Connector             string
+	ConnectorData         []byte
 	Provider              string
 	Subject               string
 	AccessToken           string
@@ -94,7 +98,7 @@ type PlaintextCredential struct {
 // Get returns a decrypted credential by (provider, subject). Returns
 // types.ErrNotFound when no record exists. Reads are local; no
 // raft round-trip.
-func (s *CredentialService) Get(_ context.Context, provider, subject string) (*PlaintextCredential, error) {
+func (s *CredentialService) Get(ctx context.Context, provider, subject string) (*PlaintextCredential, error) {
 	if s.store == nil {
 		return nil, errors.New("credentials: store not wired")
 	}
@@ -110,13 +114,16 @@ func (s *CredentialService) Get(_ context.Context, provider, subject string) (*P
 	if err := proto.Unmarshal(raw, &rec); err != nil {
 		return nil, fmt.Errorf("credentials: unmarshal %s: %w", key, err)
 	}
+	if err := authorizeCredential(ctx, &rec); err != nil {
+		return nil, err
+	}
 	return s.decrypt(&rec)
 }
 
 // List returns every credential in the bucket, decrypted. Used by
 // the operator's "credentials list" CLI/builtin. Sensitive — caller
 // must apply the appropriate authorization gate (scope:owner only).
-func (s *CredentialService) List(_ context.Context) ([]*PlaintextCredential, error) {
+func (s *CredentialService) List(ctx context.Context) ([]*PlaintextCredential, error) {
 	if s.store == nil {
 		return nil, errors.New("credentials: store not wired")
 	}
@@ -125,6 +132,9 @@ func (s *CredentialService) List(_ context.Context) ([]*PlaintextCredential, err
 		var rec lobslawv1.CredentialRecord
 		if err := proto.Unmarshal(raw, &rec); err != nil {
 			return err
+		}
+		if authorizeCredential(ctx, &rec) != nil {
+			return nil
 		}
 		decoded, derr := s.decrypt(&rec)
 		if derr != nil {
@@ -154,6 +164,16 @@ func (s *CredentialService) Put(ctx context.Context, p *PlaintextCredential) err
 	if err != nil {
 		return err
 	}
+	if err := authorizeCredential(ctx, rec); err != nil {
+		return err
+	}
+	if old, err := s.loadCredential(p.Provider, p.Subject); err == nil {
+		if err := authorizeCredential(ctx, old); err != nil {
+			return err
+		}
+	} else if !IsCredentialNotFound(err) {
+		return err
+	}
 	rec.Generation = ids.New()
 	entry := &lobslawv1.LogEntry{
 		Op:      lobslawv1.LogOp_LOG_OP_PUT,
@@ -180,11 +200,20 @@ func (s *CredentialService) Delete(ctx context.Context, provider, subject string
 	if err != nil {
 		return err
 	}
+	var owner, connector string
+	if old, err := s.loadCredential(provider, subject); err == nil {
+		owner, connector = old.Owner, old.Connector
+		if err := authorizeCredential(ctx, old); err != nil {
+			return err
+		}
+	} else if !IsCredentialNotFound(err) {
+		return err
+	}
 	entry := &lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_DELETE,
 		Id: key,
 		Payload: &lobslawv1.LogEntry_Credential{
-			Credential: &lobslawv1.CredentialRecord{Provider: provider, Subject: subject},
+			Credential: &lobslawv1.CredentialRecord{Provider: provider, Subject: subject, Owner: owner, Connector: connector},
 		},
 	}
 	data, err := proto.Marshal(entry)
@@ -314,6 +343,9 @@ func (s *CredentialService) IssueForSkill(ctx context.Context, provider, subject
 		if err != nil {
 			return nil, err
 		}
+		if err := authorizeCredential(ctx, rec); err != nil {
+			return nil, err
+		}
 		issue, err := s.credentialIssue(rec, skill)
 		if err != nil {
 			return nil, err
@@ -345,6 +377,9 @@ func (s *CredentialService) IssueForSkill(ctx context.Context, provider, subject
 					if result.err != nil {
 						return nil, result.err
 					}
+					if err := authorizeCredential(ctx, result.record); err != nil {
+						return nil, err
+					}
 					return s.credentialIssue(result.record, skill)
 				}
 			}
@@ -368,7 +403,15 @@ func (s *CredentialService) encrypt(p *PlaintextCredential) (*lobslawv1.Credenti
 	if err != nil {
 		return nil, fmt.Errorf("credentials: seal refresh token: %w", err)
 	}
+	var connectorData []byte
+	if len(p.ConnectorData) > 0 {
+		connectorData, err = crypto.Seal(s.key, p.ConnectorData)
+		if err != nil {
+			return nil, err
+		}
+	}
 	rec := &lobslawv1.CredentialRecord{
+		Owner: p.Owner, Connector: p.Connector, ConnectorData: connectorData,
 		Id:            p.ID,
 		Provider:      p.Provider,
 		Subject:       p.Subject,
@@ -408,7 +451,15 @@ func (s *CredentialService) decrypt(rec *lobslawv1.CredentialRecord) (*Plaintext
 	if err != nil {
 		return nil, fmt.Errorf("credentials: open refresh token: %w", err)
 	}
+	var connectorData []byte
+	if len(rec.ConnectorData) > 0 {
+		connectorData, err = crypto.Open(s.key, rec.ConnectorData)
+		if err != nil {
+			return nil, err
+		}
+	}
 	out := &PlaintextCredential{
+		Generation: rec.Generation, Owner: rec.Owner, Connector: rec.Connector, ConnectorData: connectorData,
 		ID:            rec.Id,
 		Provider:      rec.Provider,
 		Subject:       rec.Subject,

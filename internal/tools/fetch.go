@@ -77,11 +77,11 @@ func RegisterFetchBuiltin(b *Builtins, cfg FetchConfig) error {
 	}
 	ttl := cfg.CacheTTL
 	if ttl <= 0 {
-		ttl = 10 * time.Minute
+		ttl = DefaultFetchCacheTTL
 	}
 	size := cfg.CacheSize
 	if size <= 0 {
-		size = 64
+		size = DefaultFetchCacheSize
 	}
 	cache := &fetchCache{ttl: ttl, maxSize: size, entries: map[string]*fetchCacheEntry{}}
 	return b.Register("fetch_url", newFetchHandler(client, cache, ua, antibot))
@@ -224,7 +224,7 @@ func newFetchHandler(client *http.Client, cache *fetchCache, userAgent string, a
 		if err != nil {
 			return nil, 1, fmt.Errorf("fetch_url: read body: %w", err)
 		}
-		if resp.StatusCode >= 400 {
+		if resp.StatusCode >= http.StatusBadRequest {
 			// A refusal a browser might get past, and a solver
 			// configured to try. Only here — after a direct fetch has
 			// actually been refused — so pages that do not need a
@@ -243,9 +243,9 @@ func newFetchHandler(client *http.Client, cache *fetchCache, userAgent string, a
 				// solver's error would hide what the site actually
 				// said.
 				return nil, 1, fmt.Errorf("fetch_url: HTTP %d: %s (antibot retry failed: %v)",
-					resp.StatusCode, compute.TruncateBodyFor(body, 256), aerr)
+					resp.StatusCode, compute.TruncateBodyFor(body, fetchDiagnosticMaxBytes), aerr)
 			}
-			return nil, 1, fmt.Errorf("fetch_url: HTTP %d: %s", resp.StatusCode, compute.TruncateBodyFor(body, 256))
+			return nil, 1, fmt.Errorf("fetch_url: HTTP %d: %s", resp.StatusCode, compute.TruncateBodyFor(body, fetchDiagnosticMaxBytes))
 		}
 
 		plain, links := htmlToPlainWithLinks(string(body), resp.Header.Get("Content-Type"), raw)
@@ -326,8 +326,8 @@ func extractAnchors(html, pageURL string) []fetchLink {
 		if text == "" {
 			text = resolved
 		}
-		if len(text) > 200 {
-			text = textutil.Truncate(text, "…", 200)
+		if len(text) > fetchLinkTextMaxChars {
+			text = textutil.Truncate(text, "…", fetchLinkTextMaxChars)
 		}
 		key := resolved + "|" + text
 		if seen[key] {

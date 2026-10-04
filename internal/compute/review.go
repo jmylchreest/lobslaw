@@ -206,7 +206,7 @@ func (f *ReviewFork) memoryThreshold() int {
 // review is an LLM call: without the turn's values on it, a failure in
 // the fork is unattributable to the turn that caused it.
 func (f *ReviewFork) Consider(ctx context.Context, req ProcessMessageRequest, messages []Message, toolCalls int) {
-	if f == nil {
+	if f == nil || containsCalendarData(messages) {
 		return
 	}
 	axes := f.shouldReview(req, toolCalls)
@@ -233,6 +233,9 @@ func (f *ReviewFork) Consider(ctx context.Context, req ProcessMessageRequest, me
 }
 
 func (f *ReviewFork) run(ctx context.Context, req ProcessMessageRequest, messages []Message, axes reviewAxes) error {
+	if containsCalendarData(messages) {
+		return nil
+	}
 	existing, err := f.cfg.Store.Existing(ArtefactSkill, ownerOf(req))
 	if err != nil {
 		return fmt.Errorf("read existing artefacts: %w", err)
@@ -401,4 +404,18 @@ func parseReviewDecision(content string) (*reviewDecision, error) {
 		return nil, fmt.Errorf("refine with no target")
 	}
 	return &out, nil
+}
+
+// Calendar results are personal data and may also carry hostile instructions.
+// Do not send a transcript containing these calls to the self-learning fork.
+// This guards identifiable tool data, not arbitrary later user paraphrases.
+func containsCalendarData(messages []Message) bool {
+	for _, m := range messages {
+		for _, call := range m.ToolCalls {
+			if strings.HasPrefix(call.Name, "calendar_") {
+				return true
+			}
+		}
+	}
+	return false
 }

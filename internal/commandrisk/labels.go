@@ -74,7 +74,8 @@ var labelSeverity = map[RiskLabel]int{
 func L(labels ...RiskLabel) []RiskLabel { return labels }
 
 // MergeLabels unions sets, dropping duplicates and ordering by display
-// severity so the same command always renders the same way.
+// severity so the same command always renders the same way. No effect implies
+// another: a network or write grant must not silently authorize a separate read.
 func MergeLabels(sets ...[]RiskLabel) []RiskLabel {
 	seen := map[RiskLabel]bool{}
 	var out []RiskLabel
@@ -86,22 +87,6 @@ func MergeLabels(sets ...[]RiskLabel) []RiskLabel {
 			seen[l] = true
 			out = append(out, l)
 		}
-	}
-	// "reads" means reads AND NOTHING ELSE.
-	//
-	// Every command reads something — `sed -i` reads the file it
-	// rewrites, `rm` reads the directory it empties — so carrying the
-	// label alongside a stronger one adds a word and no information.
-	// Worse, it would make an approved set of exactly {writes} reject
-	// `sed -i`, which is not what anybody writing that meant.
-	if len(out) > 1 {
-		kept := out[:0]
-		for _, l := range out {
-			if l != LabelReads {
-				kept = append(kept, l)
-			}
-		}
-		out = kept
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		return labelSeverity[out[i]] > labelSeverity[out[j]]

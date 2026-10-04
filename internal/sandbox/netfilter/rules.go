@@ -55,8 +55,8 @@ func GenerateRules(rs RuleSet) (string, error) {
 		fmt.Fprintf(&b, "add rule inet %s output meta oif lo accept\n", TableName)
 	}
 	if rs.AllowDNS {
-		fmt.Fprintf(&b, "add rule inet %s output udp dport 53 accept\n", TableName)
-		fmt.Fprintf(&b, "add rule inet %s output tcp dport 53 accept\n", TableName)
+		fmt.Fprintf(&b, "add rule inet %s output udp dport %d accept\n", TableName, dnsPort)
+		fmt.Fprintf(&b, "add rule inet %s output tcp dport %d accept\n", TableName, dnsPort)
 	}
 
 	v4, v6 := splitCIDRs(rs.AllowCIDRs)

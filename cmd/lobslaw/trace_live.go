@@ -51,7 +51,7 @@ func traceListLive(args []string) error {
 	fs := newFlagSet("trace list", flag.ExitOnError)
 	var node liveNode
 	node.bind(fs)
-	limit := fs.Int("limit", 20, "how many turns to list")
+	limit := fs.Int("limit", defaultTraceListLimit, "how many turns to list")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

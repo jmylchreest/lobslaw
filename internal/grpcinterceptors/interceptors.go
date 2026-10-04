@@ -97,7 +97,7 @@ func RecoveryStream(logger *slog.Logger) grpc.StreamServerInterceptor {
 // is plenty — request IDs don't need to be globally unique, just
 // distinct across concurrent RPCs on this process.
 func newRequestID() string {
-	var b [8]byte
+	var b [requestIDBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		// rand.Read should never fail on a sane OS; fall back to a
 		// constant so logging keeps functioning.

@@ -61,3 +61,9 @@ const (
 	// construction rather than by both being typed as 8443.
 	DefaultGatewayHTTPPort = 8443
 )
+
+// The initial buffer is an allocation hint; the maximum bounds one dotenv line.
+const (
+	dotenvInitialBufferBytes int = 64 << 10
+	maxDotenvLineBytes       int = 1 << 20
+)

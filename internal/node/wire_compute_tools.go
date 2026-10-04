@@ -27,6 +27,9 @@ import (
 // by hand; and the whole pass must precede Agent construction, which
 // snapshots the tool registry.
 func (n *Node) registerAgentTools(builtins *tools.Builtins, embedder compute.EmbeddingProvider) (func() []promptgen.BinaryInfo, error) {
+	if n.cfg.Security.GoogleCalendar.Enabled && (n.raft == nil || n.store == nil) {
+		return nil, fmt.Errorf("google calendar requires local memory and policy services")
+	}
 	var binariesProvider func() []promptgen.BinaryInfo
 
 	// Everything in this block persists through Raft and reads back
@@ -299,6 +302,9 @@ func (n *Node) wireCommitmentTools(builtins *tools.Builtins) error {
 // surfaces "not configured" at call time. Default-deny policy seed
 // gates these to scope:owner.
 func (n *Node) wireCredentialsTools(builtins *tools.Builtins) error {
+	if err := n.wireCalendar(builtins); err != nil {
+		return err
+	}
 	if n.credentialSvc == nil || n.oauthTracker == nil {
 		return nil
 	}
@@ -423,7 +429,7 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 				"name", name, "panic", r)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), toolBootstrapTimeout)
 	defer cancel()
 
 	// Resolve version="latest" against GitHub's releases API, then
@@ -506,7 +512,7 @@ func (n *Node) autoInstallBinary(satisfier *binaries.Satisfier, name string, dec
 		currentOut := runDetect(ctx, decl.Detect)
 		if !strings.Contains(currentOut, declVersion) {
 			force = true
-			reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, 80) + ")"
+			reason = "version mismatch (declared=" + declVersion + ", detect=" + truncateLine(currentOut, toolVersionPreviewRunes) + ")"
 		} else {
 			n.log.Debug("binary: auto-install skip (version match)",
 				"name", name, "version", declVersion)

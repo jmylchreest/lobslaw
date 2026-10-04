@@ -146,11 +146,15 @@ On Slack these arrive as `/lobslaw <command>`; a directly-registered `/status` a
 
 ```toml
 [[gateway.channels]]
-type          = "rest"
-listen        = ":8443"
-require_auth  = true
-jwt_validator = "google"
+type = "rest"
+
+[auth]
+require_auth = true
+issuer       = "https://accounts.google.com"
+jwks_url     = "https://www.googleapis.com/oauth2/v3/certs"
 ```
+
+REST is served on the gateway HTTP port (`[gateway].http_port`, 8443 by default); the channel has no listener of its own. Token validation is configured once, in `[auth]` (see [JWT validation](#jwt-validation)), not per channel.
 
 Speaks the standard agent shape:
 
@@ -230,33 +234,45 @@ replicated or backed up. Re-upload expired files for later conversation turns.
 Media turns remain separate under `debounce` and `smart` queue modes; `latest`
 and `off` still return an explicit rejection when they discard a request.
 
-### JWT validators
+### JWT validation
+
+There is one validator per node, configured in `[auth]`. Either fetch signing keys from a JWKS endpoint:
 
 ```toml
-[gateway.jwt_validators.google]
-type    = "jwks"
-jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
-issuer  = "https://accounts.google.com"
-
-[gateway.jwt_validators.cloudflare-access]
-type    = "jwks"
-jwks_url = "https://<team>.cloudflareaccess.com/cdn-cgi/access/certs"
-audience = "<application-aud>"
+[auth]
+require_auth = true
+issuer       = "https://<team>.cloudflareaccess.com"
+jwks_url     = "https://<team>.cloudflareaccess.com/cdn-cgi/access/certs"
 ```
 
-The validator pulls JWKS, verifies signature, extracts standard claims (sub, scope, iss, aud), maps to lobslaw's `Claims` struct via `gateway.user_scopes` overrides.
+or verify HS256 tokens signed with a shared secret of at least 32 bytes:
+
+```toml
+[auth]
+require_auth   = true
+issuer         = "lobslaw-home"
+allow_hs256    = true
+jwt_secret_ref = "env:LOBSLAW_JWT_SECRET"
+```
+
+The validator verifies the signature and expiry, and rejects a token whose `iss` differs from `issuer`; a token with no `iss` claim is not rejected for it. The audience (`aud`) is not checked, so with a shared identity provider such as Cloudflare Access, any application's token from that issuer is accepted. The token's `sub` names the user: it must equal a `[[user.channels]]` `type = "rest"` address (see [User scopes](#user-scopes)).
+
+`require_auth = true` rejects requests without a valid token. With it false, a valid token is still honoured and requests without one run anonymously in the default scope.
+
+Unknown keys are ignored rather than rejected, so a misspelt or per-channel `require_auth` leaves the endpoint open without any warning.
 
 ## Webhooks (inbound)
 
 ```toml
 [[gateway.channels]]
-type   = "webhook"
-listen = ":8444"
-path   = "/hooks"
-secret_ref = "env:WEBHOOK_HMAC_SECRET"
+type              = "webhook"
+name              = "ci"
+webhook_path      = "/hooks/ci"            # default: /webhook/<name>
+shared_secret_ref = "env:WEBHOOK_SHARED_SECRET"
+scope             = "webhook"                  # default
 ```
 
-External services POST to `https://<host>:8444/hooks`. The body is HMAC-verified, then queued as if a user sent it from a `webhook` channel. Useful for: GitHub push events, Stripe webhooks, IoT triggers.
+Webhooks are served on the gateway HTTP port. External services POST to `http://<host>:8443/hooks/ci` with `Authorization: Bearer <shared secret>`, either JSON (`{"prompt": "..."}`) or a `text/plain` body used as the prompt. Each POST becomes one agent turn in `scope`, and the reply is returned in the response body. The secret is compared as a bearer token; the request body is not HMAC-signed, so a sender that only signs payloads (GitHub's `X-Hub-Signature-256`, Stripe's `Stripe-Signature`) needs a relay that adds the header. Useful for anything that can set a header: CI jobs, Home Assistant automations, scripts, IoT triggers.
 
 ## User scopes
 

@@ -24,7 +24,7 @@ func checkShareArchive(raw []byte) error {
 			return errors.New("clawhub: unsafe or duplicate archive path")
 		}
 		seen[name] = true
-		if len(seen) > sharing.MaxFiles+2 || size < 0 || size > sharing.MaxBytes || total > sharing.MaxBytes-size {
+		if len(seen) > sharing.MaxFiles+shareMetadataFileCount || size < 0 || size > sharing.MaxBytes || total > sharing.MaxBytes-size {
 			return errors.New("clawhub: expanded package exceeds sharing limits")
 		}
 		if regular {
@@ -32,7 +32,7 @@ func checkShareArchive(raw []byte) error {
 		}
 		return nil
 	}
-	if len(raw) >= 2 && raw[0] == 0x1f && raw[1] == 0x8b {
+	if len(raw) >= len(gzipMagic) && string(raw[:len(gzipMagic)]) == gzipMagic {
 		if err := checkShareTar(raw, check); err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func checkShareTar(raw []byte, check func(string, int64, bool) error) error {
 		return err
 	}
 	defer func() { _ = gz.Close() }()
-	tr := tar.NewReader(io.LimitReader(gz, sharing.MaxBytes+(256<<10)))
+	tr := tar.NewReader(io.LimitReader(gz, sharing.MaxBytes+shareArchiveOverheadBytes))
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {

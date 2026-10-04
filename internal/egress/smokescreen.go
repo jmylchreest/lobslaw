@@ -194,7 +194,7 @@ func NewSmokescreenProvider(cfg SmokescreenConfig) (*SmokescreenProvider, error)
 	p.server = &http.Server{
 		ErrorLog:          logging.StandardLogger(logger, slog.LevelError),
 		Handler:           proxy,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: proxyReadHeaderTimeout,
 	}
 	go func() {
 		if serveErr := p.server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
@@ -313,8 +313,8 @@ func (p *SmokescreenProvider) buildClient(role string) *http.Client {
 	transport := &http.Transport{
 		Proxy:              http.ProxyURL(p.proxyURL),
 		ProxyConnectHeader: http.Header{roleHeader: []string{role}},
-		MaxIdleConns:       100,
-		IdleConnTimeout:    90 * time.Second,
+		MaxIdleConns:       proxyMaxIdleConns,
+		IdleConnTimeout:    proxyIdleConnTimeout,
 	}
 	return &http.Client{
 		Transport: &roleInjector{base: transport, role: role},

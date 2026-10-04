@@ -112,3 +112,16 @@ revisions must never be passed through `Number()`.
 Regression coverage includes omitted versus empty/false patches, generated enum
 values, binary/JSON round trips at uint64 limits, and local/remote REST reads and
 conditional writes with revisions above JavaScript's exact range.
+
+## Consolidation and persisted schema
+
+The four delivery stages are consolidated in PR #348 and reconciled with main.
+Released Raft payload tags remain unchanged, including calendar integration state
+(38) and settings (39), and credential owner/connector metadata. Unreleased bot
+inbox and group payloads use tags 53 and 54. Buf breaking checks against main
+verify the released schema remains compatible.
+
+Pre-merge #348 development Raft stores that used the earlier bot payload tags are
+not directly compatible with this schema. Do not replay those development logs
+with the reconciled binary; retain their backups and use a fresh development
+store. This limitation does not apply to stores written by main.

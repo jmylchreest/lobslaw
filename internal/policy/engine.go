@@ -239,7 +239,11 @@ func (e *Engine) conditionsHold(ctx context.Context, conds []types.Condition) (b
 }
 
 // subjectMatches compares a rule subject like "user:alice",
-// "role:admin", "scope:default", or "*" against the claims.
+// "role:admin", "scope:default", or "*" against the claims. The kinds
+// it knows are matchableSubjectKinds. ValidateSubject checks a rule
+// against that same list before it is written, so a kind that falls
+// through to the default case below should never reach here from a
+// rule this process wrote itself.
 func subjectMatches(subject string, claims *types.Claims) bool {
 	if subject == "" || subject == "*" {
 		return true

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -60,6 +59,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	// skills with destructive actions (e.g. clear_workspace) extend
 	// this map.
 	noSeedTools := map[string]bool{
+		"calendar_settings": true, "calendar_settings_update": true, "calendar_agenda": true, "calendar_list": true, "calendar_events": true, "calendar_event": true, "calendar_event_create": true, "calendar_event_update": true,
 		"soul_get":              true,
 		"soul_reset":            true,
 		"soul_tune":             true,
@@ -145,11 +145,11 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	seeded := []string{}
 	for _, td := range seedTargets {
 		effect := "allow"
-		priority := int32(1)
+		priority := builtinAllowSeedPriority
 		ruleID := "lobslaw-builtin-" + td.Name
 		if defaultDenyBuiltins[td.Name] {
 			effect = "deny"
-			priority = 10
+			priority = builtinDenySeedPriority
 			ruleID = "lobslaw-builtin-deny-" + td.Name
 		}
 		want := &lobslawv1.PolicyRule{
@@ -202,7 +202,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 			n.log.Warn("policy: marshal GC entry failed", "id", id, "err", err)
 			return
 		}
-		if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 			n.log.Warn("policy: GC stale seed rule failed", "id", id, "err", err)
 			return
 		}
@@ -465,7 +465,7 @@ func (n *Node) seedDreamTask(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("marshal dream task: %w", err)
 	}
-	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+	if _, err := n.raft.Apply(data, nodeProposalTimeout); err != nil {
 		return fmt.Errorf("apply dream task: %w", err)
 	}
 	n.log.Info("memory: seeded dream task", "id", dreamTaskID, "schedule", schedule)

@@ -34,6 +34,8 @@ type RESTConfig struct {
 	// UIWebEnabled records runtime intent even when this binary excludes web support.
 	UIWebEnabled  bool
 	RemoteConsole lobslawv1.ConsoleServiceClient
+	Calendar      CalendarManagement
+	CalendarOAuth http.Handler
 	// IncomingDir holds temporary, owner-bound REST media uploads.
 	IncomingDir string
 
@@ -243,13 +245,13 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 		cfg.Addr = fmt.Sprintf(":%d", config.DefaultGatewayHTTPPort)
 	}
 	if cfg.ReadTimeout <= 0 {
-		cfg.ReadTimeout = 30 * time.Second
+		cfg.ReadTimeout = restReadTimeout
 	}
 	if cfg.WriteTimeout <= 0 {
-		cfg.WriteTimeout = 60 * time.Second
+		cfg.WriteTimeout = restWriteTimeout
 	}
 	if cfg.IdleTimeout <= 0 {
-		cfg.IdleTimeout = 2 * time.Minute
+		cfg.IdleTimeout = restIdleTimeout
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
@@ -265,20 +267,14 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 	}
 }
 
-// Start binds the listener and serves. Blocks until ctx is
-// cancelled or the HTTP server returns an error. A cancelled ctx
-// triggers a graceful shutdown with a bounded timeout.
-func (s *Server) Start(ctx context.Context) error {
-	if err := s.logins.load(s.cfg.LoginSessionFile); err != nil {
-		return fmt.Errorf("rest: load browser sessions: %w", err)
+// registerRoutes wires HTTP adapters to their application services.
+func (s *Server) registerRoutes(mux *http.ServeMux) {
+	if s.cfg.Calendar != nil {
+		mux.HandleFunc("/v1/calendar", s.handleCalendar)
 	}
-	if err := s.initPush(); err != nil {
-		return fmt.Errorf("rest: web push: %w", err)
+	if s.cfg.CalendarOAuth != nil {
+		mux.Handle("/integrations/google/", s.cfg.CalendarOAuth)
 	}
-	if s.cfg.Telegram != nil && s.cfg.Telegram.NotificationsEnabled() {
-		s.cfg.Telegram.cfg.NotificationBotCheck = s.validateNotificationBot
-	}
-	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/push", s.handlePush)
 	mux.HandleFunc("/v1/messages", s.consoleRoute(s.handleMessages))
 	if s.cfg.TaskApprovals != nil || s.cfg.RemoteConsole != nil {
@@ -315,6 +311,24 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.registerTeamRoutes(mux)
 	s.mountConsole(mux)
+
+}
+
+// Start binds the listener and serves. Blocks until ctx is
+// cancelled or the HTTP server returns an error. A cancelled ctx
+// triggers a graceful shutdown with a bounded timeout.
+func (s *Server) Start(ctx context.Context) error {
+	if err := s.logins.load(s.cfg.LoginSessionFile); err != nil {
+		return fmt.Errorf("rest: load browser sessions: %w", err)
+	}
+	if err := s.initPush(); err != nil {
+		return fmt.Errorf("rest: web push: %w", err)
+	}
+	if s.cfg.Telegram != nil && s.cfg.Telegram.NotificationsEnabled() {
+		s.cfg.Telegram.cfg.NotificationBotCheck = s.validateNotificationBot
+	}
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
 
 	if s.consoleEnabled() {
 		if err := checkConsoleBind(s.cfg.Addr, s.cfg.RequireAuth); err != nil {
@@ -395,7 +409,7 @@ func (s *Server) Start(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), restShutdownTimeout)
 		defer cancel()
 		_ = s.httpSrv.Shutdown(shutdownCtx)
 		return nil
@@ -782,7 +796,7 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 		s.jsonErr(w, http.StatusConflict, "prompt expired")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, restPromptMaxBytes)
 	var body struct {
 		Approve bool `json:"approve"`
 		// Scope is "once" | "session" | "always". Absent or

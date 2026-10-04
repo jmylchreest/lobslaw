@@ -228,7 +228,7 @@ func (h *TelegramHandler) learnedRequest(ctx context.Context, method, contentTyp
 	var result struct {
 		OK bool `json:"ok"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, telegramAPIResponseMaxBytes)).Decode(&result); err != nil {
 		return fmt.Errorf("invalid Telegram response")
 	}
 	if resp.StatusCode != http.StatusOK || !result.OK {

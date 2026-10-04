@@ -45,7 +45,7 @@ func NewTaskApprovalStore(raft raftApplier, store *Store) (*TaskApprovalStore, e
 }
 
 func validTaskIdentity(s string) bool {
-	return s != "" && len(s) <= 256 && !strings.ContainsAny(s, "\x00\r\n")
+	return s != "" && len(s) <= maxTaskIdentityBytes && !strings.ContainsAny(s, "\x00\r\n")
 }
 
 func (s *TaskApprovalStore) load(id, owner string) (*pb.TaskApprovalRecord, error) {
@@ -99,7 +99,7 @@ func (s *TaskApprovalStore) write(ctx context.Context, previous, next *pb.TaskAp
 	if err != nil {
 		return err
 	}
-	result, err := s.raft.Apply(data, 5*time.Second)
+	result, err := s.raft.Apply(data, taskApprovalApplyTimeout)
 	if err == nil {
 		if e, ok := result.(error); ok {
 			err = e
@@ -264,12 +264,12 @@ func (s *TaskApprovalStore) GetTaskApproval(_ context.Context, q *pb.GetTaskAppr
 	return &pb.GetTaskApprovalResponse{Record: taskMetadata(r)}, nil
 }
 func (s *TaskApprovalStore) ListTaskApproval(_ context.Context, q *pb.ListTaskApprovalRequest) (*pb.ListTaskApprovalResponse, error) {
-	if q == nil || !validTaskIdentity(q.Owner) || q.Limit < 0 || q.Limit > 100 {
-		return nil, status.Error(codes.InvalidArgument, "owner required; limit must be 0..100")
+	if q == nil || !validTaskIdentity(q.Owner) || q.Limit < 0 || q.Limit > MaxTaskApprovalListLimit {
+		return nil, status.Errorf(codes.InvalidArgument, "owner required; limit must be 0..%d", MaxTaskApprovalListLimit)
 	}
 	limit := int(q.Limit)
 	if limit == 0 {
-		limit = 50
+		limit = int(DefaultTaskApprovalListLimit)
 	}
 	out := &pb.ListTaskApprovalResponse{}
 	stop := errors.New("page complete")
@@ -397,8 +397,8 @@ func (s *TaskApprovalStore) ClaimTaskApproval(ctx context.Context, q *pb.ClaimTa
 	return &pb.ClaimTaskApprovalResponse{Record: n}, nil
 }
 func (s *TaskApprovalStore) FinishTaskApproval(ctx context.Context, q *pb.FinishTaskApprovalRequest) (*pb.FinishTaskApprovalResponse, error) {
-	if q == nil || len(q.Result) > 65536 {
-		return nil, status.Error(codes.InvalidArgument, "result must be at most 64 KiB")
+	if q == nil || len(q.Result) > maxTaskResultBytes {
+		return nil, status.Errorf(codes.InvalidArgument, "result must be at most %d KiB", maxTaskResultBytes>>10)
 	}
 	if !validTaskBudget(q.BudgetSpent) {
 		return nil, status.Error(codes.InvalidArgument, "invalid final budget")

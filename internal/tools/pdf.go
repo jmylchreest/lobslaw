@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -74,7 +73,7 @@ func RegisterPDFBuiltin(b *Builtins, cfgs ...PDFConfig) error {
 		}
 		client := cfg.HTTPClient
 		if client == nil {
-			client = &http.Client{Timeout: 120 * time.Second}
+			client = &http.Client{Timeout: defaultPDFTimeout}
 		}
 		handlers = append(handlers, compute.FailoverHandler{Label: cfg.Label, Tier: cfg.TrustTier, Fn: newReadPDFHandler(cfg, client)})
 	}
@@ -141,7 +140,7 @@ func newReadPDFHandler(cfg PDFConfig, client *http.Client) compute.BuiltinFunc {
 
 		body, _ := json.Marshal(pdfChatRequest{
 			Model:     cfg.Model,
-			MaxTokens: 4096,
+			MaxTokens: pdfMaxCompletionTokens,
 			Messages: []pdfChatMessage{{
 				Role: "user",
 				Content: []pdfChatPart{
@@ -166,7 +165,7 @@ func newReadPDFHandler(cfg PDFConfig, client *http.Client) compute.BuiltinFunc {
 		if resp.StatusCode != http.StatusOK {
 			return nil, 1, &compute.DriverError{
 				Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-				Err:   fmt.Errorf("read_pdf: HTTP %d: %s", resp.StatusCode, compute.TruncateBodyFor(raw, 512)),
+				Err:   fmt.Errorf("read_pdf: HTTP %d: %s", resp.StatusCode, compute.TruncateBodyFor(raw, compute.DiagnosticExcerptMaxBytes)),
 			}
 		}
 		var decoded struct {

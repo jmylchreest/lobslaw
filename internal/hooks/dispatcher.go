@@ -187,7 +187,7 @@ func (d *Dispatcher) runHook(ctx context.Context, cfg types.HookConfig, payload 
 	// is killed by ctx cancel. Without this, Wait blocks for the
 	// lifetime of any grandchild process that inherited our pipes
 	// (e.g. a sleep child of a shell hook).
-	cmd.WaitDelay = 500 * time.Millisecond
+	cmd.WaitDelay = hookWaitDelay
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -203,7 +203,7 @@ func (d *Dispatcher) runHook(ctx context.Context, cfg types.HookConfig, payload 
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			exitCode = exitErr.ExitCode()
 		}
-		if exitCode == 2 {
+		if exitCode == HookBlockExitCode {
 			return &Response{
 				Decision: types.HookBlock,
 				Reason:   stderr.String(),

@@ -205,8 +205,16 @@ func SoulTuneRecordIDFor(botID string) string {
 	return SoulTuneRecordID + ":" + botID
 }
 
+// BucketIntegrationSettings holds durable encrypted user connector preferences.
+const BucketIntegrationSettings = "integration_settings"
+
+// BucketIntegrationState holds encrypted short-lived connector state.
+const BucketIntegrationState = "integration_state"
+
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
+	BucketIntegrationSettings,
+	BucketIntegrationState,
 	BucketSkillInstallations,
 	BucketArchiveImports,
 	BucketArchiveMappings,

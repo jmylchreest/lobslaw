@@ -1466,6 +1466,11 @@ message CredentialRecord {
   string claimed_by = 15;
   google.protobuf.Timestamp refresh_deadline = 16;
   bool refresh_uncertain = 17;
+  // Connector credentials are private to this canonical principal and trusted
+  // connector. Legacy skill/credential APIs must not expose or mutate them.
+  string owner = 18;
+  string connector = 19;
+  bytes connector_data = 20; // encrypted connector metadata, never agent input
 }
 
 message AllowedScopes {
@@ -2127,6 +2132,18 @@ message SessionLease {
   uint64 revision = 5;
 }
 
+// Short-lived encrypted OAuth attempts and prepared external mutations.
+// Omitted from portable archives, retained in encrypted physical snapshots.
+message IntegrationStateRecord {
+  string id = 1;
+  string owner = 2;
+  string kind = 3;
+  bytes data = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  uint64 revision = 6;
+  string claimed_by = 7;
+}
+
 message LogEntry {
   LogOp op = 1;
   // Target record id for DELETE; same id also duplicates the record's
@@ -2165,9 +2182,12 @@ message LogEntry {
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
     BotRecord bot = 51;
-    BotInboxItem bot_inbox = 38;
-    GroupRecord group = 39;
+    BotInboxItem bot_inbox = 53;
+    GroupRecord group = 54;
     ShareBatch share_batch = 37;
+    IntegrationStateRecord integration_state = 38;
+    // Durable encrypted connector preferences; no expiry, separate from flows.
+    IntegrationStateRecord integration_settings = 39;
     TaskApprovalRecord task_approval = 50;
     TaskAdmission task_admission = 101;
   }

@@ -173,7 +173,8 @@ type TelegramConfig struct {
 	Prompts Prompts
 
 	// Learned exposes owner-scoped human review, never agent approval tools.
-	Learned LearnedReviews
+	Learned  LearnedReviews
+	Calendar CalendarManagement
 
 	// ConfirmationTTL mirrors RESTConfig.ConfirmationTTL. 0 → 5min.
 	ConfirmationTTL time.Duration
@@ -462,7 +463,7 @@ func NewTelegramHandler(cfg TelegramConfig, runner turn.Runner) (*TelegramHandle
 		// our bot's traffic to an attacker-controlled host.
 		base := egress.For("gateway/telegram").HTTPClient()
 		wrapped := *base
-		wrapped.Timeout = 30 * time.Second
+		wrapped.Timeout = telegramAPIRequestTimeout
 		client = &wrapped
 	}
 	base := cfg.APIBase
@@ -491,6 +492,7 @@ func NewTelegramHandler(cfg TelegramConfig, runner turn.Runner) (*TelegramHandle
 	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
 	RegisterBuiltinCommands(h.commands, h.conv)
 	h.registerLearnedCommand()
+	h.registerCalendarCommand()
 	// Nil leaves /grants unregistered — see RegisterGrantCommands.
 	RegisterGrantCommands(h.commands, cfg.SessionGrants)
 	return h, nil
@@ -516,7 +518,7 @@ func (h *TelegramHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, telegramUpdateMaxBytes)
 	var up tgUpdate
 	if err := json.NewDecoder(r.Body).Decode(&up); err != nil {
 		h.log.Warn("telegram: malformed update body",
@@ -762,7 +764,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req turn.Request, resp *turn.Response, session SessionRef) {
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
-		ttl = 5 * time.Minute
+		ttl = DefaultPromptTTL
 	}
 	// The paused turn rides on the prompt itself. It used to live in a
 	// Go map on this handler, which is why an approval after a restart
@@ -943,6 +945,10 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 		"callback_query_id": q.ID,
 	})
 
+	if strings.HasPrefix(q.Data, "cal:") {
+		h.handleCalendarCallback(ctx, q)
+		return
+	}
 	if strings.HasPrefix(q.Data, "learned:") {
 		h.handleLearnedCallback(ctx, q)
 		return
@@ -963,7 +969,7 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	if !h.mayResolve(ctx, promptID, q) {
 		return
 	}
-	if p, err := h.cfg.Prompts.Get(promptID); err == nil && strings.HasPrefix(p.Action, "learned:") {
+	if p, err := h.cfg.Prompts.Get(promptID); err == nil && (strings.HasPrefix(p.Action, "learned:") || p.Action == "calendar:ui") {
 		h.answerCallback(q, "Use the skill review buttons or reopen /learned.")
 		return
 	}
@@ -1121,7 +1127,7 @@ func (h *TelegramHandler) postJSON(method string, body any) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, telegramAPIErrorMaxBytes))
 		h.log.Error("telegram: "+method+" non-2xx",
 			"status", resp.StatusCode, "body", string(raw))
 	}
@@ -1177,7 +1183,7 @@ func (h *TelegramHandler) Send(chatID int64, text string) (retErr error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, telegramAPIErrorMaxBytes))
 		return fmt.Errorf("telegram: sendMessage non-2xx (HTTP %d): %s", resp.StatusCode, string(raw))
 	}
 	return nil
@@ -1201,7 +1207,7 @@ func (h *TelegramHandler) sendText(chatID int64, text string) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, telegramAPIErrorMaxBytes))
 		h.log.Error("telegram: sendMessage non-2xx",
 			"status", resp.StatusCode, "body", string(raw))
 	}
@@ -1218,7 +1224,7 @@ func (h *TelegramHandler) firstSeen(updateID int64) bool {
 	// to a proper LRU if a deployment ever hits tens of thousands.
 	now := time.Now()
 	for id, t := range h.seenUpdate {
-		if now.Sub(t) > 5*time.Minute {
+		if now.Sub(t) > telegramUnknownUserDedupTTL {
 			delete(h.seenUpdate, id)
 		}
 	}
@@ -1658,7 +1664,7 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := httpbody.Read(resp.Body, 8<<20)
+	raw, err := httpbody.Read(resp.Body, telegramPollMaxBytes)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/compute/research"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -52,16 +53,16 @@ func ResearchToolDefs() []*types.ToolDef {
 		{
 			Name:        "research_start",
 			Path:        compute.BuiltinScheme + "research_start",
-			Description: "Run a multi-step deep-research task in the background. Use for 'find me everything about X', 'compare these approaches', 'what's the current state of Y' — questions that need multiple searches + cross-referencing. For single quick lookups, prefer web_search; for one specific page, prefer fetch_url. Pipeline: planner decomposes the question into sub-questions, workers run web_search + fetch_url per sub-question, a synthesiser writes the report to memory (tagged research:<id>) and notifies the user on the originating channel when done (typically 1–3 minutes). Pass question (free text) and optional depth (1-10, default 3 — controls sub-question count + total tool budget). Returns the task id.\n\nResearch tasks are stored as commitments. Track their status with commitment_list (filter by handler='research:run' or look at the Reason field starting with 'deep-research run for:'); cancel one with commitment_cancel(id=<task_id>). The completed report lands in memory and is searchable via memory_search; reference it by the memory_id returned in the completion notification.",
-			ParametersSchema: []byte(`{
+			Description: fmt.Sprintf("Run a multi-step deep-research task in the background. Use for 'find me everything about X', 'compare these approaches', 'what's the current state of Y' — questions that need multiple searches + cross-referencing. For single quick lookups, prefer web_search; for one specific page, prefer fetch_url. Pipeline: planner decomposes the question into sub-questions, workers run web_search + fetch_url per sub-question, a synthesiser writes the report to memory (tagged research:<id>) and notifies the user on the originating channel when done (typically 1–3 minutes). Pass question (free text) and optional depth (1-%d, default %d — controls sub-question count + total tool budget). Returns the task id.\n\nResearch tasks are stored as commitments. Track their status with commitment_list (filter by handler='research:run' or look at the Reason field starting with 'deep-research run for:'); cancel one with commitment_cancel(id=<task_id>). The completed report lands in memory and is searchable via memory_search; reference it by the memory_id returned in the completion notification.", research.MaxDepth, research.DefaultDepth),
+			ParametersSchema: []byte(fmt.Sprintf(`{
 				"type": "object",
 				"properties": {
 					"question": {"type": "string", "description": "The research topic or question. Free-form text."},
-					"depth": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of sub-questions the planner decomposes into. Default 3."}
+					"depth": {"type": "integer", "minimum": 1, "maximum": %d, "description": "Number of sub-questions the planner decomposes into. Default %d."}
 				},
 				"required": ["question"],
 				"additionalProperties": false
-			}`),
+			}`, research.MaxDepth, research.DefaultDepth)),
 			RiskTier: types.RiskCommunicating,
 		},
 	}
@@ -73,11 +74,11 @@ func newResearchStartHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		if question == "" {
 			return nil, 2, errors.New("research_start: question is required")
 		}
-		depth := 3
+		depth := research.DefaultDepth
 		if rawDepth := strings.TrimSpace(args["depth"]); rawDepth != "" {
 			n, err := strconv.Atoi(rawDepth)
-			if err != nil || n < 1 || n > 10 {
-				return nil, 2, fmt.Errorf("research_start: depth must be an integer 1-10, got %q", rawDepth)
+			if err != nil || n < 1 || n > research.MaxDepth {
+				return nil, 2, fmt.Errorf("research_start: depth must be an integer 1-%d, got %q", research.MaxDepth, rawDepth)
 			}
 			depth = n
 		}
@@ -121,7 +122,7 @@ func newResearchStartHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("research_start: marshal: %w", err)
 		}
-		if _, err := raft.Apply(data, 5*time.Second); err != nil {
+		if _, err := raft.Apply(data, writeApplyTimeout); err != nil {
 			return nil, 1, fmt.Errorf("research_start: raft apply: %w", err)
 		}
 		out, _ := json.Marshal(map[string]any{

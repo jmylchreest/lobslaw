@@ -68,7 +68,7 @@ func (d *whisperAudioDriver) Transcribe(ctx context.Context, in AudioRequest) (s
 	if resp.StatusCode != http.StatusOK {
 		return "", &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, DiagnosticExcerptMaxBytes)),
 		}
 	}
 	var decoded struct {
@@ -93,7 +93,7 @@ func (d *chatMultimodalAudioDriver) Transcribe(ctx context.Context, in AudioRequ
 	format := audioContainerExt(abs)
 	reqBody, _ := json.Marshal(audioChatMultimodalRequest{
 		Model:     cfg.Model,
-		MaxTokens: 1024,
+		MaxTokens: audioTranscriptMaxTokens,
 		Messages: []audioChatMessage{{
 			Role: "user",
 			Content: []audioChatPart{
@@ -122,7 +122,7 @@ func (d *chatMultimodalAudioDriver) Transcribe(ctx context.Context, in AudioRequ
 	if resp.StatusCode != http.StatusOK {
 		return "", &DriverError{
 			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, 512)),
+			Err:   fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, TruncateBodyFor(raw, DiagnosticExcerptMaxBytes)),
 		}
 	}
 	var decoded struct {

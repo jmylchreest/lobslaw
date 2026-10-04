@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // TaskApprovalAPI is owner-facing; it cannot create execution claims or obtain
@@ -46,8 +48,8 @@ func (s *Server) handleTaskApprovals(w http.ResponseWriter, r *http.Request) {
 		limit := 0
 		if raw := r.URL.Query().Get("limit"); raw != "" {
 			limit, err = strconv.Atoi(raw)
-			if err != nil || limit < 0 || limit > 100 {
-				http.Error(w, "limit must be 0..100", http.StatusBadRequest)
+			if err != nil || limit < 0 || limit > int(types.MaxTaskApprovalListLimit) {
+				http.Error(w, fmt.Sprintf("limit must be 0..%d", types.MaxTaskApprovalListLimit), http.StatusBadRequest)
 				return
 			}
 		}

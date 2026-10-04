@@ -128,7 +128,7 @@ func lexicalSimilarity(a, b *lobslawv1.SelfTaughtRecord) float64 {
 	// Weighted toward the name, which is the field a proposer varies
 	// accidentally. Two skills with the same name are almost certainly
 	// the same job whatever their descriptions say.
-	return 0.7*nameScore + 0.3*descScore
+	return similarityNameWeight*nameScore + similarityDescriptionWeight*descScore
 }
 
 // tokenise splits on anything that is not a letter or digit, so

@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"filippo.io/age"
 
@@ -17,8 +16,6 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
-
-const defaultArchiveImportTimeout = 30 * time.Minute
 
 func readArchiveFile(path, identityPath string) (archive.Snapshot, error) {
 	var identities []age.Identity
@@ -99,7 +96,7 @@ func bindArchiveRestoreOptions(fs *flag.FlagSet, opts *memory.ArchiveImportOptio
 func archiveImport(args []string, requireEmpty bool) error {
 	fs := newFlagSet("archive import", flag.ContinueOnError)
 	var node liveNode
-	node.bindWithTimeout(fs, defaultArchiveImportTimeout)
+	node.bindWithTimeout(fs, defaultRestoreTimeout)
 	var opts memory.ArchiveImportOptions
 	bindArchiveImportOptions(fs, &opts)
 	identity := fs.String("identity", "", "age identity file")

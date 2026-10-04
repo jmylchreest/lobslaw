@@ -172,9 +172,9 @@ func runBootstrap(ctx context.Context, satisfier *Satisfier, mgrName string, cli
 	}
 	out, err := satisfier.runner.Run(ctx, interp, []string{tmp.Name()}, env)
 	if err != nil {
-		return fmt.Errorf("binaries: bootstrap %q %s: %w (output: %s)", mgrName, interp, err, textutil.Truncate(out, "…", 512))
+		return fmt.Errorf("binaries: bootstrap %q %s: %w (output: %s)", mgrName, interp, err, textutil.Truncate(out, "…", maxErrorOutputRunes))
 	}
-	satisfier.log.Info("binaries: bootstrap ok", "manager", mgrName, "url", recipe.URL, "output_head", textutil.Truncate(out, "…", 256))
+	satisfier.log.Info("binaries: bootstrap ok", "manager", mgrName, "url", recipe.URL, "output_head", textutil.Truncate(out, "…", maxLogOutputRunes))
 
 	target, ok := satisfier.managers[mgrName]
 	if !ok {
@@ -201,8 +201,7 @@ func fetchBootstrapBody(ctx context.Context, client *http.Client, urlStr string)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	const maxScript = 10 << 20
-	return io.ReadAll(io.LimitReader(resp.Body, maxScript+1))
+	return io.ReadAll(io.LimitReader(resp.Body, MaxScriptSize+1))
 }
 
 // _ keeps slog imported for the runBootstrap log call when

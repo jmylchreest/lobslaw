@@ -89,9 +89,9 @@ func NeutralJudgment() Judgment {
 // vocabulary, which is the only one that can route.
 const judgeSystemPromptFormat = `You classify requests for routing. Reply with JSON only, no prose, no code fences:
 
-{"complexity": <0-100>, "domains": [<tags>], "hint": "fast"|"balanced"|"deep"|"reasoning"}
+{"complexity": <0-%d>, "domains": [<tags>], "hint": "fast"|"balanced"|"deep"|"reasoning"}
 
-complexity: 0-20 greeting, acknowledgement, or a fact you could answer in one line. 21-50 a normal question needing a paragraph. 51-80 multi-step work, unfamiliar material, or careful reasoning. 81-100 research, proof, architecture, or anything where being wrong is expensive.
+complexity: 0-20 greeting, acknowledgement, or a fact you could answer in one line. 21-50 a normal question needing a paragraph. 51-80 multi-step work, unfamiliar material, or careful reasoning. 81-%d research, proof, architecture, or anything where being wrong is expensive.
 
 Judge the DIFFICULTY, not the length. "Prove this loop terminates" is short and hard. A pasted stack trace is long and easy.
 
@@ -117,7 +117,7 @@ func judgeSystemPrompt(vocabulary []string) string {
 			"domains: at most %d of these exact tags, whichever apply: %s. Use no others, and omit rather than guess.",
 			maxDomains, strings.Join(vocabulary, ", "))
 	}
-	return fmt.Sprintf(judgeSystemPromptFormat, domains)
+	return fmt.Sprintf(judgeSystemPromptFormat, maxComplexity, maxComplexity, domains)
 }
 
 // judgeMaxCompletionTokens bounds the reply. The answer is one small
@@ -248,11 +248,11 @@ func (j *Judge) reportOutOfVocabulary(tags []string) {
 func complexityOf(h Hint) int {
 	switch h {
 	case HintFast:
-		return 10
+		return complexityFastHint
 	case HintDeep, HintReasoning:
-		return 85
+		return complexityDeepHint
 	default:
-		return 50
+		return complexityBalancedHint
 	}
 }
 
@@ -328,8 +328,8 @@ func clampComplexity(n int) int {
 	if n < 0 {
 		return 0
 	}
-	if n > 100 {
-		return 100
+	if n > maxComplexity {
+		return maxComplexity
 	}
 	return n
 }

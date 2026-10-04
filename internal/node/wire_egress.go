@@ -107,6 +107,7 @@ func (n *Node) subprocessProxyURL(role string, networkIsolation bool) string {
 func buildEgressInputs(n *Node) egress.ACLInputs {
 	in := egress.ACLInputs{
 		WebPush:            slices.Contains(n.cfg.Functions, types.FunctionUIWeb),
+		GoogleCalendar:     n.cfg.Security.GoogleCalendar.Enabled,
 		Providers:          n.cfg.Compute.Providers,
 		Channels:           n.cfg.Gateway.Channels,
 		ClawhubBaseURL:     n.cfg.Security.ClawhubBaseURL,

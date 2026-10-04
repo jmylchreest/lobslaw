@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
@@ -164,7 +163,7 @@ func finishSharePlan(p *SharePlan) error {
 	if err != nil {
 		return err
 	}
-	if len(raw) > 4<<20 {
+	if len(raw) > maxShareBatchBytes {
 		return errors.New("sharing: installation exceeds transaction limit")
 	}
 	p.Digest = sharing.Hash(raw)
@@ -410,7 +409,7 @@ func (s *SharingStore) Apply(ctx context.Context, p *SharePlan, expected string)
 	if err != nil {
 		return err
 	}
-	res, err := s.raft.Apply(raw, 5*time.Second)
+	res, err := s.raft.Apply(raw, shareApplyTimeout)
 	if err != nil {
 		return err
 	}

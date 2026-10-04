@@ -14,7 +14,7 @@ import (
 func (n *Node) proposeClawhubShare(ctx context.Context, ref string) ([]byte, error) {
 	caller, ok := turn.IdentityFrom(ctx)
 	owner := caller.Principal.String()
-	if !ok || caller.UserID == "" || !strings.HasPrefix(owner, "user:") || len(owner) <= 5 || n.policyEngine == nil {
+	if !ok || caller.UserID == "" || !strings.HasPrefix(owner, userOwnerPrefix) || len(owner) <= len(userOwnerPrefix) || n.policyEngine == nil {
 		return nil, errors.New("clawhub: authenticated user and proposal policy required")
 	}
 	claims := caller.Claims()
