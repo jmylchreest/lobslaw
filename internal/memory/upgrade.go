@@ -19,9 +19,12 @@ import (
 const upgradeTimeout = 10 * time.Second
 
 type UpgradePeer struct {
-	ID        string
-	Supported []uint32
-	State     dataformat.ContractState
+	ID               string
+	Supported        []uint32
+	State            dataformat.ContractState
+	AutomaticTargets []uint32
+	AutomaticReady   bool
+	AppliedIndex     uint64
 }
 
 func (p *UpgradePeer) supports(target uint32) error {
@@ -42,6 +45,12 @@ func (n *RaftNode) UpgradeStatus() (*pb.UpgradeStatusResponse, error) {
 		return nil, err
 	}
 	out := &pb.UpgradeStatusResponse{NodeId: string(n.nodeID), SupportedContracts: dataformat.SupportedContracts(), ActiveContract: state.Active, Epoch: state.Epoch, AppliedIndex: n.fsm.lastApplied(), LeaderAddress: string(n.LeaderAddress())}
+	out.AutomaticTargets = dataformat.AutomaticTargets()
+	out.AutomaticReady = n.automaticReady != nil && n.automaticReady()
+	_, out.AutomaticBlocker = state.AutomaticStep()
+	if !out.AutomaticReady {
+		out.AutomaticBlocker = "local node is not ready for automatic activation"
+	}
 	if t := state.Prepared; t != nil {
 		out.Prepared = transitionCommand("prepare", *t)
 		out.PreparedIndex = t.Index
@@ -69,6 +78,13 @@ func (n *RaftNode) validateProposal(raw []byte) error {
 }
 
 func (n *RaftNode) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest) (*pb.UpgradeStatusResponse, error) {
+	if req != nil && req.Action == "prepare" && dataformat.IsAutomaticID(req.TransitionId) {
+		return nil, errors.New("automatic transition IDs are reserved for cluster control")
+	}
+	return n.changeUpgrade(ctx, req, "")
+}
+
+func (n *RaftNode) changeUpgrade(ctx context.Context, req *pb.ChangeUpgradeRequest, automaticFence string) (*pb.UpgradeStatusResponse, error) {
 	if req == nil {
 		return nil, errors.New("upgrade request required")
 	}
@@ -81,6 +97,15 @@ func (n *RaftNode) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeReque
 	lease.release()
 	if req.Action == "transfer" {
 		return n.transferUpgradeLeader(ctx, before, req.TargetNodeId)
+	}
+	if automaticFence != "" {
+		if before.automaticFence() != automaticFence {
+			return nil, errControlChanged
+		}
+		step, reason := before.state.AutomaticStep()
+		if reason != "" || req.Action != step.Action || req.TransitionId != step.ID || req.Target != step.Target || req.ExpectedEpoch != step.Epoch {
+			return nil, errors.New("automatic request does not match durable transition")
+		}
 	}
 	state := before.state
 	ids := make([]string, 0, len(before.servers))
@@ -103,6 +128,11 @@ func (n *RaftNode) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeReque
 	// Abort needs quorum and the prepared membership, but not unavailable peers.
 	if req.Action != "abort" {
 		if err := n.checkUpgradeMembers(ctx, before.servers, state, t, req.Action == "finalize"); err != nil {
+			return nil, err
+		}
+	}
+	if automaticFence != "" {
+		if err := n.checkAutomaticMembers(ctx, before); err != nil {
 			return nil, err
 		}
 	}
