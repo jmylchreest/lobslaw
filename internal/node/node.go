@@ -570,6 +570,7 @@ func New(cfg Config) (*Node, error) {
 			// because a check on the client is one the attacker
 			// controls.
 			grpcinterceptors.OperatorNotAPeer(),
+			grpcinterceptors.DataFormat(),
 		),
 		grpc.ChainStreamInterceptor(
 			grpcinterceptors.RequestIDStream(log),
@@ -577,6 +578,7 @@ func New(cfg Config) (*Node, error) {
 			// Raft's transport is streaming, so without this half the
 			// guard covers nothing that matters.
 			grpcinterceptors.OperatorNotAPeerStream(),
+			grpcinterceptors.DataFormatStream(),
 		),
 	)
 
@@ -1003,7 +1005,7 @@ func (n *Node) runSoulWatcher(ctx context.Context) {
 
 func (n *Node) dialer() discovery.Dialer {
 	return func(ctx context.Context, addr string) (*grpc.ClientConn, error) {
-		return grpc.NewClient(addr, grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()))
+		return grpc.NewClient(addr, grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient()), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient()))
 	}
 }
 

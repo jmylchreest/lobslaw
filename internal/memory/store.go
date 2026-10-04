@@ -63,19 +63,7 @@ func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open state.db %q: %w", path, err)
 	}
-	if !readOnly {
-		if err := db.Update(func(tx *bolt.Tx) error {
-			for _, name := range allBuckets {
-				if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
-					return fmt.Errorf("create bucket %q: %w", name, err)
-				}
-			}
-			return nil
-		}); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
-	}
+
 	c, err := crypto.NewCipher(key)
 	if err != nil {
 		_ = db.Close()
@@ -83,6 +71,23 @@ func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
 	}
 	s := &Store{key: key, cipher: c, path: path, readOnly: readOnly, failed: make(chan struct{})}
 	s.db.Store(db)
+	if err := s.prepareFormat(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("prepare state format: %w", err)
+	}
+	if !readOnly {
+		if err := s.loadDB().Update(func(tx *bolt.Tx) error {
+			for _, name := range allBuckets {
+				if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+					return fmt.Errorf("create bucket %q: %w", name, err)
+				}
+			}
+			return nil
+		}); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+	}
 	return s, nil
 }
 

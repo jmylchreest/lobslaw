@@ -9,8 +9,12 @@ import (
 
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/jmylchreest/lobslaw/internal/dataformat"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
+	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
@@ -18,6 +22,14 @@ import (
 )
 
 func (n *Node) wireRaft(advertise string) error {
+	manifest, err := dataformat.ReadManifest(n.cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	if manifest.RestoreRequired && !n.cfg.RestoreMode {
+		return fmt.Errorf("copied physical data requires memory.restore_mode=true; inspect pending work before explicitly accepting recovery")
+	}
+
 	unprotect, err := policy.ProtectRaftPaths(n.cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("protect raft paths: %w", err)
@@ -31,13 +43,13 @@ func (n *Node) wireRaft(advertise string) error {
 
 	transport, err := rafttransport.New(rafttransport.Config{
 		LocalAddr: raft.ServerAddress(advertise),
-		DialOpts:  []grpc.DialOption{grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds())},
+		DialOpts:  []grpc.DialOption{grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient()), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient())},
 	})
 	if err != nil {
 		_ = store.Close()
 		return fmt.Errorf("rafttransport.New: %w", err)
 	}
-	transport.Register(n.server)
+	transport.Register(grpcinterceptors.PersistenceRegistrar{ServiceRegistrar: n.server})
 
 	rNode, err := memory.NewRaft(memory.RaftConfig{
 		NodeID:    n.cfg.NodeID,
@@ -152,6 +164,9 @@ func (n *Node) establishRaftMembership(ctx context.Context) error {
 				"node_id", n.cfg.NodeID,
 				"candidates", candidates)
 			return nil
+		}
+		if status.Code(err) == codes.FailedPrecondition {
+			return fmt.Errorf("refusing bootstrap after incompatible peer rejected join: %w", err)
 		}
 		n.log.Warn("raft: join via discovered candidates failed",
 			"err", err,
