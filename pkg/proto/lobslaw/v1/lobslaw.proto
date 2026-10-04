@@ -2145,6 +2145,8 @@ message IntegrationStateRecord {
 }
 
 message LogEntry {
+  // Persisted envelope version; zero denotes an unversioned historical entry.
+  uint32 schema_version = 1000;
   LogOp op = 1;
   // Target record id for DELETE; same id also duplicates the record's
   // id field for PUT (eases indexing without fully decoding the payload).

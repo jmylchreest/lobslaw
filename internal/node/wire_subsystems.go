@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
+	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/oauth"
@@ -367,6 +368,14 @@ func (n *Node) wireDiscoveryStage() error {
 		raftMembership = n.raft
 	}
 	n.discSvc = discovery.NewService(n.registry, n.localInfo, n.log, n.reloadSections, raftMembership)
+	n.discSvc.SetMemberVerifier(func(ctx context.Context, addr string) error {
+		conn, err := n.dialer()(ctx, addr)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = conn.Close() }()
+		return grpcinterceptors.VerifyDataPeer(ctx, conn)
+	})
 	lobslawv1.RegisterNodeServiceServer(n.server, n.discSvc)
 	n.discCli = discovery.NewClient(n.localInfo, n.registry, n.dialer(), n.log)
 	return nil

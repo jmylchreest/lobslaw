@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/jmylchreest/lobslaw/internal/logging"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -118,6 +120,9 @@ func (c *Client) JoinCluster(ctx context.Context, seeds []string, perDialTimeout
 		if err == nil {
 			logging.From(ctx).Info("cluster join accepted", "via", addr)
 			return nil
+		}
+		if status.Code(err) == codes.FailedPrecondition {
+			return err
 		}
 		lastErr = err
 		if leaderAddr != "" && !tried[leaderAddr] {

@@ -1,0 +1,10 @@
+{
+  "op": "LOG_OP_PUT",
+  "id": "calendar",
+  "integration_settings": {
+    "id": "calendar",
+    "owner": "user:alice",
+    "kind": "calendar-profile",
+    "revision": "9007199254740993"
+  }
+}

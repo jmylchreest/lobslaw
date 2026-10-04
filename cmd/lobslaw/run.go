@@ -92,6 +92,7 @@ func printCommandList(w *os.File) {
 var commandSummaries = map[string]string{
 	"archive":      "export, verify and import portable knowledge archives",
 	"backup":       "create, restore and prune encrypted backup generations",
+	"data":         "inspect and migrate physical data formats offline",
 	"cluster":      "certificates, node signing, operator export",
 	"plugin":       "install and manage plugins",
 	"audit":        "query and verify the audit chain",

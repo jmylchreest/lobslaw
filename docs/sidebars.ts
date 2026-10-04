@@ -79,6 +79,7 @@ const sidebars: SidebarsConfig = {
         "operating/doctor",
         "operating/cert-rotation",
         "operating/cluster-membership",
+        "operating/data-migrations",
       ],
     },
     {

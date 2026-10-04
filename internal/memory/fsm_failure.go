@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jmylchreest/lobslaw/internal/dataformat"
+
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -42,6 +44,9 @@ func (f *FSM) halt(index uint64, cause error) error {
 // Check support before mutation. Unknown optional protobuf fields on known
 // payloads remain compatible; an unknown oneof variant decodes with no payload.
 func validateLogEntrySupport(entry *lobslawv1.LogEntry) error {
+	if entry.SchemaVersion > dataformat.LogVersion {
+		return fmt.Errorf("unsupported log schema %d", entry.SchemaVersion)
+	}
 	switch entry.Op {
 	case lobslawv1.LogOp_LOG_OP_PUT:
 		switch entry.Payload.(type) {

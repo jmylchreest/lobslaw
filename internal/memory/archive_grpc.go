@@ -114,6 +114,10 @@ func (s *ArchiveRPC) ImportArchive(stream grpc.ClientStreamingServer[lobslawv1.I
 	if err != nil {
 		return status.Error(codes.InvalidArgument, "archive verification failed")
 	}
+	snapshot, err = archive.Upgrade(ctx, snapshot)
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "migrate archive: %v", err)
+	}
 	if err := bindArchiveSource(snapshot.Manifest, &opts, header.RequireEmpty); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}

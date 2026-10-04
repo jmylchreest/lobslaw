@@ -121,7 +121,10 @@ Released Raft payload tags remain unchanged, including calendar integration stat
 inbox and group payloads use tags 53 and 54. Buf breaking checks against main
 verify the released schema remains compatible.
 
-Pre-merge #348 development Raft stores that used the earlier bot payload tags are
-not directly compatible with this schema. Do not replay those development logs
-with the reconciled binary; retain their backups and use a fresh development
-store. This limitation does not apply to stores written by main.
+Pre-merge #348 development stores are supported through the migration foundation
+below this PR. Use the fixture-backed `pr348-v0` or `pr348-early-v0` profile only
+when it matches the retained unversioned log history; never guess mixed histories.
+`docs/dev/DATA_MIGRATIONS.md` documents the offline inspect/copy workflow, retained
+source, restore-mode acknowledgement and coordinated cluster upgrade. No fresh
+store or deletion is required for a supported history. Team state uses format 2;
+format 1 main stores upgrade through the same ordered migration registry.
