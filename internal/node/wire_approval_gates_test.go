@@ -54,6 +54,7 @@ func approvalGateNode(t *testing.T, memoryWrite, withShell bool) (*Node, *policy
 	n.toolRegistry = reg
 	n.executor = compute.NewExecutor(reg, eng, nil, compute.ExecutorConfig{}, log)
 	n.cfg.MemoryWriteApproval = memoryWrite
+	n.cfg.Functions = []types.NodeFunction{types.FunctionCompute}
 	return n, eng
 }
 
@@ -72,7 +73,7 @@ func TestBothDefaultsSurviveWiring(t *testing.T) {
 	t.Parallel()
 	n, eng := approvalGateNode(t, true, true)
 
-	if err := n.wireApprovalGates(); err != nil {
+	if err := n.wirePolicyDefaults(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +92,7 @@ func TestOffMeansAbsent(t *testing.T) {
 	t.Parallel()
 	n, eng := approvalGateNode(t, false, true)
 
-	if err := n.wireApprovalGates(); err != nil {
+	if err := n.wirePolicyDefaults(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +112,7 @@ func TestNoShellGateWithoutTheTool(t *testing.T) {
 	t.Parallel()
 	n, eng := approvalGateNode(t, true, false)
 
-	if err := n.wireApprovalGates(); err != nil {
+	if err := n.wirePolicyDefaults(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -129,7 +130,7 @@ func TestNeitherGateIsSafe(t *testing.T) {
 	t.Parallel()
 	n, eng := approvalGateNode(t, false, false)
 
-	if err := n.wireApprovalGates(); err != nil {
+	if err := n.wirePolicyDefaults(); err != nil {
 		t.Fatal(err)
 	}
 	if got := effectFor(t, eng, compute.ShellAction, "git status"); got == types.EffectRequireConfirmation {

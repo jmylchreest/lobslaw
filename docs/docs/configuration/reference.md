@@ -823,10 +823,19 @@ can no longer be unblocked, found by the garbage collector's reachability
 analysis. Nothing registers it here — `pprof.Index` looks profiles up when the
 request arrives, so profiles a newer Go adds appear on their own.
 
+Environment overrides use `__` between sections and keys. For hyphenated
+sections, use underscores in shell variable names: `LOBSLAW__COMPUTE_TEAMS__ENABLED=true`
+and `LOBSLAW__UI_WEB__ENABLED=true`. `LOBSLAW__UI_WEB__PUBLIC_URL` sets `ui-web.public_url`.
+Existing underscore sections and keys keep their spelling, such as
+`LOBSLAW__SELF_LEARNING__MODE`. Literal hyphenated section names remain accepted
+when supplied by an environment manager; supplying both spellings for the same
+key is an error. Enabling the console through the environment requires the same
+authentication configuration as TOML.
+
 ## `[compute-teams]`
 
 Off by default. Enable explicitly with `--compute-teams` or this section;
-`--all` does not enable it.
+`--all` enables it.
 
 ```toml
 [compute-teams]
@@ -848,7 +857,7 @@ the backend's gate controls availability of the remote team console.
 
 ## `[ui-web]`
 
-Off by default. `--all` does not enable it. Enabling it does not imply local compute.
+Off by default. `--all` enables it. Enabling it does not imply local compute.
 
 ```toml
 [ui-web]

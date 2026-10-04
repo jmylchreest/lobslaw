@@ -192,3 +192,28 @@ jobs:
         env:
           LOBSLAW_ROLLING_BASELINE: ${{ runner.temp }}/rolling-baseline.test
         run: go test -race -count=1 -timeout 3m -run '^TestRollingMixedBinaries$' ./internal/memory
+
+  automatic-upgrade:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: checkout candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: checkout pre-automatic contract-2 baseline
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 5576af6fb9cf7f42259e76b0c19def24d53dd26f
+          path: .automatic-baseline
+      - name: setup go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: compile genuine baseline binary
+        working-directory: .automatic-baseline
+        run: go test -c -o "$RUNNER_TEMP/automatic-baseline.test" ./internal/memory
+      - name: exercise automatic activation with mixed binaries
+        env:
+          LOBSLAW_AUTOMATIC_BASELINE: ${{ runner.temp }}/automatic-baseline.test
+        run: go test -race -count=1 -timeout 3m -run '^TestRollingAutomaticUpgrade$' ./internal/memory

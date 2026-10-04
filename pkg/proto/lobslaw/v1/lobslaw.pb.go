@@ -22458,6 +22458,9 @@ type UpgradeStatusResponse struct {
 	PreparedIndex      uint64                 `protobuf:"varint,6,opt,name=prepared_index,json=preparedIndex,proto3" json:"prepared_index,omitempty"`
 	AppliedIndex       uint64                 `protobuf:"varint,7,opt,name=applied_index,json=appliedIndex,proto3" json:"applied_index,omitempty"`
 	LeaderAddress      string                 `protobuf:"bytes,8,opt,name=leader_address,json=leaderAddress,proto3" json:"leader_address,omitempty"`
+	AutomaticTargets   []uint32               `protobuf:"varint,9,rep,packed,name=automatic_targets,json=automaticTargets,proto3" json:"automatic_targets,omitempty"`
+	AutomaticReady     bool                   `protobuf:"varint,10,opt,name=automatic_ready,json=automaticReady,proto3" json:"automatic_ready,omitempty"`
+	AutomaticBlocker   string                 `protobuf:"bytes,11,opt,name=automatic_blocker,json=automaticBlocker,proto3" json:"automatic_blocker,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -22544,6 +22547,27 @@ func (x *UpgradeStatusResponse) GetAppliedIndex() uint64 {
 func (x *UpgradeStatusResponse) GetLeaderAddress() string {
 	if x != nil {
 		return x.LeaderAddress
+	}
+	return ""
+}
+
+func (x *UpgradeStatusResponse) GetAutomaticTargets() []uint32 {
+	if x != nil {
+		return x.AutomaticTargets
+	}
+	return nil
+}
+
+func (x *UpgradeStatusResponse) GetAutomaticReady() bool {
+	if x != nil {
+		return x.AutomaticReady
+	}
+	return false
+}
+
+func (x *UpgradeStatusResponse) GetAutomaticBlocker() string {
+	if x != nil {
+		return x.AutomaticBlocker
 	}
 	return ""
 }
@@ -24622,7 +24646,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x05items\x18\x01 \x03(\v2\x1c.lobslaw.v1.ConsoleInboxItemR\x05items\x12\x1f\n" +
 	"\vnext_cursor\x18\x02 \x01(\tR\n" +
 	"nextCursor\"\x16\n" +
-	"\x14UpgradeStatusRequest\"\xcb\x02\n" +
+	"\x14UpgradeStatusRequest\"\xce\x03\n" +
 	"\x15UpgradeStatusResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12/\n" +
 	"\x13supported_contracts\x18\x02 \x03(\rR\x12supportedContracts\x12'\n" +
@@ -24631,7 +24655,11 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\bprepared\x18\x05 \x01(\v2\x1a.lobslaw.v1.UpgradeCommandR\bprepared\x12%\n" +
 	"\x0eprepared_index\x18\x06 \x01(\x04R\rpreparedIndex\x12#\n" +
 	"\rapplied_index\x18\a \x01(\x04R\fappliedIndex\x12%\n" +
-	"\x0eleader_address\x18\b \x01(\tR\rleaderAddress\"\xb8\x01\n" +
+	"\x0eleader_address\x18\b \x01(\tR\rleaderAddress\x12+\n" +
+	"\x11automatic_targets\x18\t \x03(\rR\x10automaticTargets\x12'\n" +
+	"\x0fautomatic_ready\x18\n" +
+	" \x01(\bR\x0eautomaticReady\x12+\n" +
+	"\x11automatic_blocker\x18\v \x01(\tR\x10automaticBlocker\"\xb8\x01\n" +
 	"\x14ChangeUpgradeRequest\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\tR\x06action\x12#\n" +
 	"\rtransition_id\x18\x02 \x01(\tR\ftransitionId\x12%\n" +

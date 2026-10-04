@@ -3268,6 +3268,9 @@ message UpgradeStatusResponse {
   uint64 prepared_index = 6;
   uint64 applied_index = 7;
   string leader_address = 8;
+  repeated uint32 automatic_targets = 9;
+  bool automatic_ready = 10;
+  string automatic_blocker = 11;
 }
 // Only an authenticated operator can request a transition. The leader supplies
 // membership fields; callers cannot supply their own readiness attestations.
