@@ -9,7 +9,7 @@ import (
 )
 
 func calendarEventDef() *types.ToolDef {
-	return calendarDef("calendar_event", "Read one event by its exact ID.", false, calendarProps("connection", "calendar", "event"), []string{"connection", "calendar", "event"})
+	return calendarDef("calendar_event", "Read one event by its exact ID.", false, calendarProps("connection", "calendar", "event"), []string{"calendar", "event"})
 }
 func calendarEventHandler(s CalendarOperations) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {

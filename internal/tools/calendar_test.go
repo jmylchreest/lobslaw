@@ -31,7 +31,7 @@ func TestCalendarEffectsAreTrustedAndCloned(t *testing.T) {
 		def.Effects.State = types.ToolDeletes
 	}
 	for _, def := range r.List() {
-		if def.Effects == nil || (def.Name != "calendar_list" && !def.Effects.Network) || def.Effects.State == types.ToolDeletes {
+		if def.Effects == nil || (def.Name != "calendar_list" && def.Name != "calendar_settings" && !def.Effects.Network) || def.Effects.State == types.ToolDeletes {
 			t.Fatalf("bad effects: %+v", def)
 		}
 	}

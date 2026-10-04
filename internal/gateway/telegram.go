@@ -893,6 +893,10 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 		"callback_query_id": q.ID,
 	})
 
+	if strings.HasPrefix(q.Data, "cal:") {
+		h.handleCalendarCallback(ctx, q)
+		return
+	}
 	if strings.HasPrefix(q.Data, "learned:") {
 		h.handleLearnedCallback(ctx, q)
 		return
@@ -913,7 +917,7 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	if !h.mayResolve(ctx, promptID, q) {
 		return
 	}
-	if p, err := h.cfg.Prompts.Get(promptID); err == nil && strings.HasPrefix(p.Action, "learned:") {
+	if p, err := h.cfg.Prompts.Get(promptID); err == nil && (strings.HasPrefix(p.Action, "learned:") || p.Action == "calendar:ui") {
 		h.answerCallback(q, "Use the skill review buttons or reopen /learned.")
 		return
 	}

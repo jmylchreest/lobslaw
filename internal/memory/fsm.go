@@ -672,7 +672,7 @@ type claimable interface {
 // holder's id as expected_claimer.
 func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
-	case BucketIntegrationState:
+	case BucketIntegrationState, BucketIntegrationSettings:
 		var r lobslawv1.IntegrationStateRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
 			return nil, err
@@ -768,7 +768,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketIntegrationState, BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
+	case BucketIntegrationState, BucketIntegrationSettings, BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
 		return true
 	default:
@@ -808,6 +808,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketChannelState, p.ChannelState, nil
 	case *lobslawv1.LogEntry_SoulTune:
 		return BucketSoulTune, p.SoulTune, nil
+	case *lobslawv1.LogEntry_IntegrationSettings:
+		return BucketIntegrationSettings, p.IntegrationSettings, nil
 	case *lobslawv1.LogEntry_IntegrationState:
 		return BucketIntegrationState, p.IntegrationState, nil
 	case *lobslawv1.LogEntry_Credential:

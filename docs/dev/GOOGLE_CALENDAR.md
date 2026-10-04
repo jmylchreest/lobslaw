@@ -13,7 +13,7 @@ release.
 
 Run the connector on a node with compute, local memory/policy services, and an
 enabled HTTP gateway. Upgrade every Raft peer before enabling it: this feature
-adds credential ownership fields and a replicated integration-state record.
+adds credential ownership fields, replicated integration state, and durable encrypted connector settings.
 Older binaries must not serve credentials from an upgraded store.
 
 Create a Google OAuth **Web application** client, enable the Calendar API, and
@@ -97,7 +97,7 @@ priority = 20
 id = "calendar-command"
 subject = "role:calendar-user"
 action = "command:exec"
-resource = "calendar"
+resource = "calendar*"
 effect = "allow"
 priority = 20
 ```
@@ -111,6 +111,9 @@ Trusted tool definitions declare state effects separately from network transport
 
 | Tool | Effects | Additional requirements |
 | --- | --- | --- |
+| `calendar_settings` | read | Own local calendar preferences and nicknames |
+| `calendar_settings_update` | write + network | Exact confirmation for availability, defaults, timezone, access and disconnect; rename/agenda offer Undo |
+| `calendar_agenda` | read + network | Combined view with source identities and explicit partial failures |
 | `calendar_list` | read | Own selected readable calendars; listing is local |
 | `calendar_events` | read + network | Explicit bounded start/end interval |
 | `calendar_event` | read + network | Exact event ID |
@@ -131,16 +134,57 @@ the Calendar write gate.
 
 ## User setup
 
-In a private Telegram conversation:
+In a private Telegram conversation, open `/calendars`:
 
-1. `/calendar connect read` (or `write` to request event-write consent).
-2. Open the returned short-lived URL and choose the Google account.
-3. Return to chat and run `/calendar pending <flow-id>`.
-4. Check the displayed account and calendar IDs, then run
-   `/calendar allow <flow-id> <displayed-email> <calendar-id> read`.
-   The final permission can be `read`, `write`, or `read-write`.
-5. `/calendar list` shows connection IDs and grants. Tell the assistant which
-   connection/calendar to use, then ask for your agenda or an event change.
+1. Choose **Connect Google (read)** or **Connect Google (read/write)**.
+2. Open the short-lived link and choose your Google account.
+3. Return and tap **Choose calendars**. Each calendar cycles through off, read,
+   and (when available) read/write. Selections can span pages.
+4. Tap **Review selection**, check the account and each calendar's grants, then
+   confirm. Repeat to connect another Google account.
+5. Give calendars nicknames and purposes in chat. `/calendars` also provides
+   buttons for agenda/availability inclusion, access, the general default, and
+   disconnecting an account connection.
+
+Examples of normal chat requests:
+
+- “Show my calendars.”
+- “Call my personal calendar Home and my shared calendar Family.”
+- “Use Family for school events and Home as my general default.”
+- “Include Work when checking availability, but leave it out of my agenda.”
+- “Make Work read-only.”
+- “My time zone is Europe/London.”
+- “What's on tomorrow across my calendars?”
+- “Add the school concert to Family on Friday at 6pm.”
+
+Nicknames are unique per canonical lobslaw user, across connected accounts.
+They are local labels; renaming one does not rename the Google calendar. Purposes
+are explicit labels chosen by the user, such as `general`, `personal`, or `school`.
+When creating an event, the assistant can select a nickname or a purpose default.
+Missing or ambiguous destinations require a choice; the service never guesses a
+calendar. Updates require the calendar containing the event as well as its ID.
+
+Rename and agenda inclusion apply immediately and return an Undo action. Undo
+expires after 15 minutes and is available only until another settings change.
+Availability inclusion, purpose defaults, time zone, access changes and disconnects
+show the exact proposed change for human confirmation. Preferences are durable
+user settings, not learned skills or conversation memory. Read and write remain
+independent; write-only can be requested in chat or through the API. Creation
+works with write-only access, while updating an existing event also needs reads.
+
+The combined agenda retains each calendar's nickname and account. Availability
+mode reads the calendars selected for availability; it returns events, not a
+provider free/busy guarantee. Any failed or truncated calendar makes the result
+incomplete. The assistant must not conclude that a slot is free from incomplete
+results. Queries cover at most 25 included calendars and have a two-minute overall
+timeout. Narrow the interval when individual calendars exceed 100 events.
+
+To connect more calendars from an existing Google account, repeat onboarding and
+select them; do not duplicate existing calendars unless you want duplicate agenda
+results. Each connection is managed independently. Adding Calendar access cannot
+grant Drive or Gmail access.
+
+The legacy `/calendar` commands remain available for existing clients.
 
 OAuth completion alone does not activate a connection. Activation is a human
 management operation, absent from agent tools. A Google write token does not
@@ -149,8 +193,7 @@ need read access to inspect the event before confirmation.
 
 `/calendar disconnect <connection-id>` removes local credentials immediately and
 invalidates pending changes that use them. Remove the application's access in
-Google Account settings to revoke Google's grant as well. To change selected
-calendars or permissions, disconnect and reconnect. Account links expire after
+Google Account settings to revoke Google's grant as well. To add unselected calendars, connect again. Existing selected-calendar grants can be changed in chat; increasing access checks Google scope, calendar role and operator policy. A read-only Google token needs reconnection before enabling writes. Account links expire after
 15 minutes. If a login is interrupted after its code was consumed, start a new
 connection attempt. `/calendar list` resolves uncertainty after activation.
 
@@ -172,6 +215,24 @@ Identity always comes from validated claims and the canonical identity resolver,
 never a request field. Large account listings use this API instead of truncating
 chat output. Shared-chat management and Calendar tool use are refused.
 
+Additional authenticated API operations:
+
+- `inventory`: calendar IDs, nicknames, independent grants, inclusion flags,
+  defaults, time zone and settings revision.
+- `settings_prepare`: accepts `change` with `operation`, `calendar` (nickname or
+  inventory ID), and operation-specific fields: `value`, `enabled`, or
+  `permission: {"read":true,"write":false}`. Optional `revision` rejects stale UI.
+- `settings_apply`: accepts the prepared `id`; this is an authenticated **human
+  confirmation** endpoint, never an agent tool.
+- `settings_immediate`: applies only rename, agenda and valid Undo changes;
+  rejects operations requiring confirmation.
+
+For example, prepare `{"operation":"settings_prepare","change":{"operation":
+"default","calendar":"Family","value":"school"}}`, display the returned summary,
+then submit `{"operation":"settings_apply","id":"PREPARED_ID"}` only after the
+user confirms it. Use `calendar_settings_update` for natural-language agent work;
+its trusted execution gate owns confirmations and the model cannot call approval.
+
 ## Event behavior and confirmation
 
 Reads return at most 100 expanded occurrences in a window of at most 366 days.
@@ -188,13 +249,13 @@ rules, series edits or special event types are accepted. An individual expanded
 recurring occurrence may be updated by its own ID.
 
 The gate runs after parameter-changing hooks. It persists the exact typed change,
-owner, credential generation and current event ETag in encrypted replicated state.
+owner, settings revision, credential generation and current event ETag in encrypted replicated state.
 The approval resource includes a nonce, so an expired/recreated preparation cannot
 borrow an earlier confirmation. A changed argument produces a different operation.
 Previews larger than the safe chat review limit are rejected, never truncated.
 
 On resume, ownership, selected grants, operator policy and credential generation
-are checked again. Updates reread the event and send `If-Match`; a stale version
+are checked again. Settings changes invalidate outstanding event approvals. Updates reread the event and send `If-Match`; a stale version
 requires a new turn and confirmation. See Google's
 [resource version guide](https://developers.google.com/workspace/calendar/api/guides/version-resources).
 A Raft compare-and-swap marks the operation dispatched **before** sending a write,
@@ -224,7 +285,10 @@ OAuth state, PKCE verifier, pending tokens and mutation previews are encrypted a
 replicated in `integration_state`. Replays and concurrent transitions use CAS.
 Expired records are removed by the leader's reaper. Allocation is bounded to 100
 records per owner and 10,000 globally, including records awaiting cleanup.
-Portable memory archives omit credentials and integration state; physical
+Durable preferences live in a separate encrypted `integration_settings` bucket,
+keyed by canonical user and connector. CAS protects concurrent nickname/default
+changes. They do not expire with OAuth flows, and cannot be read through memory
+or skill APIs. Portable memory archives omit credentials, integration settings and integration state; physical
 snapshots contain their encrypted records and require the cluster key.
 
 Learned instructions may describe how to use the typed tools, but cannot expand
