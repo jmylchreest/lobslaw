@@ -8,17 +8,24 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
-	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
+
+// PromptRecordStore is implemented by the storage adapter supplied at node wiring.
+type PromptRecordStore interface {
+	Create(*lobslawv1.PromptRecord) (*lobslawv1.PromptRecord, error)
+	Get(string) (*lobslawv1.PromptRecord, error)
+	Resolve(string, lobslawv1.PromptDecision, lobslawv1.PromptScope, string) (*lobslawv1.PromptRecord, error)
+	Wait(context.Context, string, time.Duration) (*lobslawv1.PromptRecord, error)
+}
 
 // RaftPrompts is the durable Prompts implementation. A confirmation
 // issued by one node can be answered on another, and survives the
 // asking process restarting — neither of which the in-memory registry
 // could do.
 type RaftPrompts struct {
-	store *memory.PromptStore
+	store PromptRecordStore
 	// nodeID is recorded as the resolver. The channel handlers do not
 	// carry the answering user's identity into Resolve, so this is the
 	// coarsest true answer to "who closed this" — better in the audit
@@ -28,11 +35,11 @@ type RaftPrompts struct {
 	// paused turn is rebuilt. Read from config rather than from the
 	// record, so an operator lowering a limit is not overridden by a
 	// turn that started before the change.
-	caps compute.BudgetCaps
+	caps turn.BudgetCaps
 }
 
 // NewRaftPrompts wraps a raft-backed store as the gateway registry.
-func NewRaftPrompts(store *memory.PromptStore, nodeID string, caps compute.BudgetCaps) *RaftPrompts {
+func NewRaftPrompts(store PromptRecordStore, nodeID string, caps turn.BudgetCaps) *RaftPrompts {
 	return &RaftPrompts{store: store, nodeID: nodeID, caps: caps}
 }
 
@@ -178,9 +185,9 @@ func translatePromptErr(err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, memory.ErrPromptNotFound):
+	case errors.Is(err, turn.ErrPromptNotFound):
 		return ErrPromptNotFound
-	case errors.Is(err, memory.ErrPromptResolved):
+	case errors.Is(err, turn.ErrPromptResolved):
 		return ErrPromptResolved
 	default:
 		return err

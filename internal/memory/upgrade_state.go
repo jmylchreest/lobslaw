@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	bolt "go.etcd.io/bbolt"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/dataformat"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -18,6 +19,12 @@ var ErrUpgradeConflict = errors.New("upgrade transition conflict")
 
 func readContract(tx *bolt.Tx) (dataformat.ContractState, error) {
 	state := dataformat.ContractState{Active: 1}
+	for _, name := range teamBuckets {
+		if tx.Bucket([]byte(name)) != nil {
+			state.Active = 2
+			break
+		}
+	}
 	if b := tx.Bucket([]byte(formatBucket)); b != nil {
 		if raw := b.Get([]byte(contractKey)); raw != nil {
 			if err := json.Unmarshal(raw, &state); err != nil {
@@ -30,6 +37,13 @@ func readContract(tx *bolt.Tx) (dataformat.ContractState, error) {
 			}
 			if format.Version > 0 {
 				state.Active = uint32(format.Version)
+			} else {
+				for _, name := range teamBuckets {
+					if tx.Bucket([]byte(name)) != nil {
+						state.Active = 2
+						break
+					}
+				}
 			}
 		}
 	}
@@ -72,6 +86,11 @@ func (s *Store) applyUpgrade(c *pb.UpgradeCommand, index uint64) error {
 		if err := b.Put([]byte(contractKey), raw); err != nil {
 			return err
 		}
+		if next.Active != state.Active {
+			if err := s.rebuildDerived(tx); err != nil {
+				return err
+			}
+		}
 		// Publish the activation and its replay watermark in the same transaction.
 		var buf [8]byte
 		binary.BigEndian.PutUint64(buf[:], index)
@@ -88,15 +107,51 @@ func (s *Store) applyUpgrade(c *pb.UpgradeCommand, index uint64) error {
 }
 
 // Feature branches extend this transaction with their actual schema migration.
-func activateContract(_ *bolt.Tx, target uint32) error {
-	if target != 1 {
+func activateContract(tx *bolt.Tx, target uint32) error {
+	if target == 1 {
+		return nil
+	}
+	if target != 2 {
 		return fmt.Errorf("unsupported contract %d", target)
 	}
-	return nil
+	for _, name := range teamBuckets {
+		if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+			return err
+		}
+	}
+	return writeStateFormat(tx, StateFormat{Version: 2, Protocol: dataformat.ClusterProtocol})
 }
 
 // validateContractEntry runs before proposal as well as on every replica. Feature
 // branches add explicit new-payload gates here, including nested archive batches.
-func validateContractEntry(entry *pb.LogEntry, _ dataformat.ContractState) error {
-	return validateLogEntrySupport(entry)
+func validateContractEntry(entry *pb.LogEntry, state dataformat.ContractState) error {
+	if err := validateLogEntrySupport(entry); err != nil {
+		return err
+	}
+	if state.Active >= 2 {
+		return nil
+	}
+	if usesContract2Fields(entry.ProtoReflect()) {
+		return fmt.Errorf("task/bot execution metadata requires active data contract 2")
+	}
+	switch p := entry.Payload.(type) {
+	case *pb.LogEntry_Bot, *pb.LogEntry_Group, *pb.LogEntry_BotInbox, *pb.LogEntry_TaskAdmission:
+		return fmt.Errorf("team records require active data contract 2")
+	case *pb.LogEntry_ArchiveBatch:
+		for _, record := range p.ArchiveBatch.Records {
+			if record.Kind == "session-messages" {
+				var message pb.SessionMessage
+				if err := proto.Unmarshal(record.Payload, &message); err != nil {
+					return err
+				}
+				if message.BudgetPending {
+					return fmt.Errorf("budget checkpoint import requires active data contract 2")
+				}
+			}
+			if record.Kind == "bots" || record.Kind == "groups" || record.Kind == "inbox" {
+				return fmt.Errorf("team archive import requires active data contract 2")
+			}
+		}
+	}
+	return nil
 }

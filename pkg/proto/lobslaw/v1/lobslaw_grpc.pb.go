@@ -3741,6 +3741,208 @@ var ArchiveService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	AgentService_RunTurn_FullMethodName    = "/lobslaw.v1.AgentService/RunTurn"
+	AgentService_ResumeTurn_FullMethodName = "/lobslaw.v1.AgentService/ResumeTurn"
+	AgentService_Ping_FullMethodName       = "/lobslaw.v1.AgentService/Ping"
+)
+
+// AgentServiceClient is the client API for AgentService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// -----------------------------------------------------------------------------
+// AgentService — run a turn on a compute node for a peer that has none
+// -----------------------------------------------------------------------------
+//
+// A ui-web node authenticates users over HTTP, then asks a compute node
+// to run the turn. Cluster mTLS authenticates the PEER NODE, not the
+// person. The authenticated user travels on the request as Claims and
+// Principal. An empty user is refused: the web node's machine identity
+// must not become the unrestricted audience over every user's data
+// (operator-role-and-cluster-authorization).
+type AgentServiceClient interface {
+	RunTurn(ctx context.Context, in *RunTurnRequest, opts ...grpc.CallOption) (*RunTurnResponse, error)
+	ResumeTurn(ctx context.Context, in *ResumeTurnRequest, opts ...grpc.CallOption) (*ResumeTurnResponse, error)
+	// Ping is the availability probe. Failure is "compute.available =
+	// false", not a deleted capability — sessions and records stay.
+	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+}
+
+type agentServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAgentServiceClient(cc grpc.ClientConnInterface) AgentServiceClient {
+	return &agentServiceClient{cc}
+}
+
+func (c *agentServiceClient) RunTurn(ctx context.Context, in *RunTurnRequest, opts ...grpc.CallOption) (*RunTurnResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunTurnResponse)
+	err := c.cc.Invoke(ctx, AgentService_RunTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) ResumeTurn(ctx context.Context, in *ResumeTurnRequest, opts ...grpc.CallOption) (*ResumeTurnResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResumeTurnResponse)
+	err := c.cc.Invoke(ctx, AgentService_ResumeTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentServiceClient) Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PingResponse)
+	err := c.cc.Invoke(ctx, AgentService_Ping_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AgentServiceServer is the server API for AgentService service.
+// All implementations should embed UnimplementedAgentServiceServer
+// for forward compatibility.
+//
+// -----------------------------------------------------------------------------
+// AgentService — run a turn on a compute node for a peer that has none
+// -----------------------------------------------------------------------------
+//
+// A ui-web node authenticates users over HTTP, then asks a compute node
+// to run the turn. Cluster mTLS authenticates the PEER NODE, not the
+// person. The authenticated user travels on the request as Claims and
+// Principal. An empty user is refused: the web node's machine identity
+// must not become the unrestricted audience over every user's data
+// (operator-role-and-cluster-authorization).
+type AgentServiceServer interface {
+	RunTurn(context.Context, *RunTurnRequest) (*RunTurnResponse, error)
+	ResumeTurn(context.Context, *ResumeTurnRequest) (*ResumeTurnResponse, error)
+	// Ping is the availability probe. Failure is "compute.available =
+	// false", not a deleted capability — sessions and records stay.
+	Ping(context.Context, *PingRequest) (*PingResponse, error)
+}
+
+// UnimplementedAgentServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAgentServiceServer struct{}
+
+func (UnimplementedAgentServiceServer) RunTurn(context.Context, *RunTurnRequest) (*RunTurnResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunTurn not implemented")
+}
+func (UnimplementedAgentServiceServer) ResumeTurn(context.Context, *ResumeTurnRequest) (*ResumeTurnResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResumeTurn not implemented")
+}
+func (UnimplementedAgentServiceServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedAgentServiceServer) testEmbeddedByValue() {}
+
+// UnsafeAgentServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AgentServiceServer will
+// result in compilation errors.
+type UnsafeAgentServiceServer interface {
+	mustEmbedUnimplementedAgentServiceServer()
+}
+
+func RegisterAgentServiceServer(s grpc.ServiceRegistrar, srv AgentServiceServer) {
+	// If the following call pancis, it indicates UnimplementedAgentServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&AgentService_ServiceDesc, srv)
+}
+
+func _AgentService_RunTurn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunTurnRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).RunTurn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_RunTurn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).RunTurn(ctx, req.(*RunTurnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_ResumeTurn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResumeTurnRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).ResumeTurn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_ResumeTurn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).ResumeTurn(ctx, req.(*ResumeTurnRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentService_Ping_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).Ping(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_Ping_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).Ping(ctx, req.(*PingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var AgentService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.AgentService",
+	HandlerType: (*AgentServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "RunTurn",
+			Handler:    _AgentService_RunTurn_Handler,
+		},
+		{
+			MethodName: "ResumeTurn",
+			Handler:    _AgentService_ResumeTurn_Handler,
+		},
+		{
+			MethodName: "Ping",
+			Handler:    _AgentService_Ping_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
 	TaskApprovalService_CreateTaskApproval_FullMethodName     = "/lobslaw.v1.TaskApprovalService/CreateTaskApproval"
 	TaskApprovalService_PauseTaskApproval_FullMethodName      = "/lobslaw.v1.TaskApprovalService/PauseTaskApproval"
 	TaskApprovalService_GetTaskApproval_FullMethodName        = "/lobslaw.v1.TaskApprovalService/GetTaskApproval"
@@ -4185,6 +4387,194 @@ var TaskApprovalService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
+	ConsoleService_QueryConsole_FullMethodName  = "/lobslaw.v1.ConsoleService/QueryConsole"
+	ConsoleService_MutateConsole_FullMethodName = "/lobslaw.v1.ConsoleService/MutateConsole"
+	ConsoleService_ChatConsole_FullMethodName   = "/lobslaw.v1.ConsoleService/ChatConsole"
+)
+
+// ConsoleServiceClient is the client API for ConsoleService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+type ConsoleServiceClient interface {
+	QueryConsole(ctx context.Context, in *QueryConsoleRequest, opts ...grpc.CallOption) (*QueryConsoleResponse, error)
+	MutateConsole(ctx context.Context, in *MutateConsoleRequest, opts ...grpc.CallOption) (*MutateConsoleResponse, error)
+	ChatConsole(ctx context.Context, in *ChatConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatConsoleResponse], error)
+}
+
+type consoleServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewConsoleServiceClient(cc grpc.ClientConnInterface) ConsoleServiceClient {
+	return &consoleServiceClient{cc}
+}
+
+func (c *consoleServiceClient) QueryConsole(ctx context.Context, in *QueryConsoleRequest, opts ...grpc.CallOption) (*QueryConsoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryConsoleResponse)
+	err := c.cc.Invoke(ctx, ConsoleService_QueryConsole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *consoleServiceClient) MutateConsole(ctx context.Context, in *MutateConsoleRequest, opts ...grpc.CallOption) (*MutateConsoleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MutateConsoleResponse)
+	err := c.cc.Invoke(ctx, ConsoleService_MutateConsole_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *consoleServiceClient) ChatConsole(ctx context.Context, in *ChatConsoleRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ChatConsoleResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ConsoleService_ServiceDesc.Streams[0], ConsoleService_ChatConsole_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ChatConsoleRequest, ChatConsoleResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConsoleService_ChatConsoleClient = grpc.ServerStreamingClient[ChatConsoleResponse]
+
+// ConsoleServiceServer is the server API for ConsoleService service.
+// All implementations should embed UnimplementedConsoleServiceServer
+// for forward compatibility.
+//
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+type ConsoleServiceServer interface {
+	QueryConsole(context.Context, *QueryConsoleRequest) (*QueryConsoleResponse, error)
+	MutateConsole(context.Context, *MutateConsoleRequest) (*MutateConsoleResponse, error)
+	ChatConsole(*ChatConsoleRequest, grpc.ServerStreamingServer[ChatConsoleResponse]) error
+}
+
+// UnimplementedConsoleServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedConsoleServiceServer struct{}
+
+func (UnimplementedConsoleServiceServer) QueryConsole(context.Context, *QueryConsoleRequest) (*QueryConsoleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) MutateConsole(context.Context, *MutateConsoleRequest) (*MutateConsoleResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MutateConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) ChatConsole(*ChatConsoleRequest, grpc.ServerStreamingServer[ChatConsoleResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ChatConsole not implemented")
+}
+func (UnimplementedConsoleServiceServer) testEmbeddedByValue() {}
+
+// UnsafeConsoleServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ConsoleServiceServer will
+// result in compilation errors.
+type UnsafeConsoleServiceServer interface {
+	mustEmbedUnimplementedConsoleServiceServer()
+}
+
+func RegisterConsoleServiceServer(s grpc.ServiceRegistrar, srv ConsoleServiceServer) {
+	// If the following call pancis, it indicates UnimplementedConsoleServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ConsoleService_ServiceDesc, srv)
+}
+
+func _ConsoleService_QueryConsole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryConsoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConsoleServiceServer).QueryConsole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConsoleService_QueryConsole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConsoleServiceServer).QueryConsole(ctx, req.(*QueryConsoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConsoleService_MutateConsole_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MutateConsoleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConsoleServiceServer).MutateConsole(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConsoleService_MutateConsole_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConsoleServiceServer).MutateConsole(ctx, req.(*MutateConsoleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConsoleService_ChatConsole_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ChatConsoleRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ConsoleServiceServer).ChatConsole(m, &grpc.GenericServerStream[ChatConsoleRequest, ChatConsoleResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConsoleService_ChatConsoleServer = grpc.ServerStreamingServer[ChatConsoleResponse]
+
+// ConsoleService_ServiceDesc is the grpc.ServiceDesc for ConsoleService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ConsoleService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.ConsoleService",
+	HandlerType: (*ConsoleServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "QueryConsole",
+			Handler:    _ConsoleService_QueryConsole_Handler,
+		},
+		{
+			MethodName: "MutateConsole",
+			Handler:    _ConsoleService_MutateConsole_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ChatConsole",
+			Handler:       _ConsoleService_ChatConsole_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "lobslaw/v1/lobslaw.proto",
 }
 

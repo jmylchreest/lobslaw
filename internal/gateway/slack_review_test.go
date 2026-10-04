@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // recordingPrompts captures what a confirmation was registered WITH,
@@ -106,8 +106,8 @@ func TestSlackChainedConfirmationIsAnswerableByTheOriginalApprover(t *testing.T)
 	// The resumed leg needs a second confirmation.
 	r := &slackResponder{h: h, channel: "C1", thread: "1700000000.000100", status: "1700000000.000100"}
 	h.sendConfirmationBlocks(context.Background(), r,
-		compute.ProcessMessageRequest{TurnID: "t1"},
-		&compute.ProcessMessageResponse{ConfirmationReason: "run the second tool"},
+		turn.Request{TurnID: "t1"},
+		&turn.Response{ConfirmationReason: "run the second tool"},
 		session)
 
 	prompts.mu.Lock()

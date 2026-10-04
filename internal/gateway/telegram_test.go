@@ -65,7 +65,7 @@ func newTGHarness(t *testing.T, agent *compute.Agent, cfg TelegramConfig) *tgSer
 	if cfg.APIBase == "" {
 		cfg.APIBase = h.fakeAPI.URL
 	}
-	handler, err := NewTelegramHandler(cfg, agent)
+	handler, err := NewTelegramHandler(cfg, compute.Adapt(agent))
 	if err != nil {
 		t.Fatal(err)
 	}

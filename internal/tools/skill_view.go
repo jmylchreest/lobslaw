@@ -72,10 +72,13 @@ func RegisterSkillViewBuiltin(b *Builtins, cfg SkillViewConfig) error {
 }
 
 func newSkillViewHandler(cfg SkillViewConfig) compute.BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		name := strings.TrimSpace(args["name"])
 		if name == "" {
 			return nil, 2, errors.New("skill_view: name is required")
+		}
+		if !compute.SkillAccessAllowed(ctx, name) {
+			return nil, 2, errors.New("skill_view: skill is outside this actor's allowed set")
 		}
 		if !cfg.Docs.Has(name) {
 			// Exit 2: the agent chose a name, and the fix is to choose

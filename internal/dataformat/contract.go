@@ -12,7 +12,7 @@ const ControlProtocol = "lobslaw-rolling-v1"
 const MaxTransitionIDBytes = 128
 
 // SupportedContracts is an explicit compatibility set, not an inferred range.
-func SupportedContracts() []uint32 { return []uint32{1} }
+func SupportedContracts() []uint32 { return []uint32{1, 2} }
 
 type Transition struct {
 	ID                    string   `json:"id"`

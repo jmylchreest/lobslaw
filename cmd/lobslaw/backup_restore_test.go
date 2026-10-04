@@ -108,7 +108,11 @@ key = %q
 		{"--node-cert", source.cert, "--node-key", source.key},
 	} {
 		err := run(append(stale, "--owner", "user:alice=user:alice-new", "--owner", "alice=alice-new", "--apply")...)
-		backupTestRPCError(t, err, codes.Unavailable, "tls:")
+		// A TLS 1.3 rejection may arrive as an alert or a socket close before
+		// the client reads that alert (for example, "broken pipe"). Assert
+		// rejection and no writes; the valid restore below proves the server
+		// remained reachable, without depending on transport error wording.
+		backupTestRPCError(t, err, codes.Unavailable, "")
 		assertEmpty()
 	}
 	if err := run("--apply"); err == nil || !strings.Contains(err.Error(), "explicit owner mapping required") {

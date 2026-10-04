@@ -1245,19 +1245,23 @@ service SoulTuneService {
   rpc RollbackSoulTune(RollbackSoulTuneRequest) returns (RollbackSoulTuneResponse);
 }
 
-message GetSoulTuneRequest {}
+message GetSoulTuneRequest {
+  string bot_id = 1;
+}
 message GetSoulTuneResponse {
   SoulTuneRecord record = 1;
 }
 message PutSoulTuneRequest {
   SoulTuneState state = 1;
   uint64 expected_revision = 2;
+  string bot_id = 3;
 }
 message PutSoulTuneResponse {
   SoulTuneRecord record = 1;
 }
 message RollbackSoulTuneRequest {
   uint32 steps = 1;
+  string bot_id = 2;
 }
 message RollbackSoulTuneResponse {
   SoulTuneRecord record = 1;
@@ -1292,6 +1296,133 @@ message EmotiveStyleTune {
   optional int32 sarcasm = 4;
   optional int32 humor = 5;
   optional string emoji_usage = 6;
+}
+
+// BotRecord is one named agent. It is a principal, not a permission
+// set: it runs as "bot:<id>" and policy decides what that may do.
+// Persona (instructions, overlay) grants no authority.
+//
+// The tools list is a registry filter — what the model is shown —
+// not a second authorisation system. Empty means the node default.
+message BotRecord {
+  // id is an immutable slug — "engineering". It is the principal's
+  // identifier, so renaming one would orphan every record it owns.
+  string id = 1;
+  string display_name = 2;
+  string description = 3;
+  // instructions is the bot's standing brief. Rendered as soul
+  // guidance, which means it is standing configuration and never
+  // the current task.
+  string instructions = 4;
+  // is_coordinator is a convenience flag. The coordinator ROLE lives
+  // on GroupRecord.coordinator_bot_id — this bot is an ordinary bot
+  // that happens to hold that role.
+  bool is_coordinator = 5;
+  repeated string tools = 6;
+  // may_message is the explicit edge list for ask_bot / tell_bot /
+  // inbox_post. Validated as a DAG on write.
+  repeated string may_message = 7;
+  string model_role = 8;
+  BotBudget budget = 9;
+  bool enabled = 10;
+  // revision is FSM-assigned and bumped on every write, making a
+  // read-modify-write safe against a stale reader. Same contract as
+  // SoulTuneRecord.
+  uint64 revision = 11;
+  string claimed_by = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  string created_by = 15;
+  // group_id is the team this bot belongs to. Empty is not a public
+  // default — a bot with no team is not in anyone's team.
+  string group_id = 16;
+  // owner is the human principal this bot belongs to — "user:alice".
+  // Empty means nobody: the record is inaccessible, never public.
+  string owner = 17;
+  // Deleted identities remain reserved because inbox, soul and memory records
+  // retain this principal. Tombstones travel with portable bot archives.
+  bool deleted = 18;
+}
+
+// BotBudget caps one of this bot's turns. Zero on a field takes the
+// node's configured default rather than meaning "unlimited".
+message BotBudget {
+  int32 max_tool_calls = 1;
+  double max_spend_usd = 2;
+  int64 max_egress_bytes = 3;
+}
+
+// GroupRecord is one team: a single human owner, a coordinator bot,
+// and the specialists under it. Empty owner is inaccessible, never
+// public.
+message GroupRecord {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  // coordinator_bot_id is an ordinary bot that answers for this group.
+  string coordinator_bot_id = 4;
+  bool is_default = 5;
+  uint64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  string created_by = 9;
+  string claimed_by = 10;
+  // owner is the human principal this team belongs to — "user:alice".
+  // Empty means nobody: the record is inaccessible, never public.
+  string owner = 11;
+}
+
+// InboxKind is what an item IS.
+enum InboxKind {
+  INBOX_KIND_UNSPECIFIED = 0;
+  INBOX_KIND_TASK = 1;
+  INBOX_KIND_QUESTION = 2;
+  INBOX_KIND_ANSWER = 3;
+  INBOX_KIND_RESULT = 4;
+  INBOX_KIND_FYI = 5;
+}
+
+// InboxStatus is where an item is in its life. FAILED stays visible.
+enum InboxStatus {
+  INBOX_STATUS_UNSPECIFIED = 0;
+  INBOX_STATUS_PENDING = 1;
+  INBOX_STATUS_CLAIMED = 2;
+  INBOX_STATUS_DONE = 3;
+  INBOX_STATUS_FAILED = 4;
+  INBOX_STATUS_CANCELLED = 5;
+  INBOX_STATUS_WAITING = 6;
+}
+
+// BotInboxItem is one unit of a bot's durable work queue.
+// Keyed "<recipient>:<ulid>". Status is not in the key.
+message BotInboxItem {
+  string id = 1;
+  string recipient = 2;
+  string sender = 3;
+  InboxKind kind = 4;
+  string subject = 5;
+  string body = 6;
+  int32 priority = 7;
+  InboxStatus status = 8;
+  string correlation_id = 9;
+  string result = 10;
+  string error = 11;
+  int32 attempts = 12;
+  string claimed_by = 13;
+  google.protobuf.Timestamp claim_expires_at = 14;
+  uint64 revision = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp completed_at = 17;
+  string session_id = 18;
+  repeated string tools_used = 19;
+  uint64 tokens_used = 20;
+  double cost_usd = 21;
+  // requested_by is the person this work traces back to.
+  string requested_by = 22;
+  // Once linked, only the durable task runner may execute this item.
+  string task_id = 23;
+  // Original caller authority, stamped by the authenticated enqueue path.
+  Claims task_claims = 24;
 }
 
 // CredentialRecord holds an OAuth (or other-provider) credential
@@ -1925,6 +2056,8 @@ message SessionMessage {
   // Server-owned prepared input for a paused executor call. Only continuation
   // messages carry this; never populated from LLM output or sent to a provider.
   PreparedToolCall prepared_tool_call = 9;
+  // Trusted runner metadata: this call has not executed because of budget.
+  bool budget_pending = 10;
 }
 
 // SessionToolCall mirrors the tool-call shape on the LLM wire.
@@ -2050,12 +2183,16 @@ message LogEntry {
     EnrolmentRecord enrolment = 35;
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
+    BotRecord bot = 51;
+    BotInboxItem bot_inbox = 53;
+    GroupRecord group = 54;
     ShareBatch share_batch = 37;
     IntegrationStateRecord integration_state = 38;
     // Durable encrypted connector preferences; no expiry, separate from flows.
     IntegrationStateRecord integration_settings = 39;
     TaskApprovalRecord task_approval = 50;
     UpgradeCommand upgrade = 1001;
+    TaskAdmission task_admission = 101;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -2075,8 +2212,12 @@ message LogEntry {
   // behaviour what a caller gets by forgetting the field — the same
   // shape as the scopeFilter="" bug that memory.Audience exists to
   // prevent. LOG_OP_CLAIM requires it and is rejected without it;
-  // PUT / DELETE ignore it, since a create has no prior revision.
+  // PUT ignores it. Inbox retention DELETE checks it when supplied, so
+  // pruning a stale terminal version cannot remove concurrently retried work.
   optional uint64 expected_revision = 24;
+  // Capacity at proposal time, checked deterministically when an inbox write
+  // adds outstanding work. Zero preserves replay of older entries.
+  uint32 inbox_max_pending = 52;
 }
 
 // ArchiveBatch is bounded by the importer and applied in one store transaction.
@@ -2304,6 +2445,11 @@ message Continuation {
   string conversation_summary = 11;
   string recalled_context = 12;
   int64 egress_bytes = 13;
+  string bot_id = 14;
+  string principal = 15;
+  // Restrictions, not tool definitions: intersect with current bot policy.
+  repeated string bot_tools = 16;
+  repeated string bot_denied = 17;
 }
 
 // PromptRecord is one pending confirmation, in Raft rather than in a
@@ -2351,6 +2497,39 @@ message PromptRecord {
   // for the same reason: the answer has to reach something other than
   // a paused turn.
   string enrolment = 20;
+}
+
+// -----------------------------------------------------------------------------
+// AgentService — run a turn on a compute node for a peer that has none
+// -----------------------------------------------------------------------------
+//
+// A ui-web node authenticates users over HTTP, then asks a compute node
+// to run the turn. Cluster mTLS authenticates the PEER NODE, not the
+// person. The authenticated user travels on the request as Claims and
+// Principal. An empty user is refused: the web node's machine identity
+// must not become the unrestricted audience over every user's data
+// (operator-role-and-cluster-authorization).
+service AgentService {
+  rpc RunTurn(RunTurnRequest) returns (RunTurnResponse);
+  rpc ResumeTurn(ResumeTurnRequest) returns (ResumeTurnResponse);
+  // Ping is the availability probe. Failure is "compute.available =
+  // false", not a deleted capability — sessions and records stay.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {}
+message PingResponse {}
+
+message TurnBudgetCaps {
+  int32 max_tool_calls = 1;
+  double max_spend_usd = 2;
+  int64 max_egress_bytes = 3;
+}
+
+message TurnBudgetState {
+  int32 tool_calls = 1;
+  double spend_usd = 2;
+  int64 egress_bytes = 3;
 }
 
 // PreparedToolCall freezes hook output for confirmation/resume. This is not an
@@ -2427,11 +2606,507 @@ message TaskBudget {
   int64 egress_bytes = 3;
 }
 
+message TurnAttachment {
+  string kind = 1;
+  string mime_type = 2;
+  int32 size = 3;
+  int32 width = 4;
+  int32 height = 5;
+  int32 duration = 6;
+  string reference = 7;
+  string filename = 8;
+  string local_path = 9;
+}
+
+message TurnToolInvocation {
+  string execution_status = 101;
+  string call_id = 1;
+  string tool_name = 2;
+  string args = 3;
+  string output = 4;
+  int32 exit_code = 5;
+  string error = 6;
+}
+
+message RunTurnRequest {
+  string message = 1;
+  // The authenticated user. Required. Never inferred from the peer
+  // certificate — that is the web node's machine identity.
+  Claims claims = 2;
+  // Cluster-wide principal already resolved on the calling node.
+  // Empty lets the compute node Resolve() from claims.user_id.
+  string principal = 3;
+  string turn_id = 4;
+  string channel = 5;
+  string channel_id = 6;
+  bool shared_conversation = 7;
+  string hint = 8;
+  string user_timezone = 9;
+  string system_prompt = 10;
+  string model = 11;
+  repeated SessionMessage conversation_history = 12;
+  string conversation_summary = 13;
+  string recalled_context = 14;
+  repeated TurnAttachment attachments = 15;
+  TurnBudgetCaps caps = 16;
+  TurnBudgetState spent = 17;
+  string bot_id = 18;
+}
+
+message ResumeTurnRequest {
+  RunTurnRequest request = 1;
+  repeated SessionMessage prior = 2;
+  // Asserted only by authenticated peer nodes after the user has approved.
+  string approval_action = 3;
+  string approval_resource = 4;
+}
+
+message RunTurnResponse {
+  string reply = 1;
+  repeated TurnToolInvocation tool_calls = 2;
+  repeated TurnAttachment attachments = 3;
+  repeated SessionMessage messages = 4;
+  int32 turn_start_index = 5;
+  TurnBudgetState budget = 6;
+  bool needs_confirmation = 7;
+  string confirmation_action = 8;
+  string confirmation_resource = 9;
+  bool confirmation_grantable = 10;
+  repeated string confirmation_labels = 11;
+  string confirmation_reason = 12;
+}
+
+message ResumeTurnResponse {
+  RunTurnResponse response = 1;
+}
+
+// ConsoleService carries the authenticated browser channel to its compute
+// backend. Login and static assets stay on the web node; records, conversations
+// and pending approvals stay together on the backend. Only node peers may call.
+service ConsoleService {
+  rpc QueryConsole(QueryConsoleRequest) returns (QueryConsoleResponse);
+  rpc MutateConsole(MutateConsoleRequest) returns (MutateConsoleResponse);
+  rpc ChatConsole(ChatConsoleRequest) returns (stream ChatConsoleResponse);
+}
+
+// No browser paths, HTTP envelopes or opaque JSON cross the peer boundary.
+message ConsoleIdentity {
+  Claims claims = 1;
+  string principal = 2;
+}
+message ConsoleEmpty {}
+message ConsoleTarget {
+  string id = 1;
+}
+message ConsoleList {
+  string id = 1;
+  int32 limit = 2;
+  string status = 3;
+}
+message ConsoleInboxTarget {
+  string bot = 1;
+  string id = 2;
+}
+message QueryConsoleRequest {
+  ConsoleIdentity identity = 1;
+  oneof query {
+    ConsoleEmpty capabilities = 2;
+    ConsoleEmpty tools = 3;
+    ConsoleEmpty bots = 4;
+    ConsoleTarget bot = 5;
+    ConsoleEmpty groups = 6;
+    ConsoleTarget group = 7;
+    ConsoleList inbox = 8;
+    ConsoleInboxTarget inbox_item = 9;
+    ConsoleList activity = 10;
+    ConsoleTarget sessions = 11;
+    ConsoleTarget transcript = 12;
+    ConsoleTarget routines = 13;
+    ConsoleTarget memory = 14;
+    ConsoleTarget prompt = 15;
+    string plan_window = 16;
+    ListTaskApprovalRequest task_approvals = 17;
+    GetTaskApprovalRequest task_approval = 18;
+    ConsoleEmpty learned_reviews = 19;
+    ConsoleTarget learned_review = 20;
+    ConsoleNotificationQuery notification_candidates = 21;
+  }
+}
+message ConsoleCapability {
+  bool supported = 5;
+  bool enabled = 1;
+  bool authorised = 2;
+  bool configured = 3;
+  bool available = 4;
+}
+message ConsoleCapabilities {
+  ConsoleCapability compute = 1;
+  ConsoleCapability compute_teams = 2;
+  ConsoleCapability ui_web = 3;
+}
+message ConsoleTool {
+  string name = 1;
+  string description = 2;
+}
+message ConsoleTools {
+  repeated ConsoleTool tools = 1;
+}
+message ConsoleBot {
+  string id = 1;
+  string display_name = 2;
+  string description = 3;
+  string instructions = 4;
+  bool is_coordinator = 5;
+  string group_id = 6;
+  bool enabled = 7;
+  repeated string tools = 8;
+  repeated string may_message = 9;
+  uint64 revision = 10;
+  string created_at = 11;
+  string updated_at = 12;
+}
+message ConsoleBots {
+  repeated ConsoleBot bots = 1;
+}
+message ConsoleGroup {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string coordinator_bot_id = 4;
+  bool is_default = 5;
+  string owner = 6;
+  bool mine = 7;
+  uint64 revision = 8;
+  int32 bots = 9;
+}
+message ConsoleGroups {
+  repeated ConsoleGroup groups = 1;
+}
+message ConsoleInboxItem {
+  string id = 1;
+  string recipient = 2;
+  string sender = 3;
+  string kind = 4;
+  string subject = 5;
+  string body = 6;
+  int32 priority = 7;
+  string status = 8;
+  string result = 9;
+  string error = 10;
+  int32 attempts = 11;
+  string correlation_id = 12;
+  string session_id = 13;
+  string requested_by = 14;
+  repeated string tools_used = 15;
+  uint64 tokens_used = 16;
+  double cost_usd = 17;
+  string created_at = 18;
+  string completed_at = 19;
+  string task_id = 20;
+  uint64 revision = 100;
+  repeated string truncated_fields = 101;
+  string detail_path = 102;
+}
+message ConsoleInbox {
+  string bot = 1;
+  repeated ConsoleInboxItem items = 2;
+}
+message ConsoleSession {
+  string id = 1;
+  string channel = 2;
+  string channel_id = 3;
+  string title = 4;
+  string user_id = 5;
+  uint64 messages = 6;
+  string updated_at = 7;
+}
+message ConsoleSessions {
+  string bot = 1;
+  repeated ConsoleSession sessions = 2;
+}
+message ConsoleMessage {
+  uint64 seq = 1;
+  string role = 2;
+  string content = 3;
+  int32 tool_calls = 4;
+  string turn_id = 5;
+}
+message ConsoleTranscript {
+  string id = 1;
+  repeated ConsoleMessage messages = 2;
+}
+message ConsoleRoutine {
+  string id = 1;
+  string name = 2;
+  string schedule = 3;
+  string handler_ref = 4;
+  bool enabled = 5;
+  string last_run = 6;
+  string next_run = 7;
+  string prompt = 8;
+}
+message ConsoleRoutines {
+  repeated ConsoleRoutine routines = 1;
+}
+message ConsoleMemoryRecord {
+  string id = 1;
+  string kind = 2;
+  string text = 3;
+  repeated string tags = 4;
+  string scope = 5;
+  string created_at = 6;
+}
+message ConsoleMemory {
+  repeated ConsoleMemoryRecord records = 1;
+  int32 total = 2;
+}
+message ConsolePrompt {
+  string id = 1;
+  string turn_id = 2;
+  string reason = 3;
+  string channel = 4;
+  string decision = 5;
+  string created_at = 6;
+  string expires_at = 7;
+}
+message ConsoleCommitment {
+  string id = 1;
+  string due_at = 2;
+  string reason = 3;
+  string status = 4;
+}
+message ConsoleScheduledTask {
+  string id = 1;
+  string name = 2;
+  string schedule = 3;
+  string handler_ref = 4;
+  string next_run = 5;
+}
+message ConsolePlan {
+  double window_seconds = 1;
+  repeated ConsoleCommitment commitments = 2;
+  repeated ConsoleScheduledTask scheduled_tasks = 3;
+}
+message QueryConsoleResponse {
+  oneof result {
+    ConsoleCapabilities capabilities = 1;
+    ConsoleTools tools = 2;
+    ConsoleBots bots = 3;
+    ConsoleBot bot = 4;
+    ConsoleGroups groups = 5;
+    ConsoleGroup group = 6;
+    ConsoleInbox inbox = 7;
+    ConsoleInboxItem inbox_item = 8;
+    ConsoleSessions sessions = 9;
+    ConsoleTranscript transcript = 10;
+    ConsoleRoutines routines = 11;
+    ConsoleMemory memory = 12;
+    ConsolePrompt prompt = 13;
+    ConsolePlan plan = 14;
+    ListTaskApprovalResponse task_approvals = 15;
+    GetTaskApprovalResponse task_approval = 16;
+    ConsoleLearnedReviews learned_reviews = 17;
+    ConsoleLearnedReview learned_review = 18;
+    ConsoleNotificationPage notification_candidates = 19;
+  }
+}
+message ConsoleStrings {
+  repeated string values = 1;
+}
+message ConsoleBotPatch {
+  string id = 1;
+  optional uint64 revision = 2;
+  optional string display_name = 3;
+  optional string description = 4;
+  optional string instructions = 5;
+  ConsoleStrings tools = 6;
+  ConsoleStrings may_message = 7;
+  optional bool enabled = 8;
+  optional string group_id = 9;
+}
+message ConsoleGroupWrite {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string coordinator_bot_id = 4;
+  optional uint64 revision = 5;
+}
+message ConsoleInboxPost {
+  string bot = 1;
+  string subject = 2;
+  string body = 3;
+  string kind = 4;
+  int32 priority = 5;
+}
+message ConsolePromptDecision {
+  string id = 1;
+  bool approve = 2;
+  string scope = 3;
+}
+message MutateConsoleRequest {
+  ConsoleIdentity identity = 1;
+  oneof operation {
+    ConsoleBot create_bot = 2;
+    ConsoleBotPatch update_bot = 3;
+    ConsoleTarget delete_bot = 4;
+    ConsoleGroupWrite create_group = 5;
+    ConsoleGroupWrite update_group = 6;
+    ConsoleTarget delete_group = 7;
+    ConsoleInboxPost post_inbox = 8;
+    ConsoleInboxTarget retry_inbox = 9;
+    ConsoleInboxTarget cancel_inbox = 10;
+    ConsolePromptDecision resolve_prompt = 11;
+    DecideTaskApprovalRequest decide_task_approval = 12;
+    CancelTaskApprovalRequest cancel_task_approval = 13;
+    RecoverTaskApprovalRequest recover_task_approval = 14;
+    ConsoleLearnedDecision decide_learned_review = 15;
+  }
+}
+message ConsoleDecision {
+  string decision = 1;
+  string status = 2;
+  string scope = 3;
+}
+message MutateConsoleResponse {
+  oneof result {
+    ConsoleBot bot = 1;
+    ConsoleGroup group = 2;
+    ConsoleInboxItem inbox_item = 3;
+    ConsoleEmpty deleted = 4;
+    ConsoleDecision decision = 5;
+    DecideTaskApprovalResponse task_decision = 6;
+    CancelTaskApprovalResponse task_cancel = 7;
+    RecoverTaskApprovalResponse task_recovery = 8;
+    ConsoleLearnedDecisionResult learned_decision = 9;
+  }
+}
+message ChatConsoleRequest {
+  ConsoleIdentity identity = 1;
+  string bot = 2;
+  string message = 3;
+  string session_id = 4;
+  string turn_id = 5;
+  string model = 6;
+}
+
+// Human review is separate from task execution approval. The digest pins all
+// inspected instructions and reference files, including pending amendments.
+message ConsoleLearnedChange {
+  string description = 1;
+  string body = 2;
+  map<string, string> files = 3;
+  string rationale = 4;
+  string turn_id = 5;
+}
+message ConsoleLearnedReview {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string body = 4;
+  map<string, string> files = 5;
+  uint64 revision = 6;
+  string digest = 7;
+  string turn_id = 8;
+  bool active = 9;
+  ConsoleLearnedChange pending = 10;
+  string author = 11;
+}
+message ConsoleLearnedReviews {
+  repeated ConsoleLearnedReview reviews = 1;
+}
+message ConsoleLearnedDecision {
+  string id = 1;
+  uint64 revision = 2;
+  string digest = 3;
+  bool approve = 4;
+}
+message ConsoleLearnedDecisionResult {
+  string message = 1;
+}
+message ConsoleToolCall {
+  string execution_status = 101;
+  string call_id = 1;
+  string tool_name = 2;
+  string args = 3;
+  string output = 4;
+  int32 exit_code = 5;
+  string error = 6;
+}
+message ConsoleBudget {
+  int32 tool_calls = 1;
+  double spend_usd = 2;
+  int64 egress_bytes = 3;
+}
+message ConsoleReply {
+  string reply = 1;
+  string turn_id = 2;
+  repeated ConsoleToolCall tool_calls = 3;
+  bool needs_confirmation = 4;
+  string confirmation_reason = 5;
+  string prompt_id = 6;
+  ConsoleBudget budget = 7;
+}
+message ConsoleBotReply {
+  repeated SessionMessage transcript = 101;
+  repeated TurnToolInvocation receipts = 102;
+  string text = 1;
+  string turn_id = 2;
+  repeated string tools_used = 3;
+  int32 tool_calls = 4;
+  uint64 tokens_used = 5;
+  double cost_usd = 6;
+  string session_id = 7;
+  repeated string tools_attempted = 8;
+}
+message ConsoleConfirmation {
+  string prompt_id = 1;
+  string reason = 2;
+  string action = 3;
+  string resource = 4;
+  int32 expires_in_seconds = 5;
+}
+message ConsoleProgress {
+  string bot = 1;
+  string turn_id = 2;
+  string text = 3;
+}
+message ConsoleFailure {
+  string message = 1;
+  string error = 2;
+}
+message ChatConsoleResponse {
+  oneof event {
+    ConsoleProgress start = 1;
+    ConsoleProgress working = 2;
+    ConsoleProgress typing = 3;
+    ConsoleProgress interim = 4;
+    ConsoleReply final = 5;
+    ConsoleBotReply reply = 6;
+    ConsoleConfirmation needs_confirmation = 7;
+    ConsoleFailure error = 8;
+    ConsoleFailure accepted = 9;
+  }
+}
+
 message TaskGrant {
   string action = 1;
   string resource = 2;
 }
+message TaskAdmission {
+  TaskApprovalRecord task = 1;
+  BotInboxItem inbox = 2;
+  uint32 max_pending = 3;
+  uint64 expected_revision = 4;
+  string expected_claimer = 5;
+}
+
 message TaskApprovalRecord {
+  repeated SessionMessage transcript = 101;
+  repeated TurnToolInvocation receipts = 102;
+  bool coordinator_conversation = 103;
+  bool recoverable = 104;
+  string session_id = 105;
+  uint32 transcript_start = 106;
   string id = 1;
   string owner = 2;
   string actor = 3;
@@ -2455,12 +3130,17 @@ message TaskApprovalRecord {
   TaskBudget budget_spent = 20;
 }
 message CreateTaskApprovalRequest {
+  BotInboxItem inbox = 101;
+  uint32 inbox_max_pending = 102;
+  bool coordinator_conversation = 103;
   string owner = 1;
   string actor = 2;
   string parent_id = 3;
   google.protobuf.Timestamp expires_at = 4;
 }
 message PauseTaskApprovalRequest {
+  repeated TurnToolInvocation receipts = 101;
+  uint32 transcript_start = 102;
   string id = 1;
   string owner = 2;
   string actor = 3;
@@ -2495,6 +3175,12 @@ message ClaimTaskApprovalRequest {
   uint64 revision = 4;
 }
 message FinishTaskApprovalRequest {
+  repeated SessionMessage transcript = 101;
+  repeated TurnToolInvocation receipts = 102;
+  uint32 transcript_start = 103;
+  TaskBudget budget_spent = 104;
+  bool outcome_unknown = 105;
+  string turn_id = 106;
   string id = 1;
   string owner = 2;
   string actor = 3;
@@ -2523,6 +3209,7 @@ message CheckGrantTaskApprovalRequest {
   string resource = 6;
 }
 message CreateTaskApprovalResponse {
+  BotInboxItem inbox = 101;
   TaskApprovalRecord record = 1;
 }
 message PauseTaskApprovalResponse {
@@ -2552,6 +3239,18 @@ message RecoverTaskApprovalResponse {
 }
 message CheckGrantTaskApprovalResponse {
   bool granted = 1;
+}
+
+// Owner-checked, bounded reads of durable notification candidates. A cursor is
+// local to the named bot; it is never a browser path or an authority assertion.
+message ConsoleNotificationQuery {
+  string bot = 1;
+  string after = 2;
+  int32 limit = 3;
+}
+message ConsoleNotificationPage {
+  repeated ConsoleInboxItem items = 1;
+  string next_cursor = 2;
 }
 
 // Upgrade control is deliberately stable across supported data contracts.

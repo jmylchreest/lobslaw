@@ -24,6 +24,7 @@ func newTestStore(t *testing.T) (*Store, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
+	activateTestTeams(t, s)
 	return s, path
 }
 

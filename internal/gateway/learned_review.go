@@ -1,42 +1,20 @@
 package gateway
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/jmylchreest/lobslaw/pkg/types"
+	"github.com/jmylchreest/lobslaw/internal/console"
 )
 
-// LearnedReviews is the human review surface. It is deliberately separate
-// from agent tools. Implementations authorise every read and decision.
-type LearnedReviews interface {
-	List(context.Context, *types.Claims) ([]LearnedReview, error)
-	Get(context.Context, *types.Claims, string) (LearnedReview, error)
-	Decide(context.Context, *types.Claims, string, uint64, string, bool) (string, error)
-}
+var ErrLearnedReviewForbidden = console.ErrLearnedReviewForbidden
+var ErrLearnedReviewNotFound = console.ErrLearnedReviewNotFound
+var ErrLearnedReviewConflict = console.ErrLearnedReviewConflict
 
-type LearnedChange struct {
-	Description string
-	Body        string
-	Files       map[string]string
-	Rationale   string
-	TurnID      string
-}
-
-type LearnedReview struct {
-	ID          string
-	Name        string
-	Description string
-	Body        string
-	Files       map[string]string
-	Revision    uint64
-	Digest      string
-	TurnID      string
-	Active      bool
-	Pending     *LearnedChange
-}
+type LearnedReviews = console.LearnedReviews
+type LearnedChange = console.LearnedChange
+type LearnedReview = console.LearnedReview
 
 const learnedReviewAction = "learned:review"
 

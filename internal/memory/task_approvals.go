@@ -82,6 +82,7 @@ func (s *TaskApprovalStore) effectiveState(r *pb.TaskApprovalRecord) {
 			r.State = pb.TaskApprovalState_TASK_APPROVAL_STATE_EXPIRED
 		}
 	}
+	r.Recoverable = r.State == pb.TaskApprovalState_TASK_APPROVAL_STATE_OUTCOME_UNKNOWN && r.Continuation != nil && !expired
 }
 
 func (s *TaskApprovalStore) write(ctx context.Context, previous, next *pb.TaskApprovalRecord) error {
@@ -167,6 +168,13 @@ func (s *TaskApprovalStore) CreateTaskApproval(ctx context.Context, q *pb.Create
 		}
 	}
 	r := &pb.TaskApprovalRecord{Id: ids.New(), Owner: q.Owner, Actor: q.Actor, ParentId: q.ParentId, State: pb.TaskApprovalState_TASK_APPROVAL_STATE_RUNNING, ExpiresAt: timestamppb.New(until), CreatedAt: timestamppb.New(now), ClaimedBy: ids.New(), ClaimExpiresAt: timestamppb.New(minTime(until, now.Add(TaskExecutionTTL)))}
+	if q.Inbox != nil {
+		item, err := s.admit(ctx, r, q)
+		if err != nil {
+			return nil, err
+		}
+		return &pb.CreateTaskApprovalResponse{Record: r, Inbox: item}, nil
+	}
 	if err := s.write(ctx, nil, r); err != nil {
 		return nil, err
 	}
@@ -233,6 +241,17 @@ func (s *TaskApprovalStore) PauseTaskApproval(ctx context.Context, q *pb.PauseTa
 	n.BudgetPolicy = q.BudgetPolicy
 	n.BudgetLimits = q.BudgetLimits
 	n.BudgetSpent = &pb.TaskBudget{ToolCalls: q.Continuation.ToolCalls, SpendUsd: q.Continuation.SpentUsd, EgressBytes: q.Continuation.EgressBytes}
+	contract, err := s.store.ContractState()
+	if err != nil {
+		return nil, err
+	}
+	if contract.Active >= 2 {
+		if err := setTaskEvidence(n, q.Continuation.Messages, q.Receipts, q.TranscriptStart); err != nil {
+			return nil, err
+		}
+	} else if len(q.Receipts) > 0 || q.TranscriptStart != 0 {
+		return nil, status.Error(codes.FailedPrecondition, "execution evidence requires active data contract 2")
+	}
 	n.ClaimedBy = ""
 	n.ClaimExpiresAt = nil
 	n.DecidedBy = ""
@@ -389,6 +408,9 @@ func (s *TaskApprovalStore) FinishTaskApproval(ctx context.Context, q *pb.Finish
 	if q == nil || len(q.Result) > maxTaskResultBytes {
 		return nil, status.Errorf(codes.InvalidArgument, "result must be at most %d KiB", maxTaskResultBytes>>10)
 	}
+	if !validTaskBudget(q.BudgetSpent) {
+		return nil, status.Error(codes.InvalidArgument, "invalid final budget")
+	}
 	r, e := s.load(q.Id, q.Owner)
 	if e != nil {
 		return nil, e
@@ -402,13 +424,30 @@ func (s *TaskApprovalStore) FinishTaskApproval(ctx context.Context, q *pb.Finish
 	n := cloneTask(r)
 	n.State = pb.TaskApprovalState_TASK_APPROVAL_STATE_COMPLETED
 	n.Result = q.Result
-	clearTaskAuthority(n)
+	if q.TurnId != "" {
+		n.TurnId = q.TurnId
+	}
+	if !q.OutcomeUnknown {
+		clearTaskAuthority(n)
+	}
+	if err := setTaskEvidence(n, q.Transcript, q.Receipts, q.TranscriptStart); err != nil {
+		return nil, err
+	}
+	if q.BudgetSpent != nil {
+		n.BudgetSpent = q.BudgetSpent
+	}
+	if q.OutcomeUnknown {
+		n.State = pb.TaskApprovalState_TASK_APPROVAL_STATE_OUTCOME_UNKNOWN
+		n.Grants, n.ClaimedBy, n.ClaimExpiresAt = nil, "", nil
+		s.effectiveState(n)
+	}
 	if e = s.write(ctx, r, n); e != nil {
 		return nil, e
 	}
 	return &pb.FinishTaskApprovalResponse{Record: taskMetadata(n)}, nil
 }
 func clearTaskAuthority(r *pb.TaskApprovalRecord) {
+	r.Recoverable = false
 	r.Grants = nil
 	r.Continuation = nil
 	r.ClaimedBy = ""
@@ -431,11 +470,14 @@ func (s *TaskApprovalStore) CancelTaskApproval(ctx context.Context, q *pb.Cancel
 	}
 	n := cloneTask(r)
 	switch n.State {
-	case pb.TaskApprovalState_TASK_APPROVAL_STATE_RUNNING, pb.TaskApprovalState_TASK_APPROVAL_STATE_RESUMING, pb.TaskApprovalState_TASK_APPROVAL_STATE_OUTCOME_UNKNOWN:
+	case pb.TaskApprovalState_TASK_APPROVAL_STATE_RUNNING, pb.TaskApprovalState_TASK_APPROVAL_STATE_RESUMING:
 		n.State = pb.TaskApprovalState_TASK_APPROVAL_STATE_OUTCOME_UNKNOWN
 		n.Result = "Cancellation requested; an action may already have executed. No further execution is authorised."
 	default:
 		n.State = pb.TaskApprovalState_TASK_APPROVAL_STATE_CANCELLED
+		if r.State == pb.TaskApprovalState_TASK_APPROVAL_STATE_OUTCOME_UNKNOWN {
+			n.Result = "Closed by owner without replay. The previous execution outcome remains uncertain."
+		}
 	}
 	clearTaskAuthority(n)
 	if e = s.write(ctx, r, n); e != nil {

@@ -132,6 +132,10 @@ func (s *Store) restoreSnapshot(r io.Reader, ops snapshotRestoreOps) (out snapsh
 	if err := upgradeStateDB(fresh, s.cipher); err != nil {
 		return out, fmt.Errorf("migrate snapshot: %w", err)
 	}
+	if err := fresh.Update(s.rebuildDerived); err != nil {
+		return out, fmt.Errorf("rebuild snapshot derived records: %w", err)
+	}
+
 	backup := tmp + ".previous"
 	if err := ops.link(s.path, backup); err != nil {
 		return out, fmt.Errorf("preserve current snapshot: %w", err)
@@ -222,7 +226,14 @@ func prepareSnapshotDB(path string) (*bolt.DB, error) {
 		return nil, err
 	}
 	err = fresh.Update(func(tx *bolt.Tx) error {
+		state, err := readContract(tx)
+		if err != nil {
+			return err
+		}
 		for _, name := range allBuckets {
+			if state.Active < 2 && isTeamBucket(name) {
+				continue
+			}
 			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
 				return err
 			}

@@ -173,7 +173,7 @@ func TestPreparedCallBindingAndWireIsolation(t *testing.T) {
 	}
 	for _, field := range []string{"call", "tool", "turn", "arguments"} {
 		t.Run(field, func(t *testing.T) {
-			p := inv.prepared.clone()
+			p := inv.prepared.Clone()
 			switch field {
 			case "call":
 				p.CallID = "another"

@@ -17,6 +17,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Policy engine | *(tbd — linked from MEMORY.md + SANDBOX.md for now)* | Rule walk, conditions, evaluator injection |
 | Executor | *(tbd)* | Tool invocation pipeline, env whitelist, capped output |
 | Agent loop | [AGENT.md](AGENT.md) | RunToolCallLoop, resolver, promptgen, LLM client, budget |
+| Bots | [BOTS.md](BOTS.md) | Named agents as principals, ownership, per-bot soul overlay |
 | Providers | [PROVIDERS.md](PROVIDERS.md) | **Design.** Drivers vs providers, modalities as tools, per-modality failover, external drivers as skills |
 | Tracing | [TRACE.md](TRACE.md) | **Design.** Per-turn spans, tool context-cost attribution, OTel / file / webhook export |
 | Gateway (channels) | [GATEWAY.md](GATEWAY.md) | REST server, Telegram webhook, confirmation prompts, JWT validator |

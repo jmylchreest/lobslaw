@@ -7,15 +7,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/hashicorp/raft"
+	bolt "go.etcd.io/bbolt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // ErrClaimConflict is returned from FSM.Apply when a LOG_OP_CLAIM
@@ -25,6 +28,8 @@ import (
 var ErrClaimConflict error = claimConflictError{}
 
 type claimConflictError struct{}
+
+func (claimConflictError) Is(target error) bool { return target == types.ErrConflict }
 
 func (claimConflictError) Error() string { return "fsm: claim conflict" }
 func (claimConflictError) GRPCStatus() *status.Status {
@@ -285,6 +290,9 @@ func (f *FSM) Apply(l *raft.Log) any {
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
+	if p, ok := entry.Payload.(*lobslawv1.LogEntry_TaskAdmission); ok {
+		return f.applyTaskAdmission(p.TaskAdmission)
+	}
 	if p, ok := entry.Payload.(*lobslawv1.LogEntry_ShareBatch); ok {
 		return f.applyShareBatch(p.ShareBatch)
 	}
@@ -302,6 +310,12 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	}
 	if entry.Id == "" {
 		return fmt.Errorf("PUT %s: empty id", bucket)
+	}
+	if err := f.checkBotWrite(bucket, entry.Id, payload); err != nil {
+		return err
+	}
+	if err := f.checkInboxCapacity(entry); err != nil {
+		return err
 	}
 	if p, ok := payload.(*lobslawv1.CredentialRecord); ok {
 		if err := f.credentialBoundary(entry.Id, p); err != nil {
@@ -407,6 +421,12 @@ func revisionOf(m proto.Message) (uint64, bool) {
 		return p.Revision, true
 	case *lobslawv1.SkillBlob:
 		return p.Revision, true
+	case *lobslawv1.BotRecord:
+		return p.Revision, true
+	case *lobslawv1.GroupRecord:
+		return p.Revision, true
+	case *lobslawv1.BotInboxItem:
+		return p.Revision, true
 	default:
 		return 0, false
 	}
@@ -440,6 +460,12 @@ func setRevision(m proto.Message, rev uint64) {
 		p.Revision = rev
 	case *lobslawv1.SkillBlob:
 		p.Revision = rev
+	case *lobslawv1.BotRecord:
+		p.Revision = rev
+	case *lobslawv1.GroupRecord:
+		p.Revision = rev
+	case *lobslawv1.BotInboxItem:
+		p.Revision = rev
 	}
 }
 
@@ -468,6 +494,19 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 	}
 	if entry.Id == "" {
 		return fmt.Errorf("DELETE %s: empty id", bucket)
+	}
+	if bucket == BucketBotInbox && entry.ExpectedRevision != nil {
+		raw, err := f.store.Get(bucket, entry.Id)
+		if err != nil {
+			return ErrClaimConflict
+		}
+		var item lobslawv1.BotInboxItem
+		if err := proto.Unmarshal(raw, &item); err != nil {
+			return err
+		}
+		if item.GetRevision() != entry.GetExpectedRevision() || !isTerminalInbox(item.GetStatus()) {
+			return ErrClaimConflict
+		}
 	}
 	if p, ok := payload.(*lobslawv1.CredentialRecord); ok {
 		if err := f.credentialBoundary(entry.Id, p); err != nil {
@@ -544,6 +583,43 @@ func (f *FSM) purgeSession(sessionID string) error {
 	return f.store.Delete(BucketSessions, sessionID)
 }
 
+func checkCredentialClaim(raw []byte, getErr error, next *lobslawv1.CredentialRecord) error {
+	// A credential CLAIM can only modify the same existing account generation.
+	// A delete/recreate may reset the revision; it must not admit an old claim.
+	if getErr != nil {
+		return fmt.Errorf("%w: credential unavailable", ErrClaimConflict)
+	}
+	var current lobslawv1.CredentialRecord
+	if err := proto.Unmarshal(raw, &current); err != nil {
+		return err
+	}
+	if current.Generation != next.Generation || current.Owner != next.Owner || current.Connector != next.Connector {
+		return fmt.Errorf("%w: credential replaced", ErrClaimConflict)
+	}
+	return nil
+}
+
+func (f *FSM) checkIntegrationStateCapacity(owner string) error {
+	count, owned := 0, 0
+	if err := f.store.ForEach(BucketIntegrationState, func(_ string, b []byte) error {
+		var r lobslawv1.IntegrationStateRecord
+		if err := proto.Unmarshal(b, &r); err != nil {
+			return err
+		}
+		count++
+		if r.Owner == owner {
+			owned++
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if count >= 10000 || owned >= 100 {
+		return fmt.Errorf("integration state limit reached; wait for expiry cleanup")
+	}
+	return nil
+}
+
 // applyClaim is the CAS primitive: the write goes through only when
 // the record's current claimed_by field matches entry.ExpectedClaimer.
 //
@@ -566,9 +642,8 @@ func (f *FSM) purgeSession(sessionID string) error {
 // internal/scheduler/scheduler.go is the right place — it runs
 // only at scan time on the leader and uses time.Now() correctly.
 //
-// Only ScheduledTaskRecord and AgentCommitment are claimable today;
-// other payload types return an error so a misrouted CLAIM can't
-// silently overwrite a record that doesn't support CAS.
+// Only buckets listed in claimableBucket support CLAIM; other payloads
+// are rejected rather than silently bypassing compare-and-swap semantics.
 func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	if rec := entry.GetSelfTaught(); rec != nil && rec.State == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ARCHIVED {
 		return f.applyReviewedArchive(entry, rec)
@@ -600,37 +675,13 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 		if !IsCredentialNotFound(getErr) {
 			return getErr
 		}
-		count, owned := 0, 0
-		owner := newPayload.(*lobslawv1.IntegrationStateRecord).Owner
-		if err := f.store.ForEach(bucket, func(_ string, b []byte) error {
-			var r lobslawv1.IntegrationStateRecord
-			if err := proto.Unmarshal(b, &r); err != nil {
-				return err
-			}
-			count++
-			if r.Owner == owner {
-				owned++
-			}
-			return nil
-		}); err != nil {
+		if err := f.checkIntegrationStateCapacity(newPayload.(*lobslawv1.IntegrationStateRecord).Owner); err != nil {
 			return err
-		}
-		if count >= 10000 || owned >= 100 {
-			return fmt.Errorf("integration state limit reached; wait for expiry cleanup")
 		}
 	}
 	if bucket == BucketCredentials {
-		// A credential CLAIM can only modify the same existing account generation.
-		// A delete/recreate may reset the revision; it must not admit an old claim.
-		if getErr != nil {
-			return fmt.Errorf("%w: credential unavailable", ErrClaimConflict)
-		}
-		var current lobslawv1.CredentialRecord
-		if err := proto.Unmarshal(raw, &current); err != nil {
+		if err := checkCredentialClaim(raw, getErr, newPayload.(*lobslawv1.CredentialRecord)); err != nil {
 			return err
-		}
-		if next := newPayload.(*lobslawv1.CredentialRecord); current.Generation != next.Generation || current.Owner != next.Owner || current.Connector != next.Connector {
-			return fmt.Errorf("%w: credential replaced", ErrClaimConflict)
 		}
 	}
 	if getErr != nil {
@@ -663,6 +714,12 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 		}
 	}
 
+	if err := f.checkBotWrite(bucket, entry.Id, newPayload); err != nil {
+		return err
+	}
+	if err := f.checkInboxCapacity(entry); err != nil {
+		return err
+	}
 	// The claimer's payload is written wholesale, which is only safe
 	// because the revision check above proved it was built from the
 	// current record.
@@ -672,7 +729,60 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("marshal %s payload: %w", bucket, err)
 	}
+	if item, ok := newPayload.(*lobslawv1.BotInboxItem); ok &&
+		(item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_DONE || item.GetStatus() == lobslawv1.InboxStatus_INBOX_STATUS_FAILED) &&
+		item.GetKind() != lobslawv1.InboxKind_INBOX_KIND_ANSWER && strings.HasPrefix(item.GetSender(), "bot:") {
+		return f.putInboxResult(entry.Id, bytes, item)
+	}
 	return f.store.Put(bucket, entry.Id, bytes)
+}
+
+// Completion and its return receipt share the original claim's Raft transaction.
+// The receipt is terminal: delivering a result must not start another task loop.
+func (f *FSM) putInboxResult(key string, raw []byte, item *lobslawv1.BotInboxItem) error {
+	body := item.GetResult()
+	if body == "" {
+		body = item.GetError()
+	}
+	if body == "" {
+		body = "completed without a reply"
+	}
+	result := &lobslawv1.BotInboxItem{
+		Id: item.GetId() + "-result", Recipient: strings.TrimPrefix(item.GetSender(), "bot:"),
+		Sender: "bot:" + item.GetRecipient(), Kind: lobslawv1.InboxKind_INBOX_KIND_ANSWER,
+		Subject: item.GetSubject(), Body: body, Result: body, Error: item.GetError(),
+		CorrelationId: item.GetId(), Status: item.GetStatus(),
+		TaskId: item.GetTaskId(), RequestedBy: item.GetRequestedBy(),
+		CreatedAt: item.GetCompletedAt(), CompletedAt: item.GetCompletedAt(), Revision: 1,
+	}
+	resultRaw, err := proto.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("marshal inbox result: %w", err)
+	}
+	sealed, err := f.store.cipher.Seal(raw)
+	if err != nil {
+		return fmt.Errorf("seal inbox completion: %w", err)
+	}
+	resultSealed, err := f.store.cipher.Seal(resultRaw)
+	if err != nil {
+		return fmt.Errorf("seal inbox result: %w", err)
+	}
+	return f.store.loadDB().Update(func(tx *bolt.Tx) error {
+		if err := f.store.updateInboxActivity(tx, key, raw); err != nil {
+			return err
+		}
+		if err := f.store.updateInboxActivity(tx, inboxKey(result.GetRecipient(), result.GetId()), resultRaw); err != nil {
+			return err
+		}
+		bucket := tx.Bucket([]byte(BucketBotInbox))
+		if bucket == nil {
+			return errors.New("inbox bucket missing")
+		}
+		if err := bucket.Put([]byte(key), sealed); err != nil {
+			return err
+		}
+		return bucket.Put([]byte(inboxKey(result.GetRecipient(), result.GetId())), resultSealed)
+	})
 }
 
 // claimable is the shape shared by the records that support CLAIM.
@@ -696,90 +806,40 @@ type claimable interface {
 func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
 	case BucketIntegrationState, BucketIntegrationSettings:
-		var r lobslawv1.IntegrationStateRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.IntegrationStateRecord{})
 	case BucketCredentials:
-		var r lobslawv1.CredentialRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.CredentialRecord{})
 	case BucketSoulTune:
-		var r lobslawv1.SoulTuneRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SoulTuneRecord{})
+	case BucketBots:
+		return decodeClaimRecord(raw, &lobslawv1.BotRecord{})
+	case BucketGroups:
+		return decodeClaimRecord(raw, &lobslawv1.GroupRecord{})
+	case BucketBotInbox:
+		return decodeClaimRecord(raw, &lobslawv1.BotInboxItem{})
 
 	case BucketScheduledTasks:
-		var r lobslawv1.ScheduledTaskRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.ScheduledTaskRecord{})
 	case BucketCommitments:
-		var r lobslawv1.AgentCommitment
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.AgentCommitment{})
 	case BucketSessionLeases:
-		var r lobslawv1.SessionLease
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SessionLease{})
 	case BucketEnrolments:
-		var r lobslawv1.EnrolmentRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.EnrolmentRecord{})
 	case BucketTaskApprovals:
-		var r lobslawv1.TaskApprovalRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.TaskApprovalRecord{})
 	case BucketPrompts:
-		var r lobslawv1.PromptRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.PromptRecord{})
 	case BucketPinned:
-		var r lobslawv1.PinnedMemory
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.PinnedMemory{})
 	case BucketSelfTaught:
-		var r lobslawv1.SelfTaughtRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SelfTaughtRecord{})
 	case BucketSessionGrants:
-		var r lobslawv1.SessionGrant
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SessionGrant{})
 	case BucketSkills:
-		var r lobslawv1.SkillRecord
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SkillRecord{})
 	case BucketSkillBlobs:
-		var r lobslawv1.SkillBlob
-		if err := proto.Unmarshal(raw, &r); err != nil {
-			return nil, err
-		}
-		return &r, nil
+		return decodeClaimRecord(raw, &lobslawv1.SkillBlob{})
 	default:
 		return nil, fmt.Errorf("bucket %q not claimable", bucket)
 	}
@@ -792,7 +852,8 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketIntegrationState, BucketIntegrationSettings, BucketTaskApprovals, BucketCredentials, BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
-		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
+		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
+		BucketBots, BucketGroups, BucketBotInbox:
 		return true
 	default:
 		return false
@@ -880,6 +941,29 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketEnrolments, p.Enrolment, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
+	default:
+		return teamBucketAndPayload(entry)
+	}
+}
+
+func decodeClaimRecord(raw []byte, record interface {
+	proto.Message
+	claimable
+}) (claimable, error) {
+	if err := proto.Unmarshal(raw, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func teamBucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) {
+	switch p := entry.Payload.(type) {
+	case *lobslawv1.LogEntry_Bot:
+		return BucketBots, p.Bot, nil
+	case *lobslawv1.LogEntry_Group:
+		return BucketGroups, p.Group, nil
+	case *lobslawv1.LogEntry_BotInbox:
+		return BucketBotInbox, p.BotInbox, nil
 	default:
 		return "", nil, fmt.Errorf("unknown log entry payload type: %T", p)
 	}

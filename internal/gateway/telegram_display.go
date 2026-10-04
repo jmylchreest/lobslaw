@@ -9,7 +9,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 // formatToolCall renders a single ToolInvocation opencode-style:
@@ -23,7 +23,7 @@ import (
 // argument appears raw in parens when there's one obvious "main"
 // field (path, pattern, url, query); otherwise a compact
 // key=value list.
-func formatToolCall(inv compute.ToolInvocation) string {
+func formatToolCall(inv turn.ToolInvocation) string {
 	display := prettyToolName(inv.ToolName)
 	arg := primaryArgDisplay(inv.Args)
 	if arg == "" {
@@ -110,7 +110,7 @@ func primaryArgDisplay(rawJSON string) string {
 // (rather than folded into the final reply) so the user always
 // sees policy enforcement, regardless of whether the LLM chose
 // to narrate the failure in its final text.
-func (h *TelegramHandler) notifyPolicyDenials(chatID int64, calls []compute.ToolInvocation) {
+func (h *TelegramHandler) notifyPolicyDenials(chatID int64, calls []turn.ToolInvocation) {
 	for _, inv := range calls {
 		if reason := deniedByPolicy(inv); reason != "" {
 			display := formatToolCall(inv)
@@ -135,7 +135,7 @@ func compactValue(v any) string {
 // looks like a policy denial, empty string otherwise. The Executor
 // wraps these with "policy denied: <reason>"; the pattern survives
 // the stringification in inv.Error.
-func deniedByPolicy(inv compute.ToolInvocation) string {
+func deniedByPolicy(inv turn.ToolInvocation) string {
 	if inv.Error == "" {
 		return ""
 	}

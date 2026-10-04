@@ -23,6 +23,7 @@ func newTestRaft(t *testing.T) (*RaftNode, *FSM) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	activateTestTeams(t, store)
 	fsm := NewFSM(store)
 	localAddr := raft.ServerAddress("test-node")
 	_, inmem := raft.NewInmemTransport(localAddr)

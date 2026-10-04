@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -18,8 +19,8 @@ import (
 // enforcing.
 type artefactStoreAdapter struct{ inner *memory.SelfTaughtStore }
 
-func (a artefactStoreAdapter) Existing(kind string) ([]compute.ArtefactSummary, error) {
-	records, err := a.inner.List(memory.SelfTaughtQuery{Kind: artefactKind(kind)})
+func (a artefactStoreAdapter) Existing(kind, owner string) ([]compute.ArtefactSummary, error) {
+	records, err := a.inner.List(memory.SelfTaughtQuery{Kind: artefactKind(kind), Owner: owner})
 	if err != nil {
 		return nil, err
 	}
@@ -35,6 +36,16 @@ func (a artefactStoreAdapter) Existing(kind string) ([]compute.ArtefactSummary, 
 }
 
 func (a artefactStoreAdapter) Propose(ctx context.Context, art compute.ProposedArtefact) error {
+	if art.Owner == "" {
+		return errors.New("review: author principal required")
+	}
+	id := art.Refines
+	if id == "" {
+		id = strings.ToLower(art.Kind) + ":" + art.Name
+	}
+	if existing, err := a.inner.Get(id); err == nil && existing.Owner != art.Owner {
+		return errors.New("review: cannot refine another principal's skill")
+	}
 	_, err := a.inner.Propose(ctx, &lobslawv1.SelfTaughtRecord{
 		Kind:        artefactKind(art.Kind),
 		Name:        art.Name,

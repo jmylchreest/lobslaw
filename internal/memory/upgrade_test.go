@@ -34,7 +34,7 @@ func TestUpgradeControlCannotUseOrdinaryProposal(t *testing.T) {
 		t.Fatal("invalid proposal reached committed FSM", fsm.Failure())
 	}
 	state, err := fsm.store.ContractState()
-	if err != nil || state.Prepared != nil || state.Active != 1 {
+	if err != nil || state.Prepared != nil || state.Active != uint32(dataformat.StateVersion) {
 		t.Fatal(state, err)
 	}
 	if _, err := node.ChangeUpgrade(context.Background(), &pb.ChangeUpgradeRequest{Action: "prepare", TransitionId: "unsupported", Target: 99}); err == nil {

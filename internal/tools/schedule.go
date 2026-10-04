@@ -18,6 +18,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -55,6 +56,9 @@ func RegisterScheduleBuiltins(b *Builtins, cfg ScheduleConfig) error {
 	if err := b.Register("schedule_get", newScheduleGetHandler(cfg.Store)); err != nil {
 		return err
 	}
+	if err := b.Register("schedule_update", newScheduleUpdateHandler(cfg.Store, cfg.Raft)); err != nil {
+		return err
+	}
 	return b.Register("schedule_delete", newScheduleDeleteHandler(cfg.Store, cfg.Raft))
 }
 
@@ -63,19 +67,26 @@ func ScheduleToolDefs() []*types.ToolDef {
 		{
 			Name:        "schedule_create",
 			Path:        compute.BuiltinScheme + "schedule_create",
-			Description: "Create a recurring scheduled task (minimum interval: one minute). Use when the user asks for a recurring check (\"check my mail every 5 minutes\", \"every morning at 8am tell me the weather\"). Pass name (human-readable), when (cron OR natural language: \"every 5m\", \"every 1h\", \"daily 08:00\"), and prompt (the self-instruction the agent executes each tick). Optional notify_on: \"always\" (ping on every tick), \"match\" (let the agent decide per tick, default), \"never\" (silent; memory-only). Returns {id} for the caller to reference. The task runs via agent.self_prompt; each tick fires your prompt through your own agent loop with full tool access.",
+			Description: "Create persistent recurring work for yourself. Use for ongoing responsibilities and daily reports. Each named-bot occurrence is a durable task in your own inbox with visible results and approvals; it runs without an open chat. Supply a self-contained prompt describing the work and what counts as a meaningful change. Do not create another schedule when executing an existing occurrence. Use notify_on=always only when the user asks for every outcome, match (default) for attention only, or never for silent outcomes. For match, call notify only when the user needs attention. Use schedule_update checkpoint to remember progress across runs; previous result and checkpoint are provided on the next run. Schedule tools return an id: confirm that receipt rather than promising unsaved work.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
 					"name": {"type": "string", "description": "Human-readable name."},
 					"when": {"type": "string", "description": "Cron expression OR natural language: 'every 5m', 'every 1h', 'daily 08:00', 'hourly'."},
 					"prompt": {"type": "string", "description": "Self-instruction fired each tick."},
+					"timezone": {"type": "string", "description": "IANA timezone, e.g. Europe/London. Defaults to the caller's timezone or UTC."},
 					"notify_on": {"type": "string", "enum": ["always", "match", "never"], "description": "Notification policy. Default: match."}
 				},
 				"required": ["name", "when", "prompt"],
 				"additionalProperties": false
 			}`),
 			RiskTier: types.RiskReversible,
+		},
+		{
+			Name: "schedule_update", Path: compute.BuiltinScheme + "schedule_update",
+			Description:      "Edit your recurring work: pause/resume with enabled, change when/prompt/notify_on, or save a bounded checkpoint of what you last processed. Checkpoints survive restarts and are provided to subsequent runs. Pausing stops future occurrences, not work already queued. Use schedule_get/list to inspect results and dispatch errors.",
+			ParametersSchema: []byte(`{"type":"object","properties":{"id":{"type":"string"},"enabled":{"type":"boolean"},"when":{"type":"string"},"timezone":{"type":"string"},"prompt":{"type":"string"},"notify_on":{"type":"string","enum":["always","match","never"]},"checkpoint":{"type":"string","description":"Progress to preserve across runs; maximum 4000 characters."}},"required":["id"],"additionalProperties":false}`),
+			RiskTier:         types.RiskReversible,
 		},
 		{
 			Name:        "schedule_list",
@@ -141,13 +152,21 @@ func newScheduleCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 			return nil, 2, fmt.Errorf("schedule_create: notify_on must be always|match|never, got %q", notifyOn)
 		}
 
-		cron, err := normaliseToCron(when)
+		caller, ok := turn.IdentityFrom(ctx)
+		if !ok || caller.Principal.IsZero() {
+			return nil, 2, errors.New("schedule_create: authenticated identity required")
+		}
+		cron, err := scheduleCron(ctx, when, args["timezone"])
 		if err != nil {
 			return nil, 2, fmt.Errorf("schedule_create: %w", err)
 		}
 
-		if _, err := scheduler.ParseAgentSchedule(cron); err != nil {
+		parsed, err := scheduler.ParseAgentSchedule(cron)
+		if err != nil {
 			return nil, 2, fmt.Errorf("schedule_create: %w", err)
+		}
+		if len(prompt) > 8000 || len(name) > 200 {
+			return nil, 2, errors.New("schedule_create: name or prompt too long")
 		}
 
 		id := ids.New()
@@ -163,6 +182,18 @@ func newScheduleCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 			Enabled:   true,
 			CreatedAt: timestamppb.Now(),
 			Owner:     identityOwner(ctx),
+			NextRun:   timestamppb.New(parsed.Next(time.Now())),
+		}
+		if caller.BotID != "" {
+			owner := requesterLabel(caller)
+			if !strings.HasPrefix(owner, "user:") {
+				return nil, 2, errors.New("schedule_create: bot must have an authenticated human owner")
+			}
+			task.Owner = "bot:" + caller.BotID
+			task.Params["requested_by"] = owner
+			task.Params["scope"] = caller.Scope
+			roles, _ := json.Marshal(caller.Roles)
+			task.Params["roles"] = string(roles)
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -190,13 +221,15 @@ func newScheduleCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 func newScheduleListHandler(store *memory.Store) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		type view struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			Schedule string `json:"schedule"`
-			Enabled  bool   `json:"enabled"`
-			NextRun  string `json:"next_run,omitempty"`
-			LastRun  string `json:"last_run,omitempty"`
-			Prompt   string `json:"prompt,omitempty"`
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			Schedule  string `json:"schedule"`
+			Enabled   bool   `json:"enabled"`
+			NextRun   string `json:"next_run,omitempty"`
+			LastRun   string `json:"last_run,omitempty"`
+			Prompt    string `json:"prompt,omitempty"`
+			LastError string `json:"last_error,omitempty"`
+			LastItem  string `json:"last_item_id,omitempty"`
 		}
 		var tasks []view
 		err := store.ForEach(memory.BucketScheduledTasks, func(_ string, raw []byte) error {
@@ -204,15 +237,16 @@ func newScheduleListHandler(store *memory.Store) compute.BuiltinFunc {
 			if err := proto.Unmarshal(raw, &t); err != nil {
 				return nil
 			}
-			if !ownedByCaller(ctx, t.Owner) {
+			if !ownsSchedule(ctx, &t) {
 				return nil
 			}
 			v := view{
-				ID:       t.Id,
-				Name:     t.Name,
-				Schedule: t.Schedule,
-				Enabled:  t.Enabled,
-				Prompt:   t.Params["prompt"],
+				ID:        t.Id,
+				Name:      t.Name,
+				Schedule:  t.Schedule,
+				Enabled:   t.Enabled,
+				Prompt:    t.Params["prompt"],
+				LastError: t.Params["last_error"], LastItem: t.Params["last_item_id"],
 			}
 			if t.NextRun != nil {
 				v.NextRun = formatTimeForUser(ctx, t.NextRun.AsTime())
@@ -251,7 +285,7 @@ func newScheduleGetHandler(store *memory.Store) compute.BuiltinFunc {
 		}
 		// Same answer for "not yours" as for "not there", so an id
 		// probe cannot map another person's schedule.
-		if !ownedByCaller(ctx, t.Owner) {
+		if !ownsSchedule(ctx, &t) {
 			return nil, 2, fmt.Errorf("schedule_get: task %q not found", id)
 		}
 		view := map[string]any{
@@ -381,5 +415,5 @@ func scheduleActionable(ctx context.Context, store *memory.Store, id string) (bo
 	if err := proto.Unmarshal(raw, &t); err != nil {
 		return false, fmt.Errorf("unmarshal scheduled task %q: %w", id, err)
 	}
-	return ownedByCaller(ctx, t.Owner), nil
+	return ownsSchedule(ctx, &t), nil
 }

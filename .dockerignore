@@ -20,6 +20,9 @@ Dockerfile*
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+!**/.env.example
 
 # Tests and fixtures (Go omits *_test.go from builds anyway, but
 # keeping the build context small speeds BuildKit uploads)

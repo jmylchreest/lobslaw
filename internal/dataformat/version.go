@@ -8,15 +8,16 @@ import (
 )
 
 const (
-	StateVersion    = 1
+	StateVersion    = 2
 	LogVersion      = 1
 	PhysicalVersion = 1
 	// ClusterProtocol changes when committed data cannot be read by all peers.
 	// This initial release deliberately requires a coordinated cluster upgrade.
-	ClusterProtocol  = "lobslaw-data-v1-main"
-	LegacyMain       = "main-v0"
-	LegacyTeams      = "pr348-v0"
-	LegacyTeamsEarly = "pr348-early-v0"
+	ClusterProtocol       = "lobslaw-data-v2-teams"
+	PreviousStateProtocol = "lobslaw-data-v1-main"
+	LegacyMain            = "main-v0"
+	LegacyTeams           = "pr348-v0"
+	LegacyTeamsEarly      = "pr348-early-v0"
 )
 
 type Step[T any] struct {

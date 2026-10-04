@@ -77,6 +77,9 @@ func newNotifyHandler(svc Notifier) compute.BuiltinFunc {
 		userID := strings.TrimSpace(args["user_id"])
 		if userID == "" {
 			userID = identity.UserID
+			if !identity.BotOwner.IsZero() {
+				userID = strings.TrimPrefix(identity.BotOwner.String(), "user:")
+			}
 		}
 		if userID == "" {
 			return nil, 2, errors.New("notify: user_id is required (this turn has no caller identity to fall back on)")
@@ -87,6 +90,7 @@ func newNotifyHandler(svc Notifier) compute.BuiltinFunc {
 		}
 
 		n := notify.Notification{
+			BotID:             identity.BotID,
 			UserID:            userID,
 			Body:              text,
 			OriginatorChannel: identity.Channel,

@@ -19,12 +19,13 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
 	"github.com/jmylchreest/lobslaw/internal/httpbody"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/turn"
+	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -50,6 +51,12 @@ const (
 // TelegramConfig configures the Telegram channel — either as an
 // inbound webhook receiver or an outbound long-poll client.
 type TelegramConfig struct {
+	// Selective task notices use numeric private-chat bindings and durable
+	// message-to-agent context, never model-supplied routing arguments.
+	NotifyTasks            bool
+	ConsoleURL             string
+	NotificationRecipients map[int64]string
+	NotificationBotCheck   func(context.Context, string, string) error
 	// BotToken is the full Telegram Bot API token. Resolved from
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
@@ -89,6 +96,9 @@ type TelegramConfig struct {
 	// bytes. Nil means files a turn generates cannot be delivered —
 	// the handler says so rather than dropping them silently.
 	ArtifactOpener ArtifactOpener
+
+	// TeamRouter picks the coordinator for this user. Nil leaves BotID empty.
+	TeamRouter TeamRouter
 
 	// Mode picks between webhook (inbound, default) and poll
 	// (outbound). Empty → webhook for back-compat with Phase 6e
@@ -132,7 +142,7 @@ type TelegramConfig struct {
 
 	// DefaultBudget applies per message. Same field shape as the
 	// REST channel.
-	DefaultBudget compute.BudgetCaps
+	DefaultBudget turn.BudgetCaps
 
 	// TypingInterval refreshes the typing indicator (Telegram
 	// clears it at ~5s). 0 disables. Default 4s applied by
@@ -212,7 +222,7 @@ type TelegramConfig struct {
 	// The executor consults the same instance, so a grant recorded
 	// here suppresses the next prompt for that operation. Nil leaves
 	// every confirmation one-shot.
-	Approvals *compute.SessionApprovals
+	Approvals SessionApprover
 
 	// ApprovalRules mints the permanent rule behind "always". Nil
 	// hides the button rather than showing one that does nothing —
@@ -274,10 +284,13 @@ type ChannelStateStore interface {
 // server's mux at /telegram so HTTPS + port are shared. Stateless
 // per request except for the HTTP client (connection pool).
 type TelegramHandler struct {
-	cfg    TelegramConfig
-	agent  *compute.Agent
-	log    *slog.Logger
-	client *http.Client
+	notificationMu         sync.Mutex
+	notificationDispatchMu sync.Mutex
+	notificationRetry      map[string]time.Time
+	cfg                    TelegramConfig
+	runner                 turn.Runner
+	log                    *slog.Logger
+	client                 *http.Client
 	// pollTimeout is how long Telegram holds getUpdates open, and
 	// pollSlack how much longer than that we wait before treating the
 	// request as stalled. Fields rather than constants so a test can
@@ -331,12 +344,13 @@ type tgUpdate struct {
 }
 
 type tgMessage struct {
-	MessageID int64   `json:"message_id"`
-	From      *tgUser `json:"from,omitempty"`
-	Chat      tgChat  `json:"chat"`
-	Text      string  `json:"text,omitempty"`
-	Caption   string  `json:"caption,omitempty"`
-	Date      int64   `json:"date"`
+	ReplyToMessage *tgMessage `json:"reply_to_message,omitempty"`
+	MessageID      int64      `json:"message_id"`
+	From           *tgUser    `json:"from,omitempty"`
+	Chat           tgChat     `json:"chat"`
+	Text           string     `json:"text,omitempty"`
+	Caption        string     `json:"caption,omitempty"`
+	Date           int64      `json:"date"`
 
 	// Media — presence (non-nil/non-empty) means the user sent
 	// something we can't process as text yet. We acknowledge with a
@@ -405,7 +419,26 @@ type tgCallbackQuery struct {
 // Fails at construction when BotToken or WebhookSecret is missing —
 // neither is optional, and a misconfigured handler would either
 // accept anyone's traffic or fail silently to reply.
-func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHandler, error) {
+func NewTelegramHandler(cfg TelegramConfig, runner turn.Runner) (*TelegramHandler, error) {
+	if cfg.NotifyTasks {
+		if cfg.ChannelState == nil {
+			return nil, errors.New("telegram task notices require persistent channel state")
+		}
+		if cfg.ConsoleURL == "" {
+			return nil, errors.New("telegram task notices require ui-web.public_url")
+		}
+		if err := config.ValidateConsolePublicURL(cfg.ConsoleURL); err != nil {
+			return nil, err
+		}
+		if len(cfg.NotificationRecipients) == 0 {
+			return nil, errors.New("telegram task notices require an enrolled numeric private-chat address")
+		}
+		for chat, owner := range cfg.NotificationRecipients {
+			if chat <= 0 || !strings.HasPrefix(owner, "user:") {
+				return nil, errors.New("telegram task notices require private chats bound to users")
+			}
+		}
+	}
 	if cfg.BotToken == "" {
 		return nil, errors.New("telegram: BotToken required")
 	}
@@ -419,8 +452,8 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		return nil, fmt.Errorf("telegram: unknown mode %q; want %q or %q",
 			cfg.Mode, TelegramModeWebhook, TelegramModePoll)
 	}
-	if agent == nil {
-		return nil, errors.New("telegram: agent required")
+	if runner == nil {
+		return nil, errors.New("telegram: runner required")
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -442,18 +475,19 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		logger = slog.Default()
 	}
 	h := &TelegramHandler{
-		cfg:          cfg,
-		agent:        agent,
-		log:          logger,
-		client:       client,
-		pollTimeout:  pollLongTimeout,
-		pollSlack:    pollDeadlineSlack,
-		pollBackoff:  pollInitialBackoff,
-		base:         base,
-		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
-		pendingScope: make(map[string]scopedOperation),
-		seenUpdate:   make(map[int64]time.Time),
-		conv:         newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
+		notificationRetry: make(map[string]time.Time),
+		cfg:               cfg,
+		runner:            runner,
+		log:               logger,
+		client:            client,
+		pollTimeout:       pollLongTimeout,
+		pollSlack:         pollDeadlineSlack,
+		pollBackoff:       pollInitialBackoff,
+		base:              base,
+		gate:              NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
+		pendingScope:      make(map[string]scopedOperation),
+		seenUpdate:        make(map[int64]time.Time),
+		conv:              newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
 	}
 	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
 	RegisterBuiltinCommands(h.commands, h.conv)
@@ -514,12 +548,6 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		return
 	}
 
-	budget, err := compute.NewTurnBudget(h.cfg.DefaultBudget)
-	if err != nil {
-		h.log.Error("telegram: budget init failed", "err", err)
-		return
-	}
-
 	claims := &types.Claims{
 		UserID: h.principalFor(ctx, msg.From),
 		Scope:  scope,
@@ -538,6 +566,15 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		Channel:   "telegram",
 		ChannelID: strconv.FormatInt(msg.Chat.ID, 10),
 		UserID:    claims.UserID,
+	}
+	notification, err := h.notificationReply(ctx, msg, canonicalUserPrincipal(claims.UserID))
+	if err != nil {
+		h.log.Warn("telegram: notification reply refused", "err", err)
+		h.sendText(msg.Chat.ID, "I couldn't verify the context of that notification. Please open its web-console link.")
+		return
+	}
+	if notification != nil {
+		sessionRef.ChannelID += ".notice." + notification.ThreadID
 	}
 	// Before the gate: a command is not a turn. It must not take a
 	// lease, load a transcript, or reach the model — /new in particular
@@ -605,17 +642,28 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		body = "(no caption — please inspect the attached media and respond)"
 	}
 
-	agentReq := compute.ProcessMessageRequest{
+	userID := claims.UserID
+	channelID := strconv.FormatInt(msg.Chat.ID, 10)
+	agentReq := turn.Request{
 		Message:             body,
 		Attachments:         im.Attachments,
 		Claims:              claims,
 		TurnID:              turnID,
-		Budget:              budget,
+		Caps:                h.cfg.DefaultBudget,
 		ConversationHistory: prior.Messages,
 		ConversationSummary: prior.Summary,
 		Channel:             "telegram",
-		ChannelID:           strconv.FormatInt(msg.Chat.ID, 10),
+		ChannelID:           channelID,
 		SharedConversation:  isSharedChat(msg.Chat),
+		BotID:               resolveTeamBot(ctx, h.cfg.TeamRouter, "telegram", channelID, userID),
+	}
+	if notification != nil {
+		agentReq.BotID = notification.BotID
+		agentReq.Principal = identity.Bot(notification.BotID)
+		agentReq.ChannelID = sessionRef.ChannelID
+		contextNote := "The user is replying to a notification from you. Discuss the referenced work; this reply is not an approval of a pending operation. Task decisions are made through the web console. The notification may describe an earlier state; use inbox_read for current evidence when needed.\n"
+		contextNote += promptgen.WrapContext([]promptgen.ContextBlock{{Source: "notification-context", Trust: promptgen.TrustUntrusted, Content: notification.Context}})
+		agentReq.ConversationHistory = append([]turn.Message{{Role: "system", Content: contextNote}}, prior.Messages...)
 	}
 
 	// Wrap the agent call with the responsiveness guards: typing
@@ -626,7 +674,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	turnCtx, cleanup := h.startResponsivenessGuards(ctx, msg.Chat.ID)
 	defer cleanup()
 
-	resp, err := h.agent.RunToolCallLoop(turnCtx, agentReq)
+	resp, err := h.runner.Run(turnCtx, agentReq)
 	if err != nil {
 		h.log.Error("telegram: agent error",
 			"turn_id", turnID, "err", err)
@@ -663,6 +711,10 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		h.sendText(msg.Chat.ID, "Confirmation required: "+resp.ConfirmationReason)
 	case resp.Reply == "":
 		h.sendText(msg.Chat.ID, "(empty reply)")
+	case notification != nil:
+		if err := h.sendNotificationReply(ctx, msg.Chat.ID, msg.MessageID, resp.Reply, *notification); err != nil {
+			h.log.Warn("telegram: contextual reply delivery failed", "err", err)
+		}
 	case isSharedChat(msg.Chat):
 		// No notice in a group. The nudge says how many proposals the
 		// OPERATOR has waiting — their queue, not the group's — and the
@@ -709,7 +761,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 // {"inline_keyboard": [[{text, callback_data}, ...]]}. Callback
 // data is prefixed "prompt:approve:<id>" / "prompt:deny:<id>" so
 // the handler can parse the verb + id without a separate mapping.
-func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse, session SessionRef) {
+func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req turn.Request, resp *turn.Response, session SessionRef) {
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
 		ttl = DefaultPromptTTL
@@ -727,7 +779,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 		TTL:          ttl,
 		Action:       resp.ConfirmationAction,
 		Resource:     resp.ConfirmationResource,
-		Continuation: &Continuation{Request: req, Messages: resp.Messages},
+		Continuation: &Continuation{Request: continuationRequest(req, resp), Messages: resp.Messages},
 		// Who may answer. Captured here rather than read off the tap,
 		// for the same reason the "always" subject is: a callback is
 		// attacker-shaped input and the turn that raised the question
@@ -1027,13 +1079,12 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, p *Prompt) {
 	cont.Request.Channel = "telegram"
 	cont.Request.ChannelID = p.ChannelID
 
-	cont.Request.Budget.Relax()
 	// The policy equivalent of Relax: carry the answer into the resumed
 	// turn. Taken from the prompt record rather than the callback, which
 	// is attacker-shaped input. Without it an "Approve" resumes into the
-	// same rule and asks again.
-	ctx = compute.WithTurnApproval(ctx, p.Action, p.Resource)
-	resp, err := h.agent.ResumeFromConfirmation(ctx, cont.Request, cont.Messages)
+	// same rule and asks again. Budget caps are lifted inside Runner.Resume.
+	ctx = turn.WithTurnApproval(ctx, p.Action, p.Resource)
+	resp, err := h.runner.Resume(ctx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("telegram: resume failed",
 			"turn_id", cont.Request.TurnID, "err", err)
@@ -1823,7 +1874,7 @@ func (h *TelegramHandler) grantForRisk(ctx context.Context, promptID string, q *
 	// without anybody having granted that exact pair.
 	keys := make([]string, 0, len(op.labels))
 	for _, l := range op.labels {
-		key := compute.RiskGrantResource(l)
+		key := riskGrantResource(l)
 		if key == "" {
 			return ""
 		}

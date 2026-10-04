@@ -45,8 +45,18 @@ type CrossOwnerAuthorizer interface {
 // incomplete wiring into a data breach that nothing in the logs
 // distinguishes from normal traffic.
 func ReadAudience(ctx context.Context, turn turn.Identity, authz CrossOwnerAuthorizer) memory.Audience {
+	// Inherited execution claims are not a grant to the owner's diary,
+	// even when those claims authorize cross-owner reads for the main agent.
+	if turn.Specialist {
+		return memory.Audience{}
+	}
 	if authz != nil && authz.AllowsAny(ctx, turn.Claims()) {
 		return memory.Everyone()
+	}
+	// The coordinator selects relevant memories and passes task context
+	// explicitly. Specialists above cannot widen this audience.
+	if turn.Principal.IsBot() && !turn.BotOwner.IsZero() {
+		return memory.ForWith(turn.Principal, turn.BotOwner)
 	}
 	// A conversation several people can read gets the records that
 	// conversation produced, on top of the speaker's own. Not the other

@@ -33,7 +33,7 @@ pre-upgrade source using its original binary and keys instead.
 
 | Surface | Current | Historical handling |
 |---|---|---|
-| State database / physical snapshot | 1 | Unversioned known buckets: validate, preserve encrypted records, add manifest |
+| State database / physical snapshot | 2 (teams) | Unversioned known buckets: validate, preserve encrypted records, add manifest |
 | Raft command envelope | 1 | Explicit historical profile for colliding fields; additive version on new proposals |
 | Physical directory manifest | 1 | Missing manifest allowed only when historical interpretation is unambiguous or explicitly selected |
 | Portable knowledge archive | 2 | Schema 1 upgrades without inventing SourceID; owner/source mappings remain explicit |
@@ -49,9 +49,10 @@ Historical Raft profiles are fixture-backed:
 - `pr348-v0`: #348 at `9c651d6`; bot is 51, inbox/group are 38/39.
 - `pr348-early-v0`: #348 at `ad38c95`; bot/inbox/group are 37/38/39.
 
-The framework can translate team envelopes, but the foundation binary cannot
-interpret team payloads or buckets. Use the #348 binary stacked on this foundation
-for those profiles. Main never silently drops an unsupported feature.
+This #348 binary supports both team profiles and upgrades format 1 main state to
+format 2 team-capable state. The foundation binary without #348 refuses team
+payloads/buckets. The cluster protocol changes with team support, so all members
+must be upgraded together. A less capable binary never silently drops records.
 
 A profile must describe the retained **unversioned log history**, not merely the
 last installed binary. Mixed histories that reused a number for two meanings

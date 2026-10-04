@@ -121,6 +121,15 @@ type AgentConfig struct {
 	// Soul remains the inexpensive accessor for runtime trust checks.
 	SoulSnapshot func(context.Context) (*soul.Soul, error)
 
+	// SoulSnapshotFor is Snapshot for one named bot. Nil falls back to
+	// SoulSnapshot, which is the chief overlay — the behaviour a
+	// deployment without bots already has.
+	SoulSnapshotFor func(context.Context, string) (*soul.Soul, error)
+
+	// Bots resolves a named agent for a turn. Nil leaves BotID as a
+	// label with no profile — ordinary compute, no teams.
+	Bots BotResolver
+
 	// LanguageDetector is reused across turns and only invoked when the
 	// effective soul enables detection. Nil uses the lazy Lingua detector.
 	LanguageDetector soul.Detector
@@ -235,6 +244,8 @@ type AgentConfig struct {
 	// is what it did, so a skill could only ever be invoked by a model
 	// that guessed its name.
 	SkillsProvider func() []promptgen.SkillInfo
+	// SkillAllowed applies the same ownership rule to index, docs and execution.
+	SkillAllowed func(context.Context, string) bool
 
 	// ProposalsProvider counts the self-taught artefacts awaiting this
 	// owner's approval, for the Installed Skills section.
@@ -388,6 +399,10 @@ type ProcessMessageRequest struct {
 	// Claims identifies the user (for policy evaluation + audit).
 	Claims *types.Claims
 
+	// Principal is the cluster-wide identity already resolved by the
+	// caller. Empty lets TurnIdentityFor Resolve() from Claims.UserID.
+	Principal identity.Principal
+
 	// TurnID is a stable identifier for this turn; propagated
 	// through request IDs in logs + audit.
 	TurnID string
@@ -464,6 +479,15 @@ type ProcessMessageRequest struct {
 	// prompt — recalled episodes are untrusted content.
 	RecalledContext string
 
+	// BotID is the named agent running this turn. Empty means the
+	// main assistant — the behaviour a deployment without bots has.
+	BotID string
+
+	// Bot is the resolved profile. Set by resolveBot when BotID is
+	// known; callers such as ask_bot may pass a modified copy
+	// (Without("ask_bot")) so the child cannot re-delegate.
+	Bot *BotProfile
+
 	// Attachments are media the channel received with this turn.
 	// Channel handlers (gateway/telegram, gateway/rest, etc.)
 	// populate this from their native payload + downloader. The
@@ -479,6 +503,8 @@ type ProcessMessageRequest struct {
 
 // ProcessMessageResponse is the per-turn output.
 type ProcessMessageResponse struct {
+	// TaskID identifies durable delegated work, including a waiting continuation.
+	TaskID string
 	// Reply is the assistant's final text response. Populated for
 	// normal turns; empty when NeedsConfirmation is true.
 	Reply string
@@ -550,13 +576,15 @@ type ProcessMessageResponse struct {
 
 // ToolInvocation records one tool call's lifecycle within a turn.
 type ToolInvocation struct {
-	prepared *PreparedToolCall
-	CallID   string
-	ToolName string
-	Args     string
-	Output   string
-	ExitCode int
-	Error    string
+	ExecutionStatus string
+	budgetPending   bool
+	prepared        *PreparedToolCall
+	CallID          string
+	ToolName        string
+	Args            string
+	Output          string
+	ExitCode        int
+	Error           string
 }
 
 // RunToolCallLoop processes one turn end-to-end. Steps per PLAN.md
@@ -579,11 +607,19 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if req.Budget == nil {
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
+	if err := a.resolveBot(ctx, &req); err != nil {
+		return nil, err
+	}
+	if req.Bot != nil {
+		req.Budget.Tighten(req.Bot.Caps)
+	}
 	// Attached before fillDefaults, not inside runLoop: fillDefaults is
 	// where the ContextEngine runs its passive recall, and that recall
 	// needs to know whose memories it may read. Getting this order wrong
 	// is how the recall came to be unscoped in the first place.
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	ctx = a.withSkillAccess(ctx, req)
+	ctx = WithBudget(ctx, req.Budget)
 	// Attached once, at the top, so anything downstream can emit a
 	// span without every intermediate signature growing a parameter.
 	// A nil recorder leaves the context untouched, which is what a
@@ -628,10 +664,21 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
 	}
-	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil) {
+	req.Tools = visibleTaskTools(ctx, *req)
+	guidance := botGuidance(req.Bot)
+	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil || a.cfg.SoulSnapshotFor != nil) {
 		var config *types.SoulConfig
 		var body string
-		if a.cfg.SoulSnapshot != nil {
+		switch {
+		case req.BotID != "" && a.cfg.SoulSnapshotFor != nil:
+			snapshot, err := a.cfg.SoulSnapshotFor(ctx, req.BotID)
+			if err != nil {
+				return fmt.Errorf("load effective soul: %w", err)
+			}
+			if snapshot != nil {
+				config, body = &snapshot.Config, snapshot.Body
+			}
+		case a.cfg.SoulSnapshot != nil:
 			snapshot, err := a.cfg.SoulSnapshot(ctx)
 			if err != nil {
 				return fmt.Errorf("load effective soul: %w", err)
@@ -639,10 +686,16 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			if snapshot != nil {
 				config, body = &snapshot.Config, snapshot.Body
 			}
-		} else {
+		case a.cfg.Soul != nil:
 			config = a.cfg.Soul()
 		}
 		if config != nil {
+			// The bot's brief is trusted guidance and belongs with the
+			// soul, not in the user turn. Without this every bot spoke
+			// as the node's assistant: "what's your role" answered
+			// "general-purpose assistant" for a bot whose whole brief
+			// said designer.
+			body = joinBotGuidance(body, guidance)
 			// Language choice is turn-local. Never mutate a shared baseline or
 			// classify configuration, recalled context, or the previous reply.
 			turnConfig := *config
@@ -658,14 +711,12 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			var skillIndex []promptgen.SkillInfo
 			if a.cfg.SkillsProvider != nil {
 				skillIndex = a.cfg.SkillsProvider()
+				skillIndex = a.visibleSkills(ctx, *req, skillIndex)
 			}
-			var pinned promptgen.PinnedBlocks
-			if a.cfg.PinnedProvider != nil {
-				pinned = a.cfg.PinnedProvider(sessionKeyFor(req), userIDFor(req))
-			}
+			pinned := a.pinnedForTask(ctx, req)
 			var proposals int
 			if a.cfg.ProposalsProvider != nil {
-				proposals = a.cfg.ProposalsProvider(userIDFor(req))
+				proposals = a.cfg.ProposalsProvider(a.TurnIdentityFor(*req).Principal.String())
 			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
 				Soul:           &turnConfig,
@@ -684,6 +735,15 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 			})
 		}
 	}
+	// A node with no soul configured still owes a bot its role.
+	if req.SystemPrompt == "" && guidance != "" {
+		req.SystemPrompt = guidance
+	}
+	a.recallContext(ctx, req)
+	return nil
+}
+
+func (a *Agent) recallContext(ctx context.Context, req *ProcessMessageRequest) {
 	// Recall is carried on the request rather than folded into the
 	// system prompt. Recalled episodes are untrusted — ingest stores
 	// user messages verbatim, and fetched pages can be summarised into
@@ -691,7 +751,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 	// the request, is the wrong place for them. seedMessages puts them
 	// in a user-role message, which is the position promptgen's
 	// deliberate no-escaping decision reasoned about.
-	if a.cfg.ContextEngine != nil {
+	if a.cfg.ContextEngine != nil && !req.Bot.IsSpecialist() && !isolatedTask(ctx, *req) {
 		assembly := a.cfg.ContextEngine.Assemble(ctx, req.Message)
 		if rendered := assembly.Rendered(); rendered != "" {
 			req.RecalledContext = rendered
@@ -700,7 +760,6 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 				"recall_count", len(assembly.RecallIDs))
 		}
 	}
-	return nil
 }
 
 // maybeIngestTurn fires the configured EpisodicIngester after a
@@ -721,7 +780,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 // turn is preferable to dropping the user's reply for a backend
 // hiccup.
 func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string, calls []ToolInvocation) {
-	if a.cfg.EpisodicIngester == nil || reply == "" {
+	if a.cfg.EpisodicIngester == nil || reply == "" || req.Bot.IsSpecialist() || isolatedTask(ctx, req) {
 		return
 	}
 	// Channel and ChatID come from the request, which is where they
@@ -784,6 +843,71 @@ func userIDFor(req *ProcessMessageRequest) string {
 	return req.Claims.UserID
 }
 
+// botGuidance is a bot's standing brief as a trusted prompt block.
+func botGuidance(bot *BotProfile) string {
+	if bot == nil {
+		return ""
+	}
+	name := strings.TrimSpace(bot.DisplayName)
+	ins := strings.TrimSpace(bot.Instructions)
+	if name == "" && ins == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("# Your role\n\n")
+	if name != "" {
+		b.WriteString("You are " + name + ".")
+		if ins != "" {
+			b.WriteString("\n\n")
+		}
+	}
+	b.WriteString(ins)
+	return strings.TrimSpace(b.String())
+}
+
+// joinBotGuidance appends a bot's brief to the soul body, so the model
+// reads it as part of who it is rather than as something the user said.
+func joinBotGuidance(body, guidance string) string {
+	if guidance == "" {
+		return body
+	}
+	if strings.TrimSpace(body) == "" {
+		return guidance
+	}
+	return strings.TrimSpace(body) + "\n\n" + guidance
+}
+
+func (a *Agent) resolveBot(ctx context.Context, req *ProcessMessageRequest) error {
+	if req.Bot != nil || req.BotID == "" {
+		return nil
+	}
+	if a.cfg.Bots == nil {
+		return errors.New("cannot resolve named bot on this compute node")
+	}
+	profile, err := a.cfg.Bots.ResolveBot(ctx, req.BotID)
+	if err != nil {
+		return err
+	}
+	req.Bot = profile
+	return nil
+}
+
+// DescribeSilentTurn returns a human description when the model
+// produced no reply, so a caller cannot confuse "" with "nothing
+// to report".
+func DescribeSilentTurn(resp *ProcessMessageResponse) string {
+	if resp == nil {
+		return "the turn produced no reply"
+	}
+	if strings.TrimSpace(resp.Reply) != "" {
+		return ""
+	}
+	if names := invokedToolNames(resp.ToolCalls); len(names) > 0 {
+		return "no reply; tools used: " + strings.Join(names, ", ")
+	}
+	return "the turn produced no reply"
+}
+
 func toPromptgenTools(tools []Tool) []promptgen.ToolInfo {
 	out := make([]promptgen.ToolInfo, 0, len(tools))
 	for _, t := range tools {
@@ -808,7 +932,15 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
+	if err := a.resolveBot(ctx, &req); err != nil {
+		return nil, err
+	}
+	if req.Bot != nil && ctx.Value(approvedTaskBudgetKey{}) != true {
+		req.Budget.Tighten(req.Bot.Caps)
+	}
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	ctx = a.withSkillAccess(ctx, req)
+	ctx = WithBudget(ctx, req.Budget)
 	// This is the same turn. Its system prompt is already part of the
 	// continuation; refreshing the soul here would assemble an unused prompt
 	// and could prevent resumption when a remote store is unavailable.
@@ -832,7 +964,14 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{TurnStartIndex: len(msgs)}, true)
 }
 
-func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse, resuming bool) (*ProcessMessageResponse, error) {
+func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse, resuming bool) (result *ProcessMessageResponse, runErr error) {
+	defer func() {
+		if runErr != nil && TaskIDFrom(ctx) != "" {
+			resp.Messages = messages
+			resp.BudgetState = req.Budget.State()
+			result = resp
+		}
+	}()
 	// Every exit from this loop — normal, budget-exceeded, confirmation
 	// or hard-timeout — must carry whatever files the turn produced.
 	// A turn that synthesised audio and then hit its budget still
@@ -864,48 +1003,61 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	// refusal instead. So the approval was recorded, the gate would
 	// have passed, and the command still never ran.
 	//
-	// Gated on the turn approval, not on `resuming` alone. A BUDGET
-	// confirmation also resumes, and its transcript tail is the last
-	// SUCCESSFUL tool result rather than a refusal — so a document or
-	// web page containing the sentinel phrase could steer the sentinel
-	// scan onto a completed call and have it run a second time.
-	// Approving a spend increase must not re-run anything.
-	if resuming && turnApprovalPending(ctx) {
+	// Budget resumption requires trusted BudgetPending metadata. Text in a
+	// successful tool result must never turn a spend increase into replay.
+	// A pending batch also retains its untouched suffix: dropping those calls
+	// would hand the provider a transcript missing requested tool results.
+	if resuming && resumePendingInvocation(ctx, messages) {
 		if tc, idx, ok := pendingToolCall(messages); ok {
-			resumeCtx := ctx
-			// Old continuations have no prepared input. When hooks are configured,
-			// prepare afresh and ask again rather than apply an old answer to a rewrite.
-			if messages[idx].PreparedToolCall == nil && a.cfg.Executor != nil && a.cfg.Executor.hasPreHooks(tc.Name, req.TurnID, req.Claims) && (a.cfg.Skills == nil || !a.cfg.Skills.Has(tc.Name)) {
-				resumeCtx = context.WithValue(ctx, turnApprovalKey{}, &turnApproval{})
-			}
-			inv, confirmation, err := a.runToolCallWithPrepared(resumeCtx, req, tc, messages[idx].PreparedToolCall)
-			if err != nil {
-				return nil, fmt.Errorf("resume tool call %q: %w", tc.Name, err)
-			}
-			resp.ToolCalls = append(resp.ToolCalls, inv)
-			if confirmation != nil {
+			pending := append([]ToolCall{tc}, unansweredToolCalls(messages, idx)...)
+			for callIndex, tc := range pending {
+				if callIndex > 0 {
+					idx = len(messages)
+					messages = append(messages, Message{})
+				}
+				resumeCtx := ctx
+				// Old continuations have no prepared input. When hooks are configured,
+				// prepare afresh and ask again rather than apply an old answer to a rewrite.
+				if messages[idx].PreparedToolCall == nil && a.cfg.Executor != nil && a.cfg.Executor.hasPreHooks(tc.Name, req.TurnID, req.Claims) && (a.cfg.Skills == nil || !a.cfg.Skills.Has(tc.Name)) {
+					resumeCtx = turn.WithoutApproval(ctx)
+				}
+				inv, confirmation, err := a.runToolCallWithPrepared(resumeCtx, req, tc, messages[idx].PreparedToolCall)
+				resp.ToolCalls = append(resp.ToolCalls, inv)
+				if err != nil {
+					messages[idx] = toolResultMessage(tc, inv)
+					return nil, fmt.Errorf("resume tool call %q: %w", tc.Name, err)
+				}
+				if confirmation != nil {
+					messages[idx] = toolResultMessage(tc, inv)
+					// Still gated — a second, different question rather
+					// than the one just answered. Hand it back up so the
+					// channel can ask it, instead of looping here.
+					resp.NeedsConfirmation = true
+					resp.ConfirmationReason = confirmation.Reason
+					resp.ConfirmationAction = confirmation.Action
+					resp.ConfirmationResource = confirmation.Resource
+					resp.ConfirmationGrantable = confirmation.Grantable
+					resp.ConfirmationLabels = confirmation.Labels
+					resp.BudgetState = req.Budget.State()
+					resp.Messages = messages
+					return resp, nil
+				}
+				// In place: the model must see the RESULT where it last saw
+				// the refusal. Appending instead would leave both, and the
+				// refusal is the more emphatic of the two.
 				messages[idx] = toolResultMessage(tc, inv)
-				// Still gated — a second, different question rather
-				// than the one just answered. Hand it back up so the
-				// channel can ask it, instead of looping here.
-				resp.NeedsConfirmation = true
-				resp.ConfirmationReason = confirmation.Reason
-				resp.ConfirmationAction = confirmation.Action
-				resp.ConfirmationResource = confirmation.Resource
-				resp.ConfirmationGrantable = confirmation.Grantable
-				resp.ConfirmationLabels = confirmation.Labels
-				resp.BudgetState = req.Budget.State()
-				resp.Messages = messages
-				return resp, nil
 			}
-			// In place: the model must see the RESULT where it last saw
-			// the refusal. Appending instead would leave both, and the
-			// refusal is the more emphatic of the two.
-			messages[idx] = toolResultMessage(tc, inv)
 		}
 	}
 
 	for loop := range a.cfg.MaxToolLoops {
+		if dec := req.Budget.Check(); dec.Exceeded {
+			resp.NeedsConfirmation = true
+			resp.ConfirmationReason = fmt.Sprintf("budget exceeded on %s", dec.ExceededOn)
+			resp.BudgetState = req.Budget.State()
+			resp.Messages = messages
+			return resp, nil
+		}
 		a.cfg.Logger.Debug("agent: LLM round-trip",
 			"turn_id", req.TurnID, "loop", loop, "messages", len(messages))
 
@@ -927,6 +1079,14 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// gateway set was defeated by the code meant to report it
 			// gracefully and the request hung until the client gave up.
 			if ctx.Err() != nil {
+				a.cfg.Logger.Warn("agent: turn context ended during LLM call",
+					"turn_id", req.TurnID, "task_id", TaskIDFrom(ctx), "err", ctx.Err())
+				// A graceful chat reply is not evidence that assigned work
+				// completed. Return the interrupted task with its evidence so
+				// the durable runner records uncertainty instead of success.
+				if TaskIDFrom(ctx) != "" {
+					return resp, fmt.Errorf("task interrupted during LLM call: %w", ctx.Err())
+				}
 				summaryCtx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), a.summaryReplyTimeout())
 				defer cancel()
@@ -1000,11 +1160,12 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 		for _, tc := range chatResp.ToolCalls {
 			toolStart := time.Now()
 			inv, confirmation, err := a.runToolCall(ctx, req, tc)
+			resp.ToolCalls = append(resp.ToolCalls, inv)
 			if err != nil {
+				messages = append(messages, toolResultMessage(tc, inv))
 				return nil, fmt.Errorf("tool call %q: %w", tc.Name, err)
 			}
 			attribution.noteTool(inv, time.Since(toolStart), toolStart)
-			resp.ToolCalls = append(resp.ToolCalls, inv)
 			if confirmation != nil {
 				resp.NeedsConfirmation = true
 				resp.ConfirmationReason = confirmation.Reason
@@ -1658,16 +1819,42 @@ func IsRetryableProviderError(ctx context.Context, err error) bool {
 // work is being done for (see Node.schedulerClaims), not of a chat.
 func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	t := turn.Identity{
-		TurnID:    req.TurnID,
-		Channel:   req.Channel,
-		ChannelID: req.ChannelID,
-		Shared:    req.SharedConversation,
-		Timezone:  req.UserTimezone,
+		Specialist:     req.Bot.IsSpecialist(),
+		OriginalClaims: req.Claims,
+		TurnID:         req.TurnID,
+		Channel:        req.Channel,
+		ChannelID:      req.ChannelID,
+		Shared:         req.SharedConversation,
+		Timezone:       req.UserTimezone,
+		BotID:          req.BotID,
 	}
 	if req.Claims != nil {
 		t.UserID = req.Claims.UserID
 		t.Scope = req.Claims.Scope
 		t.Roles = req.Claims.Roles
+	}
+	// A bot's principal is minted, never resolved. The alias map
+	// translates ids that arrived FROM a channel, and Resolve wraps
+	// whatever it is given in the user kind — so putting "bot:devops"
+	// through it yields "user:bot:devops", which owns nothing the bot
+	// owns and matches no policy rule written about it.
+	//
+	// Explicit claims still win: a routine alice scheduled is worked by
+	// the devops bot and attributed to alice, so only a turn running as
+	// its own bot takes the bot principal.
+	if req.BotID != "" && req.Claims != nil && req.Claims.UserID == identity.Bot(req.BotID).String() {
+		t.Principal = identity.Bot(req.BotID)
+		if req.Bot != nil {
+			t.BotOwner = identity.Principal(strings.TrimSpace(req.Bot.Owner))
+		}
+		return t
+	}
+	if req.Principal != "" {
+		t.Principal = req.Principal
+		if req.Bot != nil {
+			t.BotOwner = identity.Principal(strings.TrimSpace(req.Bot.Owner))
+		}
+		return t
 	}
 	// A nil resolver maps every id to itself, which is the correct
 	// behaviour for a deployment that has declared no aliases.
@@ -1751,6 +1938,27 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 }
 
 func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageRequest, tc ToolCall, prepared *PreparedToolCall) (ToolInvocation, *pendingConfirmation, error) {
+	inv, pending, err := a.dispatchToolCall(ctx, req, tc, prepared)
+	inv.CallID, inv.ToolName = tc.ID, tc.Name
+	if inv.Args == "" {
+		inv.Args = tc.Arguments
+	}
+	if err != nil {
+		inv.Error = err.Error()
+	}
+	if inv.ExecutionStatus == "" {
+		inv.ExecutionStatus = turn.ReceiptRefused
+	}
+	if pending != nil {
+		inv.ExecutionStatus = turn.ReceiptApprovalRequired
+		if pending.Action == "" {
+			inv.ExecutionStatus = turn.ReceiptBudgetRequired
+		}
+	}
+	return inv, pending, err
+}
+
+func (a *Agent) dispatchToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall, prepared *PreparedToolCall) (ToolInvocation, *pendingConfirmation, error) {
 	if err := checkTaskExecution(ctx); err != nil {
 		return ToolInvocation{}, nil, err
 	}
@@ -1758,13 +1966,22 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 		return ToolInvocation{}, nil, fmt.Errorf("prepared tool call does not match the pending call")
 	}
 
+	if dec := req.Budget.Check(); dec.Exceeded {
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: "budget exceeded", budgetPending: true, prepared: prepared},
+			&pendingConfirmation{Reason: fmt.Sprintf("budget exceeded on %s", dec.ExceededOn)}, nil
+	}
+	if reason := taskToolRestriction(ctx, req, tc.Name); reason != "" {
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Error: reason}, nil, nil
+	}
 	budgetDec := req.Budget.RecordToolCall()
 	if budgetDec.Exceeded {
 		return ToolInvocation{
-			CallID:   tc.ID,
-			ToolName: tc.Name,
-			Args:     tc.Arguments,
-			Error:    "budget exceeded",
+			CallID:        tc.ID,
+			ToolName:      tc.Name,
+			Args:          tc.Arguments,
+			Error:         "budget exceeded",
+			budgetPending: true,
+			prepared:      prepared,
 		}, &pendingConfirmation{Reason: fmt.Sprintf("budget exceeded on %s", budgetDec.ExceededOn)}, nil
 	}
 
@@ -1804,6 +2021,9 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	if prepared != nil {
 		params = maps.Clone(prepared.Params)
 	}
+	if tc.Name == "skill_view" && !a.skillAllowed(ctx, req, strings.TrimSpace(params["name"])) {
+		return ToolInvocation{CallID: tc.ID, ToolName: tc.Name, Error: "skill is outside this actor's allowed set"}, nil, nil
+	}
 	inv := ToolInvocation{
 		CallID:   tc.ID,
 		ToolName: tc.Name,
@@ -1821,6 +2041,10 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 	// dispatch uses internally, so allow rules behave
 	// identically across all dispatch paths.
 	if a.cfg.Skills != nil && a.cfg.Skills.Has(tc.Name) {
+		if !a.skillAllowed(ctx, req, tc.Name) {
+			inv.Error = "skill is outside this actor's allowed set"
+			return inv, nil, nil
+		}
 		return a.runSkillToolCall(ctx, req, tc, prepared, params, inv)
 	}
 
@@ -1843,6 +2067,7 @@ func (a *Agent) runToolCallWithPrepared(ctx context.Context, req ProcessMessageR
 		invReq.approved = prepared.Approvals
 	}
 	result, err := a.cfg.Executor.Invoke(ctx, invReq)
+	invocationResult(&inv, result)
 	var staged *preparedConfirmation
 	if errors.As(err, &staged) {
 		inv.prepared = &PreparedToolCall{CallID: tc.ID, ToolName: tc.Name, TurnID: req.TurnID, OriginalArguments: tc.Arguments, Params: maps.Clone(staged.params), Approvals: staged.approvals}
@@ -1928,9 +2153,11 @@ func (a *Agent) runSkillToolCall(ctx context.Context, req ProcessMessageRequest,
 	if err != nil {
 		inv.Error = err.Error()
 		a.logToolFailure(req, tc.Name, "skill dispatch failed", -1, err.Error())
+		inv.ExecutionStatus = turn.ReceiptUnknown
 		return inv, nil, nil
 	}
 	inv.ExitCode = skillRes.ExitCode
+	inv.ExecutionStatus = turn.ReceiptExecuted
 	if skillRes.ExitCode != 0 {
 		a.logToolFailure(req, tc.Name, "skill returned a non-zero exit",
 			skillRes.ExitCode, string(skillRes.Stderr))
@@ -2041,7 +2268,7 @@ func pendingToolCall(msgs []Message) (ToolCall, int, bool) {
 		if msgs[i].Role != "tool" {
 			continue
 		}
-		if !strings.Contains(msgs[i].Content, ErrRequireConfirm.Error()) {
+		if !msgs[i].BudgetPending && !strings.Contains(msgs[i].Content, ErrRequireConfirm.Error()) {
 			// A tool result that is not a refusal means the tail has
 			// already been answered; stop rather than reaching further
 			// back into the turn.
@@ -2106,7 +2333,8 @@ func toolResultMessage(tc ToolCall, inv ToolInvocation) Message {
 		Role:             "tool",
 		Content:          content,
 		ToolCallID:       tc.ID,
-		PreparedToolCall: inv.prepared.clone(),
+		PreparedToolCall: inv.prepared.Clone(),
+		BudgetPending:    inv.budgetPending,
 	}
 }
 

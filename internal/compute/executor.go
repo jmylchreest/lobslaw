@@ -41,6 +41,7 @@ type InvokeRequest struct {
 // Stderr are the captured (and possibly truncated) bytes — callers
 // check Truncated to know whether output was capped by MaxOutputBytes.
 type InvokeResult struct {
+	started   bool
 	ExitCode  int
 	Stdout    []byte
 	Stderr    []byte
@@ -281,7 +282,7 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (result *Invok
 		result, err = e.runSubprocess(ctx, req, resolvedPath, argv)
 	}
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 
 	// PostToolUse hook.
@@ -323,12 +324,14 @@ func (e *Executor) runBuiltin(ctx context.Context, req InvokeRequest, name strin
 	stdout, exitCode, err := fn(ctx, req.Params)
 	if err != nil {
 		return &InvokeResult{
+			started:  true,
 			ExitCode: exitCode,
 			Stdout:   stdout,
 			Stderr:   []byte(err.Error()),
 		}, nil
 	}
 	return &InvokeResult{
+		started:  true,
 		ExitCode: exitCode,
 		Stdout:   stdout,
 	}, nil
@@ -369,6 +372,7 @@ func (e *Executor) runSubprocess(ctx context.Context, req InvokeRequest, path st
 	err := execretry.Run(runCtx, cmd)
 
 	result := &InvokeResult{
+		started:   cmd.Process != nil,
 		Stdout:    stdout.Bytes(),
 		Stderr:    stderr.Bytes(),
 		Truncated: stdout.truncated || stderr.truncated,

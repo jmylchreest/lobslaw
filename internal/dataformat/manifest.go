@@ -49,7 +49,8 @@ func ReadManifest(dir string) (Manifest, error) {
 	if d.Decode(new(any)) != io.EOF {
 		return m, errors.New("trailing manifest data")
 	}
-	if m.StateVersion != StateVersion || m.LogVersion != LogVersion || m.Version != PhysicalVersion || m.Protocol != ClusterProtocol || !ValidLegacy(m.LegacyFormat) {
+	compatible := (m.StateVersion == StateVersion && m.Protocol == ClusterProtocol) || (m.StateVersion == 1 && m.Protocol == PreviousStateProtocol)
+	if !compatible || m.LogVersion != LogVersion || m.Version != PhysicalVersion || !ValidLegacy(m.LegacyFormat) {
 		return m, fmt.Errorf("unsupported physical data manifest (version %d, protocol %q)", m.Version, m.Protocol)
 	}
 	return m, nil

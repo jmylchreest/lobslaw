@@ -8,7 +8,10 @@ import (
 	"github.com/hashicorp/raft"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/memory/memorytest"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -33,6 +36,7 @@ func twoNodes(t *testing.T, caps compute.BudgetCaps) (asker, answerer *RaftPromp
 	if err != nil {
 		t.Fatal(err)
 	}
+	memorytest.ActivateTeams(t, store)
 	_, inmem := raft.NewInmemTransport("cont-node")
 	node, err := memory.NewRaft(memory.RaftConfig{
 		NodeID: "cont-node", LocalAddr: "cont-node",
@@ -59,13 +63,10 @@ func twoNodes(t *testing.T, caps compute.BudgetCaps) (asker, answerer *RaftPromp
 }
 
 func pausedTurn() *Continuation {
-	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{MaxToolCalls: 10, MaxSpendUSD: 1})
-	budget.RecordToolCall()
-	budget.RecordToolCall()
-	budget.RecordToolCall()
-	budget.RecordCostUSD(compute.CostRecord{CostUSD: 0.25})
 	return &Continuation{
-		Request: compute.ProcessMessageRequest{
+		Request: turn.Request{
+			BotID:               "worker",
+			Principal:           identity.Bot("worker"),
 			Message:             "tidy my notes",
 			Claims:              &types.Claims{UserID: "tg-@alice", Roles: []string{"ops"}, Scope: "private"},
 			UserTimezone:        "Europe/London",
@@ -73,11 +74,12 @@ func pausedTurn() *Continuation {
 			SystemPrompt:        "you are lobslaw",
 			ConversationSummary: "earlier: talked about notes",
 			RecalledContext:     "<recall>notes live in workspace</recall>",
-			Budget:              budget,
+			Caps:                turn.BudgetCaps{MaxToolCalls: 10, MaxSpendUSD: 1},
+			Spent:               turn.BudgetState{ToolCalls: 3, SpendUSD: 0.25},
 		},
-		Messages: []compute.Message{
+		Messages: []turn.Message{
 			{Role: "user", Content: "tidy my notes"},
-			{Role: "assistant", ToolCalls: []compute.ToolCall{
+			{Role: "assistant", ToolCalls: []turn.ToolCall{
 				{ID: "c1", Name: "write_file", Arguments: `{"path":"notes/plan.md"}`},
 			}},
 			{Role: "tool", ToolCallID: "c1", Content: "needs confirmation"},
@@ -135,6 +137,9 @@ func TestPausedTurnSurvivesTheProcessThatPausedIt(t *testing.T) {
 	}
 
 	r := c.Request
+	if r.BotID != "worker" || r.Principal != identity.Bot("worker") {
+		t.Fatal("bot execution identity was lost")
+	}
 	if r.Message != "tidy my notes" {
 		t.Errorf("user message lost: %q", r.Message)
 	}
@@ -153,8 +158,8 @@ func TestPausedTurnSurvivesTheProcessThatPausedIt(t *testing.T) {
 	if r.ConversationSummary == "" || r.RecalledContext == "" {
 		t.Errorf("context lost: summary=%q recall=%q", r.ConversationSummary, r.RecalledContext)
 	}
-	if r.Tools != nil {
-		t.Error("tools were carried across; they are node state and must be rebuilt from the local registry")
+	if r.Spent.ToolCalls != 3 || r.Spent.SpendUSD != 0.25 {
+		t.Errorf("spend lost: %+v", r.Spent)
 	}
 }
 
@@ -181,7 +186,7 @@ func TestResumingDoesNotRefillTheBudget(t *testing.T) {
 	if got.Continuation == nil {
 		t.Fatal("continuation lost; there is no budget to check")
 	}
-	state := got.Continuation.Request.Budget.State()
+	state := got.Continuation.Request.Spent
 	if state.ToolCalls != 3 {
 		t.Errorf("tool calls = %d, want 3 — resuming reset the counter", state.ToolCalls)
 	}
@@ -216,7 +221,11 @@ func TestResumingUsesTheCurrentCaps(t *testing.T) {
 
 	// Three calls already spent against a cap of four: one more is
 	// within, the next is not.
-	budget := got.Continuation.Request.Budget
+	budget, err := compute.NewTurnBudget(got.Continuation.Request.Caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget.Restore(got.Continuation.Request.Spent)
 	if d := budget.RecordToolCall(); !d.Within {
 		t.Fatalf("the 4th call was refused under a cap of 4: %+v", d)
 	}

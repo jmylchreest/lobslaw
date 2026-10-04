@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/raft"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/memory/memorytest"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -40,6 +41,7 @@ func TestTaskRunnerResumesPreparedCallOnce(t *testing.T) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	memorytest.ActivateTeams(t, db)
 	log := &taskTestLog{fsm: memory.NewFSM(db)}
 	backend, e := memory.NewTaskApprovalStore(log, db)
 	if e != nil {
@@ -96,6 +98,7 @@ func TestTaskRunnerResumesPreparedCallOnce(t *testing.T) {
 func TestTaskRunnerBudgetExtensionKeepsConsumptionAndBound(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
+	memorytest.ActivateTeams(t, env.store)
 	backend, e := memory.NewTaskApprovalStore(&taskTestLog{fsm: memory.NewFSM(env.store)}, env.store)
 	if e != nil {
 		t.Fatal(e)
@@ -106,6 +109,7 @@ func TestTaskRunnerBudgetExtensionKeepsConsumptionAndBound(t *testing.T) {
 	}
 	req := confirmRequest(t)
 	req.Budget = mkBudget(t, BudgetCaps{MaxToolCalls: 3})
+	req.BotID = "specialist"
 	req.Budget.Restore(BudgetState{ToolCalls: 4})
 	paused, e := PauseTask(ctx, backend, created.Record, req, &ProcessMessageResponse{NeedsConfirmation: true, ConfirmationReason: "budget exceeded on tool_calls", Messages: []Message{{Role: "user", Content: "finish the task"}}, BudgetState: req.Budget.State()})
 	if e != nil {
@@ -130,7 +134,7 @@ func TestTaskRunnerBudgetExtensionKeepsConsumptionAndBound(t *testing.T) {
 		t.Fatal(e)
 	}
 	provider := NewMockProvider(MockResponse{ToolCalls: []ToolCall{{ID: "1", Name: "echo", Arguments: `{}`}}}, MockResponse{ToolCalls: []ToolCall{{ID: "2", Name: "echo", Arguments: `{}`}}}, MockResponse{ToolCalls: []ToolCall{{ID: "3", Name: "echo", Arguments: `{}`}}})
-	agent, e := NewAgent(AgentConfig{Provider: provider, Executor: env.executor})
+	agent, e := NewAgent(AgentConfig{Provider: provider, Executor: env.executor, Bots: staticBotResolver{p: &BotProfile{ID: "specialist", Caps: BudgetCaps{MaxToolCalls: 3}}}})
 	if e != nil {
 		t.Fatal(e)
 	}

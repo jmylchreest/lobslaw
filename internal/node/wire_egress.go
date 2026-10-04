@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // wireEgress builds the smokescreen provider from current config +
@@ -104,6 +106,7 @@ func (n *Node) subprocessProxyURL(role string, networkIsolation bool) string {
 // what lets a skill installed after boot get its role.
 func buildEgressInputs(n *Node) egress.ACLInputs {
 	in := egress.ACLInputs{
+		WebPush:            slices.Contains(n.cfg.Functions, types.FunctionUIWeb),
 		GoogleCalendar:     n.cfg.Security.GoogleCalendar.Enabled,
 		Providers:          n.cfg.Compute.Providers,
 		Channels:           n.cfg.Gateway.Channels,

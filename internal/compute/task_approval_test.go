@@ -11,13 +11,15 @@ import (
 
 func TestTaskGrantDoesNotBorrowConversationOrOtherTask(t *testing.T) {
 	e, sessions := modeGatedExecutor(t, []string{"strict"})
-	ctx := turn.WithIdentity(context.Background(), turn.Identity{Channel: "telegram", ChannelID: "42"})
+	ctx := turn.WithIdentity(context.Background(), turn.Identity{Principal: "user:alice", Channel: "telegram", ChannelID: "42"})
 	sessions.Grant(ctx, ShellAction, "(risk=reads)")
 	check := func(_ context.Context, q *pb.CheckGrantTaskApprovalRequest) (*pb.CheckGrantTaskApprovalResponse, error) {
 		return &pb.CheckGrantTaskApprovalResponse{Granted: q.Id == "parent" && q.Resource == "(risk=reads)"}, nil
 	}
+	ctx = WithTurnApproval(ctx, ShellAction, "!unclassified")
+	ctx, _ = withInvocationApprovals(ctx, []PreparedApproval{{Action: ShellAction, Resource: "!unclassified"}})
 	// No turn identity is needed by this direct gate test; it tests grant scope.
-	task := WithTaskExecution(context.Background(), turn.TaskScope{ID: "child", Owner: "user:alice", Actor: "user:alice", ClaimToken: "token"}, check)
+	task := WithTaskExecution(ctx, turn.TaskScope{ID: "child", Owner: "user:alice", Actor: "user:alice", ClaimToken: "token"}, check)
 	if err := checkShell(task, t, e, "pwd && ls"); !errors.Is(err, ErrRequireConfirm) {
 		t.Fatalf("child bypassed approval: %v", err)
 	}

@@ -256,7 +256,7 @@ func (n *Node) wireMemoryTools(builtins *tools.Builtins, embedder compute.Embedd
 	return n.registerSessionTools()
 }
 
-// wireScheduleTools registers schedule_create / list / get / delete.
+// wireScheduleTools registers schedule_create / list / get / update / delete.
 // The agent-turn handler for the actual dispatch is registered
 // separately via registerAgentTurnHandlers().
 func (n *Node) wireScheduleTools(builtins *tools.Builtins) error {
@@ -271,7 +271,7 @@ func (n *Node) wireScheduleTools(builtins *tools.Builtins) error {
 			return fmt.Errorf("register schedule tool %q: %w", td.Name, err)
 		}
 	}
-	n.log.Debug("compute: schedule_create/list/get/delete registered")
+	n.log.Debug("compute: schedule_create/list/get/update/delete registered")
 	return nil
 }
 
@@ -948,6 +948,7 @@ func (n *Node) wireSoulTools(builtins *tools.Builtins) error {
 	}
 	if err := tools.RegisterSoulBuiltins(builtins, tools.SoulBuiltinsConfig{
 		Mutator: n.soulAdjuster,
+		ForBot:  func(id string) (tools.SoulMutator, error) { return n.soulAdjuster.ForBot(id) },
 	}); err != nil {
 		return fmt.Errorf("register soul builtins: %w", err)
 	}

@@ -26,15 +26,24 @@ import (
 //
 // Rendered as "<kind>:<id>" so the kind is legible wherever a
 // principal is stored or logged, and so two kinds can never collide on
-// a bare id. Two kinds exist today:
+// a bare id. Three kinds exist today:
 //
 //	user:alice                 a person
 //	chat:telegram:-1001234     a conversation, owned collectively
+//	bot:engineering            one of the assistant's own agents
 //
 // The second matters because ownership is not always individual. A
 // Telegram group chat's transcript belongs to the chat, not to whoever
 // happened to speak first, and modelling that as a principal is what
 // keeps group sharing from being a special case in every reader.
+//
+// The third is what makes a team of bots cost almost nothing: memory
+// ownership, policy subjects, scheduled-task owners and audit entries
+// all already decide against a principal, so a bot that IS one
+// inherits per-bot isolation from machinery that already exists.
+// Modelling a bot's authority as a field on a bot record instead would
+// have been a second authorisation system beside the policy engine,
+// and two of those is how they come to disagree.
 type Principal string
 
 // Kind prefixes. Exported because callers construct principals for
@@ -42,7 +51,14 @@ type Principal string
 const (
 	KindUser = "user"
 	KindChat = "chat"
+	KindBot  = "bot"
 )
+
+// RoleOperator is the [[user]] role that names a human operator.
+// Holding it grants nothing on its own; it only makes the principal
+// matchable by a policy rule, and uniquely identifiable when
+// adopting unowned bot records.
+const RoleOperator = "operator"
 
 // User returns the principal for a person. An empty id yields the
 // empty Principal rather than "user:", so callers can test for absence
@@ -63,6 +79,37 @@ func Chat(channel, channelID string) Principal {
 		return ""
 	}
 	return Principal(KindChat + ":" + channel + ":" + channelID)
+}
+
+// Bot returns the principal for one of the assistant's own agents.
+//
+// Deliberately not reachable from the alias map: aliases translate the
+// ids that arrive from a channel, and a channel must never be able to
+// name a caller a bot. A bot principal is minted here, by the code
+// that already knows it is running a bot's turn.
+func Bot(id string) Principal {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	return Principal(KindBot + ":" + id)
+}
+
+// IsBot reports whether this principal names a bot rather than a
+// person or a conversation.
+func (p Principal) IsBot() bool {
+	return strings.HasPrefix(string(p), KindBot+":")
+}
+
+// UniqueOperator returns the user:<id> principal when exactly one
+// operator id is supplied. Zero or more than one yields the empty
+// Principal — unowned records stay inaccessible rather than becoming
+// public.
+func UniqueOperator(operatorIDs []string) Principal {
+	if len(operatorIDs) != 1 {
+		return ""
+	}
+	return User(operatorIDs[0])
 }
 
 // String renders the principal for storage and logs.

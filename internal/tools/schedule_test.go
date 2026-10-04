@@ -3,6 +3,9 @@ package tools
 import (
 	"context"
 	"testing"
+
+	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 )
 
 func TestNormaliseToCronNatural(t *testing.T) {
@@ -61,7 +64,8 @@ func TestScheduleCreateValidatesBeforeSaving(t *testing.T) {
 	} {
 		t.Run(tc.when, func(t *testing.T) {
 			raft := &fakeApplier{}
-			_, _, err := newScheduleCreateHandler(raft)(context.Background(), map[string]string{
+			ctx := turn.WithIdentity(context.Background(), turn.Identity{Principal: identity.User("alice"), UserID: "alice"})
+			_, _, err := newScheduleCreateHandler(raft)(ctx, map[string]string{
 				"name": "check", "when": tc.when, "prompt": "check the weather",
 			})
 			if (err == nil) != tc.valid {

@@ -94,6 +94,12 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		"slack_read_channel": true,
 		"slack_search":       true,
 	}
+	// The team tools (bot_list, bot_create, bot_update, ask_bot,
+	// tell_bot, inbox_*) are deliberately NOT here. A team whose
+	// coordinator cannot list, add or reach its own bots is not a team,
+	// and seeding them default-deny made the first "create a bot" fail
+	// with "no rule matched". They are curated builtins like any other;
+	// an operator tightens them with [[policy.rules]].
 
 	// Seed default-allow rules ONLY for builtins (Path prefix
 	// BuiltinScheme). Builtins are lobslaw-curated — operators get

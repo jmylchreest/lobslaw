@@ -7,14 +7,16 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/console"
 )
 
 // Sentinel errors for the prompt flow. Callers map these to HTTP
 // status codes / user-visible messages.
 var (
-	ErrPromptNotFound = errors.New("prompt: not found")
-	ErrPromptExpired  = errors.New("prompt: expired")
-	ErrPromptResolved = errors.New("prompt: already resolved")
+	ErrPromptNotFound = console.ErrPromptNotFound
+	ErrPromptExpired  = console.ErrPromptExpired
+	ErrPromptResolved = console.ErrPromptResolved
 )
 
 // PromptDecision is how a user responded to a confirmation.

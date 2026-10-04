@@ -55,7 +55,7 @@ func validateStateFormat(tx *bolt.Tx, cipher *crypto.Cipher, validateRecords boo
 	if format.Version > dataformat.StateVersion {
 		return format, fmt.Errorf("state format %d is newer than supported %d", format.Version, dataformat.StateVersion)
 	}
-	compatible := (format.Version == 0 && format.Protocol == "") || (format.Version == dataformat.StateVersion && format.Protocol == dataformat.ClusterProtocol)
+	compatible := (format.Version == 0 && format.Protocol == "") || (format.Version == dataformat.StateVersion && format.Protocol == dataformat.ClusterProtocol) || (format.Version == 1 && format.Protocol == dataformat.PreviousStateProtocol)
 	if !compatible {
 		return format, fmt.Errorf("state requires protocol %q; binary supports %q", format.Protocol, dataformat.ClusterProtocol)
 	}
@@ -63,12 +63,19 @@ func validateStateFormat(tx *bolt.Tx, cipher *crypto.Cipher, validateRecords boo
 		if string(name) == formatBucket {
 			return nil
 		}
+		if format.Version == 1 && isTeamBucket(string(name)) {
+			return errors.New("contract 1 contains team-only buckets")
+		}
 		if !slices.Contains(allBuckets, string(name)) {
 			return fmt.Errorf("unsupported state bucket %q; use a binary supporting the source features", name)
 		}
 		return b.ForEach(func(k, v []byte) error {
-			if v == nil {
+			if v == nil && b.Bucket(k) != nil {
 				return fmt.Errorf("unexpected nested bucket in %q", name)
+			}
+			// Notification key index is derived plaintext, rebuilt on open/restore.
+			if string(name) == bucketInboxNotificationKeys || string(name) == bucketTaskHistory {
+				return nil
 			}
 			if validateRecords || format.Version == 0 {
 				if _, err := cipher.OpenTo(nil, v); err != nil {
@@ -90,20 +97,39 @@ func upgradeStateDB(db *bolt.DB, cipher *crypto.Cipher) error {
 		if err != nil {
 			return err
 		}
-		steps := []dataformat.Step[*bolt.Tx]{{From: 0, To: 1, Name: "record-state-format", Apply: func(_ context.Context, tx *bolt.Tx) (*bolt.Tx, error) {
-			b, err := tx.CreateBucketIfNotExists([]byte(formatBucket))
-			if err != nil {
-				return tx, err
+		steps := []dataformat.Step[*bolt.Tx]{
+			{From: 0, To: 1, Name: "record-state-format", Apply: func(_ context.Context, tx *bolt.Tx) (*bolt.Tx, error) {
+				return tx, writeStateFormat(tx, StateFormat{Version: 1, Protocol: dataformat.PreviousStateProtocol})
+			}},
+			{From: 1, To: 2, Name: "team-record-support", Apply: func(_ context.Context, tx *bolt.Tx) (*bolt.Tx, error) {
+				return tx, writeStateFormat(tx, StateFormat{Version: dataformat.StateVersion, Protocol: dataformat.ClusterProtocol})
+			}},
+		}
+
+		target := max(1, format.Version)
+		if format.Version == 0 {
+			for _, name := range teamBuckets {
+				if tx.Bucket([]byte(name)) != nil {
+					target = 2
+					break
+				}
 			}
-			raw, err := json.Marshal(StateFormat{Version: dataformat.StateVersion, Protocol: dataformat.ClusterProtocol})
-			if err != nil {
-				return tx, err
-			}
-			return tx, b.Put([]byte(formatKey), raw)
-		}}}
-		_, err = dataformat.Upgrade(context.Background(), tx, format.Version, dataformat.StateVersion, steps)
+		}
+		_, err = dataformat.Upgrade(context.Background(), tx, format.Version, target, steps)
 		return err
 	})
+}
+
+func writeStateFormat(tx *bolt.Tx, format StateFormat) error {
+	b, err := tx.CreateBucketIfNotExists([]byte(formatBucket))
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(format)
+	if err != nil {
+		return err
+	}
+	return b.Put([]byte(formatKey), raw)
 }
 
 func (s *Store) prepareFormat() error {
@@ -125,7 +151,7 @@ func (s *Store) prepareFormat() error {
 	}); err != nil {
 		return err
 	}
-	if s.readOnly || format.Version == dataformat.StateVersion {
+	if s.readOnly || format.Version >= 1 {
 		return nil
 	}
 	if !populated {

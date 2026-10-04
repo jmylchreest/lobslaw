@@ -207,6 +207,8 @@ func validateArchiveRecordID(record archive.Record, msg proto.Message) error {
 		}
 	case *lobslawv1.SessionMessage:
 		id = sessionMessageKey(rec.SessionId, rec.Seq)
+	case *lobslawv1.BotInboxItem:
+		id = inboxKey(rec.Recipient, rec.Id)
 	case *lobslawv1.UserPreferences:
 		id = rec.UserId
 	default:
@@ -255,6 +257,14 @@ func mapArchiveOwner(id string, msg proto.Message, owners map[string]string) (st
 
 func pauseArchiveRecord(kind string, msg proto.Message, timezone string) (bool, error) {
 	switch rec := msg.(type) {
+	case *lobslawv1.BotInboxItem:
+		rec.TaskClaims = nil
+		if rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_PENDING || rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_CLAIMED || rec.Status == lobslawv1.InboxStatus_INBOX_STATUS_WAITING {
+			rec.Status = lobslawv1.InboxStatus_INBOX_STATUS_CANCELLED
+			rec.ClaimedBy, rec.ClaimExpiresAt = "", nil
+			rec.Error = "paused by archive import; assign new work with fresh authority after reviewing possible prior effects"
+			return true, nil
+		}
 	case *lobslawv1.ShareInstallation:
 		paused := rec.Active
 		rec.Active = false

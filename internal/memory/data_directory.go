@@ -267,10 +267,16 @@ func MigrateData(ctx context.Context, source, destination, profile string, key c
 	if err != nil {
 		return empty, err
 	}
+	var migratedFormat StateFormat
+	formatErr := state.loadDB().View(func(tx *bolt.Tx) error { var err error; migratedFormat, err = readStateFormat(tx); return err })
+	if formatErr != nil {
+		_ = state.Close()
+		return empty, formatErr
+	}
 	if err := state.Close(); err != nil {
 		return empty, err
 	}
-	manifest := dataformat.Manifest{StateVersion: dataformat.StateVersion, LogVersion: dataformat.LogVersion, Version: dataformat.PhysicalVersion, Protocol: dataformat.ClusterProtocol, LegacyFormat: s.report.LegacyFormat, RestoreRequired: true}
+	manifest := dataformat.Manifest{StateVersion: migratedFormat.Version, LogVersion: dataformat.LogVersion, Version: dataformat.PhysicalVersion, Protocol: migratedFormat.Protocol, LegacyFormat: s.report.LegacyFormat, RestoreRequired: true}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return empty, err
@@ -293,7 +299,7 @@ func MigrateData(ctx context.Context, source, destination, profile string, key c
 	if err := syncSnapshotDirectory(filepath.Dir(dst)); err != nil {
 		return empty, fmt.Errorf("destination published at %s but directory sync failed: %w", dst, err)
 	}
-	s.report.State = StateFormat{Version: dataformat.StateVersion, Protocol: dataformat.ClusterProtocol}
+	s.report.State = migratedFormat
 	s.report.RestoreRequired = true
 	return s.report, nil
 }

@@ -60,7 +60,7 @@ func validateLogEntrySupport(entry *lobslawv1.LogEntry) error {
 	switch entry.Op {
 	case lobslawv1.LogOp_LOG_OP_PUT:
 		switch entry.Payload.(type) {
-		case *lobslawv1.LogEntry_ArchiveBatch, *lobslawv1.LogEntry_SessionAppend, *lobslawv1.LogEntry_ShareBatch:
+		case *lobslawv1.LogEntry_ArchiveBatch, *lobslawv1.LogEntry_SessionAppend, *lobslawv1.LogEntry_ShareBatch, *lobslawv1.LogEntry_TaskAdmission:
 			return nil
 		}
 	case lobslawv1.LogOp_LOG_OP_DELETE, lobslawv1.LogOp_LOG_OP_CLAIM:

@@ -1,8 +1,8 @@
 // Package gateway wires user-facing channels (REST, Telegram) on
 // top of the node's internal services. The agent loop doesn't know
 // about HTTP or Telegram — each channel is a thin adapter that
-// translates an inbound request into an internal
-// compute.ProcessMessageRequest and translates the response back.
+// translates an inbound request into a turn.Request and translates
+// the response back.
 package gateway
 
 import (
@@ -17,13 +17,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jmylchreest/lobslaw/internal/logging"
+	"github.com/jmylchreest/lobslaw/internal/console"
 
-	"google.golang.org/protobuf/types/known/durationpb"
-
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/identity"
-	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/logging"
+	"github.com/jmylchreest/lobslaw/internal/push"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -32,6 +31,9 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	// UIWebEnabled records runtime intent even when this binary excludes web support.
+	UIWebEnabled  bool
+	RemoteConsole lobslawv1.ConsoleServiceClient
 	Calendar      CalendarManagement
 	CalendarOAuth http.Handler
 	// IncomingDir holds temporary, owner-bound REST media uploads.
@@ -97,7 +99,7 @@ type RESTConfig struct {
 	// DefaultBudget is the per-turn budget applied to each message.
 	// Zero caps mean unlimited. Callers typically pass caps derived
 	// from config.Compute.Budgets.
-	DefaultBudget compute.BudgetCaps
+	DefaultBudget turn.BudgetCaps
 
 	// JWTValidator validates inbound Authorization: Bearer tokens.
 	// Nil means accept unauthenticated requests with DefaultScope
@@ -109,6 +111,19 @@ type RESTConfig struct {
 	// to "reject with 401". Deployments that MUST have valid JWTs
 	// (anything reachable from the public internet) set this true.
 	RequireAuth bool
+
+	// LoginSessionFile persists browser sessions on this gateway's local disk.
+	// Empty uses an ephemeral store (primarily for tests).
+	LoginSessionFile string
+
+	// Identity maps JWT subjects and channel addresses onto [[user]].id.
+	// Nil keeps Bearer "the subject is the user" behaviour; cookie
+	// login still requires a matching Users entry.
+	Identity *identity.Resolver
+
+	// Users is the operator-declared enrolment catalog. Cookie login
+	// requires a matching [[user]]; there is no self-signup.
+	Users []config.UserConfig
 
 	// Telegram, when non-nil, mounts the Telegram webhook handler
 	// at /telegram on the same mux. Shares the server's TLS + port
@@ -133,7 +148,10 @@ type RESTConfig struct {
 	// as plain text like Phase 6e).
 	Prompts       Prompts
 	TaskApprovals TaskApprovalAPI
-	TaskIdentity  *identity.Resolver
+	Learned       LearnedReviews
+	// StartBotTask handles explicit /task commands, never ordinary bot chat.
+	StartBotTask func(context.Context, turn.Request) (*lobslawv1.TaskApprovalRecord, error)
+	TaskIdentity *identity.Resolver
 
 	// ConfirmationTTL is how long a pending prompt waits before
 	// auto-denying on timeout. 0 → 5 minutes default.
@@ -160,14 +178,41 @@ type RESTConfig struct {
 
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
+
+	// Bots, Groups and Inbox are the compute-teams registries. Nil
+	// leaves /v1/bots and /v1/groups unmounted — ordinary compute.
+	Bots   BotAPI
+	Groups GroupAPI
+	Inbox  InboxAPI
+
+	// TeamRouter picks which bot answers a channel message. Nil
+	// leaves BotID empty.
+	TeamRouter TeamRouter
+
+	// Tools lists what a bot may be granted, for the console's tool
+	// picker. Nil returns 503 rather than an empty list, so a console
+	// can tell "nothing registered" from "this node does not say".
+	Tools ToolCatalogue
+
+	// Config is the allowlisted node configuration /v1/config
+	// publishes. Nil returns 503 rather than a 404, so a console can
+	// tell "this node does not say" from "wrong path".
+	Config *ConfigView
+
+	// Transcripts is the read-only session browser the console uses to
+	// show what a bot actually did. Nil returns 503.
+	Transcripts SessionBrowser
+
+	// Routines and Memory back the read-only per-bot insight panes.
+	// Nil on a node that runs no scheduler or hosts no memory.
+	Routines RoutineAPI
+	Memory   MemoryAPI
 }
 
 // PlanService is the subset of lobslawv1.PlanServiceServer that the
 // REST layer actually calls. Kept narrow so tests can pass a fake
 // without constructing a real Raft-backed service.
-type PlanService interface {
-	GetPlan(ctx context.Context, req *lobslawv1.GetPlanRequest) (*lobslawv1.GetPlanResponse, error)
-}
+type PlanService = console.PlanService
 
 // Server is the REST channel handler. Stateful only for lifecycle
 // bookkeeping (net.Listener, underlying http.Server).
@@ -176,22 +221,26 @@ type Server struct {
 	gate *TurnGate
 
 	cfg     RESTConfig
-	agent   *compute.Agent
+	runner  turn.Runner
 	log     *slog.Logger
 	conv    *conversationLog
+	logins  *loginStore
+	push    *push.Service
 	uploads *restUploads
 
-	mu       sync.Mutex
-	httpSrv  *http.Server
-	listener net.Listener
-	ready    bool // flipped to true when Start() completes bind; checked by /readyz
+	mu         sync.Mutex
+	httpSrv    *http.Server
+	listener   net.Listener
+	ready      bool // flipped to true when Start() completes bind; checked by /readyz
+	console    http.Handler
+	remoteCaps *capabilitiesResponse
 }
 
 // NewServer constructs the REST server with explicit dependencies.
-// agent may be nil — /healthz still responds, /v1/messages returns
+// runner may be nil — /healthz still responds, /v1/messages returns
 // 503. Lets a node with Compute disabled still expose health
 // endpoints for load-balancer probes.
-func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
+func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = fmt.Sprintf(":%d", config.DefaultGatewayHTTPPort)
 	}
@@ -209,33 +258,43 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 	}
 	return &Server{
 		cfg:     cfg,
-		uploads: newRESTUploads(cfg.IncomingDir),
-		agent:   agent,
+		runner:  runner,
 		log:     cfg.Logger,
 		gate:    NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
 		conv:    newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
+		logins:  newLoginStore(),
+		uploads: newRESTUploads(cfg.IncomingDir),
 	}
 }
 
-// Start binds the listener and serves. Blocks until ctx is
-// cancelled or the HTTP server returns an error. A cancelled ctx
-// triggers a graceful shutdown with a bounded timeout.
-func (s *Server) Start(ctx context.Context) error {
-	mux := http.NewServeMux()
+// registerRoutes wires HTTP adapters to their application services.
+func (s *Server) registerRoutes(mux *http.ServeMux) {
 	if s.cfg.Calendar != nil {
 		mux.HandleFunc("/v1/calendar", s.handleCalendar)
 	}
 	if s.cfg.CalendarOAuth != nil {
 		mux.Handle("/integrations/google/", s.cfg.CalendarOAuth)
 	}
-	mux.HandleFunc("/v1/messages", s.handleMessages)
-	if s.cfg.TaskApprovals != nil {
+	mux.HandleFunc("/v1/push", s.handlePush)
+	mux.HandleFunc("/v1/messages", s.consoleRoute(s.handleMessages))
+	if s.cfg.TaskApprovals != nil || s.cfg.RemoteConsole != nil {
 		mux.HandleFunc("/v1/task-approvals", s.handleTaskApprovals)
 		mux.HandleFunc("/v1/task-approvals/", s.handleTaskApprovals)
 	}
+	mux.HandleFunc("/v1/learned-reviews", s.handleLearnedReviews)
+	mux.HandleFunc("/v1/learned-reviews/", s.handleLearnedReviews)
 	mux.HandleFunc("/v1/uploads", s.handleUpload)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
+	mux.HandleFunc("/v1/session", s.handleSession)
+	mux.HandleFunc("/v1/session/code", s.handleSessionCode)
+	mux.HandleFunc("/v1/tools", s.consoleRoute(s.handleTools))
+	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
+	// General to the gateway rather than gated on compute-teams: a
+	// node with no bots still has a configuration worth reading and a
+	// transcript store worth browsing. Both say 503 when unwired.
+	mux.HandleFunc("/v1/config", s.handleConfig)
+	mux.HandleFunc("/v1/sessions/", s.consoleRoute(s.handleSessionTranscript))
 	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
 		mux.Handle("/telegram", s.cfg.Telegram)
 	}
@@ -244,11 +303,37 @@ func (s *Server) Start(ctx context.Context) error {
 		s.log.Info("gateway: webhook mounted",
 			"name", wh.Name(), "path", wh.PathPrefix())
 	}
-	if s.cfg.Prompts != nil {
-		mux.HandleFunc("/v1/prompts/", s.handlePrompt)
+	if s.cfg.Prompts != nil || s.cfg.RemoteConsole != nil {
+		mux.HandleFunc("/v1/prompts/", s.consoleRoute(s.handlePrompt))
 	}
-	if s.cfg.Plan != nil {
-		mux.HandleFunc("/v1/plan", s.handlePlan)
+	if s.cfg.Plan != nil || s.cfg.RemoteConsole != nil {
+		mux.HandleFunc("/v1/plan", s.consoleRoute(s.handlePlan))
+	}
+	s.registerTeamRoutes(mux)
+	s.mountConsole(mux)
+
+}
+
+// Start binds the listener and serves. Blocks until ctx is
+// cancelled or the HTTP server returns an error. A cancelled ctx
+// triggers a graceful shutdown with a bounded timeout.
+func (s *Server) Start(ctx context.Context) error {
+	if err := s.logins.load(s.cfg.LoginSessionFile); err != nil {
+		return fmt.Errorf("rest: load browser sessions: %w", err)
+	}
+	if err := s.initPush(); err != nil {
+		return fmt.Errorf("rest: web push: %w", err)
+	}
+	if s.cfg.Telegram != nil && s.cfg.Telegram.NotificationsEnabled() {
+		s.cfg.Telegram.cfg.NotificationBotCheck = s.validateNotificationBot
+	}
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+
+	if s.consoleEnabled() {
+		if err := checkConsoleBind(s.cfg.Addr, s.cfg.RequireAuth); err != nil {
+			return err
+		}
 	}
 
 	ln, err := net.Listen("tcp", s.cfg.Addr)
@@ -258,8 +343,8 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.listener = ln
 	s.httpSrv = &http.Server{
+		Handler:      s.withAccessLog(mux),
 		ErrorLog:     logging.StandardLogger(s.log, slog.LevelError),
-		Handler:      mux,
 		ReadTimeout:  s.cfg.ReadTimeout,
 		WriteTimeout: s.cfg.WriteTimeout,
 		IdleTimeout:  s.cfg.IdleTimeout,
@@ -268,8 +353,15 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	uploadCtx, stopUploads := context.WithCancel(ctx)
-	defer func() { stopUploads(); s.uploads.close() }()
+	var notificationWorkers sync.WaitGroup
+	defer func() { stopUploads(); notificationWorkers.Wait(); s.uploads.close() }()
 	go s.uploads.run(uploadCtx)
+	if s.push != nil {
+		notificationWorkers.Go(func() { s.runPush(uploadCtx) })
+	}
+	if s.cfg.Telegram != nil && s.cfg.Telegram.NotificationsEnabled() {
+		notificationWorkers.Go(func() { s.runTelegramNotifications(uploadCtx) })
+	}
 
 	s.log.Info("rest server listening", "addr", ln.Addr().String(), "tls", s.cfg.TLSCert != "")
 
@@ -341,7 +433,7 @@ func (s *Server) Addr() string {
 
 // messageRequest is the JSON body for POST /v1/messages. Minimal
 // shape — channel handlers construct the full
-// compute.ProcessMessageRequest server-side from this + config +
+// turn.Request server-side from this + config +
 // any auth context.
 type messageRequest struct {
 	UploadIDs []string `json:"upload_ids,omitempty"`
@@ -380,12 +472,13 @@ type messageResponse struct {
 }
 
 type toolCallJSON struct {
-	CallID   string `json:"call_id"`
-	ToolName string `json:"tool_name"`
-	Args     string `json:"args,omitempty"`
-	Output   string `json:"output,omitempty"`
-	ExitCode int    `json:"exit_code,omitempty"`
-	Error    string `json:"error,omitempty"`
+	ExecutionStatus string `json:"execution_status,omitempty"`
+	CallID          string `json:"call_id"`
+	ToolName        string `json:"tool_name"`
+	Args            string `json:"args,omitempty"`
+	Output          string `json:"output,omitempty"`
+	ExitCode        int    `json:"exit_code,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 type budgetStateJSON struct {
@@ -447,53 +540,38 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.agent == nil {
+	if s.runner == nil {
 		http.Error(w, "agent not configured on this node", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Cap body size to avoid clients streaming megabytes. The actual
-	// useful message is usually under a few KB; 1MB covers rare long
-	// copy-paste scenarios.
-	r.Body = http.MaxBytesReader(w, r.Body, restMessageMaxBytes)
-
 	var req messageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
-		return
-	}
-	if len(req.UploadIDs) > restMessageMaxUploads {
-		s.jsonErr(w, http.StatusBadRequest, fmt.Sprintf("at most %d uploads per message", restMessageMaxUploads))
-		return
-	}
-	if strings.TrimSpace(req.Message) == "" && len(req.UploadIDs) == 0 {
-		s.jsonErr(w, http.StatusBadRequest, "message is required")
-		return
-	}
-	// A turn with no id is a turn with no trace. The Telegram path
-	// always mints one; this one passed through whatever the caller
-	// sent, so a REST turn from a client that supplied none recorded
-	// its spans under the empty id and `trace list` came back empty —
-	// tracing looked switched OFF on a node where it was switched on.
-	// Returned in the response too: an id the caller cannot see is an
-	// id they cannot look the turn up by.
-	if req.TurnID == "" {
-		req.TurnID = "rest-" + ids.New()
-	}
-
-	budget, err := compute.NewTurnBudget(s.cfg.DefaultBudget)
-	if err != nil {
-		s.jsonErr(w, http.StatusInternalServerError, "budget construction: "+err.Error())
+	if !s.decodeMessageRequest(w, r, &req) {
 		return
 	}
 
-	claims, authErr := s.authenticate(r, s.cfg.RequireAuth || len(req.UploadIDs) > 0)
+	authn, authErr := s.authenticateRequest(r)
 	if authErr != nil {
 		s.jsonErr(w, http.StatusUnauthorized, authErr.Error())
 		return
 	}
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+	claims := authn.Claims
+	if len(req.UploadIDs) > 0 && !authenticatedUploadClaims(claims) {
+		s.jsonErr(w, http.StatusUnauthorized, "authentication required for uploads")
+		return
+	}
+	userID := ""
+	if claims != nil {
+		userID = claims.UserID
+	}
+	reqCtx, stopStream := s.bindStream(r.Context(), authn.LoginID)
+	defer stopStream()
 
-	attachments, releaseUploads, err := s.uploads.acquire(claims.UserID, req.UploadIDs, time.Now())
+	attachments, releaseUploads, err := s.uploads.acquire(userID, req.UploadIDs, time.Now())
 	if err != nil {
 		s.jsonErr(w, http.StatusNotFound, errUploadUnavailable.Error())
 		return
@@ -503,225 +581,26 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		req.Message = "Please examine the attached media."
 	}
 
-	var sessionRef SessionRef
-	var prior Transcript
-	if req.SessionID != "" {
-		if err := validateSessionID(req.SessionID); err != nil {
-			s.jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		sessionRef = SessionRef{
-			Channel:   "rest",
-			ChannelID: restSessionID(claims.UserID, req.SessionID),
-			UserID:    claims.UserID,
-		}
-		// Serialise turns on this session for the same reason the
-		// Telegram path does: Load → run → Append is not atomic, and
-		// each request is its own goroutine. Only sessioned requests
-		// need it — a session-less call has no transcript to corrupt.
-		lease, disposition := s.gate.acquire(r.Context(), cacheKey(sessionRef), req.TurnID, req.Message, len(attachments) > 0)
-		switch disposition {
-		case Folded:
-			// Another in-flight turn absorbed this message and will
-			// answer for it. Unlike a chat channel, an HTTP caller is
-			// waiting on this response, so say so rather than hanging
-			// up silently.
-			s.jsonErr(w, http.StatusAccepted,
-				"message folded into an in-flight turn on this session; its reply covers this message")
-			return
-		case Dropped:
-			s.jsonErr(w, http.StatusConflict,
-				"a turn is already running for this session")
-			return
-		}
-		defer lease.Release()
-
-		if len(lease.Batch) > 1 {
-			req.Message = strings.Join(lease.Batch, "\n")
-		}
-
-		prior = s.conv.Load(r.Context(), sessionRef)
-		s.log.Debug("rest: conversation history loaded",
-			"turn_id", req.TurnID,
-			"session_id", req.SessionID,
-			"prior_messages", len(prior.Messages),
-			"summarised", prior.Summary != "")
-	}
-
-	agentReq := compute.ProcessMessageRequest{
-		Attachments:         attachments,
-		Message:             req.Message,
-		Claims:              claims,
-		TurnID:              req.TurnID,
-		Model:               req.Model,
-		Budget:              budget,
-		ConversationHistory: prior.Messages,
-		ConversationSummary: prior.Summary,
-		Channel:             sessionRef.Channel,
-		ChannelID:           sessionRef.ChannelID,
-	}
-
-	// Responsiveness, shared with Telegram. The visible half needs an
-	// SSE client; the hard timeout applies either way, and REST had
-	// none — a stalled provider hung the request until the client gave
-	// up.
-	//
-	// turnCtx, not r.Context(), for the rest of this handler: the
-	// confirmation resume loop below re-enters the agent, and a turn
-	// that stalls after approval should hit the same cap as one that
-	// stalls before it.
-	responder := newRESTResponder(w, r)
-	turnCtx, stopGuards := startResponsiveness(r.Context(), responder, ResponsivenessConfig{
-		TypingInterval: s.cfg.TypingInterval,
-		InterimTimeout: s.cfg.InterimTimeout,
-		HardTimeout:    s.cfg.HardTimeout,
-		Soul:           s.cfg.Soul,
+	var responder *restResponder
+	out, err := s.runConsoleChat(reqCtx, claims, req, attachments, func() chatResponder {
+		responder = newRESTResponder(w, r)
+		return responder
 	})
-	defer stopGuards()
-
-	resp, err := s.agent.RunToolCallLoop(turnCtx, agentReq)
 	if err != nil {
-		s.log.Error("agent error", "turn_id", req.TurnID, "err", err)
-		stopGuards()
-		responder.Close()
-		s.restError(w, responder, http.StatusInternalServerError, err.Error())
+		if responder != nil && responder.Streaming() {
+			_ = responder.sendError(err.Error())
+		} else {
+			s.chatHTTPError(w, err)
+		}
 		return
 	}
-
-	// Captured before the resume loop replaces resp: resumption only
-	// ever appends, so the original boundary still marks the start of
-	// the whole turn once it finishes.
-	turnStart := resp.TurnStartIndex
-
-	// Auto-resume loop: when the agent returns NeedsConfirmation AND
-	// the registry is wired, register a prompt, long-poll Wait until
-	// the user resolves it (or the TTL fires), then either resume the
-	// turn with a lifted budget (Approved) or stop with a deny reply
-	// (Denied / TimedOut). The resumed turn may itself hit a fresh
-	// confirmation; we loop until the agent returns a plain reply or
-	// the user refuses. A nil registry leaves resp unchanged — older
-	// clients that don't understand prompt_id still see the reason in
-	// the response body.
-	var lastPromptID string
-	for resp.NeedsConfirmation && s.cfg.Prompts != nil {
-		ttl := s.cfg.ConfirmationTTL
-		if ttl <= 0 {
-			ttl = DefaultPromptTTL
-		}
-		// The REST caller holds the connection open, so this handler
-		// resumes the turn itself and does not need the continuation
-		// carried. Action and resource still are: they are what a
-		// "session" or "always" answer records a grant against.
-		p, perr := s.cfg.Prompts.Create(NewPrompt{
-			TurnID:    req.TurnID,
-			Reason:    resp.ConfirmationReason,
-			Channel:   "rest",
-			SessionID: req.SessionID,
-			TTL:       ttl,
-			Action:    resp.ConfirmationAction,
-			Resource:  resp.ConfirmationResource,
-		})
-		if perr != nil {
-			s.log.Warn("rest: prompt registration failed — returning confirmation as-is", "err", perr)
-			break
-		}
-		lastPromptID = p.ID
-
-		decision, werr := s.cfg.Prompts.Wait(turnCtx, p.ID)
-		if werr != nil {
-			s.log.Warn("rest: prompt wait aborted",
-				"prompt_id", p.ID, "turn_id", req.TurnID, "err", werr)
-			break
-		}
-		if decision != PromptApproved {
-			resp.Reply = fmt.Sprintf("Confirmation %s: %s",
-				decision.String(), resp.ConfirmationReason)
-			resp.NeedsConfirmation = false
-			resp.ConfirmationReason = ""
-			break
-		}
-
-		// Approved: lift caps and re-enter. resp.Messages carries the
-		// conversation at the moment the original turn stopped.
-		//
-		// The turn approval is the policy half of the same idea: the
-		// operation the user just answered for does not get asked again
-		// inside the turn they answered it in.
-		agentReq.Budget.Relax()
-		resumeCtx := compute.WithTurnApproval(turnCtx, resp.ConfirmationAction, resp.ConfirmationResource)
-		resumed, rerr := s.agent.ResumeFromConfirmation(resumeCtx, agentReq, resp.Messages)
-		if rerr != nil {
-			s.log.Error("rest: resume after approval failed",
-				"turn_id", req.TurnID, "err", rerr)
-			stopGuards()
-			responder.Close()
-			s.restError(w, responder, http.StatusInternalServerError, rerr.Error())
-			return
-		}
-		// Preserve prior tool calls in the cumulative response.
-		resumed.ToolCalls = append(resp.ToolCalls, resumed.ToolCalls...)
-		resp = resumed
-	}
-
-	// Persisted after the confirmation loop so an approved-and-resumed
-	// turn is recorded once, complete, rather than twice in halves.
-	if req.SessionID != "" {
-		if newTurn := newTurnMessages(resp.Messages, turnStart); len(newTurn) > 0 {
-			s.conv.Append(r.Context(), sessionRef, req.TurnID, newTurn)
-		}
-	}
-
-	out := messageResponse{
-		// Appended after the transcript was persisted above, and to
-		// the outbound text only. A notice recorded as an assistant
-		// message is one the model reads next turn and reasons about.
-		Reply: s.cfg.Notices.Append(r.Context(), "rest",
-			sessionRef.ChannelID, noticeSubject(claims), resp.Reply),
-		NeedsConfirmation:  resp.NeedsConfirmation,
-		ConfirmationReason: resp.ConfirmationReason,
-		PromptID:           lastPromptID,
-		TurnID:             req.TurnID,
-		Budget: budgetStateJSON{
-			ToolCalls:   resp.BudgetState.ToolCalls,
-			SpendUSD:    resp.BudgetState.SpendUSD,
-			EgressBytes: resp.BudgetState.EgressBytes,
-		},
-	}
-	for _, tc := range resp.ToolCalls {
-		out.ToolCalls = append(out.ToolCalls, toolCallJSON{
-			CallID:   tc.CallID,
-			ToolName: tc.ToolName,
-			Args:     tc.Args,
-			Output:   tc.Output,
-			ExitCode: tc.ExitCode,
-			Error:    tc.Error,
-		})
-	}
-
-	// Timers off and the responder closed BEFORE the body is written,
-	// so a typing tick that fires at exactly the wrong moment cannot
-	// interleave itself into the response.
-	stopGuards()
-	responder.Close()
-
 	if responder.Streaming() {
 		_ = responder.sendFinal(out)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
-}
 
-// restError writes an error in whichever shape the client is reading:
-// an SSE event mid-stream, or an ordinary JSON body. Once headers are
-// out for a stream, jsonErr's WriteHeader is a no-op and the client
-// would be left waiting on a connection that never says why.
-func (s *Server) restError(w http.ResponseWriter, responder *restResponder, code int, msg string) {
-	if responder.Streaming() {
-		_ = responder.sendError(msg)
-		return
-	}
-	s.jsonErr(w, code, msg)
 }
 
 // handleHealthz returns 200 as long as the server is running.
@@ -743,7 +622,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"status":"starting"}`, http.StatusServiceUnavailable)
 		return
 	}
-	if s.agent == nil {
+	if s.runner == nil {
 		http.Error(w, `{"status":"agent-not-configured"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -821,6 +700,16 @@ func anonClaims(scope string) *types.Claims {
 // expires. Resolution is idempotent-on-conflict: a second attempt
 // after the first (or after timeout) returns 409.
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
+	authn, err := s.authenticateRequest(r)
+	if err != nil {
+		s.jsonErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+
 	// Parse path: /v1/prompts/<id>[/resolve]
 	path := strings.TrimPrefix(r.URL.Path, "/v1/prompts/")
 	if path == "" {
@@ -837,9 +726,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case action == "" && r.Method == http.MethodGet:
-		s.handlePromptGet(w, r, id)
+		s.handlePromptGet(w, r, id, authn)
 	case action == "resolve" && r.Method == http.MethodPost:
-		s.handlePromptResolve(w, r, id)
+		s.handlePromptResolve(w, r, id, authn)
 	case action == "" && r.Method != http.MethodGet:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	case action == "resolve" && r.Method != http.MethodPost:
@@ -849,7 +738,17 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id string, authn requestAuth) {
+	if s.cfg.RequireAuth || authn.FromPeer {
+		view, err := s.consoleOperations().Prompt(r.Context(), authn.Claims, id)
+		if err != nil {
+			s.consolePromptError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, view)
+		return
+	}
+
 	p, err := s.cfg.Prompts.Get(id)
 	if err != nil {
 		if errors.Is(err, ErrPromptNotFound) {
@@ -857,6 +756,14 @@ func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.promptVisible(p, authn) {
+		s.jsonErr(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+	if s.promptExpired(p) {
+		s.jsonErr(w, http.StatusConflict, "prompt expired")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -871,7 +778,24 @@ func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id stri
 	})
 }
 
-func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id string, authn requestAuth) {
+	p, err := s.cfg.Prompts.Get(id)
+	if err != nil {
+		if errors.Is(err, ErrPromptNotFound) {
+			s.jsonErr(w, http.StatusNotFound, "prompt not found")
+			return
+		}
+		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.promptVisible(p, authn) {
+		s.jsonErr(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+	if s.promptExpired(p) {
+		s.jsonErr(w, http.StatusConflict, "prompt expired")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, restPromptMaxBytes)
 	var body struct {
 		Approve bool `json:"approve"`
@@ -882,6 +806,16 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
+		return
+	}
+
+	if s.cfg.RequireAuth || authn.FromPeer {
+		decision, scope, err := s.consoleOperations().ResolvePrompt(r.Context(), authn.Claims, id, body.Approve, body.Scope)
+		if err != nil {
+			s.consolePromptError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]string{"decision": decision, "scope": scope})
 		return
 	}
 	decision := PromptDenied
@@ -907,78 +841,54 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 	})
 }
 
+func (s *Server) promptVisible(p *Prompt, authn requestAuth) bool {
+	if !s.cfg.RequireAuth && !authn.FromPeer {
+		return true
+	}
+	if p.RaisedFor == "" || authn.Claims == nil {
+		return false
+	}
+	return p.RaisedFor == authn.Claims.UserID
+}
+
+func (s *Server) promptExpired(p *Prompt) bool {
+	if p.Decision == PromptTimedOut {
+		return true
+	}
+	if p.Decision != PromptPending {
+		return false
+	}
+	return !p.ExpiresAt.IsZero() && time.Now().After(p.ExpiresAt)
+}
+
 // handlePlan wraps PlanService.GetPlan. Accepts an optional
 // ?window=<duration> query param (Go-duration syntax: "24h", "30m",
 // "1h30m"); empty or invalid falls back to the service default.
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.Plan == nil {
+		s.jsonErr(w, http.StatusServiceUnavailable, "plan service unavailable")
+		return
+	}
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	req := &lobslawv1.GetPlanRequest{}
-	if wq := r.URL.Query().Get("window"); wq != "" {
-		if d, err := time.ParseDuration(wq); err == nil && d > 0 {
-			req.Window = durationpb.New(d)
-		}
-	}
-	resp, err := s.cfg.Plan.GetPlan(r.Context(), req)
-	if err != nil {
-		s.log.Error("plan: GetPlan failed", "err", err)
-		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+	if _, err := s.authenticateRequest(r); err != nil {
+		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-
-	out := planResponseJSON{
-		WindowSeconds: resp.Window.AsDuration().Seconds(),
+	out, err := s.consoleOperations().Plan(r.Context(), s.consoleClaims(r), r.URL.Query().Get("window"))
+	if err != nil {
+		s.consoleOperationError(w, err, http.StatusInternalServerError)
+		return
 	}
-	for _, c := range resp.Commitments {
-		out.Commitments = append(out.Commitments, commitmentJSON{
-			ID:     c.Id,
-			DueAt:  c.DueAt.AsTime(),
-			Reason: c.Reason,
-			Status: c.Status,
-		})
-	}
-	for _, t := range resp.ScheduledTasks {
-		entry := scheduledTaskJSON{
-			ID:         t.Id,
-			Name:       t.Name,
-			Schedule:   t.Schedule,
-			HandlerRef: t.HandlerRef,
-		}
-		if t.NextRun != nil {
-			entry.NextRun = t.NextRun.AsTime()
-		}
-		out.ScheduledTasks = append(out.ScheduledTasks, entry)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	respondJSON(w, http.StatusOK, out)
 }
 
 // planResponseJSON mirrors the GetPlanResponse subset the REST API
 // exposes. Kept narrow so the public JSON surface doesn't accidentally
 // drag new proto fields into client expectations.
-type planResponseJSON struct {
-	WindowSeconds  float64             `json:"window_seconds"`
-	Commitments    []commitmentJSON    `json:"commitments,omitempty"`
-	ScheduledTasks []scheduledTaskJSON `json:"scheduled_tasks,omitempty"`
-}
-
-type commitmentJSON struct {
-	ID     string    `json:"id"`
-	DueAt  time.Time `json:"due_at"`
-	Reason string    `json:"reason,omitempty"`
-	Status string    `json:"status"`
-}
-
-type scheduledTaskJSON struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name,omitempty"`
-	Schedule   string    `json:"schedule"`
-	HandlerRef string    `json:"handler_ref"`
-	NextRun    time.Time `json:"next_run,omitempty"`
-}
+type planResponseJSON = console.PlanView
 
 // promptJSON is the on-the-wire shape for prompt state. Kept
 // narrow so the user-visible API doesn't accidentally leak

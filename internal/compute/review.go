@@ -82,7 +82,7 @@ type ArtefactSummary struct {
 type ArtefactStore interface {
 	// Existing lists what is already stored, so the fork can name a
 	// refinement target rather than inventing a near-duplicate.
-	Existing(kind string) ([]ArtefactSummary, error)
+	Existing(kind, owner string) ([]ArtefactSummary, error)
 	// Propose records the artefact.
 	Propose(ctx context.Context, a ProposedArtefact) error
 }
@@ -144,7 +144,7 @@ func (f *ReviewFork) shouldReview(req ProcessMessageRequest, toolCalls int) revi
 	// firing, or a research worker. No human in the loop means nothing
 	// to learn about the user — and the fork is expensive enough that
 	// spending it on a cron tick is the wrong trade twice over.
-	if req.Channel == "" {
+	if req.Channel == "" && req.BotID == "" {
 		return out
 	}
 
@@ -157,6 +157,9 @@ func (f *ReviewFork) shouldReview(req ProcessMessageRequest, toolCalls int) revi
 
 	if n := f.skillThreshold(); n > 0 && toolCalls >= n {
 		out.skills = true
+	}
+	if req.BotID != "" {
+		return out
 	}
 	if n := f.memoryThreshold(); n > 0 {
 		key := req.Channel + ":" + req.ChannelID
@@ -233,7 +236,7 @@ func (f *ReviewFork) run(ctx context.Context, req ProcessMessageRequest, message
 	if containsCalendarData(messages) {
 		return nil
 	}
-	existing, err := f.cfg.Store.Existing(ArtefactSkill)
+	existing, err := f.cfg.Store.Existing(ArtefactSkill, ownerOf(req))
 	if err != nil {
 		return fmt.Errorf("read existing artefacts: %w", err)
 	}
@@ -348,6 +351,12 @@ func truncateForDigest(s string) string {
 }
 
 func ownerOf(req ProcessMessageRequest) string {
+	if req.BotID != "" {
+		return "bot:" + req.BotID
+	}
+	if req.Principal != "" {
+		return req.Principal.String()
+	}
 	if req.Claims == nil {
 		return ""
 	}

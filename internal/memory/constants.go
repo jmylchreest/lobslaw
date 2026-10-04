@@ -1,12 +1,16 @@
 package memory
 
-import "time"
+import (
+	"time"
+
+	"github.com/jmylchreest/lobslaw/pkg/types"
+)
 
 // Package policy defaults, resource limits, and protocol bounds.
 const (
 	maxShareBatchBytes            int           = 4 << 20
 	storeOpenTimeout              time.Duration = 5 * time.Second
-	MaxTaskApprovalListLimit      int32         = 100
+	MaxTaskApprovalListLimit      int32         = types.MaxTaskApprovalListLimit
 	DefaultTaskApprovalListLimit  int32         = 50
 	maxTaskIdentityBytes          int           = 256
 	maxTaskResultBytes            int           = 64 << 10

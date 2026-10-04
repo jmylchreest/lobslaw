@@ -3,11 +3,13 @@ package node
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/clawhub"
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/oauth"
 	"github.com/jmylchreest/lobslaw/internal/plan"
@@ -142,6 +144,45 @@ func (n *Node) wireSoulRaft() error {
 			}
 		}()
 	})
+	return nil
+}
+
+// wireBots constructs the raft-backed bot registry and adopts any
+// unowned records onto the unique [[user]] with role:operator. None
+// or more than one operator leaves those records inaccessible.
+func (n *Node) wireBots() error {
+	n.botSvc = memory.NewBotService(n.raft, n.store)
+	state, err := n.store.ContractState()
+	if err != nil {
+		return err
+	}
+	if state.Active < 2 {
+		return nil
+	}
+	var operatorIDs []string
+	for _, u := range n.cfg.Users {
+		if slices.Contains(u.Roles, identity.RoleOperator) {
+			operatorIDs = append(operatorIDs, u.ID)
+		}
+	}
+	owner := identity.UniqueOperator(operatorIDs)
+	if owner.IsZero() {
+		list, err := n.botSvc.List(context.Background())
+		if err != nil {
+			return fmt.Errorf("list bots: %w", err)
+		}
+		for _, rec := range list {
+			if strings.TrimSpace(rec.GetOwner()) == "" {
+				n.log.Warn("bots: unowned record left inaccessible; need exactly one [[user]] with role:operator",
+					"bot", rec.GetId(), "operators", len(operatorIDs))
+			}
+		}
+		return nil
+	}
+	// Adoption applies through raft, so it runs after leadership in
+	// Start. Doing it here failed the whole boot with "no leader
+	// elected" whenever the store held an unowned record.
+	n.botOwner = owner
 	return nil
 }
 
