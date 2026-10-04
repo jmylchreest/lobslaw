@@ -29,7 +29,7 @@ memory or BoltDB; an architecture regression test enforces that boundary.
 
 ## Delivery stack based on PR #348
 
-1. Shared operations and removal of gateway storage dependencies (this change).
+1. Shared operations and removal of gateway storage dependencies.
 2. Replace the backend's synthetic HTTP dispatch with direct typed calls,
    including the streaming chat path. Preserve peer identity, cancellation and
    uncertain mutation outcomes; do not add automatic mutation retries.
@@ -84,3 +84,31 @@ that intent in discovery and keeps the HTTP API running without an SPA.
 An explicit `[ui-web].backend` always takes precedence over local compute,
 including in a no-web binary. Unavailability is reported; it never causes a
 silent switch to local state or retries an uncertain mutation.
+
+## Browser contracts and compatibility
+
+`pkg/proto/lobslaw/v1/lobslaw.proto` is the shared schema. The Go generator
+remains in `buf.gen.yaml`; `buf.gen.web.yaml` uses protobuf-es, with matching
+generator/runtime versions pinned in `web/package-lock.json`. Run
+`make proto-web` after editing the schema and commit `web/src/gen`. CI regenerates
+and checks for drift. Ordinary Go/no-web builds do not install npm dependencies.
+
+The browser imports generated JSON types through `web/src/api.ts`. Its small
+type adapters describe the existing snake_case REST names, required public
+fields, legacy integer representations and task/review protobuf JSON. Task
+approvals use an explicit field selection; node configuration remains an
+intentional handwritten allowlist. No cluster credentials or gRPC transport are
+added to the browser, and adding a private record field does not automatically
+change a server's public projection.
+
+For legacy bot/group/inbox REST projections, revisions up to 2^53-1 remain JSON
+numbers. Larger revisions are decimal strings, so JavaScript cannot round them.
+Bot/group writes accept either representation and validate uint64 bounds without
+floating-point conversion. The UI returns the revision unchanged. Existing
+task/review protobuf JSON continues to use decimal strings for 64-bit fields.
+Ordinary display counters may be converted for presentation; conditional-write
+revisions must never be passed through `Number()`.
+
+Regression coverage includes omitted versus empty/false patches, generated enum
+values, binary/JSON round trips at uint64 limits, and local/remote REST reads and
+conditional writes with revisions above JavaScript's exact range.

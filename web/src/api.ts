@@ -1,145 +1,50 @@
-// The console's whole view of the node.
-//
-// Hand-written rather than generated: the surface is a small set of
-// calls, and a generator would be a build-step dependency plus a schema
-// to keep in step, for types a person can read in one screen.
+// Protobuf is the source of shared contracts. REST uses snake_case for legacy
+// resources and protobuf JSON for task/review evidence; adapters below describe
+// those deliberate public projections without exposing private task fields.
+import type {
+ ConsoleBotJson, ConsoleGroupJson, ConsoleRoutineJson, ConsoleMemoryRecordJson,
+ ConsoleInboxItemJson, ConsoleToolJson, ConsoleCapabilityJson, ConsoleSessionJson,
+ ConsoleMessageJson, ConsoleLearnedChangeJson, ConsoleLearnedReviewJson,
+ TaskApprovalRecordJson, SessionMessageJson, TurnToolInvocationJson, ConsoleBotReplyJson,
+ InboxStatusJson, InboxKindJson,
+} from "./gen/lobslaw/v1/lobslaw_pb";
 
 import { clearLocalPush } from "./pushBinding";
 
-export type BotStatus = "pending" | "claimed" | "waiting" | "done" | "failed" | "cancelled";
-export type InboxKind = "task" | "question" | "answer" | "result" | "fyi";
+type Snake<S extends string> = S extends `${infer H}${infer T}`
+ ? `${H extends Lowercase<H> ? H : `_${Lowercase<H>}`}${Snake<T>}` : S;
+type REST<T> = { [K in keyof T as K extends string ? Snake<K> : K]: T[K] };
+type Require<T, K extends keyof T> = T & Required<Pick<T, K>>;
+type LegacyInt64 = string | number;
+type EnumSuffix<T, P extends string> = T extends `${P}${infer V}`
+ ? V extends "UNSPECIFIED" ? never : Lowercase<V> : never;
+export type BotStatus = EnumSuffix<InboxStatusJson, "INBOX_STATUS_">;
+export type InboxKind = EnumSuffix<InboxKindJson, "INBOX_KIND_">;
 
-export interface Bot {
-  id: string;
-  display_name: string;
-  description: string;
-  instructions: string;
-  is_coordinator: boolean;
-  /** Resolved by the server: a bot written before groups existed
-   *  reports the default team rather than an empty string. */
-  group_id: string;
-  enabled: boolean;
-  tools: string[];
-  may_message: string[];
-  revision: number;
-  created_at?: string;
-  updated_at?: string;
-}
 
-export interface Group {
-  id: string;
-  name: string;
-  description?: string;
-  coordinator_bot_id?: string;
-  is_default: boolean;
-  revision: number;
-  bots: number;
-  owner?: string;
-  /** Whether the signed-in person may rename or delete this team.
-   *  Decided by the server; the console only uses it to avoid
-   *  offering a control that would be refused. */
-  mine?: boolean;
-}
+// Small legacy REST revisions remain numeric; larger values arrive as decimal
+// strings. Neither form is converted to a JS number before a conditional write.
+export type Bot = Require<Omit<REST<ConsoleBotJson>, "revision"> & { revision: LegacyInt64 },
+ "id" | "display_name" | "description" | "instructions" | "is_coordinator" |
+ "group_id" | "enabled" | "tools" | "may_message">;
+export type Group = Require<Omit<REST<ConsoleGroupJson>, "revision"> & { revision: LegacyInt64 },
+ "id" | "name" | "is_default" | "bots">;
+export type Routine = Require<REST<ConsoleRoutineJson>, "id" | "name" | "schedule" | "handler_ref" | "enabled">;
+export type MemoryRecord = Require<REST<ConsoleMemoryRecordJson>, "id" | "kind" | "text">;
+export type InboxItem = Require<Omit<REST<ConsoleInboxItemJson>, "revision" | "tokens_used" | "kind" | "status"> & {
+ revision?: LegacyInt64; tokens_used?: LegacyInt64; kind: InboxKind; status: BotStatus;
+}, "id" | "recipient" | "sender" | "subject" | "priority" | "attempts">;
 
-export interface Routine {
-  id: string;
-  name: string;
-  schedule: string;
-  handler_ref: string;
-  enabled: boolean;
-  last_run?: string;
-  next_run?: string;
-  prompt?: string;
-}
-
-export interface MemoryRecord {
-  id: string;
-  kind: string;
-  text: string;
-  tags?: string[];
-  scope?: string;
-  created_at?: string;
-}
-
-export interface InboxItem {
-  /** Activity is a bounded projection; detail retains complete evidence/links. */
-  revision?: number;
-  truncated_fields?: string[];
-  detail_path?: string;
-  task_id?: string;
-  id: string;
-  recipient: string;
-  sender: string;
-  kind: InboxKind;
-  subject: string;
-  body?: string;
-  priority: number;
-  status: BotStatus;
-  result?: string;
-  error?: string;
-  attempts: number;
-  correlation_id?: string;
-  session_id?: string;
-  /** Historical inbox names are attempts, without per-call outcome evidence. */
-  tools_used?: string[];
-  tokens_used?: number;
-  cost_usd?: number;
-  created_at?: string;
-  completed_at?: string;
-}
-
-export interface SessionInfo {
-  user_id: string;
-}
-
-export interface LearnedChange {
-  description?: string; body?: string; files?: Record<string, string>;
-  rationale?: string; turnId?: string;
-}
-export interface LearnedReview extends LearnedChange {
-  id: string; name: string; revision: string; digest: string; author?: string;
-  active?: boolean; pending?: LearnedChange;
-}
-
-// The shared TaskApprovalService uses protobuf JSON names and string revisions.
-// Keep revisions as strings: converting them to JS numbers loses CAS precision.
-export interface TaskApproval {
-  id: string;
-  actor: string;
-  parentId?: string;
-  state: string;
-  revision: string;
-  expiresAt?: string;
-  result?: string;
-  recoverable?: boolean;
-  sessionId?: string;
-  coordinatorConversation?: boolean;
-  transcript?: TaskMessage[];
-  receipts?: ToolReceipt[];
-  operation?: {
-    toolName?: string; action?: string; resource?: string; summary?: string;
-    grantable?: boolean; labels?: string[]; requiresBudgetExtension?: boolean;
-  };
-  budgetSpent?: { toolCalls?: number; spendUsd?: number; egressBytes?: string };
-  budgetLimits?: { toolCalls?: number; spendUsd?: number; egressBytes?: string };
-}
-
-// Generated protobuf JSON. These are evidence, never replayable continuations.
-export interface TaskMessage {
-  seq?: string; sessionId?: string; role?: string; content?: string;
-  turnId?: string; toolCallId?: string; timestamp?: string;
-  toolCalls?: { id?: string; name?: string; arguments?: string }[];
-}
-export interface ToolReceipt {
-  callId?: string; toolName?: string; args?: string; output?: string;
-  exitCode?: number; error?: string; executionStatus?: string;
-}
-export interface BotReply {
-  text?: string; turnId?: string; sessionId?: string;
-  toolsUsed?: string[]; toolsAttempted?: string[]; toolCalls?: number;
-  tokensUsed?: string; costUsd?: number;
-  transcript?: TaskMessage[]; receipts?: ToolReceipt[];
-}
+export interface SessionInfo { user_id: string }
+export type LearnedChange = ConsoleLearnedChangeJson;
+export type LearnedReview = Require<ConsoleLearnedReviewJson, "id" | "name" | "revision" | "digest">;
+export type TaskApproval = Require<Pick<TaskApprovalRecordJson,
+ "id" | "actor" | "parentId" | "state" | "revision" | "expiresAt" | "result" |
+ "recoverable" | "sessionId" | "coordinatorConversation" | "transcript" | "receipts" |
+ "operation" | "budgetSpent" | "budgetLimits">, "id" | "actor" | "state" | "revision">;
+export type TaskMessage = SessionMessageJson;
+export type ToolReceipt = TurnToolInvocationJson;
+export type BotReply = ConsoleBotReplyJson;
 
 // Older, non-durable bot replies used snake-case REST counters. New evidence
 // replies use generated protobuf JSON consistently, locally and over peers.
@@ -156,42 +61,19 @@ export function botReply(data: Record<string, unknown>): BotReply {
 export type TaskChoice = "once" | "operation" | "risk_labels" | "deny" | "budget_extension";
 export interface ExtraTaskBudget { tool_calls: number; spend_usd: number; egress_bytes: number }
 
-/** One selectable tool in the console's picker. */
-export interface ToolInfo {
-  name: string;
-  description?: string;
-}
-
-export interface CapabilityFlags {
-  enabled: boolean;
-  authorised: boolean;
-  configured: boolean;
-  available: boolean;
-}
-
+export type ToolInfo = Require<ConsoleToolJson, "name">;
+export type CapabilityFlags = Require<ConsoleCapabilityJson, "enabled" | "authorised" | "configured" | "available">;
 export interface Capabilities {
-  compute: CapabilityFlags;
-  "compute-teams": CapabilityFlags;
-  "ui-web": CapabilityFlags;
+ compute: CapabilityFlags;
+ "compute-teams": CapabilityFlags;
+ "ui-web": CapabilityFlags;
 }
+export type Session = Require<Omit<REST<ConsoleSessionJson>, "messages"> & { messages: LegacyInt64 },
+ "id" | "channel" | "channel_id">;
+export type TranscriptMessage = Require<Omit<REST<ConsoleMessageJson>, "seq"> & {seq:LegacyInt64},
+ "role" | "content">;
 
-export interface Session {
-  id: string;
-  channel: string;
-  channel_id: string;
-  title?: string;
-  messages: number;
-  updated_at?: string;
-}
-
-export interface TranscriptMessage {
-  seq: number;
-  role: string;
-  content: string;
-  tool_calls?: number;
-  turn_id?: string;
-}
-
+// Configuration is an intentional operator-facing allowlist, not a storage schema.
 export interface NodeConfig {
   node_id: string;
   version?: string;
@@ -392,7 +274,7 @@ export const api = {
     }
   },
 
-  renameGroup: (id: string, name: string, revision: number) =>
+  renameGroup: (id: string, name: string, revision: Group["revision"]) =>
     request<Group>(`/v1/groups/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify({ name, revision }),

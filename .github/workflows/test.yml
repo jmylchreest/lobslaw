@@ -44,6 +44,19 @@ jobs:
       - name: build the console
         run: make web
 
+      - name: install buf for browser contract generation
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.68.4
+
+      - name: verify generated browser contracts
+        run: |
+          npm --prefix web run proto
+          git diff --exit-code -- web/src/gen
+
+      - name: test no-web build
+        run: |
+          go build -tags no_web ./...
+          go test -tags no_web ./internal/gateway/... ./internal/node/...
+
       - name: test the console
         run: npm --prefix web test
 

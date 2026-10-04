@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
@@ -119,6 +120,12 @@ func consoleConvert(in, out any) error {
 	b, err := json.Marshal(in)
 	if err != nil {
 		return status.Error(codes.Internal, "encode console value")
+	}
+	if message, ok := out.(proto.Message); ok {
+		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, message); err != nil {
+			return status.Error(codes.InvalidArgument, "invalid console value")
+		}
+		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(b))
 	decoder.UseNumber()
@@ -315,7 +322,11 @@ func consolePublicValue(m protoreflect.Message) map[string]any {
 				out[string(f.Name())] = consolePublicValue(v.Message())
 			}
 		default:
-			out[string(f.Name())] = v.Interface()
+			if f.Name() == "revision" && f.Kind() == protoreflect.Uint64Kind && v.Uint() > 9007199254740991 {
+				out[string(f.Name())] = strconv.FormatUint(v.Uint(), 10)
+			} else {
+				out[string(f.Name())] = v.Interface()
+			}
 		}
 	}
 	return out
