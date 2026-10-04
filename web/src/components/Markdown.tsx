@@ -1,5 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { SourceContent } from "./SourceContent";
 
 /** Model output is markdown, and we were printing it raw.
  *
@@ -14,6 +15,10 @@ import remarkGfm from "remark-gfm";
  * a web page, so this string is not necessarily the model's own words.
  */
 export function Markdown({ children }: { children: string }) {
+  return <SourceContent text={children} render={(text) => <MarkdownBody>{text}</MarkdownBody>} />;
+}
+
+function MarkdownBody({ children }: { children: string }) {
   return (
     <div className="md">
       <ReactMarkdown

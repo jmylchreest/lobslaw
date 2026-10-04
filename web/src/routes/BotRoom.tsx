@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { api, botReply, streamBotChat, type Bot, type InboxItem, type TranscriptMessage, type TaskMessage, type ToolReceipt } from "../api";
+import { api, type Bot, type InboxItem, type TranscriptMessage } from "../api";
 import { InboxSummaryNotice } from "../components/InboxSummaryNotice";
 import { TaskEvidence } from "../components/TaskEvidence";
 import { Markdown } from "../components/Markdown";
@@ -8,6 +8,10 @@ import { Mascot } from "../components/Mascot";
 import { MultiSelect } from "../components/MultiSelect";
 import { Err, Spinner, useLoad, when } from "../components/ui";
 import { botVars } from "../theme";
+import { CheckIcon, Chevron, Collapse, Disclosure, StateText, StatusMark, useFeedback, useNewItems } from "../components/Motion";
+import { useBotChat, type ChatMessage } from "../components/ChatSessions";
+import { Composer } from "../components/Composer";
+import { SourceText } from "../components/SourceContent";
 
 /** One bot, one room.
  *
@@ -23,12 +27,7 @@ import { botVars } from "../theme";
  */
 
 type Entry =
-  | {
-      kind: "said"; from: "me" | "bot"; text: string; at: number; notice?: boolean;
-      // What the turn actually ran, carried alongside what it said.
-      tools?: string[]; attempts?: string[]; tokens?: number; cost?: number; sessionId?: string;
-      transcript?: TaskMessage[]; receipts?: ToolReceipt[];
-    }
+  | ChatMessage
   | { kind: "work"; item: InboxItem; at: number }
   | { kind: "sent"; item: InboxItem; at: number };
 
@@ -47,8 +46,9 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   // Marketing" is a sentence about a colleague, and the whole point of
   // this screen is that these read as people.
   const { data: roster } = useLoad(() => api.listBots(), []);
-  const [said, setSaid] = useState<Entry[]>([]);
-  const [draft, setDraft] = useState("");
+  const { session, send: sendMessage, stop, history, answered, draft: saveDraft } = useBotChat(botId);
+  const { messages: said, draft, busy, working, partial, notice, error: sendErr, ask, liveReply } = session;
+  const setDraft = (value: string) => saveDraft(botId, value);
   // The company view's "Ask for a briefing" arrives as a query
   // parameter rather than a sent message: it drops the words in the
   // box and leaves the send to you. An action that fires a turn on
@@ -60,25 +60,12 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
       setDraft("Brief me. What is the team working on, what landed since I last asked, and what needs a decision from me?");
     }
   }, [params]);
-  const [busy, setBusy] = useState(false);
-  const [working, setWorking] = useState(false);
-  // Text as it is generated. Held apart from `said` until the turn
-  // ends: a partial reply is not yet a message, and committing it
-  // early would leave a half-sentence in the thread if the turn then
-  // failed.
-  const [partial, setPartial] = useState("");
-  // One sentence, announced to assistive tech when the turn changes
-  // state. See the region it renders into, below.
-  const [notice, setNotice] = useState("");
-  const [sendErr, setSendErr] = useState<Error | null>(null);
-  // The turn is blocked on the other end of the open stream, so this
-  // is a live question rather than a record of one. Cleared as soon as
-  // it is answered — a stale set of Approve/Deny buttons invites you
-  // to answer a question that has already timed out.
-  const [ask, setAsk] = useState<{ id: string; reason: string; action?: string; resource?: string } | null>(null);
   const [settings, setSettings] = useState(false);
+  const [visitedSettings, setVisitedSettings] = useState(false);
+  const notify = useFeedback();
+  const arrivals = useNewItems(work, botId);
+  const threadPane = useRef<HTMLDivElement>(null);
   const end = useRef<HTMLDivElement>(null);
-  const activeStream = useRef<AbortController | null>(null);
 
   // A new bot is a new room. Carrying the spoken lines across would
   // show a conversation the bot you just opened has never had.
@@ -88,15 +75,14 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   // and not showing it made a refresh look like the conversation had
   // been thrown away.
   useEffect(() => {
-    setSaid([]); setSendErr(null); setSettings(false); setPartial(""); setAsk(null);
-    setBusy(false); setWorking(false);
+    setSettings(false); setVisitedSettings(false);
     let live = true;
     // The console files a bot's own conversation under bot:<id>, the
     // same address the turn runner writes to.
     const id = `bot:${botId}`;
     Promise.all([api.transcript(id), api.botSessions(botId)])
       .then(([msgs, sessions]) => {
-        if (!live || activeStream.current) return;
+        if (!live) return;
         // Stored messages carry a sequence number and no timestamp, so
         // they cannot be placed on the same clock as queue items
         // without one. Anchoring to when the session was last written
@@ -106,98 +92,44 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
         // relative to each other, which is the part that must be exact.
         const anchor = sessions.find((x) => x.id === id)?.updated_at;
         const end = anchor ? new Date(anchor).getTime() : Date.now();
-        const entries = msgs.map(toEntry).filter((e): e is Entry => e !== null);
+        const entries = msgs.map(toEntry).filter((e): e is ChatMessage => e !== null);
         const spacing = 30_000;
         entries.forEach((e, i) => { e.at = end - (entries.length - 1 - i) * spacing; });
-        setSaid(entries);
+        history(botId, entries);
       })
       // A bot nobody has spoken to yet has no transcript, and a 404
       // here is that — not a failure worth showing.
       .catch(() => {});
     return () => {
       live = false;
-      activeStream.current?.abort();
-      activeStream.current = null;
     };
-  }, [botId]);
+  }, [botId, history]);
 
   // The queue moves without you. Polling keeps the thread honest
   // rather than frozen at whatever it was when you arrived.
   useEffect(() => {
     const t = setInterval(() => { reloadWork(); reloadFeed(); }, 8000);
-    return () => clearInterval(t);
-  }, [reloadWork, reloadFeed]);
+    const completed = (event: Event) => { if ((event as CustomEvent<string>).detail === botId) { reloadWork(); reloadFeed(); } };
+    window.addEventListener("lobslaw:chat-completed", completed);
+    return () => { clearInterval(t); window.removeEventListener("lobslaw:chat-completed", completed); };
+  }, [botId, reloadWork, reloadFeed]);
 
   // `ask` belongs in here: a confirmation can arrive taller than the
   // space left and land with its buttons below the fold, so the one
   // message that REQUIRES an action was the one you could not see.
   useEffect(() => {
+    if (settings) return;
     // The reduced-motion rule in the stylesheet cannot reach this:
     // `behavior` is a JS argument, and an explicit "smooth" wins over
     // any `scroll-behavior` the CSS sets. Asked directly instead.
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     end.current?.scrollIntoView({ behavior: still ? "auto" : "smooth" });
-  }, [said, work, working, partial, ask]);
+  }, [said, work, working, partial, ask, settings]);
+  useEffect(() => {
+    if (settings) threadPane.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [settings]);
 
-  async function send() {
-    const text = draft.trim();
-    if (!text || busy || activeStream.current) return;
-    const controller = new AbortController();
-    activeStream.current = controller;
-    setNotice("");
-    setSaid((p) => [...p, { kind: "said", from: "me", text, at: Date.now() }]);
-    setDraft("");
-    // Immediately, not when the server's heartbeat arrives. That
-    // heartbeat is on a ten-second ticker and exists to hold the
-    // connection open; waiting for it meant you hit Send and the
-    // console sat there saying nothing for ten seconds, which reads
-    // as "it didn't register my message".
-    setBusy(true); setWorking(true); setSendErr(null);
-    try {
-      await streamBotChat(botId, text, (event, data) => {
-        if (activeStream.current !== controller) return;
-        if (event === "accepted") setNotice(String(data.message ?? "Message accepted by the active turn."));
-        if (event === "working") setWorking(true);
-        if (event === "delta") {
-          setWorking(false);
-          setPartial((prev) => prev + String(data.text ?? ""));
-        }
-        if (event === "reply") {
-          const reply = botReply(data);
-          setWorking(false); setAsk(null); setPartial("");
-          setNotice(`${bot?.display_name || botId} replied.`);
-          setSaid((p) => [...p, {
-            kind: "said", from: "bot", text: reply.text ?? "", at: Date.now(),
-            tools: reply.toolsUsed ?? [], attempts: reply.toolsAttempted ?? [],
-            tokens: Number(reply.tokensUsed ?? 0), cost: Number(reply.costUsd ?? 0),
-            sessionId: reply.sessionId, transcript: reply.transcript, receipts: reply.receipts,
-          }]);
-        }
-        if (event === "needs_confirmation") {
-          setNotice(`${bot?.display_name || botId} needs your approval to continue.`);
-          setAsk({
-            id: String(data.prompt_id ?? ""),
-            reason: String(data.reason ?? ""),
-            action: data.action ? String(data.action) : undefined,
-            resource: data.resource ? String(data.resource) : undefined,
-          });
-        }
-        if (event === "error") {
-          setWorking(false); setAsk(null); setPartial("");
-          setNotice("The turn failed.");
-          setSendErr(new Error(String(data.message ?? "the turn failed")));
-        }
-      }, controller.signal);
-      if (activeStream.current === controller) reloadWork();
-    } catch (e) {
-      if (activeStream.current === controller && !controller.signal.aborted) setSendErr(e as Error);
-    } finally {
-      if (activeStream.current === controller) {
-        activeStream.current = null;
-        setBusy(false); setWorking(false); setPartial(""); setAsk(null);
-      }
-    }
-  }
+  const send = () => void sendMessage(botId, draft.trim(), bot?.display_name || botId);
 
   if (error) return <div className="wrap"><Err error={error} /></div>;
   if (loading && !bot) return <Spinner />;
@@ -218,12 +150,16 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
       at: new Date(item.created_at ?? 0).getTime(),
     })),
     ...said,
+    ...(busy && !ask && liveReply && !said.some((e) => e.kind === "said" && e.id === liveReply.id) ? [{
+      kind: "said" as const, id: liveReply.id, from: "bot" as const, text: partial,
+      at: liveReply.at, animate: true, pending: true,
+    }] : []),
   ].sort((a, b) => a.at - b.at);
 
   return (
     <div className="chat" style={botVars(bot.id)}>
       <header className="room-head">
-        <Mascot id={bot.id} size={30} dim={!bot.enabled} />
+        <Mascot id={bot.id} size={30} dim={!bot.enabled} working={busy || (work ?? []).some((item) => item.status === "claimed")} />
         <div className="grow">
           <div className="room-nm">
             {bot.display_name || bot.id}
@@ -232,7 +168,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           </div>
           <div className="meta">{bot.description || `bot:${bot.id}`}</div>
         </div>
-        <button className="btn ghost sm" onClick={() => setSettings((v) => !v)}>
+        <button className="btn ghost sm" aria-expanded={settings} aria-controls="bot-settings" onClick={() => { setSettings((v) => !v); setVisitedSettings(true); }}>
           {settings ? "Close" : "Settings"}
         </button>
       </header>
@@ -247,72 +183,43 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           thread to be read at the user's pace. */}
       <div className="sr-only" role="status" aria-live="polite">{notice}</div>
 
-      {settings ? (
-        <div className="thread" tabIndex={0}><div className="thread-in">
-          <Settings bot={bot} onSaved={() => { reload(); onChanged(); setSettings(false); }} />
-          <Routines botId={bot.id} />
-          <Knows botId={bot.id} />
-        </div></div>
-      ) : (
-        /* tabIndex because this region scrolls. Without it the pane
-           cannot take focus, so there is no way to scroll the
-           transcript from the keyboard — and the :focus-visible ring
-           written for it could never match. */
-        <div className="thread" tabIndex={0}>
-          <div className="thread-in">
-            <BotHistory key={bot.id} botId={bot.id} />
-            {thread.length === 0 && !working && (
-              <div className="opening">
-                <Mascot id={bot.id} size={56} />
-                <div className="nm">{bot.display_name || bot.id}</div>
-                <div className="desc">{bot.description || "Ask it something."}</div>
-              </div>
-            )}
-            {thread.map((e, i) =>
-              e.kind === "said" ? <Said key={i} e={e} bot={bot} />
-              : e.kind === "sent" ? <Handoff key={`s-${e.item.id}`} item={e.item} names={names} />
-              : <Work key={e.item.id} item={e.item} botId={bot.id} onChanged={reloadWork} />)}
-            {ask && <Approval ask={ask} onAnswered={() => setAsk(null)} />}
-            {partial && (
-              <div className="msg">
-                <Mascot id={bot.id} size={30} />
-                <div className="grow">
-                  <div className="from">{bot.display_name || bot.id}</div>
-                  {/* Rendered as markdown while incomplete, so the
-                      text does not reflow when the turn ends. A half
-                      table looks odd either way; a paragraph that
-                      suddenly re-lays-out looks broken. */}
-                  {/* aria-live on the finished reply, not on this:
-                      announcing a token at a time is unusable. The
-                      caret is decorative and hidden. */}
-                  <div className="txt" aria-busy="true">
-                    <Markdown>{partial}</Markdown>
-                    <span className="caret" aria-hidden="true" />
-                  </div>
+      <div ref={threadPane} className="thread" tabIndex={0} aria-label={settings ? "Bot settings" : "Conversation"}>
+        <div className="thread-in">
+          <Collapse open={settings} id="bot-settings">
+            {visitedSettings && <div className="col gap-lg" key={bot.id}>
+              <Settings bot={bot} onSaved={() => { reload(); onChanged(); notify("Bot settings saved"); }} />
+              <Routines botId={bot.id} active={settings} />
+              <Knows botId={bot.id} />
+            </div>}
+          </Collapse>
+          <Collapse open={!settings}>
+            <div className="col gap-lg">
+              <BotHistory key={bot.id} botId={bot.id} />
+              {thread.length === 0 && !working && (
+                <div className="opening">
+                  <Mascot id={bot.id} size={56} />
+                  <div className="nm">{bot.display_name || bot.id}</div>
+                  <div className="desc">{bot.description || "Ask it something."}</div>
                 </div>
-              </div>
-            )}
-            {working && !ask && !partial && <Working bot={bot} />}
-            {sendErr && <Err error={sendErr} />}
-            <div ref={end} />
-          </div>
+              )}
+              {thread.map((e) =>
+                e.kind === "said" ? <Said key={e.id} e={e} bot={bot} />
+                : e.kind === "sent" ? <Handoff key={`s-${e.item.id}`} item={e.item} names={names} />
+                : <Work key={e.item.id} item={e.item} botId={bot.id} onChanged={reloadWork} arrived={arrivals.has(e.item.id)} />)}
+              {ask && <Approval ask={ask} onAnswered={() => answered(botId)} />}
+              {sendErr && <div className="chat-error" role="alert"><Err error={sendErr} /><button className="btn ghost sm" onClick={() => {
+                const last = [...said].reverse().find((message) => message.from === "me");
+                if (last) setDraft(last.text);
+              }}>Use last message again</button></div>}
+              <div ref={end} />
+            </div>
+          </Collapse>
         </div>
-      )}
+      </div>
 
-      {!settings && (
-        <div className="composer">
-          <div className="composer-in">
-            <textarea className="ta" rows={1} value={draft}
-              placeholder={`Message ${bot.display_name || bot.id}…`}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
-              }} />
-            <button className="btn primary" onClick={send} disabled={busy || !draft.trim()}
-              style={{ height: 44 }}>Send</button>
-          </div>
-        </div>
-      )}
+      <Collapse open={!settings} className="composer-reveal">
+        <Composer draft={draft} onChange={setDraft} onSend={send} busy={busy} onStop={() => stop(botId)} placeholder={`Message ${bot.display_name || bot.id}…`} />
+      </Collapse>
     </div>
   );
 }
@@ -407,7 +314,7 @@ function toEntry(m: TranscriptMessage): Entry | null {
   // `at` is filled in by the caller, which knows when the session was
   // last written; a sequence number alone cannot be compared against
   // the epoch timestamps everything else on the timeline uses.
-  return { kind: "said", from: m.role === "user" ? "me" : "bot", text, at: 0 };
+  return { kind: "said", id: `stored-${m.seq}`, from: m.role === "user" ? "me" : "bot", text, at: 0 };
 }
 
 /** Shown from the moment you hit Send until the reply lands.
@@ -439,45 +346,43 @@ export function Receipt({ tools, attempts, tokens, cost }: { tools?: string[]; a
   );
 }
 
-function Working({ bot }: { bot: Bot }) {
+function Working({ active }: { active: boolean }) {
   const [secs, setSecs] = useState(0);
   useEffect(() => {
+    if (!active) { setSecs(0); return; }
     const t = setInterval(() => setSecs((s) => s + 1), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [active]);
 
   return (
-    <div className="msg" aria-live="polite">
-      <Mascot id={bot.id} size={30} />
-      <div className="grow">
-        <div className="from">{bot.display_name || bot.id}</div>
-        <div className="waiting">
-          <span className="dots"><i /><i /><i /></span>
-          <span className="waiting-txt">
-            {secs < 12 ? "thinking" : secs < 40 ? "working on it" : "still working"}
-          </span>
-          {secs >= 5 && <span className="waiting-secs">{secs}s</span>}
-        </div>
-      </div>
+    <div className="waiting">
+      <span className="dots"><i /><i /><i /></span>
+      <span className="waiting-txt">
+        {secs < 12 ? "Thinking…" : secs < 40 ? "Preparing your reply…" : "Still waiting for the model…"}
+      </span>
+      {secs >= 5 && <span className="waiting-secs">{secs}s</span>}
     </div>
   );
 }
 
 function Said({ e, bot }: { e: Extract<Entry, { kind: "said" }>; bot: Bot }) {
   if (e.from === "me") {
-    return <div className="msg me"><div className="bubble">{e.text}</div></div>;
+    return <div className={`msg me${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}><div className="bubble">{e.text}</div></div>;
   }
   return (
-    <div className="msg">
-      <Mascot id={bot.id} size={30} />
+    <div className={`msg${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}>
+      <Mascot id={bot.id} size={30} working={e.pending} />
       <div className="grow">
         <div className="from">{bot.display_name || bot.id}</div>
         {/* A notice is our own generated sentence, not model output —
             rendering it as markdown would be pretending otherwise. */}
-        {e.notice
-          ? <div className="txt notice">{e.text}</div>
-          : <div className="txt"><Markdown>{e.text}</Markdown></div>}
-        {!e.notice && <>
+        <Collapse open={!!e.pending && !e.text} className="reply-thinking"><Working active={!!e.pending && !e.text} /></Collapse>
+        <Collapse open={!!e.text} className="reply-text">
+          {e.notice
+            ? <div className="txt notice">{e.text}</div>
+            : <div className="txt" aria-busy={e.pending || undefined}><Markdown>{e.text}</Markdown>{e.pending && <span className="caret" aria-hidden="true" />}</div>}
+        </Collapse>
+        {!e.notice && !e.pending && <>
           {!e.receipts?.length && <Receipt tools={e.tools} attempts={e.attempts} tokens={e.tokens} cost={e.cost} />}
           <TaskEvidence transcript={e.transcript} receipts={e.receipts} />
           {e.sessionId && !e.transcript?.length && <Transcript sessionId={e.sessionId} />}
@@ -521,11 +426,13 @@ function Handoff({ item, names }: { item: InboxItem; names: Map<string, string> 
   );
 }
 
-function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onChanged: () => void }) {
+function Work({ item, botId, onChanged, arrived }: { item: InboxItem; botId: string; onChanged: () => void; arrived: boolean }) {
   const [open, setOpen] = useState(false);
+  const detailId = useId();
   const [full, setFull] = useState<InboxItem | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const notify = useFeedback();
 
   useEffect(() => {
     let live = true;
@@ -539,7 +446,7 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
   function toggle() { setOpen((value) => !value); }
   async function act(action: "retry" | "cancel") {
     setBusy(true); setError(null);
-    try { setFull(await api.actOnItem(botId, item.id, action)); onChanged(); }
+    try { setFull(await api.actOnItem(botId, item.id, action)); onChanged(); notify(action === "retry" ? "Task queued for another attempt" : "Task withdrawn"); }
     catch (e) { setError(e as Error); } finally { setBusy(false); }
   }
 
@@ -557,10 +464,10 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
   };
 
   return (
-    <div className={`ev ${item.status}`}>
+    <div className={`ev ${item.status}${arrived ? " activity-arrival" : ""}`}>
       {/* The rail node. Status lives here as shape and colour, so the
           text beside it can be plain language. */}
-      <span className="ev-node" aria-hidden="true" />
+      <StatusMark status={item.status} className="ev-node" />
       <div className="ev-main">
         {/* A button, because it is one: a div with onClick cannot be
             reached by Tab and does not respond to Enter or Space. */}
@@ -569,13 +476,14 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
           className={`ev-head${open ? " open" : ""}`}
           onClick={toggle}
           aria-expanded={open}
+          aria-controls={detailId}
           aria-label={`${open ? "Collapse" : "Expand"}: ${item.subject || "untitled item"}`}
         >
           <span className="ev-ttl">{item.subject || "(no subject)"}</span>
-          <span className="ev-chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>
+          <Chevron className="ev-chevron" />
         </button>
         <div className="ev-meta">
-          <span className="ev-state">{LINE[item.status] ?? item.status}</span>
+          <StateText value={item.status} className="ev-state">{LINE[item.status] ?? item.status}</StateText>
           <span className="ev-dot">·</span>
           {item.sender === "operator" ? "you asked for this" : `asked by ${item.sender.replace(/^bot:/, "")}`}
           <span className="ev-dot">·</span>
@@ -601,14 +509,14 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
             quietly is the failure the queue exists to prevent. */}
         {item.error && !open && <div className="ev-body bad">{item.error}</div>}
         {error && <Err error={error} />}
-        {open && (
+        <Collapse open={open} id={detailId}>
           <div className="ev-detail">
             <Block label="Asked" body={d.body} />
             {d.result && <Block label="Result" body={d.result} />}
             {d.error && <Block label="Error" body={d.error} bad />}
             {d.session_id && <Transcript sessionId={d.session_id} />}
           </div>
-        )}
+        </Collapse>
       </div>
     </div>
   );
@@ -621,12 +529,13 @@ function Work({ item, botId, onChanged }: { item: InboxItem; botId: string; onCh
  * caught it for the simple reason that there was nowhere to look —
  * the routine either existed or did not, and both looked identical.
  */
-function Routines({ botId }: { botId: string }) {
+function Routines({ botId, active }: { botId: string; active: boolean }) {
   const { data, error, loading, reload } = useLoad(() => api.routines(botId), [botId]);
   useEffect(() => {
+    if (!active) return;
     const timer = setInterval(reload, 8000);
     return () => clearInterval(timer);
-  }, [reload]);
+  }, [reload, active]);
   if (loading && !data) return null;
 
   return (
@@ -732,32 +641,32 @@ function Transcript({ sessionId }: { sessionId: string }) {
   }
   return (
     <div>
-      <button className="btn ghost sm" style={{ padding: 0 }} onClick={toggle}>
-        {open ? "▾" : "▸"} what it did
+      <button className="btn ghost sm" style={{ padding: 0 }} onClick={toggle} aria-expanded={open} aria-label={`${open ? "▾" : "▸"} what it did`}>
+        <Chevron /> what it did
       </button>
       {error && <Err error={error} />}
-      {open && msgs && (
+      <Collapse open={open}>
+        {msgs && (
         <div className="col gap-sm" style={{ marginTop: 8, paddingLeft: 12, borderLeft: "1px solid var(--edge)" }}>
           {msgs.map((m) => (
             <div key={m.seq}>
               <div className="lbl">{m.role}{m.tool_calls ? ` · ${m.tool_calls} tool calls` : ""}</div>
               <div style={{ fontSize: 13, color: "var(--mid)", whiteSpace: "pre-wrap", marginTop: 2 }}>
-                {m.content || "(tool calls only)"}
+                {m.content ? <SourceText>{m.content}</SourceText> : "(tool calls only)"}
               </div>
             </div>
           ))}
         </div>
-      )}
+        )}
+      </Collapse>
     </div>
   );
 }
 
 function BotHistory({ botId }: { botId: string }) {
-  const [open, setOpen] = useState(false);
-  return <details onToggle={(e) => setOpen(e.currentTarget.open)}>
-    <summary>Conversation and task history</summary>
-    {open && <BotHistoryList botId={botId} />}
-  </details>;
+  return <Disclosure title="Conversation and task history">
+    {(hasOpened) => hasOpened && <BotHistoryList botId={botId} />}
+  </Disclosure>;
 }
 
 function BotHistoryList({ botId }: { botId: string }) {
@@ -783,31 +692,40 @@ function Settings({ bot, onSaved }: { bot: Bot; onSaved: () => void }) {
   const roster = useLoad(() => api.listBots());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { setSaved(false); }, [f, tools, edges]);
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(false), 2500);
+    return () => clearTimeout(timer);
+  }, [saved]);
 
   async function save(patch?: Partial<Bot>) {
+    if (busy) return;
+    setSaved(false);
     setBusy(true); setError(null);
     try {
       await api.updateBot(bot.id, { revision: bot.revision, ...(patch ?? {
         display_name: f.display_name, description: f.description, instructions: f.instructions,
         tools, may_message: edges,
       }) });
-      onSaved();
+      setSaved(!patch); onSaved();
     } catch (e) { setError(e as Error); } finally { setBusy(false); }
   }
 
   return (
     <div className="card pad col gap-lg">
       <div className="field">
-        <label>Display name</label>
-        <input className="in" value={f.display_name} onChange={(e) => setF({ ...f, display_name: e.target.value })} />
+        <label htmlFor="bot-display-name">Display name</label>
+        <input id="bot-display-name" className="in" value={f.display_name} onChange={(e) => setF({ ...f, display_name: e.target.value })} />
       </div>
       <div className="field">
-        <label>Description</label>
-        <input className="in" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+        <label htmlFor="bot-description">Description</label>
+        <input id="bot-description" className="in" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
       </div>
       <div className="field">
-        <label>Instructions</label>
-        <textarea className="ta" rows={7} value={f.instructions}
+        <label htmlFor="bot-instructions">Instructions</label>
+        <textarea id="bot-instructions" className="ta" rows={7} value={f.instructions}
           onChange={(e) => setF({ ...f, instructions: e.target.value })} />
         <div className="hint">Rides on every turn this bot takes. The role, not a task.</div>
       </div>
@@ -839,8 +757,10 @@ function Settings({ bot, onSaved }: { bot: Bot; onSaved: () => void }) {
         />
       )}
       {error && <Err error={error} />}
-      <div className="row gap-sm">
-        <button className="btn primary" onClick={() => save()} disabled={busy}>Save</button>
+      <div className="row gap-sm settings-actions">
+        <button className={`btn primary${saved ? " action-saved" : ""}`} onClick={() => save()} disabled={busy}>
+          {busy ? "Saving…" : saved ? <><CheckIcon />Saved</> : "Save"}
+        </button>
         {/* The coordinator answers your Telegram messages and the API
             refuses to remove it, so the control is absent rather than
             present and failing. */}
@@ -850,7 +770,7 @@ function Settings({ bot, onSaved }: { bot: Bot; onSaved: () => void }) {
           </button>
         )}
         <div className="grow" />
-        <Link to="/config"><button className="btn ghost sm">Node config →</button></Link>
+        <Link className="btn ghost sm" to="/config">Node config →</Link>
       </div>
     </div>
   );

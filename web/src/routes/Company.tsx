@@ -1,10 +1,11 @@
 import { Link, useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type Bot, type Group, type InboxItem } from "../api";
 import { Mascot } from "../components/Mascot";
 import { InboxSummaryNotice } from "../components/InboxSummaryNotice";
 import { Err, Spinner, useLoad, when } from "../components/ui";
 import { botVars } from "../theme";
+import { StateText, StatusMark, useFeedback, useNewItems } from "../components/Motion";
 
 /** Your desk.
  *
@@ -20,8 +21,13 @@ import { botVars } from "../theme";
  */
 export function Company({ group, onRenamed }: { group?: Group; onRenamed: () => void }) {
   const nav = useNavigate();
-  const { data: bots, error, loading } = useLoad(() => api.listBots());
-  const { data: feed } = useLoad(() => api.activity(200));
+  const { data: bots, error, loading, reload: reloadBots } = useLoad(() => api.listBots());
+  const { data: feed, reload: reloadFeed } = useLoad(() => api.activity(200));
+  const arrivals = useNewItems(feed, group?.id ?? "all");
+  useEffect(() => {
+    const timer = setInterval(() => { reloadBots(); reloadFeed(); }, 8000);
+    return () => clearInterval(timer);
+  }, [reloadBots, reloadFeed]);
 
   if (error) return <div className="wrap wide"><Err error={error} /></div>;
   if (loading && !bots) return <Spinner />;
@@ -61,7 +67,7 @@ export function Company({ group, onRenamed }: { group?: Group; onRenamed: () => 
         )}
       </div>
 
-      <div className="desk">
+      <div className="desk team-desk">
         <div className="col gap">
           {blocked.length > 0 && (
             <section className="needs">
@@ -107,7 +113,7 @@ export function Company({ group, onRenamed }: { group?: Group; onRenamed: () => 
           </div>
         </div>
 
-        <Ledger items={items} names={name} />
+        <Ledger items={items} names={name} arrivals={arrivals} />
       </div>
     </div>
   );
@@ -123,6 +129,7 @@ function GroupName({ group, onRenamed }: { group?: Group; onRenamed: () => void 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const notify = useFeedback();
 
   if (!group) return <h1>Your team</h1>;
   // Somebody else's team is shown, not edited. The server refuses
@@ -136,7 +143,7 @@ function GroupName({ group, onRenamed }: { group?: Group; onRenamed: () => void 
     // Enter on a name you decided not to change should just close.
     if (!name || !group || name === group.name) { setEditing(false); return; }
     setBusy(true);
-    try { await api.renameGroup(group.id, name, group.revision); onRenamed(); }
+    try { await api.renameGroup(group.id, name, group.revision); onRenamed(); notify("Team name saved"); }
     finally { setBusy(false); setEditing(false); }
   }
 
@@ -188,14 +195,14 @@ function Person({ bot, work, names, lead }: {
   return (
     <Link to={`/bots/${bot.id}`}>
       <div className={`person${lead ? " lead" : ""}`} style={botVars(bot.id)}>
-        <Mascot id={bot.id} size={lead ? 42 : 36} dim={!bot.enabled} />
+        <Mascot id={bot.id} size={lead ? 42 : 36} dim={!bot.enabled} working={!!active} />
         <div className="grow">
           <div className="person-nm">
             {bot.display_name || bot.id}
             {!bot.enabled && <span className="tag warn">off duty</span>}
           </div>
           <div className="person-role">{bot.description || "No remit set."}</div>
-          <div className={`person-state ${state.cls}`}><i />{state.text}</div>
+          <div className={`person-state ${state.cls}`}><StatusMark status={state.cls} /><StateText value={state.cls}>{state.text}</StateText></div>
           {latest?.result && !active && (
             <div className="person-last">{latest.result}</div>
           )}
@@ -228,7 +235,7 @@ function Person({ bot, work, names, lead }: {
  * that engineering answered marketing's question ten minutes after it
  * was asked.
  */
-function Ledger({ items, names }: { items: InboxItem[]; names: Map<string, string> }) {
+function Ledger({ items, names, arrivals }: { items: InboxItem[]; names: Map<string, string>; arrivals: Set<string> }) {
   const done = items.filter((i) => i.status !== "pending").slice(0, 25);
   if (done.length === 0) {
     return (
@@ -243,14 +250,14 @@ function Ledger({ items, names }: { items: InboxItem[]; names: Map<string, strin
       <div className="lbl">Recent work</div>
       <div className="col" style={{ marginTop: 10 }}>
         {done.map((i) => (
-          <div key={i.id}>
+          <div key={i.id} data-activity-id={i.id} className={arrivals.has(i.id) ? "activity-arrival" : ""}>
             <Link to={`/bots/${i.recipient}`}>
               <div className={`led ${i.status}`} style={botVars(i.recipient)}>
                 {/* A node on the rail, in the bot's colour. The mascot
                     was doing avatar duty in a list where the only
                     question is "who and when" — the colour answers it
                     in a ninth of the space. */}
-                <span className="led-node" aria-hidden="true" />
+                <StatusMark status={i.status} className="led-node" />
                 <div className="grow">
                   <div className="led-top">
                     <b>{names.get(i.recipient) ?? i.recipient}</b>

@@ -1,4 +1,6 @@
 import { botHue } from "../theme";
+import { useId } from "react";
+import { useChangeMotion } from "./Motion";
 
 /** A bot's face.
  *
@@ -37,8 +39,11 @@ function pick(id: string): number {
   return h % SHAPES.length;
 }
 
-export function Mascot({ id, size = 30, dim }: { id: string; size?: number; dim?: boolean }) {
+export function Mascot({ id, size = 30, dim, working = false }: { id: string; size?: number; dim?: boolean; working?: boolean }) {
   const hue = botHue(id);
+  const gradientId = useId();
+  const active = working && !dim;
+  const ref = useChangeMotion<SVGSVGElement>(active, active ? "mascot" : "settle");
   const shape = SHAPES[pick(id)];
   // Eyes sit low and wide. High, close-set eyes read as anxious; low
   // and wide reads as calm, which is what you want looking back at you
@@ -47,6 +52,8 @@ export function Mascot({ id, size = 30, dim }: { id: string; size?: number; dim?
 
   return (
     <svg
+      ref={ref}
+      className={`mascot${active ? " is-working" : ""}`}
       width={size}
       height={size}
       viewBox="0 0 100 100"
@@ -54,16 +61,20 @@ export function Mascot({ id, size = 30, dim }: { id: string; size?: number; dim?
       aria-hidden="true"
     >
       <defs>
-        <linearGradient id={`g-${id}`} x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={`hsl(${hue} 85% 66%)`} />
           <stop offset="100%" stopColor={`hsl(${hue} 78% 52%)`} />
         </linearGradient>
       </defs>
-      <path d={shape} fill={`url(#g-${id})`} />
-      {/* Pupils only, no whites: at sidebar size the white ring closes
-          up into a grey smudge and the face stops reading as a face. */}
-      <ellipse cx={38} cy={58} rx={eye * 100 / size} ry={eye * 130 / size} fill="#0b0b0d" />
-      <ellipse cx={62} cy={58} rx={eye * 100 / size} ry={eye * 130 / size} fill="#0b0b0d" />
+      <g className="mascot-body">
+        <path d={shape} fill={`url(#${gradientId})`} />
+        {/* Pupils only, no whites: at sidebar size the white ring closes
+            up into a grey smudge and the face stops reading as a face. */}
+        <g className="mascot-eyes">
+          <ellipse cx={38} cy={58} rx={eye * 100 / size} ry={eye * 130 / size} fill="#0b0b0d" />
+          <ellipse cx={62} cy={58} rx={eye * 100 / size} ry={eye * 130 / size} fill="#0b0b0d" />
+        </g>
+      </g>
     </svg>
   );
 }

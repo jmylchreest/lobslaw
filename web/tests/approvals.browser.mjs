@@ -104,7 +104,7 @@ try {
     await page.getByRole("button", { name: "Close without replay", exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: "Recover for fresh approval", exact: true }).count(), recoverable ? 1 : 0);
     await page.getByRole("button", { name: "Close without replay", exact: true }).click();
-    await page.getByRole("heading", { name: "bot:worker · cancelled", exact: true }).waitFor();
+    await page.locator(".task-state-badge").getByText("Cancelled", { exact: true }).waitFor();
   }
   assert.equal(recoverCalls, 1);
   assert.equal(closed.length, 2);
@@ -116,7 +116,7 @@ try {
   await page.getByText("Conversation and task history", { exact: true }).click();
   await page.getByPlaceholder("Message Coordinator…").fill("continue");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await page.getByText("coordinator completed", { exact: true }).waitFor();
+  await page.locator(".thread").getByText("coordinator completed", { exact: true }).waitFor();
   await page.getByText("Transcript and execution receipts", { exact: true }).click();
   await page.getByText("write_file · Awaiting approval — not executed", { exact: true }).waitFor();
   teams = false;

@@ -14,9 +14,13 @@ import { Config } from "./routes/Config";
 import { NewBot } from "./routes/NewBot";
 import { TaskApprovals } from "./routes/TaskApprovals";
 import { LearnedReviews, LearnedReviewNotice } from "./routes/LearnedReviews";
+import { FeedbackProvider, NavigationMarker, switchView, useFeedback } from "./components/Motion";
+import { ChatSessionsProvider, useChatSessions } from "./components/ChatSessions";
+import { Composer } from "./components/Composer";
+import { BotDirectory } from "./components/BotDirectory";
 
 export function App() {
-  return <LoginGate><Console /></LoginGate>;
+  return <FeedbackProvider><LoginGate><ChatSessionsProvider><Console /></ChatSessionsProvider></LoginGate></FeedbackProvider>;
 }
 
 /** Console decides which console this node can render.
@@ -49,6 +53,7 @@ function Console() {
  * version listed five names and left the question to a separate page.
  */
 function Shell() {
+  const { sessions: chats } = useChatSessions();
   const { data: bots, reload } = useLoad(() => api.listBots());
   const { data: groups, reload: reloadGroups } = useLoad(() => api.listGroups());
   // Which team you are looking at. Kept in the URL-less shell state
@@ -63,7 +68,21 @@ function Shell() {
   // itself on navigation — a drawer you have to dismiss by hand after
   // every tap is worse than no drawer.
   const [nav, setNav] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const sidebar = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const timer = setInterval(reloadFeed, 8000);
+    return () => clearInterval(timer);
+  }, [reloadFeed]);
   useEffect(() => { setNav(false); }, [pathname]);
+  useEffect(() => {
+    if (!nav) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setNav(false); menuButton.current?.focus(); }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [nav]);
 
   // Colours are assigned across the whole roster rather than per id,
   // so two bots cannot render the same hue. Seeded here because this
@@ -76,6 +95,11 @@ function Shell() {
   }
 
   const refresh = () => { reload(); reloadFeed(); reloadGroups(); };
+  useEffect(() => {
+    const completed = () => { reloadFeed(); reload(); };
+    window.addEventListener("lobslaw:chat-completed", completed);
+    return () => window.removeEventListener("lobslaw:chat-completed", completed);
+  }, [reloadFeed, reload]);
 
   // Default to the team the server marks as default, so the console
   // opens on whichever one a channel would reach.
@@ -87,7 +111,7 @@ function Shell() {
   const here = bots?.find((b) => pathname === `/bots/${b.id}`);
 
   return (
-    <div className={`shell${nav ? " nav-open" : ""}`}>
+    <BotDirectory bots={bots}><div className={`shell${nav ? " nav-open" : ""}`}>
       {/* First in the tab order, invisible until focused. The roster
           below is a tab stop per bot, on every page. */}
       <a className="skip" href="#main">Skip to content</a>
@@ -96,13 +120,16 @@ function Shell() {
           location as well as the toggle, because once the sidebar is
           hidden there is nothing else saying which bot you are in. */}
       <div className="topbar">
-        <button className="burger" onClick={() => setNav(true)} aria-label="Open menu">
+        <button ref={menuButton} className="burger" onClick={() => setNav(true)} aria-label="Open menu" aria-expanded={nav} aria-controls="sidebar">
           <i /><i /><i />
         </button>
         <div className="topbar-nm">
           {here ? (here.display_name || here.id)
             : pathname === "/config" ? "Config"
             : pathname === "/bots/new" ? "Hire someone"
+            : pathname.startsWith("/approvals/") ? "Task details"
+            : pathname === "/approvals" ? "Task approvals"
+            : pathname === "/learned" ? "Learned reviews"
             : current?.name ?? "Overview"}
         </div>
       </div>
@@ -111,10 +138,12 @@ function Shell() {
           on a body listener so it cannot outlive the open state. */}
       <div className="scrim" onClick={() => setNav(false)} />
 
-      <aside className="side">
+      <aside ref={sidebar} className="side" id="sidebar" aria-label="Main navigation">
+        <NavigationMarker container={sidebar} location={pathname} layoutKey={`${current?.id}:${mine.length}:${nav}`} />
         <div className="brand">
           <img src="/logo-64.png" alt="" width={26} height={26} />
           lobslaw
+          <button className="nav-close btn ghost" aria-label="Close menu" onClick={() => { setNav(false); menuButton.current?.focus(); }}>×</button>
         </div>
 
         <NavLink to="/" end className={`desknav${pathname === "/" ? " on" : ""}`}>
@@ -126,20 +155,20 @@ function Shell() {
           <GroupPicker
             groups={groups}
             current={current}
-            onPick={setGroupId}
+            onPick={(id) => switchView(() => setGroupId(id))}
             onChanged={() => { reloadGroups(); reload(); }}
           />
         )}
 
         <h6>Team</h6>
-        <div className="roster">
+        <div className="roster roster-pane">
           {mine.map((b) => {
             const on = pathname === `/bots/${b.id}`;
             const item = latest.get(b.id);
             return (
               <NavLink key={b.id} to={`/bots/${b.id}`}
                 className={`${on ? "on" : ""} ${b.enabled ? "" : "off"}`}>
-                <Mascot id={b.id} size={30} dim={!b.enabled} />
+                <Mascot id={b.id} size={30} dim={!b.enabled} working={!!chats[b.id]?.busy || (feed ?? []).some((entry) => entry.recipient === b.id && entry.status === "claimed")} />
                 <div className="txt">
                   <div className="nm">
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -148,9 +177,9 @@ function Shell() {
                     {b.is_coordinator && <i className="lead" title="coordinator" />}
                   </div>
                   <div className="last">
-                    {item
+                    {chats[b.id]?.ask ? "Needs your approval" : chats[b.id]?.busy ? "Writing a reply…" : chats[b.id]?.messages.at(-1)?.text || (item
                       ? `${item.result || item.error || item.subject}`
-                      : b.description || "Nothing yet"}
+                      : b.description || "Nothing yet")}
                   </div>
                 </div>
               </NavLink>
@@ -164,8 +193,8 @@ function Shell() {
 
         <div className="side-foot">
           <LearnedReviewNotice />
-          <NavLink to="/approvals">Task approvals</NavLink>
-          <NavLink to="/config">Config</NavLink>
+          <NavLink to="/approvals" className={({ isActive }) => isActive ? "on" : ""}>Task approvals</NavLink>
+          <NavLink to="/config" className={({ isActive }) => isActive ? "on" : ""}>Config</NavLink>
           <Signed />
         </div>
       </aside>
@@ -195,7 +224,7 @@ function Shell() {
           <Route path="*" element={<div className="empty"><b>Nothing here</b><span>That page does not exist.</span></div>} />
         </Routes>
       </main>
-    </div>
+    </div></BotDirectory>
   );
 }
 
@@ -233,6 +262,7 @@ function GroupPicker({ groups, current, onPick, onChanged }: {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const notify = useFeedback();
 
   async function create() {
     const label = name.trim();
@@ -244,7 +274,7 @@ function GroupPicker({ groups, current, onPick, onChanged }: {
       // group_id.
       const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
       await api.createGroup(id || `team-${groups.length + 1}`, label);
-      setName(""); setAdding(false); setOpen(false); onChanged();
+      setName(""); setAdding(false); setOpen(false); onChanged(); notify("Team created");
     } finally { setBusy(false); }
   }
 
@@ -359,8 +389,8 @@ function Frame({ children }: { children: ReactNode }) {
           lobslaw
         </div>
       </aside>
-      <main className="main" id="main" tabIndex={-1}>
-        <nav className="pad" aria-label="Assistant navigation"><NavLink to="/">Chat</NavLink> · <LearnedReviewNotice /></nav>
+      <main className="main assistant-main" id="main" tabIndex={-1}>
+        <nav className="assistant-nav" aria-label="Assistant navigation"><NavLink to="/">Chat</NavLink> · <LearnedReviewNotice /></nav>
         {children}
       </main>
     </div>
@@ -427,22 +457,23 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
 
   return (
     <Frame>
+      <div className="chat single-chat">
       {!computeOn && (
         <Empty
           title="Assistant unavailable"
           hint="This node is not running compute. The console is up; chat will wait until an agent is reachable."
         />
       )}
-      <div className="thread" tabIndex={0} aria-label="Conversation">
+      <div className="thread" tabIndex={0} aria-label="Conversation"><div className="thread-in">
         {lines.map((line, i) => (
-          <div key={i} className="msg" data-role={line.role}>
-            {line.role === "assistant" ? <Markdown>{line.text}</Markdown> : line.text}
+          <div key={i} className={`msg message-arrival${line.role === "user" ? " me" : ""}`} data-role={line.role}>
+            {line.role === "assistant" ? <><Mascot id="assistant" size={30} /><div className="grow txt"><Markdown>{line.text}</Markdown></div></> : <div className="bubble">{line.text}</div>}
           </div>
         ))}
-        {busy && <div className="msg" aria-live="polite">{notice || "Working"}</div>}
+        {busy && <div className="msg message-arrival"><Mascot id="assistant" size={30} working /><div className="waiting"><span className="dots" aria-hidden="true"><i /><i /><i /></span>{notice || "Working"}</div></div>}
         {ask && <Approval ask={ask} onAnswered={() => setAsk(null)} />}
         <div ref={bottom} />
-      </div>
+      </div></div>
       <div className="sr-only" role="status" aria-live="polite">{notice}</div>
       {error && (
         <div className="pad">
@@ -451,31 +482,8 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
             : <Err error={error} />}
         </div>
       )}
-      <form
-        className="composer"
-        onSubmit={(e) => { e.preventDefault(); void send(); }}
-      >
-        <div className="composer-in">
-          <label className="sr-only" htmlFor="draft">Message</label>
-          <textarea
-            id="draft"
-            className="ta"
-            rows={2}
-            value={draft}
-            disabled={!computeOn || busy}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-          />
-          <button className="btn primary" type="submit" disabled={!computeOn || busy || !draft.trim()}>
-            Send
-          </button>
-        </div>
-      </form>
+      <Composer draft={draft} onChange={setDraft} onSend={() => void send()} busy={busy} disabled={!computeOn} />
+      </div>
     </Frame>
   );
 }
