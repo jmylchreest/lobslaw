@@ -4187,3 +4187,145 @@ var TaskApprovalService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "lobslaw/v1/lobslaw.proto",
 }
+
+const (
+	UpgradeService_UpgradeStatus_FullMethodName = "/lobslaw.v1.UpgradeService/UpgradeStatus"
+	UpgradeService_ChangeUpgrade_FullMethodName = "/lobslaw.v1.UpgradeService/ChangeUpgrade"
+)
+
+// UpgradeServiceClient is the client API for UpgradeService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Upgrade control is deliberately stable across supported data contracts.
+type UpgradeServiceClient interface {
+	UpgradeStatus(ctx context.Context, in *UpgradeStatusRequest, opts ...grpc.CallOption) (*UpgradeStatusResponse, error)
+	ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*ChangeUpgradeResponse, error)
+}
+
+type upgradeServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewUpgradeServiceClient(cc grpc.ClientConnInterface) UpgradeServiceClient {
+	return &upgradeServiceClient{cc}
+}
+
+func (c *upgradeServiceClient) UpgradeStatus(ctx context.Context, in *UpgradeStatusRequest, opts ...grpc.CallOption) (*UpgradeStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpgradeStatusResponse)
+	err := c.cc.Invoke(ctx, UpgradeService_UpgradeStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *upgradeServiceClient) ChangeUpgrade(ctx context.Context, in *ChangeUpgradeRequest, opts ...grpc.CallOption) (*ChangeUpgradeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChangeUpgradeResponse)
+	err := c.cc.Invoke(ctx, UpgradeService_ChangeUpgrade_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpgradeServiceServer is the server API for UpgradeService service.
+// All implementations should embed UnimplementedUpgradeServiceServer
+// for forward compatibility.
+//
+// Upgrade control is deliberately stable across supported data contracts.
+type UpgradeServiceServer interface {
+	UpgradeStatus(context.Context, *UpgradeStatusRequest) (*UpgradeStatusResponse, error)
+	ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*ChangeUpgradeResponse, error)
+}
+
+// UnimplementedUpgradeServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedUpgradeServiceServer struct{}
+
+func (UnimplementedUpgradeServiceServer) UpgradeStatus(context.Context, *UpgradeStatusRequest) (*UpgradeStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpgradeStatus not implemented")
+}
+func (UnimplementedUpgradeServiceServer) ChangeUpgrade(context.Context, *ChangeUpgradeRequest) (*ChangeUpgradeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ChangeUpgrade not implemented")
+}
+func (UnimplementedUpgradeServiceServer) testEmbeddedByValue() {}
+
+// UnsafeUpgradeServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to UpgradeServiceServer will
+// result in compilation errors.
+type UnsafeUpgradeServiceServer interface {
+	mustEmbedUnimplementedUpgradeServiceServer()
+}
+
+func RegisterUpgradeServiceServer(s grpc.ServiceRegistrar, srv UpgradeServiceServer) {
+	// If the following call pancis, it indicates UnimplementedUpgradeServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&UpgradeService_ServiceDesc, srv)
+}
+
+func _UpgradeService_UpgradeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpgradeStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UpgradeServiceServer).UpgradeStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UpgradeService_UpgradeStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UpgradeServiceServer).UpgradeStatus(ctx, req.(*UpgradeStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UpgradeService_ChangeUpgrade_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChangeUpgradeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UpgradeServiceServer).ChangeUpgrade(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UpgradeService_ChangeUpgrade_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UpgradeServiceServer).ChangeUpgrade(ctx, req.(*ChangeUpgradeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// UpgradeService_ServiceDesc is the grpc.ServiceDesc for UpgradeService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var UpgradeService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.UpgradeService",
+	HandlerType: (*UpgradeServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "UpgradeStatus",
+			Handler:    _UpgradeService_UpgradeStatus_Handler,
+		},
+		{
+			MethodName: "ChangeUpgrade",
+			Handler:    _UpgradeService_ChangeUpgrade_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}

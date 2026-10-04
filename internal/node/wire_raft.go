@@ -43,7 +43,7 @@ func (n *Node) wireRaft(advertise string) error {
 
 	transport, err := rafttransport.New(rafttransport.Config{
 		LocalAddr: raft.ServerAddress(advertise),
-		DialOpts:  []grpc.DialOption{grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient()), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient())},
+		DialOpts:  []grpc.DialOption{grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient(n.dataContract)), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient(n.dataContract))},
 	})
 	if err != nil {
 		_ = store.Close()

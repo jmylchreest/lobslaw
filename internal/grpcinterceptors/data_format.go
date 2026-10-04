@@ -2,6 +2,8 @@ package grpcinterceptors
 
 import (
 	"context"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,26 +24,59 @@ func persistenceMethod(method string) bool {
 	return strings.HasPrefix(method, "/RaftTransport/") || method == pb.NodeService_AddMember_FullMethodName || method == pb.NodeService_Propose_FullMethodName
 }
 
-func checkDataProtocol(ctx context.Context) error {
-	md, _ := metadata.FromIncomingContext(ctx)
-	values := md.Get(dataProtocolHeader)
-	if len(values) != 1 || values[0] != dataformat.ClusterProtocol {
-		return status.Error(codes.FailedPrecondition, "incompatible persistence protocol; coordinated cluster upgrade required")
+type ContractProvider func() uint32
+
+func requiredContract(providers []ContractProvider) uint32 {
+	if len(providers) > 0 && providers[0] != nil {
+		return providers[0]()
 	}
-	return nil
+	return 1
+}
+
+const requiredHeader = "lobslaw-data-required"
+const supportedHeader = "lobslaw-data-supported"
+
+func contractHeaders(required uint32) metadata.MD {
+	values := make([]string, 0)
+	for _, v := range dataformat.SupportedContracts() {
+		values = append(values, strconv.FormatUint(uint64(v), 10))
+	}
+	return metadata.Pairs(dataProtocolHeader, dataformat.ControlProtocol, requiredHeader, strconv.FormatUint(uint64(required), 10), supportedHeader, strings.Join(values, ","))
+}
+func checkHeaders(md metadata.MD, required uint32) error {
+	protocols := md.Get(dataProtocolHeader)
+	needs := md.Get(requiredHeader)
+	sets := md.Get(supportedHeader)
+	if len(protocols) != 1 || protocols[0] != dataformat.ControlProtocol || len(needs) != 1 || len(sets) != 1 || required == 0 {
+		return status.Error(codes.FailedPrecondition, "missing rolling upgrade protocol; coordinated initial upgrade required")
+	}
+	remoteRequired, err := strconv.ParseUint(needs[0], 10, 32)
+	if err != nil || !slices.Contains(dataformat.SupportedContracts(), uint32(remoteRequired)) {
+		return status.Error(codes.FailedPrecondition, "binary cannot read peer active/prepared contract")
+	}
+	for _, v := range strings.Split(sets[0], ",") {
+		if v == strconv.FormatUint(uint64(required), 10) {
+			return nil
+		}
+	}
+	return status.Error(codes.FailedPrecondition, "peer cannot read local active/prepared contract")
+}
+func checkDataProtocol(ctx context.Context, required uint32) error {
+	md, _ := metadata.FromIncomingContext(ctx)
+	return checkHeaders(md, required)
 }
 
 // DataFormat is a compatibility gate, never an identity check. It follows the
 // existing mTLS/operator guard. GetPeers provides a read-only preflight handshake.
-func DataFormat() grpc.UnaryServerInterceptor {
+func DataFormat(providers ...ContractProvider) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if info.FullMethod == pb.NodeService_GetPeers_FullMethodName {
-			if err := grpc.SetHeader(ctx, metadata.Pairs(dataProtocolHeader, dataformat.ClusterProtocol)); err != nil {
+			if err := grpc.SetHeader(ctx, contractHeaders(requiredContract(providers))); err != nil {
 				return nil, err
 			}
 		}
 		if persistenceMethod(info.FullMethod) {
-			if err := checkDataProtocol(ctx); err != nil {
+			if err := checkDataProtocol(ctx, requiredContract(providers)); err != nil {
 				return nil, err
 			}
 		}
@@ -49,10 +84,10 @@ func DataFormat() grpc.UnaryServerInterceptor {
 	}
 }
 
-func DataFormatStream() grpc.StreamServerInterceptor {
+func DataFormatStream(providers ...ContractProvider) grpc.StreamServerInterceptor {
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if persistenceMethod(info.FullMethod) {
-			if err := checkDataProtocol(stream.Context()); err != nil {
+			if err := checkDataProtocol(stream.Context(), requiredContract(providers)); err != nil {
 				return err
 			}
 		}
@@ -60,15 +95,17 @@ func DataFormatStream() grpc.StreamServerInterceptor {
 	}
 }
 
-func dataContext(ctx context.Context) context.Context {
+func dataContext(ctx context.Context, required uint32) context.Context {
 	md, _ := metadata.FromOutgoingContext(ctx)
 	md = md.Copy()
-	md.Set(dataProtocolHeader, dataformat.ClusterProtocol)
+	for key, values := range contractHeaders(required) {
+		md.Set(key, values...)
+	}
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
 // VerifyDataPeer checks the remote reader before replication or membership changes.
-func VerifyDataPeer(ctx context.Context, conn *grpc.ClientConn) error {
+func VerifyDataPeer(ctx context.Context, conn *grpc.ClientConn, providers ...ContractProvider) error {
 	ctx, cancel := context.WithTimeout(ctx, compatibilityTimeout)
 	defer cancel()
 	var header metadata.MD
@@ -76,21 +113,17 @@ func VerifyDataPeer(ctx context.Context, conn *grpc.ClientConn) error {
 	if err != nil {
 		return err
 	}
-	values := header.Get(dataProtocolHeader)
-	if len(values) != 1 || values[0] != dataformat.ClusterProtocol {
-		return status.Error(codes.FailedPrecondition, "peer lacks compatible persistence protocol; upgrade all cluster nodes before replication")
-	}
-	return nil
+	return checkHeaders(header, requiredContract(providers))
 }
 
 // DataFormatClient sends mutations only to versioned endpoints whose server
 // enforces compatibility. Reconnects to older binaries fail before dispatch.
-func DataFormatClient() grpc.UnaryClientInterceptor {
+func DataFormatClient(providers ...ContractProvider) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, conn *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		if !persistenceMethod(method) {
 			return invoke(ctx, method, req, reply, conn, opts...)
 		}
-		err := invoke(dataContext(ctx), persistenceEndpoint(method), req, reply, conn, opts...)
+		err := invoke(dataContext(ctx, requiredContract(providers)), persistenceEndpoint(method), req, reply, conn, opts...)
 		if status.Code(err) == codes.Unimplemented {
 			return status.Error(codes.FailedPrecondition, "peer lacks versioned persistence endpoint; coordinated upgrade required")
 		}
@@ -98,10 +131,10 @@ func DataFormatClient() grpc.UnaryClientInterceptor {
 	}
 }
 
-func DataFormatStreamClient() grpc.StreamClientInterceptor {
+func DataFormatStreamClient(providers ...ContractProvider) grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, conn *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 		if persistenceMethod(method) {
-			ctx = dataContext(ctx)
+			ctx = dataContext(ctx, requiredContract(providers))
 			method = persistenceEndpoint(method)
 		}
 		return streamer(ctx, desc, conn, method, opts...)

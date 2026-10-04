@@ -169,8 +169,9 @@ func TestFSMRejectsUnknownOp(t *testing.T) {
 			PolicyRule: &lobslawv1.PolicyRule{Id: "bad"},
 		},
 	}
+	// Inject committed input below proposal admission to test replay safety.
 	data, _ := proto.Marshal(entry)
-	res, err := node.Apply(data, time.Second)
+	res, err := node.applyRaw(data, time.Second)
 	if err != nil {
 		t.Fatalf("Apply returned unexpected error: %v", err)
 	}

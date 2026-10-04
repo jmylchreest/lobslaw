@@ -41,9 +41,16 @@ func readStateFormat(tx *bolt.Tx) (StateFormat, error) {
 }
 
 func validateStateFormat(tx *bolt.Tx, cipher *crypto.Cipher, validateRecords bool) (StateFormat, error) {
+	state, err := readContract(tx)
+	if err != nil {
+		return StateFormat{}, err
+	}
 	format, err := readStateFormat(tx)
 	if err != nil {
 		return format, err
+	}
+	if format.Version > 0 && state.Active != uint32(format.Version) {
+		return format, errors.New("active contract and state schema disagree")
 	}
 	if format.Version > dataformat.StateVersion {
 		return format, fmt.Errorf("state format %d is newer than supported %d", format.Version, dataformat.StateVersion)

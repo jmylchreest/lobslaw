@@ -168,7 +168,15 @@ func (s *Service) AddMember(ctx context.Context, req *lobslawv1.AddMemberRequest
 			return nil, status.Errorf(codes.FailedPrecondition, "member compatibility: %v", err)
 		}
 	}
-	if err := s.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.Address)); err != nil {
+	var addErr error
+	if contextual, ok := s.raft.(interface {
+		AddVoterContext(context.Context, raft.ServerID, raft.ServerAddress) error
+	}); ok {
+		addErr = contextual.AddVoterContext(ctx, raft.ServerID(req.NodeId), raft.ServerAddress(req.Address))
+	} else {
+		addErr = s.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.Address))
+	}
+	if err := addErr; err != nil {
 		return nil, status.Errorf(codes.Internal, "AddVoter: %v", err)
 	}
 	logging.From(ctx).Info("cluster member added",
@@ -213,7 +221,15 @@ func (s *Service) Propose(ctx context.Context, req *lobslawv1.ProposeRequest) (*
 			"not the raft leader; leader is %s", s.raft.LeaderAddress())
 	}
 
-	resp, err := s.raft.Apply(req.Entry, proposeTimeout)
+	var resp any
+	var err error
+	if contextual, ok := s.raft.(interface {
+		ApplyContext(context.Context, []byte, time.Duration) (any, error)
+	}); ok {
+		resp, err = contextual.ApplyContext(ctx, req.Entry, proposeTimeout)
+	} else {
+		resp, err = s.raft.Apply(req.Entry, proposeTimeout)
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "raft apply: %v", err)
 	}

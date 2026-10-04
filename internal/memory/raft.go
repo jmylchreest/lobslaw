@@ -60,6 +60,10 @@ type RaftConfig struct {
 // operate on the inner fields directly — use the Apply/Shutdown
 // methods.
 type RaftNode struct {
+	control      chan struct{}
+	leadership   leadershipFence
+	upgradeProbe func(context.Context, raft.Server) (*UpgradePeer, error)
+
 	Raft      *raft.Raft
 	transport raft.Transport
 	logStore  *raftboltdb.BoltStore
@@ -141,6 +145,8 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 
 	raftCfg := raft.DefaultConfig()
 	raftCfg.LocalID = raft.ServerID(cfg.NodeID)
+	// The synchronous leadership fence requires unbuffered command admission.
+	raftCfg.BatchApplyCh = false
 	raftCfg.Logger = newHCLogAdapter(logger, "raft")
 	raftCfg.HeartbeatTimeout = nonZeroDur(cfg.HeartbeatTimeout, DefaultRaftHeartbeatTimeout)
 	raftCfg.ElectionTimeout = nonZeroDur(cfg.ElectionTimeout, DefaultRaftElectionTimeout)
@@ -158,7 +164,12 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 		_ = boltStore.Close()
 		return nil, err
 	}
-	logs, err := preflightLogs(context.Background(), boltStore, manifest.LegacyFormat)
+	_, covered, err := inspectSnapshots(context.Background(), cfg.DataDir, fsm.store.key)
+	if err != nil {
+		_ = boltStore.Close()
+		return nil, fmt.Errorf("snapshot compatibility preflight: %w", err)
+	}
+	logs, err := preflightLogs(context.Background(), boltStore, manifest.LegacyFormat, covered)
 	if err != nil {
 		_ = boltStore.Close()
 		return nil, fmt.Errorf("data compatibility preflight: %w", err)
@@ -187,6 +198,7 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 	}
 
 	node := &RaftNode{
+		control:   make(chan struct{}, 1),
 		Raft:      r,
 		transport: cfg.Transport,
 		logStore:  boltStore,
@@ -200,6 +212,7 @@ func NewRaft(cfg RaftConfig, fsm *FSM) (*RaftNode, error) {
 		hadState:  hadState,
 		fwd:       &leaderConns{},
 	}
+	node.installControlFence()
 	node.startStateWatch()
 	return node, nil
 }
@@ -440,8 +453,45 @@ func nonZeroDur(v, fallback time.Duration) time.Duration {
 // raft.ServerAddress) join as a voting member. Must be called on the
 // leader.
 func (n *RaftNode) AddVoter(id raft.ServerID, addr raft.ServerAddress) error {
-	future := n.Raft.AddVoter(id, addr, 0, addVoterTimeout)
-	return future.Error()
+	return n.AddVoterContext(context.Background(), id, addr)
+}
+
+func (n *RaftNode) AddVoterContext(ctx context.Context, id raft.ServerID, addr raft.ServerAddress) error {
+	ctx, cancel := controlContext(ctx, addVoterTimeout)
+	defer cancel()
+	lease, before, err := n.readControl(ctx)
+	if err != nil {
+		return err
+	}
+	lease.release()
+	if before.state.Prepared != nil {
+		return fmt.Errorf("membership is frozen by upgrade %s", before.state.Prepared.ID)
+	}
+	if n.upgradeProbe != nil {
+		peer, err := n.upgradeProbe(ctx, raft.Server{ID: id, Address: addr})
+		if err != nil {
+			return err
+		}
+		if peer == nil || peer.ID != string(id) {
+			return errors.New("member identity mismatch")
+		}
+		if err := peer.supports(before.state.Required()); err != nil {
+			return err
+		}
+	}
+	lease, after, err := n.readControl(ctx)
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+	if !before.matches(after) {
+		return errControlChanged
+	}
+	future, err := n.enqueueControl(ctx, before.generation, func(timeout time.Duration) raft.Future { return n.Raft.AddVoter(id, addr, 0, timeout) })
+	if err != nil {
+		return err
+	}
+	return lease.wait(ctx, future)
 }
 
 // FSM returns the finite-state machine this Raft node is driving.
@@ -509,6 +559,43 @@ func (n *RaftNode) LeaderAddress() raft.ServerAddress {
 // Apply serialises data through Raft consensus. Returns the FSM's
 // Apply return value on success.
 func (n *RaftNode) Apply(data []byte, timeout time.Duration) (any, error) {
+	return n.ApplyContext(context.Background(), data, timeout)
+}
+
+func (n *RaftNode) ApplyContext(ctx context.Context, data []byte, timeout time.Duration) (any, error) {
+	ctx, cancel := controlContext(ctx, timeout)
+	defer cancel()
+	lease, view, err := n.readControl(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer lease.release()
+	if err := n.validateProposal(data); err != nil {
+		return nil, err
+	}
+	return n.applyControl(ctx, lease, view.generation, data)
+}
+
+func (n *RaftNode) applyControl(ctx context.Context, lease *controlLease, generation uint64, data []byte) (any, error) {
+	data, err := dataformat.CurrentLog(data)
+	if err != nil {
+		return nil, err
+	}
+	var applied raft.ApplyFuture
+	future, err := n.enqueueControl(ctx, generation, func(timeout time.Duration) raft.Future {
+		applied = n.Raft.Apply(data, timeout)
+		return applied
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := lease.wait(ctx, future); err != nil {
+		return nil, err
+	}
+	return applied.Response(), nil
+}
+
+func (n *RaftNode) applyRaw(data []byte, timeout time.Duration) (any, error) {
 	var err error
 	data, err = dataformat.CurrentLog(data)
 	if err != nil {

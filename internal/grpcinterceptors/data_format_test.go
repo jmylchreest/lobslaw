@@ -112,3 +112,23 @@ func TestVersionedPersistenceRetainsOperatorGuard(t *testing.T) {
 		}
 	}
 }
+
+func TestMixedVersionContractHandshake(t *testing.T) {
+	// The future peer supports old contract 1 while the cluster still uses it.
+	md := contractHeaders(1)
+	md.Set(supportedHeader, "1,2")
+	if err := checkHeaders(md, 1); err != nil {
+		t.Fatal("rejected compatible mixed binaries", err)
+	}
+	md.Set(requiredHeader, "99")
+	if err := checkHeaders(md, 1); err == nil {
+		t.Fatal("accepted peer after unsupported activation")
+	}
+	md = contractHeaders(1)
+	if err := checkHeaders(md, 99); err == nil {
+		t.Fatal("accepted old peer against local restart fence")
+	}
+	if err := checkHeaders(md, 0); err == nil {
+		t.Fatal("accepted invalid local state")
+	}
+}

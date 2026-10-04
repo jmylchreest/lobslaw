@@ -23,10 +23,14 @@ func dispatchCluster(args []string) bool {
 	sub := args[idx+1:]
 	if len(sub) == 0 {
 		fmt.Fprintln(os.Stderr, "lobslaw cluster: subcommand required")
-		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, export-operator")
+		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, export-operator, upgrade")
 		os.Exit(2)
 	}
 	switch sub[0] {
+	case "upgrade":
+		if err := clusterUpgrade(sub[1:]); err != nil {
+			exitWith(err.Error())
+		}
 	case "ca-init":
 		clusterCAInit(sub[1:])
 	case "sign-node":
@@ -40,7 +44,7 @@ func dispatchCluster(args []string) bool {
 		clusterReset(sub[1:])
 	default:
 		diagnosticf("lobslaw cluster: unknown subcommand %q\n", sub[0])
-		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, export-operator, reset")
+		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, export-operator, upgrade, reset")
 		os.Exit(2)
 	}
 	return true

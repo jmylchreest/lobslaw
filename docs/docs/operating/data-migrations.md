@@ -68,3 +68,73 @@ restore mode.
 An unsupported source format, missing encryption key, unknown feature bucket or
 ambiguous legacy log produces an error rather than a partial import or guessed
 conversion. Retain the source and use a binary supporting that format.
+
+## Rolling binary upgrades after the initial transition
+
+The rolling-control baseline supports data contract 1. PR #348's binary supports
+contracts 1 and 2. The earlier migration-only binary is not the rolling baseline:
+move to a binary with `lobslaw-rolling-v1` through the coordinated procedure above.
+Only explicitly supported contract combinations can run together.
+
+During a supported rollout, replace one follower at a time, wait for catch-up,
+and preserve a majority of healthy voters. Transfer leadership before replacing
+the leader using `lobslaw cluster upgrade transfer --context prod --member NODE_ID`. A two-voter cluster cannot retain quorum while one member is stopped.
+This feature does not install binaries or automatically remove unavailable members.
+
+New binaries continue using the active contract, including snapshot output. New
+features require explicit activation. Operator certificates need the configured
+`operator` role and explicit policy grants for `cluster.upgrade.read` and
+`cluster.upgrade.write` on `cluster:*`. Peer credentials can inspect local upgrade
+status but cannot request activation. These actions are not agent tools.
+
+```sh
+lobslaw cluster upgrade status --context prod
+lobslaw cluster upgrade prepare --context prod --id teams-2026 --target 2 --epoch 0
+lobslaw cluster upgrade finalize --context prod --id teams-2026 --target 2 --epoch 0
+```
+
+Send changes to the leader address reported by status. Use the observed epoch,
+not a guessed value. Prepare checks every configured member and commits a durable
+transition that freezes membership. Finalize requires every member to have durably
+applied that exact preparation; retry after lagging members catch up. Missing or
+old members block activation even if the cluster has quorum. A restarted node must
+support the prepared target. Keep upgraded binaries installed once preparation
+begins. A lost response is resolved using status and the same transition ID.
+
+To abandon a prepared transition while retaining the old active contract:
+
+```sh
+lobslaw cluster upgrade abort --context prod --id teams-2026 --target 2 --epoch 0
+```
+
+Abort still requires quorum and the exact transition. It advances the epoch;
+future attempts need a new ID. Do not treat abort as permission to downgrade local
+data: prepared history may remain in logs/snapshots. Supported binary rollback is
+before preparation. After activation, older binaries are refused; use the original
+cluster backup and binary for disaster recovery, accounting for subsequent writes
+and external effects. Do not start copied directories as duplicate node identities.
+
+Team-capable nodes started on contract 1 keep team execution/tools disabled. After
+finalization, restart those compute nodes one at a time to wire the enabled team
+services. This does not require stopping the whole cluster. New empty data
+stores begin on contract 1; historical team stores retain contract 2 through the
+initial coordinated migration. Do not activate solely because binaries have
+changed: inspect status and check ordinary operations first.
+
+The upgrade RPC status is local to the addressed member; it reports its node ID,
+reader capabilities, active contract, epoch, preparation index and known leader.
+A blocked preparation/finalization identifies the first member that is not ready.
+Activation changes storage interpretation, not ownership or tool permissions.
+
+
+Upgrade mutations are audited with the verified operator and policy grant.
+Configure local audit as well as Raft audit to retain completion evidence after
+leadership transfer. If recording admission fails, the action is refused. If an
+outcome record fails after submission, the node warns; check upgrade status before
+retrying, because the action may already have committed. Reuse the exact ID,
+epoch and target for a lost-response retry; changing the target is refused.
+
+Joining-member probes have a bounded timeout and do not hold the write-admission
+lease during the network call. Cancelled or expired requests waiting for admission
+return without submitting. A timeout after submission still has an uncertain
+outcome: inspect status/configuration rather than assuming it did not happen.
