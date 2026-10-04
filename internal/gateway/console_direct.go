@@ -178,7 +178,7 @@ func (s *Server) queryConsoleOperations(ctx context.Context, in *pb.QueryConsole
 	return out, nil
 }
 func protoCapability(v capabilityFlags) *pb.ConsoleCapability {
-	return &pb.ConsoleCapability{Enabled: v.Enabled, Authorised: v.Authorised, Configured: v.Configured, Available: v.Available}
+	return &pb.ConsoleCapability{Supported: v.Supported, Enabled: v.Enabled, Authorised: v.Authorised, Configured: v.Configured, Available: v.Available}
 }
 
 func consoleBotPatch(v *pb.ConsoleBotPatch) console.BotPatch {

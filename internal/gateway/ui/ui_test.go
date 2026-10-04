@@ -1,3 +1,5 @@
+//go:build !no_web
+
 package ui
 
 import (

@@ -143,3 +143,16 @@ HOOK_TOOLCHAIN := go1.26.2
 hook-tools:
 	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/evilmartians/lefthook@latest
 	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/betterleaks/betterleaks@latest
+
+
+# Excludes assets and SPA wiring even if make web was run earlier.
+build-no-web:
+	@go build -tags no_web ./...
+
+test-no-web:
+	@go test -tags no_web ./...
+
+docker-no-web:
+	@docker build --build-arg WEB_VARIANT=no-web -t lobslaw:no-web .
+
+.PHONY: build-no-web test-no-web docker-no-web
