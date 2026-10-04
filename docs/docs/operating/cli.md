@@ -819,3 +819,24 @@ lobslaw data migrate --data-dir /srv/lobslaw --output /srv/lobslaw-upgraded --le
 Use `--memory-key-ref` or the existing configured memory key. Follow
 [Data upgrades and recovery](data-migrations.md) for supported historical formats,
 coordinated cluster upgrades, restore mode and explicit recovery acknowledgement.
+
+### Cluster upgrade control
+
+Inspect the local member, then send preparation and activation to the leader:
+
+```sh
+lobslaw cluster upgrade status --context prod
+lobslaw cluster upgrade prepare --context prod --id rollout-1 --target 2 --epoch 0
+lobslaw cluster upgrade finalize --context prod --id rollout-1 --target 2 --epoch 0
+lobslaw cluster upgrade abort --context prod --id rollout-1 --target 2 --epoch 0
+```
+
+Use the actual epoch from status. These require an operator certificate and an
+explicit cluster upgrade policy grant. See [data migrations](./data-migrations)
+for the initial coordinated transition, quorum and rollback limits.
+
+Transfer leadership to a caught-up configured voter before replacing the leader:
+
+```sh
+lobslaw cluster upgrade transfer --context prod --member node-2
+```

@@ -78,7 +78,14 @@ func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
 
 	if !readOnly {
 		if err := s.loadDB().Update(func(tx *bolt.Tx) error {
+			state, err := readContract(tx)
+			if err != nil {
+				return err
+			}
 			for _, name := range allBuckets {
+				if state.Active < 2 && isTeamBucket(name) {
+					continue
+				}
 				if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
 					return fmt.Errorf("create bucket %q: %w", name, err)
 				}

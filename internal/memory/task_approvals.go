@@ -241,8 +241,16 @@ func (s *TaskApprovalStore) PauseTaskApproval(ctx context.Context, q *pb.PauseTa
 	n.BudgetPolicy = q.BudgetPolicy
 	n.BudgetLimits = q.BudgetLimits
 	n.BudgetSpent = &pb.TaskBudget{ToolCalls: q.Continuation.ToolCalls, SpendUsd: q.Continuation.SpentUsd, EgressBytes: q.Continuation.EgressBytes}
-	if err := setTaskEvidence(n, q.Continuation.Messages, q.Receipts, q.TranscriptStart); err != nil {
+	contract, err := s.store.ContractState()
+	if err != nil {
 		return nil, err
+	}
+	if contract.Active >= 2 {
+		if err := setTaskEvidence(n, q.Continuation.Messages, q.Receipts, q.TranscriptStart); err != nil {
+			return nil, err
+		}
+	} else if len(q.Receipts) > 0 || q.TranscriptStart != 0 {
+		return nil, status.Error(codes.FailedPrecondition, "execution evidence requires active data contract 2")
 	}
 	n.ClaimedBy = ""
 	n.ClaimExpiresAt = nil

@@ -152,6 +152,13 @@ func (n *Node) wireSoulRaft() error {
 // or more than one operator leaves those records inaccessible.
 func (n *Node) wireBots() error {
 	n.botSvc = memory.NewBotService(n.raft, n.store)
+	state, err := n.store.ContractState()
+	if err != nil {
+		return err
+	}
+	if state.Active < 2 {
+		return nil
+	}
 	var operatorIDs []string
 	for _, u := range n.cfg.Users {
 		if slices.Contains(u.Roles, identity.RoleOperator) {
@@ -374,9 +381,10 @@ func (n *Node) wireDiscoveryStage() error {
 			return err
 		}
 		defer func() { _ = conn.Close() }()
-		return grpcinterceptors.VerifyDataPeer(ctx, conn)
+		return grpcinterceptors.VerifyDataPeer(ctx, conn, n.dataContract)
 	})
 	lobslawv1.RegisterNodeServiceServer(n.server, n.discSvc)
+	n.wireUpgradeService()
 	n.discCli = discovery.NewClient(n.localInfo, n.registry, n.dialer(), n.log)
 	return nil
 }

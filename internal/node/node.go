@@ -571,6 +571,13 @@ func New(cfg Config) (*Node, error) {
 		advertise = listener.Addr().String()
 	}
 
+	var n *Node
+	contract := func() uint32 {
+		if n == nil {
+			return 0
+		}
+		return n.dataContract()
+	}
 	server := grpc.NewServer(
 		grpc.Creds(cfg.Creds.ServerCreds()),
 		// A skill bundle is capped at DefaultMaxSkillTotalBytes, which
@@ -589,7 +596,7 @@ func New(cfg Config) (*Node, error) {
 			// because a check on the client is one the attacker
 			// controls.
 			grpcinterceptors.OperatorNotAPeer(),
-			grpcinterceptors.DataFormat(),
+			grpcinterceptors.DataFormat(contract),
 		),
 		grpc.ChainStreamInterceptor(
 			grpcinterceptors.RequestIDStream(log),
@@ -597,7 +604,7 @@ func New(cfg Config) (*Node, error) {
 			// Raft's transport is streaming, so without this half the
 			// guard covers nothing that matters.
 			grpcinterceptors.OperatorNotAPeerStream(),
-			grpcinterceptors.DataFormatStream(),
+			grpcinterceptors.DataFormatStream(contract),
 		),
 	)
 
@@ -610,7 +617,7 @@ func New(cfg Config) (*Node, error) {
 
 	registry := discovery.NewRegistry()
 
-	n := &Node{
+	n = &Node{
 		cfg:          cfg,
 		log:          log,
 		listener:     listener,
@@ -734,7 +741,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
 	// cancel. Only present on Raft-hosting nodes (the construction
 	// branch in New gated that).
-	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
+	if n.inboxSvc != nil && n.agent != nil && n.teamsActive() {
 		go n.runInboxDrain(ctx)
 	}
 	if n.scheduler != nil {
@@ -1037,7 +1044,7 @@ func (n *Node) runSoulWatcher(ctx context.Context) {
 
 func (n *Node) dialer() discovery.Dialer {
 	return func(ctx context.Context, addr string) (*grpc.ClientConn, error) {
-		return grpc.NewClient(addr, grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient()), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient()))
+		return grpc.NewClient(addr, grpc.WithTransportCredentials(n.cfg.Creds.ClientCreds()), grpc.WithChainUnaryInterceptor(grpcinterceptors.DataFormatClient(n.dataContract)), grpc.WithChainStreamInterceptor(grpcinterceptors.DataFormatStreamClient(n.dataContract)))
 	}
 }
 

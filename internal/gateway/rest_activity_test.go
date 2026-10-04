@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/memory/memorytest"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -153,6 +154,7 @@ func TestActivityUsesRealNewestInboxWindowLocalAndRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	memorytest.ActivateTeams(t, store)
 	// Production projection writes are exercised here. Corrupt source/projection
 	// isolation is tested inside memory, where raw bbolt fixtures are available.
 	for _, row := range []struct {
@@ -210,6 +212,7 @@ func TestActivityLargeRecordsPreserveDetailAndRemoteMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	memorytest.ActivateTeams(t, store)
 	item := &pb.BotInboxItem{Id: "item", Recipient: "worker", Revision: 17, Status: pb.InboxStatus_INBOX_STATUS_FAILED,
 		Error: strings.Repeat("error", 14<<10), Body: "private body", Result: strings.Repeat("result", 3000),
 		TaskClaims: &pb.Claims{UserId: strings.Repeat("claims", 20000)},

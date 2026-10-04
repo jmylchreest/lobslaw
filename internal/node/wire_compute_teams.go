@@ -9,6 +9,10 @@ import (
 )
 
 func (n *Node) wireComputeTeamsStage() error {
+	if !n.teamContractActive() {
+		n.log.Info("team tools await data contract 2 activation and restart")
+		return nil
+	}
 	if n.botSvc != nil && n.groupSvc == nil {
 		n.groupSvc = memory.NewGroupService(n.raft, n.store)
 	}
@@ -69,4 +73,16 @@ func (n *Node) wireTeamTools() error {
 		}
 	}
 	return nil
+}
+
+func (n *Node) teamsActive() bool {
+	return gateComputeTeams(n.cfg) && n.teamContractActive()
+}
+
+func (n *Node) teamContractActive() bool {
+	if n.store == nil {
+		return false
+	}
+	state, err := n.store.ContractState()
+	return err == nil && state.Active >= 2
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -214,6 +216,26 @@ func (f *FSM) Apply(l *raft.Log) any {
 		return f.halt(l.Index, fmt.Errorf("unmarshal log entry: %w", err))
 	}
 	if err := validateLogEntrySupport(&entry); err != nil {
+		return f.halt(l.Index, err)
+	}
+	if c := entry.GetUpgrade(); c != nil {
+		if err := f.store.applyUpgrade(c, l.Index); err != nil {
+			if errors.Is(err, ErrUpgradeConflict) {
+				f.setLastApplied(l.Index)
+				return err
+			}
+			return f.halt(l.Index, err)
+		}
+		f.lastAppliedMu.Lock()
+		f.lastAppliedCached = false
+		f.lastAppliedMu.Unlock()
+		return nil
+	}
+	state, err := f.store.ContractState()
+	if err != nil {
+		return f.halt(l.Index, err)
+	}
+	if err := validateContractEntry(&entry, state); err != nil {
 		return f.halt(l.Index, err)
 	}
 	// Advanced even when the apply below returns an error. A CAS that
@@ -956,7 +978,24 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 	if err := f.Failure(); err != nil {
 		return nil, err
 	}
-	return &snapshot{store: f.store, fsm: f}, nil
+	// Capture under the FSM lock: Persist runs later and must not include a
+	// contract activation newer than Raft's snapshot index. A private file
+	// avoids pinning a bbolt read transaction across subsequent writes/remaps.
+	image, err := os.CreateTemp(filepath.Dir(f.store.path), ".raft-snapshot-*")
+	if err != nil {
+		return nil, err
+	}
+	if err := f.store.WriteSnapshot(image); err != nil {
+		_ = image.Close()
+		_ = os.Remove(image.Name())
+		return nil, err
+	}
+	if _, err := image.Seek(0, io.SeekStart); err != nil {
+		_ = image.Close()
+		_ = os.Remove(image.Name())
+		return nil, err
+	}
+	return &snapshot{store: f.store, fsm: f, image: image}, nil
 }
 
 // Restore replaces state.db's contents with the bbolt dump read from
@@ -1025,8 +1064,10 @@ func (f *FSM) setLastApplied(idx uint64) {
 // snapshot is the per-Snapshot() state captured for raft's async
 // Persist call.
 type snapshot struct {
-	fsm   *FSM
-	store *Store
+	image   *os.File
+	release sync.Once
+	fsm     *FSM
+	store   *Store
 }
 
 // Persist writes the snapshot bytes to sink. Called by raft on its
@@ -1040,7 +1081,7 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 		}
 	}
 
-	if err := s.store.WriteSnapshot(sink); err != nil {
+	if err := s.write(sink); err != nil {
 		_ = sink.Cancel()
 		return err
 	}
@@ -1057,10 +1098,22 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 	return sink.Close()
 }
 
-// Release is called by raft when it's done with the snapshot. bbolt
-// doesn't need any release logic — the View transaction closes with
-// Persist's return.
-func (s *snapshot) Release() {}
+// Release removes the private captured image once Raft is done with it.
+func (s *snapshot) Release() {
+	s.release.Do(func() {
+		if s.image != nil {
+			_ = s.image.Close()
+			_ = os.Remove(s.image.Name())
+		}
+	})
+}
+func (s *snapshot) write(w io.Writer) error {
+	if s.image == nil {
+		return s.store.WriteSnapshot(w)
+	}
+	_, err := io.Copy(struct{ io.Writer }{w}, s.image)
+	return err
+}
 
 // Ownership and connector binding cannot change at a reused credential key.
 // Enforced during deterministic application, including stale follower proposals.

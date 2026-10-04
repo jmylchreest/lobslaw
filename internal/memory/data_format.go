@@ -41,9 +41,16 @@ func readStateFormat(tx *bolt.Tx) (StateFormat, error) {
 }
 
 func validateStateFormat(tx *bolt.Tx, cipher *crypto.Cipher, validateRecords bool) (StateFormat, error) {
+	state, err := readContract(tx)
+	if err != nil {
+		return StateFormat{}, err
+	}
 	format, err := readStateFormat(tx)
 	if err != nil {
 		return format, err
+	}
+	if format.Version > 0 && state.Active != uint32(format.Version) {
+		return format, errors.New("active contract and state schema disagree")
 	}
 	if format.Version > dataformat.StateVersion {
 		return format, fmt.Errorf("state format %d is newer than supported %d", format.Version, dataformat.StateVersion)
@@ -56,15 +63,18 @@ func validateStateFormat(tx *bolt.Tx, cipher *crypto.Cipher, validateRecords boo
 		if string(name) == formatBucket {
 			return nil
 		}
+		if format.Version == 1 && isTeamBucket(string(name)) {
+			return errors.New("contract 1 contains team-only buckets")
+		}
 		if !slices.Contains(allBuckets, string(name)) {
 			return fmt.Errorf("unsupported state bucket %q; use a binary supporting the source features", name)
 		}
 		return b.ForEach(func(k, v []byte) error {
-			if v == nil {
+			if v == nil && b.Bucket(k) != nil {
 				return fmt.Errorf("unexpected nested bucket in %q", name)
 			}
 			// Notification key index is derived plaintext, rebuilt on open/restore.
-			if string(name) == bucketInboxNotificationKeys {
+			if string(name) == bucketInboxNotificationKeys || string(name) == bucketTaskHistory {
 				return nil
 			}
 			if validateRecords || format.Version == 0 {
@@ -96,7 +106,16 @@ func upgradeStateDB(db *bolt.DB, cipher *crypto.Cipher) error {
 			}},
 		}
 
-		_, err = dataformat.Upgrade(context.Background(), tx, format.Version, dataformat.StateVersion, steps)
+		target := max(1, format.Version)
+		if format.Version == 0 {
+			for _, name := range teamBuckets {
+				if tx.Bucket([]byte(name)) != nil {
+					target = 2
+					break
+				}
+			}
+		}
+		_, err = dataformat.Upgrade(context.Background(), tx, format.Version, target, steps)
 		return err
 	})
 }
@@ -132,7 +151,7 @@ func (s *Store) prepareFormat() error {
 	}); err != nil {
 		return err
 	}
-	if s.readOnly || format.Version == dataformat.StateVersion {
+	if s.readOnly || format.Version >= 1 {
 		return nil
 	}
 	if !populated {

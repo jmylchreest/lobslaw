@@ -9,28 +9,28 @@ import (
 )
 
 func (n *Node) teamRouterOrNil() gateway.TeamRouter {
-	if !gateComputeTeams(n.cfg) || n.groupSvc == nil {
+	if !n.teamsActive() || n.groupSvc == nil {
 		return nil
 	}
 	return &teamRouter{groups: n.groupSvc, prefs: n.userPrefsSvc}
 }
 
 func (n *Node) teamBotsOrNil() gateway.BotAPI {
-	if !gateComputeTeams(n.cfg) {
+	if !n.teamsActive() {
 		return nil
 	}
 	return n.botSvc
 }
 
 func (n *Node) teamGroupsOrNil() gateway.GroupAPI {
-	if !gateComputeTeams(n.cfg) {
+	if !n.teamsActive() {
 		return nil
 	}
 	return n.groupSvc
 }
 
 func (n *Node) teamInboxOrNil() gateway.InboxAPI {
-	if !gateComputeTeams(n.cfg) || n.inboxSvc == nil {
+	if !n.teamsActive() || n.inboxSvc == nil {
 		return nil
 	}
 	// The wrapper, not the plain service: posting work must wake the

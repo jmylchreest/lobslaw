@@ -26,6 +26,7 @@ func replayStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	activateTestTeams(t, store)
 	return store
 }
 

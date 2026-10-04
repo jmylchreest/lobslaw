@@ -124,7 +124,12 @@ func openDataSource(ctx context.Context, dir, profile string, key crypto.Key) (*
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := preflightLogs(ctx, s.logs, profile); err != nil {
+	var covered uint64
+	s.report.Snapshots, covered, err = inspectSnapshots(ctx, dir, key)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := preflightLogs(ctx, s.logs, profile, covered); err != nil {
 		return nil, err
 	}
 	s.report.FirstLog, err = s.logs.FirstIndex()
@@ -138,53 +143,52 @@ func openDataSource(ctx context.Context, dir, profile string, key crypto.Key) (*
 	s.report.Protocol = dataformat.ClusterProtocol
 	s.report.LegacyFormat = profile
 	s.report.RestoreRequired = s.manifest.RestoreRequired
-	s.report.Snapshots, err = inspectSnapshots(ctx, dir, key)
-	if err != nil {
-		return nil, err
-	}
+
 	ok = true
 	return s, nil
 }
 
-func inspectSnapshots(ctx context.Context, dir string, key crypto.Key) (int, error) {
+func inspectSnapshots(ctx context.Context, dir string, key crypto.Key) (int, uint64, error) {
 	count := 0
+	var covered uint64
 	// Open an existing snapshot directory only; inspection must not create one.
 	snapdir := filepath.Join(dir, SnapshotDir)
 	if info, err := os.Lstat(snapdir); err == nil {
 		if !info.IsDir() {
-			return 0, errors.New("snapshots must be a directory")
+			return 0, 0, errors.New("snapshots must be a directory")
 		}
 		if info, err := os.Lstat(filepath.Join(snapdir, "snapshots")); err != nil || !info.IsDir() {
-			return 0, errors.New("snapshot repository missing or not a directory")
+			return 0, 0, errors.New("snapshot repository missing or not a directory")
 		}
 		store, err := raft.NewFileSnapshotStore(snapdir, retainedSnapshots, io.Discard)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		snapshots, err := store.List()
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		count = len(snapshots)
 		for _, snap := range snapshots {
 			if err := ctx.Err(); err != nil {
-				return 0, err
+				return 0, 0, err
 			}
 			_, reader, err := store.Open(snap.ID)
 			if err != nil {
-				return 0, err
+				return 0, 0, err
 			}
 			// Validate a private copy; never mutate a historical snapshot in place.
 			err = validatePhysicalSnapshot(reader, key)
 			_ = reader.Close()
 			if err != nil {
-				return 0, fmt.Errorf("snapshot %s: %w", snap.ID, err)
+				return 0, 0, fmt.Errorf("snapshot %s: %w", snap.ID, err)
 			}
+			covered = max(covered, snap.Index)
 		}
 	} else if !os.IsNotExist(err) {
-		return 0, err
+		return 0, 0, err
 	}
-	return count, nil
+	return count, covered, nil
 }
 
 func validatePhysicalSnapshot(r io.Reader, key crypto.Key) error {
@@ -258,10 +262,16 @@ func MigrateData(ctx context.Context, source, destination, profile string, key c
 	if err != nil {
 		return empty, err
 	}
+	var migratedFormat StateFormat
+	formatErr := state.loadDB().View(func(tx *bolt.Tx) error { var err error; migratedFormat, err = readStateFormat(tx); return err })
+	if formatErr != nil {
+		_ = state.Close()
+		return empty, formatErr
+	}
 	if err := state.Close(); err != nil {
 		return empty, err
 	}
-	manifest := dataformat.Manifest{StateVersion: dataformat.StateVersion, LogVersion: dataformat.LogVersion, Version: dataformat.PhysicalVersion, Protocol: dataformat.ClusterProtocol, LegacyFormat: s.report.LegacyFormat, RestoreRequired: true}
+	manifest := dataformat.Manifest{StateVersion: migratedFormat.Version, LogVersion: dataformat.LogVersion, Version: dataformat.PhysicalVersion, Protocol: migratedFormat.Protocol, LegacyFormat: s.report.LegacyFormat, RestoreRequired: true}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return empty, err
@@ -284,7 +294,7 @@ func MigrateData(ctx context.Context, source, destination, profile string, key c
 	if err := syncSnapshotDirectory(filepath.Dir(dst)); err != nil {
 		return empty, fmt.Errorf("destination published at %s but directory sync failed: %w", dst, err)
 	}
-	s.report.State = StateFormat{Version: dataformat.StateVersion, Protocol: dataformat.ClusterProtocol}
+	s.report.State = migratedFormat
 	s.report.RestoreRequired = true
 	return s.report, nil
 }

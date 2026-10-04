@@ -10,6 +10,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/memory/memorytest"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -35,6 +36,7 @@ func twoNodes(t *testing.T, caps compute.BudgetCaps) (asker, answerer *RaftPromp
 	if err != nil {
 		t.Fatal(err)
 	}
+	memorytest.ActivateTeams(t, store)
 	_, inmem := raft.NewInmemTransport("cont-node")
 	node, err := memory.NewRaft(memory.RaftConfig{
 		NodeID: "cont-node", LocalAddr: "cont-node",

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/memory/memorytest"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -25,6 +26,7 @@ func TestNotificationSourceFindsLateFailureLocallyAndThroughPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	memorytest.ActivateTeams(t, store)
 	put := func(item *pb.BotInboxItem) {
 		t.Helper()
 		raw, err := proto.Marshal(item)

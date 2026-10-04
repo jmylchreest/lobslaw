@@ -41,6 +41,7 @@ func TestConsoleLearnedReviewTypedTransportUsesHumanService(t *testing.T) {
 		t.Run(role, func(t *testing.T) {
 			t.Parallel()
 			n := reviewNode(t)
+			activateTeamFixture(t, n.store)
 			n.botSvc = memory.NewBotService(nil, n.store)
 			bot, err := proto.Marshal(&pb.BotRecord{Id: "worker", Owner: "user:alice", Enabled: true})
 			if err != nil {

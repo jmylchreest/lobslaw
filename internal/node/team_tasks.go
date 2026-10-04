@@ -22,7 +22,7 @@ import (
 type teamTaskRunner struct{ n *Node }
 
 func (n *Node) botTaskStarter() func(context.Context, turn.Request) (*pb.TaskApprovalRecord, error) {
-	if !gateComputeTeams(n.cfg) || n.agent == nil || n.inboxSvc == nil {
+	if !n.teamsActive() || n.agent == nil || n.inboxSvc == nil {
 		return nil
 	}
 	return n.startBotChatTask

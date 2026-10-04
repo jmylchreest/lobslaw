@@ -226,7 +226,14 @@ func prepareSnapshotDB(path string) (*bolt.DB, error) {
 		return nil, err
 	}
 	err = fresh.Update(func(tx *bolt.Tx) error {
+		state, err := readContract(tx)
+		if err != nil {
+			return err
+		}
 		for _, name := range allBuckets {
+			if state.Active < 2 && isTeamBucket(name) {
+				continue
+			}
 			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
 				return err
 			}

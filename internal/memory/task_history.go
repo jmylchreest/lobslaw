@@ -38,6 +38,13 @@ func taskHistoryKey(id string, task *pb.TaskApprovalRecord) []byte {
 func (s *Store) updateTaskHistory(tx *bolt.Tx, id string, raw []byte) error {
 	index := tx.Bucket([]byte(bucketTaskHistory))
 	if index == nil {
+		state, err := readContract(tx)
+		if err != nil {
+			return err
+		}
+		if state.Active < 2 {
+			return nil
+		}
 		return fmt.Errorf("missing task history index")
 	}
 	if sealed := tx.Bucket([]byte(BucketTaskApprovals)).Get([]byte(id)); sealed != nil {

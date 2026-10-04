@@ -80,13 +80,20 @@ func TestHistoricalTeamRecordsUseCanonicalRaftReader(t *testing.T) {
 	}
 }
 
-func TestTeamStateUpgradesFoundationAndKeepsRollback(t *testing.T) {
+func TestTeamStatePreservesFoundationUntilActivation(t *testing.T) {
 	store, path := newTestStore(t)
 	key := store.key
 	if err := store.Put(BucketPinned, "retained", []byte("original")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.loadDB().Update(func(tx *bolt.Tx) error {
+		for _, name := range teamBuckets {
+			if tx.Bucket([]byte(name)) != nil {
+				if err := tx.DeleteBucket([]byte(name)); err != nil {
+					return err
+				}
+			}
+		}
 		return writeStateFormat(tx, StateFormat{Version: 1, Protocol: dataformat.PreviousStateProtocol})
 	}); err != nil {
 		t.Fatal(err)
@@ -101,8 +108,8 @@ func TestTeamStateUpgradesFoundationAndKeepsRollback(t *testing.T) {
 	defer func() { _ = upgraded.Close() }()
 	if err := upgraded.loadDB().View(func(tx *bolt.Tx) error {
 		format, err := readStateFormat(tx)
-		if err == nil && (format.Version != 2 || format.Protocol != dataformat.ClusterProtocol) {
-			t.Fatalf("not migrated: %+v", format)
+		if err == nil && (format.Version != 1 || format.Protocol != dataformat.PreviousStateProtocol) {
+			t.Fatalf("eagerly migrated during binary rollout: %+v", format)
 		}
 		return err
 	}); err != nil {
@@ -112,7 +119,7 @@ func TestTeamStateUpgradesFoundationAndKeepsRollback(t *testing.T) {
 		t.Fatal("lost source data", err)
 	}
 	copies, err := filepath.Glob(filepath.Join(filepath.Dir(path), "state-before-migration-*.db"))
-	if err != nil || len(copies) != 1 {
-		t.Fatal("missing rollback image", err)
+	if err != nil || len(copies) != 0 {
+		t.Fatal("unexpected migration during binary rollout", err)
 	}
 }

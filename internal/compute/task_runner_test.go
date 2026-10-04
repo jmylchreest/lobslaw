@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/raft"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/memory/memorytest"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -40,6 +41,7 @@ func TestTaskRunnerResumesPreparedCallOnce(t *testing.T) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	memorytest.ActivateTeams(t, db)
 	log := &taskTestLog{fsm: memory.NewFSM(db)}
 	backend, e := memory.NewTaskApprovalStore(log, db)
 	if e != nil {
@@ -96,6 +98,7 @@ func TestTaskRunnerResumesPreparedCallOnce(t *testing.T) {
 func TestTaskRunnerBudgetExtensionKeepsConsumptionAndBound(t *testing.T) {
 	ctx := context.Background()
 	env := newTestEnv(t)
+	memorytest.ActivateTeams(t, env.store)
 	backend, e := memory.NewTaskApprovalStore(&taskTestLog{fsm: memory.NewFSM(env.store)}, env.store)
 	if e != nil {
 		t.Fatal(e)

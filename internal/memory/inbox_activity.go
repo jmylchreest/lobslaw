@@ -158,6 +158,13 @@ func (s *Store) rebuildInboxActivity(tx *bolt.Tx) error {
 // Rebuild existing projections too: an older binary may have changed the source
 // records without maintaining them. This runs before publication, never on reads.
 func (s *Store) rebuildDerived(tx *bolt.Tx) error {
+	state, err := readContract(tx)
+	if err != nil {
+		return err
+	}
+	if state.Active < 2 {
+		return nil
+	}
 	if err := s.rebuildTaskHistory(tx); err != nil {
 		return err
 	}

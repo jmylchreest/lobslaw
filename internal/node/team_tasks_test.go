@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/raft"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -171,6 +174,14 @@ func waitingTeamTask(t *testing.T, n *Node, calls int) *pb.BotInboxItem {
 
 func bootTeamTaskNode(t *testing.T, cfg Config, provider compute.LLMProvider, calls, forbidden *int, options ...func(*Node, *compute.AgentConfig)) (*Node, func()) {
 	t.Helper()
+	fixture, err := memory.OpenStore(filepath.Join(cfg.DataDir, "state.db"), cfg.MemoryKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activateTeamFixture(t, fixture)
+	if err := fixture.Close(); err != nil {
+		t.Fatal(err)
+	}
 	n, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -227,4 +238,26 @@ func bootTeamTaskNode(t *testing.T, cfg Config, provider compute.LLMProvider, ca
 		t.Fatal(err)
 	}
 	return n, stop
+}
+
+// This fixture represents a cluster whose operator has already activated teams.
+func activateTeamFixture(t *testing.T, store *memory.Store) {
+	t.Helper()
+	state, err := store.ContractState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Active >= 2 {
+		return
+	}
+	fsm := memory.NewFSM(store)
+	for i, action := range []string{"prepare", "finalize"} {
+		raw, err := proto.Marshal(&pb.LogEntry{Op: pb.LogOp_LOG_OP_PUT, Payload: &pb.LogEntry_Upgrade{Upgrade: &pb.UpgradeCommand{Action: action, TransitionId: "test-fixture", Target: 2, MembershipIndex: 1, MemberIds: []string{"fixture"}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := fsm.Apply(&raft.Log{Index: uint64(i + 1), Data: raw}); result != nil {
+			t.Fatal(result)
+		}
+	}
 }
