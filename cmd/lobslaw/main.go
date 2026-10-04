@@ -104,8 +104,8 @@ func parseFlags(args []string, out *flags) error {
 	fs.BoolVar(&out.compute, "compute", false, "enable compute function")
 	fs.BoolVar(&out.gateway, "gateway", false, "enable gateway function")
 	fs.BoolVar(&out.storage, "storage", false, "enable storage function")
-	fs.BoolVar(&out.computeTeams, "compute-teams", false, "enable compute-teams (opt-in; not implied by --all)")
-	fs.BoolVar(&out.uiWeb, "ui-web", false, "enable ui-web (opt-in; not implied by --all)")
+	fs.BoolVar(&out.computeTeams, "compute-teams", false, "enable compute-teams (also enabled by --all)")
+	fs.BoolVar(&out.uiWeb, "ui-web", false, "enable ui-web (also enabled by --all)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -141,10 +141,10 @@ func parseLogLevel(s string) slog.Level {
 
 // resolveFunctions picks the enabled node functions.
 // Precedence: --all > explicit per-function flags > config enabled
-// bits > default (all four).
+// bits > default (memory, compute, storage).
 func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 	if f.all {
-		return allFunctions()
+		return types.AllFunctions()
 	}
 
 	var explicit []types.NodeFunction
@@ -199,17 +199,7 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 		return fromCfg
 	}
 
-	return allFunctions()
-}
-
-func allFunctions() []types.NodeFunction {
-	// The canonical set. policy and gateway are accepted in config and
-	// normalised away, so they are not offered here.
-	return []types.NodeFunction{
-		types.FunctionMemory,
-		types.FunctionCompute,
-		types.FunctionStorage,
-	}
+	return types.DefaultFunctions()
 }
 
 // applyLogFilters translates config-file filter entries into

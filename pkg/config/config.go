@@ -467,13 +467,13 @@ type PolicyRuleConfig struct {
 }
 
 // ComputeTeamsConfig is the [compute-teams] section. Off by default;
-// --all does not enable it.
+// --all enables it.
 type ComputeTeamsConfig struct {
 	Enabled bool `koanf:"enabled"`
 }
 
-// UIWebConfig is the [ui-web] section. Off by default; --all does
-// not enable it. Enabling it does not imply local compute.
+// UIWebConfig is the [ui-web] section. Off by default; --all enables it.
+// Enabling ui-web alone does not imply local compute.
 type UIWebConfig struct {
 	Enabled bool `koanf:"enabled"`
 	// PublicURL is the browser-reachable root URL used in notification links.

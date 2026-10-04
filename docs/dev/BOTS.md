@@ -30,7 +30,7 @@ See aide decisions `owned-bots` and `compute-teams`.
 ## Teams (opt-in: `FunctionComputeTeams`)
 
 Coordinator selection, specialist delegation and a durable inbox.
-Off by default. `--all` does not enable it. Ordinary compute does
+Off by default. `--all` enables it. Ordinary compute does
 not seed teams or register team tools.
 
 | Piece | Where | Shape |

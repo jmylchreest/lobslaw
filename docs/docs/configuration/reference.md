@@ -826,7 +826,7 @@ request arrives, so profiles a newer Go adds appear on their own.
 ## `[compute-teams]`
 
 Off by default. Enable explicitly with `--compute-teams` or this section;
-`--all` does not enable it.
+`--all` enables it.
 
 ```toml
 [compute-teams]
@@ -848,7 +848,7 @@ the backend's gate controls availability of the remote team console.
 
 ## `[ui-web]`
 
-Off by default. `--all` does not enable it. Enabling it does not imply local compute.
+Off by default. `--all` enables it. Enabling it does not imply local compute.
 
 ```toml
 [ui-web]

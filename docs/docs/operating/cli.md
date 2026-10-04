@@ -98,6 +98,17 @@ lobslaw --config /etc/lobslaw/config.toml
 
 Foreground process. SIGTERM for graceful shutdown, SIGHUP for config reload + cert reload.
 
+`--all` explicitly selects every node function: `memory`, `compute`, `storage`,
+`compute-teams` and `ui-web`. It takes precedence over individual function flags
+and config `enabled` settings. Without function flags, enabled config sections
+select the functions; if none are enabled, the defaults are `memory`, `compute`
+and `storage`. Use `--memory --compute --storage` to request that subset explicitly.
+
+Feature selection does not supply provider credentials, bypass authentication,
+activate a new cluster data contract, or add browser assets to a `no_web` build.
+Teams still require the documented contract-2 activation before their services
+start. See [Data migrations](/operating/data-migrations).
+
 ## `lobslaw init`
 
 Interactive scaffold — walks through prompts, writes `config.toml`, `.env`, `data/`, `audit/`, `certs/`. See [Getting Started → From Source](/getting-started/from-source) for the full walkthrough.
