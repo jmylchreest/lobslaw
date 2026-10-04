@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/bots"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -248,16 +250,5 @@ var ErrNotYours = errors.New("groups: that team belongs to somebody else")
 // unowned-editable fallback — an unowned team is inaccessible, not
 // public. Named apart from MayModify (bots) because both live here.
 func MayModifyGroup(rec *lobslawv1.GroupRecord, principal string) bool {
-	principal = strings.TrimSpace(principal)
-	if principal == "" {
-		return false
-	}
-	if rec == nil {
-		return false
-	}
-	owner := strings.TrimSpace(rec.GetOwner())
-	if owner == "" {
-		return false
-	}
-	return owner == principal
+	return bots.MayModifyGroup(rec, principal)
 }

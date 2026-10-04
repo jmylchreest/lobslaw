@@ -1,12 +1,13 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/jmylchreest/lobslaw/internal/console"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,13 +19,7 @@ import (
 
 // TaskApprovalAPI is owner-facing; it cannot create execution claims or obtain
 // private continuation/claim tokens. The runner uses the typed peer service.
-type TaskApprovalAPI interface {
-	GetTaskApproval(context.Context, *pb.GetTaskApprovalRequest) (*pb.GetTaskApprovalResponse, error)
-	ListTaskApproval(context.Context, *pb.ListTaskApprovalRequest) (*pb.ListTaskApprovalResponse, error)
-	DecideTaskApproval(context.Context, *pb.DecideTaskApprovalRequest) (*pb.DecideTaskApprovalResponse, error)
-	CancelTaskApproval(context.Context, *pb.CancelTaskApprovalRequest) (*pb.CancelTaskApprovalResponse, error)
-	RecoverTaskApproval(context.Context, *pb.RecoverTaskApprovalRequest) (*pb.RecoverTaskApprovalResponse, error)
-}
+type TaskApprovalAPI = console.TaskApprovalAPI
 
 func (s *Server) handleTaskApprovals(w http.ResponseWriter, r *http.Request) {
 	authn, ok := s.authenticateTaskOwner(w, r)

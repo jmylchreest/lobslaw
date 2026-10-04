@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
+
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -25,12 +27,12 @@ import (
 
 var (
 	// ErrPromptNotFound is returned for an unknown or purged id.
-	ErrPromptNotFound = errors.New("prompt: not found")
+	ErrPromptNotFound = turn.ErrPromptNotFound
 
 	// ErrPromptResolved means somebody else answered first. Expected
 	// under a double-tap or two channels racing, not an error worth
 	// alarming about.
-	ErrPromptResolved = errors.New("prompt: already resolved")
+	ErrPromptResolved = turn.ErrPromptResolved
 )
 
 // DefaultPromptTTL bounds how long a question waits for an answer.
