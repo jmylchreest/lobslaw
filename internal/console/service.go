@@ -4,12 +4,12 @@ package console
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/bots"
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/logging"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -62,10 +62,7 @@ type Service struct {
 }
 
 func New(cfg Config) *Service {
-	log := cfg.Logger
-	if log == nil {
-		log = slog.New(slog.NewTextHandler(io.Discard, nil))
-	}
+	log := logging.OrDefault(cfg.Logger)
 	return &Service{cfg: cfg, log: log}
 }
 func Principal(id string) string {

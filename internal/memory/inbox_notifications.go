@@ -11,12 +11,13 @@ import (
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/jmylchreest/lobslaw/internal/bots"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
 const bucketInboxNotifications = "inbox_notifications_v1"
 const bucketInboxNotificationKeys = "inbox_notification_keys_v1"
-const MaxNotificationPage = 256
+const MaxNotificationPage = bots.MaxNotificationPage
 
 // Candidates are indexed by current state, not inbox arrival. Active work is
 // retained until resolved; terminal outcomes are ordered by their completion.

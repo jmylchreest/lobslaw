@@ -32,3 +32,6 @@ func InboxStatusName(s pb.InboxStatus) string {
 func InboxKindName(k pb.InboxKind) string {
 	return strings.ToLower(strings.TrimPrefix(k.String(), "INBOX_KIND_"))
 }
+
+// MaxNotificationPage bounds owner-facing outbox pages across transports.
+const MaxNotificationPage = 256

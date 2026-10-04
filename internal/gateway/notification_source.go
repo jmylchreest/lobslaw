@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/bots"
 	"github.com/jmylchreest/lobslaw/internal/notify"
 	pb "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -164,7 +164,7 @@ func (s *Server) notificationTask(ctx context.Context, claims *types.Claims, own
 
 func (s *Server) queryConsoleNotifications(ctx context.Context, in *pb.QueryConsoleRequest) (*pb.QueryConsoleResponse, error) {
 	query := in.GetNotificationCandidates()
-	if query.Limit < 1 || query.Limit > memory.MaxNotificationPage || len(query.After) > 512 {
+	if query.Limit < 1 || query.Limit > bots.MaxNotificationPage || len(query.After) > 512 {
 		return nil, status.Error(codes.InvalidArgument, "invalid notification page")
 	}
 	claims, _ := ctx.Value(forwardedConsoleIdentity{}).(*types.Claims)
