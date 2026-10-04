@@ -47,14 +47,14 @@ func TestUpgradeMutationsAuditAuthorityAndOutcome(t *testing.T) {
 	t.Cleanup(func() { _ = log.Close() })
 	n := &Node{raft: rn, auditLog: log, log: slog.Default(), policyEngine: policy.NewEngine(store, slog.Default())}
 	n.cfg.Users = []config.UserConfig{{ID: "alice", Roles: []string{"operator"}}}
+	wireUpgradeTestDefaults(t, n)
 	service := upgradeService{node: n}
 	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "alice", OrganizationalUnit: []string{mtls.OperatorOU}}}
 	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{cert}}}}})
 	req := &pb.ChangeUpgradeRequest{Action: "transfer", TargetNodeId: "audit-node"}
-	if _, err = service.ChangeUpgrade(ctx, req); err == nil {
-		t.Fatal("missing grant accepted")
+	if _, err = service.ChangeUpgrade(context.Background(), req); err == nil {
+		t.Fatal("anonymous mutation accepted")
 	}
-	seedRule(t, store, &pb.PolicyRule{Id: "upgrade-write", Subject: "role:operator", Action: "cluster.upgrade.write", Resource: "cluster:*", Effect: "allow", Priority: 50})
 	if _, err = service.ChangeUpgrade(ctx, req); err != nil {
 		t.Fatal(err)
 	}
@@ -65,21 +65,21 @@ func TestUpgradeMutationsAuditAuthorityAndOutcome(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("want denied, admitted and completed audit; got %+v", entries)
 	}
-	for _, e := range entries {
+	for _, e := range entries[1:] {
 		if e.ActorScope != "operator:alice" {
 			t.Fatalf("actor missing: %+v", e)
 		}
 	}
-	if entries[0].Effect != types.EffectDeny || entries[1].PolicyRule != "upgrade-write" || entries[2].PolicyRule != "upgrade-write" || entries[2].ResultHash == "" {
+	if entries[0].Effect != types.EffectDeny || entries[1].PolicyRule != "default-operator-cluster-upgrade-write" || entries[2].PolicyRule != "default-operator-cluster-upgrade-write" || entries[2].ResultHash == "" {
 		t.Fatalf("missing grant/outcome: %+v", entries)
 	}
 }
 
 func TestUpgradeRefusesMutationWhenAdmissionCannotBeAudited(t *testing.T) {
 	store := crossOwnerTestStore(t)
-	seedRule(t, store, &pb.PolicyRule{Id: "write", Subject: "role:operator", Action: "cluster.upgrade.write", Resource: "cluster:*", Effect: "allow", Priority: 50})
 	n := &Node{policyEngine: policy.NewEngine(store, slog.Default())}
 	n.cfg.Users = []config.UserConfig{{ID: "alice", Roles: []string{"operator"}}}
+	wireUpgradeTestDefaults(t, n)
 	cert := &x509.Certificate{Subject: pkix.Name{CommonName: "alice", OrganizationalUnit: []string{mtls.OperatorOU}}}
 	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{cert}}}}})
 	// Raft is intentionally nil: reaching mutation dispatch would panic.

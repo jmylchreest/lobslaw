@@ -46,7 +46,7 @@ type Engine struct {
 	evalMu     sync.RWMutex
 	evaluators map[string]ConditionEvaluator
 
-	// defaults are config-derived rules held in memory, evaluated
+	// defaults are shipped or config-derived rules held in memory, evaluated
 	// AFTER everything in the store.
 	//
 	// Not written to the rule bucket, deliberately. That bucket is
@@ -167,7 +167,7 @@ func (e *Engine) Evaluate(ctx context.Context, claims *types.Claims, action, res
 	}, nil
 }
 
-// SetDefaults installs config-derived fallback rules.
+// SetDefaults installs shipped or config-derived fallback rules.
 //
 // Replaces rather than appends, so a reload cannot accumulate
 // duplicates of the same setting.

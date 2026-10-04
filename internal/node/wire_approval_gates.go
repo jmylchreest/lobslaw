@@ -18,15 +18,13 @@ import (
 // directions — a gate with no rule denies everything by default-deny,
 // and a rule with no gate is never consulted.
 //
-// They are wired TOGETHER because Engine.SetDefaults replaces rather
-// than appends. Two stages each calling it with their own one-element
-// slice meant whichever ran second silently disabled the first, and
-// the symptom would have been a gate that never asked — the failure
-// mode that looks exactly like working correctly.
+// Defaults are returned to wirePolicyDefaults for composition with other
+// subsystems. Engine.SetDefaults replaces rather than appends, so independent
+// calls would silently disable another subsystem's defaults.
 
-// wireApprovalGates installs every approval gate and the single set of
-// default rules behind them.
-func (n *Node) wireApprovalGates() error {
+// wireApprovalGates installs compute approval gates and returns their fallback
+// rules. wirePolicyDefaults installs the combined defaults before serving work.
+func (n *Node) wireApprovalGates() []types.PolicyRule {
 	var defaults []types.PolicyRule
 
 	// The condition evaluator goes in FIRST, and before the boot audit
@@ -121,17 +119,7 @@ func (n *Node) wireApprovalGates() error {
 			"override", `write a policy rule, e.g. action="remote:run" resource="(remote=*) git *"`)
 	}
 
-	// Once, and unconditionally — including with an empty slice, so a
-	// node that turned a gate off clears the rule rather than leaving
-	// the previous boot's default in place.
-	//
-	// The rules go in before the gates above start being consulted;
-	// registering a gate while the engine had nothing to say would
-	// make every call hit default-deny in the window between.
-	if n.policyEngine != nil {
-		n.policyEngine.SetDefaults(defaults)
-	}
-	return nil
+	return defaults
 }
 
 func (n *Node) shellIsRegistered() bool {

@@ -22,7 +22,9 @@ No arbitrary skipped-release or zero-quorum availability guarantee is made.
 - `RaftNode.ChangeUpgrade` owns leader checks, member probes, membership fencing
   and proposal admission. `SetUpgradeProbe` injects authenticated peer discovery.
 - `UpgradeService` exposes typed status/change messages. Node wiring owns mTLS
-  identity checks and explicit operator policy. Peers may inspect capabilities;
+  identity checks and policy evaluation. Configured operators receive separate
+  read/write fallback grants, overridden by stored policy; a verified operator
+  certificate is still required for changes. Peers may inspect capabilities;
   only operators with the configured role and grant may change the contract.
 - gRPC interceptors exchange the stable control protocol, required contract and
   supported contract set. Both directions are checked before sending persisted
