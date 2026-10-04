@@ -72,53 +72,53 @@ func (n *RaftNode) ChangeUpgrade(ctx context.Context, req *pb.ChangeUpgradeReque
 	if req == nil {
 		return nil, errors.New("upgrade request required")
 	}
-	n.controlMu.Lock()
-	defer n.controlMu.Unlock()
-	if err := n.Raft.Barrier(upgradeTimeout).Error(); err != nil {
-		return nil, err
-	}
-	state, err := n.fsm.store.ContractState()
+	ctx, cancel := controlContext(ctx, upgradeTimeout)
+	defer cancel()
+	lease, before, err := n.readControl(ctx)
 	if err != nil {
 		return nil, err
 	}
+	lease.release()
 	if req.Action == "transfer" {
-		return n.transferUpgradeLeader(ctx, req.TargetNodeId)
+		return n.transferUpgradeLeader(ctx, before, req.TargetNodeId)
 	}
-	if state.CompletedID == req.TransitionId && state.CompletedAction == req.Action && state.Epoch == req.ExpectedEpoch+1 {
-		return n.UpgradeStatus()
-	}
-	cfg := n.Raft.GetConfiguration()
-	if err := cfg.Error(); err != nil {
-		return nil, err
-	}
-	servers := cfg.Configuration().Servers
-	ids := make([]string, 0, len(servers))
-	for _, s := range servers {
-		ids = append(ids, string(s.ID))
+	state := before.state
+	ids := make([]string, 0, len(before.servers))
+	for _, server := range before.servers {
+		ids = append(ids, string(server.ID))
 	}
 	slices.Sort(ids)
-	t := dataformat.Transition{ID: req.TransitionId, Target: req.Target, Epoch: req.ExpectedEpoch, MembershipIndex: n.Raft.AppliedIndex(), MembershipFingerprint: configurationFingerprint(servers), Members: ids, Index: 1}
+	t := dataformat.Transition{ID: req.TransitionId, Target: req.Target, Epoch: req.ExpectedEpoch, MembershipIndex: before.index, MembershipFingerprint: configurationFingerprint(before.servers), Members: ids, Index: 1}
 	if state.Prepared != nil {
 		t.MembershipIndex = state.Prepared.MembershipIndex
+	} else if state.CompletedID == req.TransitionId && state.Completed != nil {
+		t.MembershipIndex = state.Completed.MembershipIndex
 	}
 	if _, err := state.Advance(req.Action, t, dataformat.SupportedContracts()); err != nil {
 		return nil, err
 	}
-	// Abort is possible without unavailable peers, but still requires quorum and
-	// the exact prepared membership. It does not advance the data contract.
+	if state.CompletedID == req.TransitionId {
+		return n.UpgradeStatus()
+	}
+	// Abort needs quorum and the prepared membership, but not unavailable peers.
 	if req.Action != "abort" {
-		if err := n.checkUpgradeMembers(ctx, servers, state, t, req.Action == "finalize"); err != nil {
+		if err := n.checkUpgradeMembers(ctx, before.servers, state, t, req.Action == "finalize"); err != nil {
 			return nil, err
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	lease, after, err := n.readControl(ctx)
+	if err != nil {
 		return nil, err
+	}
+	defer lease.release()
+	if !before.matches(after) {
+		return nil, errControlChanged
 	}
 	raw, err := proto.Marshal(&pb.LogEntry{Op: pb.LogOp_LOG_OP_PUT, Payload: &pb.LogEntry_Upgrade{Upgrade: transitionCommand(req.Action, t)}})
 	if err != nil {
 		return nil, err
 	}
-	result, err := n.applyRaw(raw, upgradeTimeout)
+	result, err := n.applyControl(ctx, lease, before.generation, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -182,20 +182,14 @@ func configurationFingerprint(servers []raft.Server) string {
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
-func (n *RaftNode) transferUpgradeLeader(ctx context.Context, id string) (*pb.UpgradeStatusResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, upgradeTimeout)
-	defer cancel()
+func (n *RaftNode) transferUpgradeLeader(ctx context.Context, before controlView, id string) (*pb.UpgradeStatusResponse, error) {
 	if id == "" {
 		return nil, errors.New("target node id required")
 	}
 	if id == string(n.nodeID) {
 		return n.UpgradeStatus()
 	}
-	state, err := n.fsm.store.ContractState()
-	if err != nil {
-		return nil, err
-	}
-	for _, member := range n.ConfigurationServers() {
+	for _, member := range before.servers {
 		if string(member.ID) != id || member.Suffrage != raft.Voter {
 			continue
 		}
@@ -209,10 +203,22 @@ func (n *RaftNode) transferUpgradeLeader(ctx context.Context, id string) (*pb.Up
 		if remote == nil || remote.ID != id {
 			return nil, errors.New("member identity mismatch")
 		}
-		if err := remote.supports(state.Required()); err != nil {
+		if err := remote.supports(before.state.Required()); err != nil {
 			return nil, err
 		}
-		if err := n.Raft.LeadershipTransferToServer(member.ID, member.Address).Error(); err != nil {
+		lease, after, err := n.readControl(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer lease.release()
+		if !before.matches(after) {
+			return nil, errControlChanged
+		}
+		future, err := n.enqueueControl(ctx, before.generation, func(time.Duration) raft.Future { return n.Raft.LeadershipTransferToServer(member.ID, member.Address) })
+		if err != nil {
+			return nil, err
+		}
+		if err := lease.wait(ctx, future); err != nil {
 			return nil, err
 		}
 		return n.UpgradeStatus()

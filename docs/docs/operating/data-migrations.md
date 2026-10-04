@@ -123,3 +123,16 @@ The upgrade RPC status is local to the addressed member; it reports its node ID,
 reader capabilities, active contract, epoch, preparation index and known leader.
 A blocked preparation/finalization identifies the first member that is not ready.
 Activation changes storage interpretation, not ownership or tool permissions.
+
+
+Upgrade mutations are audited with the verified operator and policy grant.
+Configure local audit as well as Raft audit to retain completion evidence after
+leadership transfer. If recording admission fails, the action is refused. If an
+outcome record fails after submission, the node warns; check upgrade status before
+retrying, because the action may already have committed. Reuse the exact ID,
+epoch and target for a lost-response retry; changing the target is refused.
+
+Joining-member probes have a bounded timeout and do not hold the write-admission
+lease during the network call. Cancelled or expired requests waiting for admission
+return without submitting. A timeout after submission still has an uncertain
+outcome: inspect status/configuration rather than assuming it did not happen.

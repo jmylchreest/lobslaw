@@ -9,6 +9,8 @@ import (
 // ControlProtocol remains stable while explicitly supported data contracts evolve.
 const ControlProtocol = "lobslaw-rolling-v1"
 
+const MaxTransitionIDBytes = 128
+
 // SupportedContracts is an explicit compatibility set, not an inferred range.
 func SupportedContracts() []uint32 { return []uint32{1} }
 
@@ -28,6 +30,14 @@ type ContractState struct {
 	Prepared        *Transition `json:"prepared,omitempty"`
 	CompletedID     string      `json:"completed_id,omitempty"`
 	CompletedAction string      `json:"completed_action,omitempty"`
+	Completed       *Transition `json:"completed,omitempty"`
+}
+
+// CompletedMatches checks the caller-controlled part of a completed request.
+// Historical records without a complete tuple remain readable, but cannot
+// establish that a retry is identical and therefore fail closed.
+func (s ContractState) CompletedMatches(action, id string, target uint32, epoch uint64) bool {
+	return s.Completed != nil && s.CompletedID == id && s.CompletedAction == action && s.Epoch == epoch+1 && s.Completed.ID == id && s.Completed.Target == target && s.Completed.Epoch == epoch
 }
 
 func (s ContractState) Required() uint32 {
@@ -53,11 +63,11 @@ func (s ContractState) Validate(supported []uint32) error {
 // Advance is deterministic. The adapter validates membership and readiness before
 // proposing; all replicas apply the same durable transition at the same index.
 func (s ContractState) Advance(action string, t Transition, supported []uint32) (ContractState, error) {
-	if t.ID == "" || len(t.ID) > 128 {
-		return s, errors.New("transition id required (maximum 128 bytes)")
+	if t.ID == "" || len(t.ID) > MaxTransitionIDBytes {
+		return s, fmt.Errorf("transition id required (maximum %d bytes)", MaxTransitionIDBytes)
 	}
 	if s.CompletedID == t.ID {
-		if s.CompletedAction == action && t.Epoch+1 == s.Epoch {
+		if s.CompletedMatches(action, t.ID, t.Target, t.Epoch) && s.Completed.matches(t) {
 			return s, nil
 		}
 		return s, errors.New("transition id already completed; choose a new id")
@@ -99,6 +109,9 @@ func (s ContractState) Advance(action string, t Transition, supported []uint32) 
 		s.Prepared = nil
 		s.CompletedID = t.ID
 		s.CompletedAction = action
+		completed := *p
+		completed.Members = slices.Clone(p.Members)
+		s.Completed = &completed
 	default:
 		return s, errors.New("expected prepare, finalize or abort")
 	}
