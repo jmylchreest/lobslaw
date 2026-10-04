@@ -77,3 +77,11 @@ func TestDataProtocolServerRejectsUnversionedPeer(t *testing.T) {
 		t.Fatal("accepted incompatible join", err)
 	}
 }
+
+func TestForwardedRaftProposalRequiresProtocol(t *testing.T) {
+	called := false
+	_, err := DataFormat()(context.Background(), &pb.ProposeRequest{}, &grpc.UnaryServerInfo{FullMethod: pb.NodeService_Propose_FullMethodName}, func(context.Context, any) (any, error) { called = true; return nil, nil })
+	if status.Code(err) != codes.FailedPrecondition || called {
+		t.Fatal("accepted old serialized proposal", err)
+	}
+}
