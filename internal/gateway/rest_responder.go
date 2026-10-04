@@ -163,9 +163,6 @@ func (r *restResponder) forceEvent(name string, payload any) error {
 
 // writeEventLocked emits one SSE frame. Caller holds r.mu.
 func (r *restResponder) writeEventLocked(name string, body []byte) error {
-	if sink, ok := r.w.(interface{ consoleEvent(string, any) error }); ok {
-		return sink.consoleEvent(name, json.RawMessage(body))
-	}
 	if _, err := r.w.Write([]byte("event: " + name + "\ndata: ")); err != nil {
 		return err
 	}
