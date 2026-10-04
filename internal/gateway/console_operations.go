@@ -10,7 +10,11 @@ import (
 
 // Transport authentication supplies claims; operations repeat resource authorization.
 func (s *Server) consoleOperations() *console.Service {
-	return console.New(console.Config{Bots: s.cfg.Bots, Groups: s.cfg.Groups, Inbox: s.cfg.Inbox, Transcripts: s.cfg.Transcripts, Routines: s.cfg.Routines, Memory: s.cfg.Memory, Tools: s.cfg.Tools, Plan: s.cfg.Plan, Prompts: consolePromptAdapter{s.cfg.Prompts}, Logger: s.log})
+	cfg := console.Config{Bots: s.cfg.Bots, Groups: s.cfg.Groups, Inbox: s.cfg.Inbox, Transcripts: s.cfg.Transcripts, Routines: s.cfg.Routines, Memory: s.cfg.Memory, Tools: s.cfg.Tools, Plan: s.cfg.Plan, Prompts: consolePromptAdapter{s.cfg.Prompts}, Logger: s.log}
+	if !s.teamsReady() {
+		cfg.Bots, cfg.Groups, cfg.Inbox = nil, nil, nil
+	}
+	return console.New(cfg)
 }
 func (s *Server) consoleClaims(r *http.Request) *types.Claims {
 	authn, err := s.authenticateRequest(r)

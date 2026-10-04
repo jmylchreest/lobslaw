@@ -78,6 +78,10 @@ func (s *Server) computeAvailable(ctx context.Context) bool {
 	return true
 }
 
+func (s *Server) teamsReady() bool {
+	return s.cfg.TeamsReady == nil || s.cfg.TeamsReady()
+}
+
 func (s *Server) localCapabilities(ctx context.Context) capabilitiesResponse {
 	computeOn := s.runner != nil
 	teamsOn := s.cfg.Bots != nil
@@ -95,7 +99,7 @@ func (s *Server) localCapabilities(ctx context.Context) capabilitiesResponse {
 			Enabled:    teamsOn,
 			Authorised: teamsOn,
 			Configured: teamsOn,
-			Available:  teamsOn,
+			Available:  teamsOn && s.teamsReady(),
 		},
 		UIWeb: capabilityFlags{
 			Supported:  ui.Supported,

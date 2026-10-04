@@ -139,8 +139,9 @@ cluster backup and binary for disaster recovery, accounting for subsequent write
 and external effects. Do not start copied directories as duplicate node identities.
 
 Team-capable nodes started on contract 1 keep team execution/tools disabled. After
-finalization, restart those compute nodes one at a time to wire the enabled team
-services. This does not require stopping the whole cluster. New empty data
+finalization, configured team services become available in the same processes.
+The inbox worker observes activation on its next wake or idle tick (at most 30 seconds);
+no second restart is required. New empty data
 stores begin on contract 1; historical team stores retain contract 2 through the
 initial coordinated migration. Do not activate solely because binaries have
 changed: inspect status and check ordinary operations first.

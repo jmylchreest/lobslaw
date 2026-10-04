@@ -741,7 +741,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
 	// cancel. Only present on Raft-hosting nodes (the construction
 	// branch in New gated that).
-	if n.inboxSvc != nil && n.agent != nil && n.teamsActive() {
+	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
 		go n.runInboxDrain(ctx)
 	}
 	if n.scheduler != nil {
