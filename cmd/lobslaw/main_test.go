@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"reflect"
@@ -232,7 +234,35 @@ func TestBuildNodeConfigLoadsImpliedMemoryKey(t *testing.T) {
 	if _, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{types.FunctionStorage}, slog.Default()); err == nil {
 		t.Fatal("storage-only selection silently skipped missing memory key")
 	}
+	cfg.Auth.RequireAuth = true
 	if _, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{types.FunctionUIWeb}, slog.Default()); err != nil {
 		t.Fatalf("web-only selection acquired a memory dependency: %v", err)
+	}
+}
+
+func TestBuildNodeConfigSelectedConsoleRequiresAuth(t *testing.T) {
+	creds := backupTestCredentials(t, "console-node", "operator")
+	t.Setenv("LOBSLAW_TEST_CONSOLE_MEMORY_KEY", "0101010101010101010101010101010101010101010101010101010101010101")
+	for _, flag := range []string{"--all", "--ui-web"} {
+		for _, authenticated := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/auth=%t", flag, authenticated), func(t *testing.T) {
+				cfg := &config.Config{}
+				cfg.Cluster.MTLS = config.MTLSConfig{CACert: creds.ca, NodeCert: filepath.Join(filepath.Dir(creds.ca), "node.pem"), NodeKey: filepath.Join(filepath.Dir(creds.ca), "node-key.pem")}
+				cfg.Memory.Encryption.KeyRef = "env:LOBSLAW_TEST_CONSOLE_MEMORY_KEY"
+				cfg.Auth.RequireAuth = authenticated
+				var f flags
+				if err := parseFlags([]string{flag}, &f); err != nil {
+					t.Fatal(err)
+				}
+				_, err := buildNodeConfig(cfg, "console-node", resolveFunctions(f, cfg), slog.Default())
+				if authenticated {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if !errors.Is(err, types.ErrInvalidConfig) || !strings.Contains(err.Error(), "require_auth") {
+					t.Fatalf("unauthenticated console should be refused, got %v", err)
+				}
+			})
+		}
 	}
 }

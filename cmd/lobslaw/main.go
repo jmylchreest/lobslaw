@@ -431,7 +431,11 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 	stamp := resolveBuildStamp()
 	// Resolve dependencies before deciding which boot secrets are required.
 	// In particular, storage implies memory even when only --storage was given.
+	// The second result lists rewritten aliases; node.New logs those warnings.
 	effectiveFunctions, _ := types.NormalizeFunctions(funcs)
+	if err := cfg.ValidateSelectedFunctions(effectiveFunctions); err != nil {
+		return node.Config{}, err
+	}
 	needsRaft := slices.Contains(effectiveFunctions, types.FunctionMemory)
 
 	// Merge .mcp.json from the same dir as config.toml. Trust model

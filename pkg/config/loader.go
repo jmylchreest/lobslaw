@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -181,6 +182,14 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateSelectedFunctions checks security requirements after CLI flags and
+// configuration have been resolved into the effective node functions.
+func (c *Config) ValidateSelectedFunctions(functions []types.NodeFunction) error {
+	ui := c.UIWeb
+	ui.Enabled = ui.Enabled || slices.Contains(functions, types.FunctionUIWeb)
+	return validateUIWebAuth(ui, c.Auth)
 }
 
 // validateUIWebAuth refuses an unauthenticated console. The node's

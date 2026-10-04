@@ -108,6 +108,8 @@ configured memory encryption key.
 
 Feature selection does not supply provider credentials, bypass authentication,
 activate a new cluster data contract, or add browser assets to a `no_web` build.
+Selecting the console with `--all` or `--ui-web` requires `[auth] require_auth = true`;
+startup fails if it is absent.
 Teams still require the documented contract-2 activation before their services
 start. See [Data migrations](/operating/data-migrations).
 
