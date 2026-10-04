@@ -48,7 +48,8 @@ func validateStateFormat(tx *bolt.Tx, cipher *crypto.Cipher, validateRecords boo
 	if format.Version > dataformat.StateVersion {
 		return format, fmt.Errorf("state format %d is newer than supported %d", format.Version, dataformat.StateVersion)
 	}
-	if format.Protocol != "" && format.Protocol != dataformat.ClusterProtocol {
+	compatible := (format.Version == 0 && format.Protocol == "") || (format.Version == dataformat.StateVersion && format.Protocol == dataformat.ClusterProtocol)
+	if !compatible {
 		return format, fmt.Errorf("state requires protocol %q; binary supports %q", format.Protocol, dataformat.ClusterProtocol)
 	}
 	err = tx.ForEach(func(name []byte, b *bolt.Bucket) error {
