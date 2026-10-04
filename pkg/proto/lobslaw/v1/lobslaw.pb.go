@@ -16350,6 +16350,7 @@ func (*QueryConsoleRequest_NotificationCandidates) isQueryConsoleRequest_Query()
 
 type ConsoleCapability struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Supported     bool                   `protobuf:"varint,5,opt,name=supported,proto3" json:"supported,omitempty"`
 	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	Authorised    bool                   `protobuf:"varint,2,opt,name=authorised,proto3" json:"authorised,omitempty"`
 	Configured    bool                   `protobuf:"varint,3,opt,name=configured,proto3" json:"configured,omitempty"`
@@ -16386,6 +16387,13 @@ func (x *ConsoleCapability) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ConsoleCapability.ProtoReflect.Descriptor instead.
 func (*ConsoleCapability) Descriptor() ([]byte, []int) {
 	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{206}
+}
+
+func (x *ConsoleCapability) GetSupported() bool {
+	if x != nil {
+		return x.Supported
+	}
+	return false
 }
 
 func (x *ConsoleCapability) GetEnabled() bool {
@@ -23551,8 +23559,9 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x0flearned_reviews\x18\x13 \x01(\v2\x18.lobslaw.v1.ConsoleEmptyH\x00R\x0elearnedReviews\x12B\n" +
 	"\x0elearned_review\x18\x14 \x01(\v2\x19.lobslaw.v1.ConsoleTargetH\x00R\rlearnedReview\x12_\n" +
 	"\x17notification_candidates\x18\x15 \x01(\v2$.lobslaw.v1.ConsoleNotificationQueryH\x00R\x16notificationCandidatesB\a\n" +
-	"\x05query\"\x8b\x01\n" +
-	"\x11ConsoleCapability\x12\x18\n" +
+	"\x05query\"\xa9\x01\n" +
+	"\x11ConsoleCapability\x12\x1c\n" +
+	"\tsupported\x18\x05 \x01(\bR\tsupported\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x1e\n" +
 	"\n" +
 	"authorised\x18\x02 \x01(\bR\n" +

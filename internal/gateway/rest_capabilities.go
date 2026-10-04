@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+
+	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
 )
 
 type capabilityFlags struct {
+	Supported  bool `json:"supported"`
 	Enabled    bool `json:"enabled"`
 	Authorised bool `json:"authorised"`
 	Configured bool `json:"configured"`
@@ -30,9 +33,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	computeOn := s.runner != nil
-	teamsOn := s.cfg.Bots != nil
-	uiOn := s.consoleEnabled()
+	uiOn := s.cfg.UIWebEnabled || s.consoleEnabled()
 	if s.cfg.RemoteConsole != nil {
 		out, err := s.remoteCapabilities(r.Context(), authn.Claims)
 		s.mu.Lock()
@@ -51,31 +52,12 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			s.remoteCaps = &cached
 		}
 		s.mu.Unlock()
-		out.UIWeb = capabilityFlags{Enabled: uiOn, Authorised: uiOn, Configured: uiOn, Available: uiOn}
+		out.UIWeb = capabilityFlags{Supported: ui.Supported, Enabled: uiOn, Authorised: uiOn, Configured: uiOn, Available: s.consoleEnabled()}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
 		return
 	}
-	out := capabilitiesResponse{
-		Compute: capabilityFlags{
-			Enabled:    computeOn,
-			Authorised: true,
-			Configured: computeOn,
-			Available:  s.computeAvailable(),
-		},
-		ComputeTeams: capabilityFlags{
-			Enabled:    teamsOn,
-			Authorised: teamsOn,
-			Configured: teamsOn,
-			Available:  teamsOn,
-		},
-		UIWeb: capabilityFlags{
-			Enabled:    uiOn,
-			Authorised: uiOn,
-			Configured: uiOn,
-			Available:  uiOn,
-		},
-	}
+	out := s.localCapabilities(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
@@ -86,12 +68,41 @@ type computeAvailability interface {
 	Available(context.Context) bool
 }
 
-func (s *Server) computeAvailable() bool {
+func (s *Server) computeAvailable(ctx context.Context) bool {
 	if s.runner == nil {
 		return false
 	}
 	if p, ok := s.runner.(computeAvailability); ok {
-		return p.Available(context.Background())
+		return p.Available(ctx)
 	}
 	return true
+}
+
+func (s *Server) localCapabilities(ctx context.Context) capabilitiesResponse {
+	computeOn := s.runner != nil
+	teamsOn := s.cfg.Bots != nil
+	uiOn := s.cfg.UIWebEnabled || s.consoleEnabled()
+	return capabilitiesResponse{
+		Compute: capabilityFlags{
+			Supported:  true,
+			Enabled:    computeOn,
+			Authorised: true,
+			Configured: computeOn,
+			Available:  s.computeAvailable(ctx),
+		},
+		ComputeTeams: capabilityFlags{
+			Supported:  true,
+			Enabled:    teamsOn,
+			Authorised: teamsOn,
+			Configured: teamsOn,
+			Available:  teamsOn,
+		},
+		UIWeb: capabilityFlags{
+			Supported:  ui.Supported,
+			Enabled:    uiOn,
+			Authorised: uiOn,
+			Configured: uiOn,
+			Available:  s.consoleEnabled(),
+		},
+	}
 }

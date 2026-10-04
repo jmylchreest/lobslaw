@@ -13,7 +13,6 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
-	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -118,6 +117,7 @@ func (n *Node) wireGateway() error {
 	}
 
 	cfg := gateway.RESTConfig{
+		UIWebEnabled:     uiWeb,
 		IncomingDir:      n.incomingDir(),
 		Notices:          n.notices,
 		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
@@ -187,22 +187,6 @@ func (n *Node) wireGateway() error {
 		"ui_web", uiWeb,
 	)
 	return nil
-}
-
-// mountWebConsole attaches the embedded SPA when FunctionUIWeb is on.
-// A missing Vite build is a warning, not a boot failure: Telegram and
-// the API still serve.
-func (n *Node) mountWebConsole(enabled bool) {
-	if !enabled || n.gatewaySrv == nil {
-		return
-	}
-	handler, err := ui.Handler()
-	if err != nil {
-		n.log.Warn("gateway: web console enabled but unavailable", "err", err)
-		return
-	}
-	n.gatewaySrv.RegisterConsole(handler)
-	n.log.Info("gateway: web console mounted", "path", "/")
 }
 
 // registerSlackTools exposes slack_read_channel / slack_search.
@@ -480,15 +464,15 @@ func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig, runner turn.R
 	}, runner)
 }
 
-// resolveTurnRunner picks the local agent when this node has compute,
-// otherwise a remote adapter against [ui-web].backend. The Backend
+// resolveTurnRunner honors an explicit [ui-web].backend before local compute.
+// An unavailable remote backend never falls back to the local agent. The Backend
 // field is read here so TestEverySettingIsReadBySomething sees it.
 func (n *Node) resolveTurnRunner() (turn.Runner, error) {
-	if n.agent != nil {
-		return compute.Adapt(n.agent), nil
-	}
 	backend := strings.TrimSpace(n.cfg.UIWeb.Backend)
 	if backend == "" {
+		if n.agent != nil {
+			return compute.Adapt(n.agent), nil
+		}
 		return nil, nil
 	}
 	conn, err := n.dialer()(context.Background(), backend)

@@ -24,6 +24,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/discovery"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -1090,7 +1091,7 @@ func validateConfig(cfg Config) error {
 var ErrUIWebBackendRequired = errors.New("ui-web without compute requires [ui-web].backend")
 
 func validateUIWebBackend(cfg Config) error {
-	if !slices.Contains(cfg.Functions, types.FunctionUIWeb) {
+	if !ui.Supported || !slices.Contains(cfg.Functions, types.FunctionUIWeb) {
 		return nil
 	}
 	if slices.Contains(cfg.Functions, types.FunctionCompute) {
