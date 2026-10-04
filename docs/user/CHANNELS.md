@@ -38,7 +38,7 @@ Session ids are scoped to the authenticated caller, so two users who both pick `
 
 ## Browser console
 
-Off by default. `--all` does not turn it on. Enable it with `--ui-web` or:
+Off by default. `--all` enables it. Enable it with `--ui-web` or:
 
 ```toml
 [ui-web]

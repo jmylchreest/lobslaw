@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -47,7 +48,8 @@ type LoadOptions struct {
 //	LOBSLAW__MEMORY__ENCRYPTION__KEY_REF=... → memory.encryption.key_ref
 //
 // The prefix is lowercased and stripped; what remains is split on
-// __ into a hierarchy path.
+// __ into a hierarchy path. Top-level section hyphens can be written as
+// underscores (UI_WEB maps to ui-web); nested key underscores are preserved.
 func Load(opts LoadOptions) (*Config, error) {
 	k := koanf.New(keyDelim)
 
@@ -62,16 +64,33 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 
 	if !opts.SkipEnv {
+		sections := envSectionNames()
+		sources := make(map[string]string)
+		var collision error
 		if err := k.Load(koanfenv.Provider(".", koanfenv.Opt{
 			Prefix: envPrefix,
 			TransformFunc: func(key, value string) (string, any) {
-				key = strings.TrimPrefix(key, envPrefix)
-				key = strings.ToLower(key)
-				key = strings.ReplaceAll(key, envSectionSep, keyDelim)
+				source := key
+				key = strings.ToLower(strings.TrimPrefix(key, envPrefix))
+				section, rest, nested := strings.Cut(key, envSectionSep)
+				if canonical, ok := sections[section]; ok {
+					section = canonical
+				}
+				key = section
+				if nested {
+					key += keyDelim + strings.ReplaceAll(rest, envSectionSep, keyDelim)
+				}
+				if previous, ok := sources[key]; ok && previous != source {
+					collision = fmt.Errorf("%w: environment variables %s and %s both set %s", types.ErrInvalidConfig, previous, source, key)
+				}
+				sources[key] = source
 				return key, value
 			},
 		}), nil); err != nil {
 			return nil, fmt.Errorf("%w: env overlay: %w", types.ErrInvalidConfig, err)
+		}
+		if collision != nil {
+			return nil, collision
 		}
 	}
 
@@ -102,6 +121,21 @@ func Load(opts LoadOptions) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// envSectionNames derives shell-friendly section names from the config schema.
+// Only section hyphens become underscores; nested keys such as public_url and
+// existing underscore sections such as self_learning retain their spelling.
+func envSectionNames() map[string]string {
+	sections := make(map[string]string)
+	schema := reflect.TypeFor[Config]()
+	for i := 0; i < schema.NumField(); i++ {
+		name := strings.Split(schema.Field(i).Tag.Get("koanf"), ",")[0]
+		if name != "" && name != "-" {
+			sections[strings.ReplaceAll(name, "-", "_")] = name
+		}
+	}
+	return sections
 }
 
 // Validate checks required-key invariants that cross subsystem
@@ -148,6 +182,14 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateSelectedFunctions checks security requirements after CLI flags and
+// configuration have been resolved into the effective node functions.
+func (c *Config) ValidateSelectedFunctions(functions []types.NodeFunction) error {
+	ui := c.UIWeb
+	ui.Enabled = ui.Enabled || slices.Contains(functions, types.FunctionUIWeb)
+	return validateUIWebAuth(ui, c.Auth)
 }
 
 // validateUIWebAuth refuses an unauthenticated console. The node's
