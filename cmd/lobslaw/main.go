@@ -429,7 +429,10 @@ func secretSchemes(c config.SecretsConfig) []string {
 
 func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFunction, logger *slog.Logger) (node.Config, error) {
 	stamp := resolveBuildStamp()
-	needsRaft := slices.Contains(funcs, types.FunctionMemory) || slices.Contains(funcs, types.FunctionPolicy)
+	// Resolve dependencies before deciding which boot secrets are required.
+	// In particular, storage implies memory even when only --storage was given.
+	effectiveFunctions, _ := types.NormalizeFunctions(funcs)
+	needsRaft := slices.Contains(effectiveFunctions, types.FunctionMemory)
 
 	// Merge .mcp.json from the same dir as config.toml. Trust model
 	// is identical to the [[mcp.servers]] block: operator-controlled

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"log/slog"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -202,5 +205,34 @@ func TestPolicyDirsSourceLabels(t *testing.T) {
 	}
 	if got := policyDirsSource(nil, &config.Config{}); got != "default-discovery" {
 		t.Errorf("default source label: got %q", got)
+	}
+}
+
+func TestBuildNodeConfigLoadsImpliedMemoryKey(t *testing.T) {
+	creds := backupTestCredentials(t, "storage-node", "operator")
+	const encodedKey = "0101010101010101010101010101010101010101010101010101010101010101"
+	t.Setenv("LOBSLAW_TEST_IMPLIED_MEMORY_KEY", encodedKey)
+	want, err := crypto.ParseKey(encodedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{}
+	cfg.Cluster.MTLS = config.MTLSConfig{CACert: creds.ca, NodeCert: filepath.Join(filepath.Dir(creds.ca), "node.pem"), NodeKey: filepath.Join(filepath.Dir(creds.ca), "node-key.pem")}
+	cfg.Memory.Encryption.KeyRef = "env:LOBSLAW_TEST_IMPLIED_MEMORY_KEY"
+	for _, function := range []types.NodeFunction{types.FunctionStorage, types.FunctionMemory, types.FunctionPolicy} {
+		nodeCfg, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{function}, slog.Default())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nodeCfg.MemoryKey != want {
+			t.Errorf("%s did not load its required memory key", function)
+		}
+	}
+	cfg.Memory.Encryption.KeyRef = ""
+	if _, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{types.FunctionStorage}, slog.Default()); err == nil {
+		t.Fatal("storage-only selection silently skipped missing memory key")
+	}
+	if _, err := buildNodeConfig(cfg, "storage-node", []types.NodeFunction{types.FunctionUIWeb}, slog.Default()); err != nil {
+		t.Fatalf("web-only selection acquired a memory dependency: %v", err)
 	}
 }

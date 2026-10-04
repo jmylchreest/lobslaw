@@ -266,3 +266,45 @@ func TestValidateRejectsUnknownQueueMode(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadFeatureEnvironmentSections(t *testing.T) {
+	path := writeTempConfig(t, "[compute-teams]\nenabled = false\n[ui-web]\nenabled = false\n[auth]\nrequire_auth = true\n")
+	t.Setenv("LOBSLAW__COMPUTE_TEAMS__ENABLED", "true")
+	t.Setenv("LOBSLAW__UI_WEB__ENABLED", "true")
+	t.Setenv("LOBSLAW__UI_WEB__PUBLIC_URL", "https://assistant.example.com")
+	t.Setenv("LOBSLAW__SELF_LEARNING__MODE", "propose")
+	cfg, err := Load(LoadOptions{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ComputeTeams.Enabled || !cfg.UIWeb.Enabled {
+		t.Fatalf("environment features ignored: teams=%v ui=%v", cfg.ComputeTeams.Enabled, cfg.UIWeb.Enabled)
+	}
+	if cfg.UIWeb.PublicURL != "https://assistant.example.com" {
+		t.Fatalf("public_url = %q", cfg.UIWeb.PublicURL)
+	}
+	if cfg.SelfLearning.Mode != "propose" {
+		t.Fatalf("underscore section changed: %v", cfg.SelfLearning.Mode)
+	}
+	t.Setenv("LOBSLAW__AUTH__REQUIRE_AUTH", "false")
+	if _, err := Load(LoadOptions{Path: path}); err == nil {
+		t.Fatal("environment-enabled console bypassed authentication validation")
+	}
+}
+
+func TestLoadFeatureEnvironmentSectionAliases(t *testing.T) {
+	path := writeTempConfig(t, "[auth]\nrequire_auth = true\n")
+	t.Setenv("LOBSLAW__UI-WEB__ENABLED", "true")
+	cfg, err := Load(LoadOptions{Path: path})
+	if err != nil || !cfg.UIWeb.Enabled {
+		t.Fatalf("literal section spelling: cfg=%v err=%v", cfg, err)
+	}
+	t.Setenv("LOBSLAW__UI_WEB__ENABLED", "false")
+	if _, err := Load(LoadOptions{Path: path}); !errors.Is(err, types.ErrInvalidConfig) {
+		t.Fatalf("conflicting aliases not rejected: %v", err)
+	}
+	cfg, err = Load(LoadOptions{Path: path, SkipEnv: true})
+	if err != nil || cfg.UIWeb.Enabled {
+		t.Fatalf("SkipEnv did not ignore aliases: cfg=%v err=%v", cfg, err)
+	}
+}

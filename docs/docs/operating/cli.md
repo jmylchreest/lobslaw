@@ -103,6 +103,8 @@ Foreground process. SIGTERM for graceful shutdown, SIGHUP for config reload + ce
 and config `enabled` settings. Without function flags, enabled config sections
 select the functions; if none are enabled, the defaults are `memory`, `compute`
 and `storage`. Use `--memory --compute --storage` to request that subset explicitly.
+Memory and storage imply each other; `--storage` therefore also requires the
+configured memory encryption key.
 
 Feature selection does not supply provider credentials, bypass authentication,
 activate a new cluster data contract, or add browser assets to a `no_web` build.
