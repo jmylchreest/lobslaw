@@ -35,6 +35,13 @@ other machine-local files are not copied. Never run source and copied directorie
 as two instances of the same node. Allow space for the source, destination and
 staging copies. An interrupted migration never activates a partial directory.
 
+When an unversioned populated state database is upgraded, the destination also
+retains an encrypted `state-before-migration-*.db` image created by the state
+adapter. This is a state-only diagnostic/rollback image, not a complete node
+backup: it does not include the matching Raft log or snapshots. Keep the original
+source directory and matching binary for whole-node rollback. Budget disk space
+for this additional state database; startup does not automatically select it.
+
 Point the node at the output directory and enable `[memory] restore_mode = true`.
 Review pending work: an old backup can predate a calendar write or another external
 action that already succeeded. Stop the node again and explicitly acknowledge the

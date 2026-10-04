@@ -20,7 +20,7 @@ const dataProtocolHeader = "lobslaw-data-protocol"
 const compatibilityTimeout = 5 * time.Second
 
 func persistenceMethod(method string) bool {
-	return strings.HasPrefix(method, "/raft.") || strings.HasPrefix(method, "/RaftTransport/") || method == pb.NodeService_AddMember_FullMethodName || method == pb.NodeService_Propose_FullMethodName
+	return strings.HasPrefix(method, "/RaftTransport/") || method == pb.NodeService_AddMember_FullMethodName || method == pb.NodeService_Propose_FullMethodName
 }
 
 type ContractProvider func() uint32
