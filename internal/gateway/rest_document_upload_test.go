@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -61,13 +62,26 @@ func TestBotChatReceivesOwnerBoundFilesAndAttachmentOnlyMessage(t *testing.T) {
 	}
 	for _, user := range []string{"bob", "alice@idp"} {
 		response = doJSON(t, http.MethodPost, webBaseURL(server)+"/v1/bots/chief/messages", `{"upload_ids":["`+upload.UploadID+`"]}`, http.Header{"Authorization": {"Bearer " + mintJWTWith(t, user, nil)}})
+		// HTTP 200 is flushed by the initial SSE event, before the runner is
+		// called. Consume the reply to synchronise with the completed turn;
+		// closing at the headers races the assertion and cancels execution.
+		body, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if user == "bob" && response.StatusCode != 404 && response.StatusCode != 403 {
 			t.Fatal("foreign upload accepted")
+		}
+		if user == "bob" && runner.lastRequest().Claims != nil {
+			t.Fatal("foreign upload reached the runner")
 		}
 		if user == "alice@idp" && response.StatusCode != 200 {
 			t.Fatal(response.StatusCode)
 		}
-		_ = response.Body.Close()
+		if user == "alice@idp" && (!strings.Contains(string(body), "event: reply") || !strings.Contains(string(body), `"text":"ok"`)) {
+			t.Fatalf("bot turn did not complete: %s", body)
+		}
 	}
 	if got := runner.lastRequest(); len(got.Attachments) != 1 || got.Attachments[0].Reference != upload.UploadID || got.Message != "Please examine the attached files." {
 		t.Fatalf("files missing from bot request: %+v", got)
