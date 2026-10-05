@@ -5,6 +5,39 @@ separately. Supported old data is validated and migrated; unknown newer formats
 are refused. Do not downgrade an upgraded data directory. Keep its original backup
 and matching binary for rollback.
 
+## Container startup checks
+
+The normal `lobslaw run` startup checks the mounted data, so a supported update
+does not need a separate migration entrypoint. Checks use the **stored data
+format and active contract**, rather than the image tag or release version.
+
+Before opening the node for normal operation, startup validates the state
+format, existing Raft commands and physical snapshots. Supported populated
+unversioned state is upgraded through the existing state adapter. A private
+`startup-backup-<id>/` directory is durably published in the data volume first,
+containing the original `state.db`, any existing `raft.db`, snapshot repository,
+and physical format manifest. Encrypted record and retained Raft/snapshot bytes
+are preserved in that backup. If backup creation fails, migration does not start.
+
+The startup log reports `stored_format`, `active_format`, `migrated`, and the
+backup path. Starting again with current data does not repeat the migration or
+create another startup backup. Empty volumes are initialized without a migration
+backup. Cluster contract activation still follows the readiness process below.
+
+Startup refuses unsupported formats, unknown buckets, incompatible snapshots,
+and ambiguous historical logs before migration changes the state database. An
+ambiguous legacy layout still requires the explicit offline procedure below;
+startup cannot infer its provenance from an image tag. Restore-mode requirements
+for copied recovery data continue to apply.
+
+Startup backups are core persistence images, not backups of every mounted file:
+retain the same encryption key, configuration, certificates, attachments, and
+other machine-local files separately. Auxiliary files already in the live data
+volume, including browser sessions and operator identity files, remain in place.
+The `startup-backup.json` marker prevents a new container from booting a startup
+backup as a duplicate live node. Use `data inspect`/`data migrate` explicitly for
+recovery and keep the matching original binary.
+
 ## Physical data directories
 
 Stop **all** Raft members for this upgrade. The first versioned persistence release
