@@ -73,6 +73,25 @@ func TestPolicyRulesGoesLiveByDefault(t *testing.T) {
 	}
 }
 
+// SyncRules returns stored rules by priority, then the node's in-memory
+// defaults, which apply only when no stored rule matched. Re-sorting by
+// priority would print a high-priority default above a stored rule the
+// engine matches first, so the live listing keeps the node's order.
+func TestTheLiveListingKeepsEvaluationOrder(t *testing.T) {
+	fromNode := []*lobslawv1.PolicyRule{
+		{Id: "operator-low", Subject: "user:alice", Priority: 1},
+		{Id: "seed-lower", Subject: "user:alice", Priority: 0, CreatedBy: "seed"},
+		{Id: "default-high", Subject: "user:alice", Priority: 100},
+	}
+	got := liveRules(fromNode, "", "")
+	if len(got) != 3 || got[0].GetId() != "operator-low" || got[1].GetId() != "seed-lower" || got[2].GetId() != "default-high" {
+		t.Fatalf("live listing reordered the node's rules: %v", got)
+	}
+	if got := liveRules(fromNode, "", "seed"); len(got) != 1 || got[0].GetId() != "seed-lower" {
+		t.Fatalf("filters still apply: %v", got)
+	}
+}
+
 // --- what counts as an approval-minted rule ----------------------------
 
 func mintedRule(id string) *lobslawv1.PolicyRule {

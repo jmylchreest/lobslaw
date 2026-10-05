@@ -48,10 +48,11 @@ revoke-approvals is DRY RUN unless --apply is given, and refuses to
 touch any rule an operator wrote — only approval-minted ones. That
 refusal is enforced by the NODE, not by this command.
 
-rules --offline reads state.db directly, so it misses the engine's
-in-memory defaults (config-derived fallback rules that are never
-written to the store). The live form includes them, because SyncRules
-calls the same loadRules() the engine evaluates against.`
+rules lists what the running node enforces, in evaluation order:
+stored rules by priority, then its in-memory defaults (shipped and
+config-derived fallbacks that are never written to the store), which
+apply only when no stored rule matched. --offline reads state.db
+directly, so it lists stored rules only, by priority.`
 
 // policyForms pairs each subcommand's live and offline implementation.
 //
@@ -179,9 +180,16 @@ func policyRulesLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	rules := filterPolicyRules(res.GetRules(), *subject, *createdBy)
-	sortPolicyRules(rules)
-	return renderPolicyRules(os.Stdout, rules, node.addr, *asJSON)
+	return renderPolicyRules(os.Stdout, liveRules(res.GetRules(), *subject, *createdBy), node.addr, *asJSON)
+}
+
+// liveRules filters the node's SyncRules response without reordering
+// it. The node returns rules in evaluation order, stored rules by
+// priority and then in-memory defaults; sorting the whole slice by
+// priority again would print a high-priority default above a stored
+// rule the engine matches first.
+func liveRules(rules []*lobslawv1.PolicyRule, subject, createdBy string) []*lobslawv1.PolicyRule {
+	return filterPolicyRules(rules, subject, createdBy)
 }
 
 // policyRevokeLive revokes on a running node.
@@ -319,13 +327,12 @@ func filterPolicyRules(rules []*lobslawv1.PolicyRule, subject, createdByPrefix s
 	return out
 }
 
-// sortPolicyRules orders rules the way an operator reads them: highest
-// priority first, id-tiebroken so the same set prints in the same
-// order between runs. It does not reproduce the engine's evaluation
-// order, since the engine appends in-memory defaults after this same
-// sort (see Engine.loadRules), so a default's priority does not
-// compete with a stored rule's. This is a listing, not the
-// enforcement path.
+// sortPolicyRules orders the offline listing, which holds stored rules
+// only: highest priority first, id-tiebroken, the same order the engine
+// gives stored rules (see Engine.loadRules). The live listing is never
+// re-sorted (liveRules): the node appends its in-memory defaults after
+// the stored rules, and a priority sort across both would misstate
+// which rule wins.
 func sortPolicyRules(rules []*lobslawv1.PolicyRule) {
 	sort.Slice(rules, func(i, j int) bool {
 		if rules[i].GetPriority() != rules[j].GetPriority() {
@@ -337,8 +344,8 @@ func sortPolicyRules(rules []*lobslawv1.PolicyRule) {
 
 // renderPolicyRules prints the complete rule set, in the same style as
 // renderApprovals plus the two columns approvals never needs: priority,
-// which governs evaluation order among stored rules (see
-// sortPolicyRules for the one exception, in-memory defaults), and
+// which governs evaluation order among stored rules (in-memory defaults
+// come after every stored rule whatever their priority; see liveRules), and
 // created_by, because an operator-authored rule (empty) and an
 // approval-minted one are the two things this listing exists to tell
 // apart from anything else that could have written a rule.

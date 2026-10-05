@@ -27,7 +27,6 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
-	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -98,9 +97,11 @@ func (n *Node) wireCompute() error {
 
 	// policy.Engine reads rules from the memory store. When policy
 	// function is on another node, soul tools use a remote policy
-	// evaluator. Other tools still require a local engine.
+	// evaluator. Other tools still require a local engine. Shared with
+	// the policy service (ensurePolicyEngine), never replaced: a second
+	// engine would miss the defaults and conditions this one gets.
 	if n.store != nil {
-		n.policyEngine = policy.NewEngine(n.store, n.log)
+		n.ensurePolicyEngine()
 	}
 
 	// One health tracker per node, shared by the chat backup chain and

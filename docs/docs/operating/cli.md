@@ -391,23 +391,26 @@ unscoped delete RPC. A rule that exists but was not minted by an approval is
 reported as *refused*; an id that does not exist at all is reported as *not
 found*. Those are different mistakes with different fixes.
 
-`policy rules` lists the complete set with no provenance filter: operator
-rules, approval-minted rules and anything else stored, sorted by priority
-descending then id. That is the order the engine evaluates the stored
-rules in; in-memory defaults (live form only) are evaluated after them,
-regardless of priority.
+`policy rules` lists every rule the node enforces, with no provenance filter,
+in evaluation order: operator rules, approval-minted rules and anything else
+stored, by priority descending then id, followed by the node's in-memory
+defaults (shipped and config-derived fallbacks), which apply only when no
+stored rule matched, whatever their priority. The live form asks the engine
+the node evaluates with, so the listing is the policy in force.
 
 ```bash
 lobslaw policy rules --context prod
 lobslaw policy rules --context prod --subject role:admin
-lobslaw policy rules --context prod --created-by lobslaw-builtin- --json
+lobslaw policy rules --context prod --created-by seed --json
 ```
 
-`--subject` matches exactly; `--created-by` matches a prefix, so
-`lobslaw-builtin-` finds every builtin rule regardless of which one minted it.
-The live form includes the engine's in-memory defaults, because it reads
-through the same call the engine evaluates against; `--offline` reads
-`state.db` directly and cannot see them, since they are never written there.
+`--subject` matches exactly; `--created-by` matches a prefix of the rule's
+provenance: `seed` for the builtin rules a node seeds at startup, `config`
+for rules from configuration, `approval:` for approval-minted rules, and empty
+for rules an operator wrote. (`lobslaw-builtin-` is the builtin rules' id
+prefix, not their `created_by`, so it matches nothing here.) `--offline` reads
+`state.db` directly, so it lists stored rules only, by priority; the in-memory
+defaults are never written there.
 
 ## `lobslaw trace`
 

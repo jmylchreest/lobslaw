@@ -32,8 +32,18 @@ type Service struct {
 // through raft.Apply so the rule replicates to every voter. An Engine
 // is constructed over the same store so Evaluate sees every Applied
 // rule immediately.
+//
+// A node passes its own evaluating engine to NewServiceWithEngine
+// instead: a private engine shares the stored rules but not the
+// in-memory defaults or registered conditions, so SyncRules and
+// Evaluate would answer for a different policy than the one enforced.
 func NewService(raft *memory.RaftNode) *Service {
-	engine := NewEngine(raft.FSM().Store(), nil)
+	return NewServiceWithEngine(raft, NewEngine(raft.FSM().Store(), nil))
+}
+
+// NewServiceWithEngine returns a Service that answers Evaluate and
+// SyncRules from engine.
+func NewServiceWithEngine(raft *memory.RaftNode, engine *Engine) *Service {
 	return &Service{raft: raft, engine: engine}
 }
 
@@ -60,10 +70,12 @@ func (s *Service) Evaluate(ctx context.Context, req *lobslawv1.EvaluateRequest) 
 	}, nil
 }
 
-// SyncRules returns the complete set of rules known to this node.
-// Clients that want eventual consistency can call this periodically
-// and reconcile against their local copy. Rule order is descending
-// priority, id-tiebroken — matches the evaluation order.
+// SyncRules returns the complete set of rules this node evaluates, in
+// evaluation order: stored rules by descending priority, id-tiebroken,
+// then the engine's in-memory defaults, which apply only when no stored
+// rule matched (see Engine.loadRules). Clients that want eventual
+// consistency can call this periodically and reconcile against their
+// local copy.
 func (s *Service) SyncRules(_ context.Context, _ *lobslawv1.SyncRulesRequest) (*lobslawv1.SyncRulesResponse, error) {
 	rules, err := s.engine.loadRules()
 	if err != nil {
