@@ -14,6 +14,12 @@ import (
 func newTestCredentialService(t *testing.T) *CredentialService {
 	t.Helper()
 	svc := newTestServiceStack(t)
+	// Raft publishes its Leader state before initial leader setup finishes.
+	// Complete a barrier before tests start bounded credential operations;
+	// otherwise startup can consume their deadline on a loaded CI runner.
+	if err := svc.raft.Barrier(10 * time.Second); err != nil {
+		t.Fatalf("credential fixture readiness: %v", err)
+	}
 	key, err := crypto.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
