@@ -43,7 +43,9 @@ func controlCluster(t *testing.T) []*RaftNode {
 		node, err := NewRaft(RaftConfig{
 			NodeID: id, LocalAddr: raft.ServerAddress(id), DataDir: dir,
 			Transport: transports[i], Bootstrap: i == 0,
-			HeartbeatTimeout: 100 * time.Millisecond, ElectionTimeout: 100 * time.Millisecond, LeaderLeaseTimeout: 50 * time.Millisecond,
+			// Tests drive turnover explicitly. Avoid unrelated elections caused
+			// by race instrumentation or shared-runner scheduling delays.
+			HeartbeatTimeout: 500 * time.Millisecond, ElectionTimeout: 500 * time.Millisecond, LeaderLeaseTimeout: 250 * time.Millisecond,
 		}, NewFSM(store))
 		if err != nil {
 			t.Fatal(err)
@@ -54,10 +56,19 @@ func controlCluster(t *testing.T) []*RaftNode {
 	if err := nodes[0].WaitForLeader(3 * time.Second); err != nil {
 		t.Fatal(err)
 	}
+	// State() becomes Leader before synchronous observer filters finish. A
+	// barrier proves the leader loop can accept commands before a control call
+	// holds the leadership fence across enqueue.
+	if err := nodes[0].Raft.Barrier(time.Second).Error(); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []string{"b", "c"} {
 		if err := nodes[0].AddVoter(raft.ServerID(id), raft.ServerAddress(id)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := nodes[0].Raft.Barrier(time.Second).Error(); err != nil {
+		t.Fatal(err)
 	}
 	return nodes
 }
