@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { api, isUnavailable, streamChat, type Bot, type Group, type InboxItem } from "./api";
+import { api, isUnavailable, type Bot, type Group, type InboxItem } from "./api";
 import { LoginGate } from "./components/LoginGate";
 import { InstallApp } from "./components/Pwa";
 import { PushControls } from "./components/PushControls";
@@ -15,12 +15,14 @@ import { NewBot } from "./routes/NewBot";
 import { TaskApprovals } from "./routes/TaskApprovals";
 import { LearnedReviews, LearnedReviewNotice } from "./routes/LearnedReviews";
 import { FeedbackProvider, NavigationMarker, switchView, useFeedback } from "./components/Motion";
-import { ChatSessionsProvider, useChatSessions } from "./components/ChatSessions";
+import { ChatSessionsProvider, useBotChat, useChatSessions } from "./components/ChatSessions";
 import { Composer } from "./components/Composer";
 import { BotDirectory } from "./components/BotDirectory";
+import { MessageFiles, UploadsProvider } from "./components/Uploads";
+import type { MessageFile } from "./uploads";
 
 export function App() {
-  return <FeedbackProvider><LoginGate><ChatSessionsProvider><Console /></ChatSessionsProvider></LoginGate></FeedbackProvider>;
+  return <FeedbackProvider><LoginGate><UploadsProvider><ChatSessionsProvider><Console /></ChatSessionsProvider></UploadsProvider></LoginGate></FeedbackProvider>;
 }
 
 /** Console decides which console this node can render.
@@ -397,67 +399,26 @@ function Frame({ children }: { children: ReactNode }) {
   );
 }
 
-interface ChatLine {
-  role: "user" | "assistant";
-  text: string;
-}
-
 /** SingleChat is the console on a node with no team registry.
  *
  * One conversation with the node's own assistant, streamed to the same
  * /v1/messages endpoint Telegram and Slack use.
  */
 function SingleChat({ computeOn }: { computeOn: boolean }) {
-  const [ask, setAsk] = useState<{ id: string; reason: string; action?: string; resource?: string } | null>(null);
-  const [lines, setLines] = useState<ChatLine[]>([]);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState<Error | null>(null);
+  const { session, send: sendMessage, stop, answered, draft: setDraft } = useBotChat("");
+  const { messages: lines, draft, busy, notice, error, ask, reconnecting } = session;
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
   }, [lines, notice]);
 
-  async function send() {
-    const text = draft.trim();
-    if (!text || busy) return;
-    setDraft("");
-    setError(null);
-    setLines((cur) => [...cur, { role: "user", text }]);
-    setBusy(true);
-    setNotice("Sending");
-    let reply = "";
-    try {
-      await streamChat(text, (event, data) => {
-        if (event === "needs_confirmation") {
-          setAsk({ id: String(data.prompt_id ?? ""), reason: String(data.reason ?? ""),
-            action: String(data.action ?? ""), resource: String(data.resource ?? "") });
-        }
-        if (event === "typing") setNotice("Working");
-        if (event === "interim" && typeof data.text === "string") setNotice(data.text);
-        if (event === "final") {
-          const body = typeof data.reply === "string" ? data.reply : "";
-          reply = body;
-        }
-        if (event === "error" && typeof data.error === "string") {
-          setError(new Error(data.error));
-        }
-      });
-      if (reply) setLines((cur) => [...cur, { role: "assistant", text: reply }]);
-    } catch (e) {
-      setError(e as Error);
-    } finally {
-      setAsk(null);
-      setBusy(false);
-      setNotice("");
-    }
-  }
+  const send = (ids: string[] = [], files: MessageFile[] = []) => void sendMessage("", draft.trim(), "Assistant", ids, files);
 
   return (
     <Frame>
       <div className="chat single-chat">
+      {reconnecting && <div className="chat-reconnecting" role="status">Reconnecting… your reply continues on the server.</div>}
       {!computeOn && (
         <Empty
           title="Assistant unavailable"
@@ -466,12 +427,12 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
       )}
       <div className="thread" tabIndex={0} aria-label="Conversation"><div className="thread-in">
         {lines.map((line, i) => (
-          <div key={i} className={`msg message-arrival${line.role === "user" ? " me" : ""}`} data-role={line.role}>
-            {line.role === "assistant" ? <><Mascot id="assistant" size={30} /><div className="grow txt"><Markdown>{line.text}</Markdown></div></> : <div className="bubble">{line.text}</div>}
+          <div key={i} className={`msg message-arrival${line.from === "me" ? " me" : ""}`} data-role={line.from}>
+            {line.from === "bot" ? <><Mascot id="assistant" size={30} /><div className="grow txt"><Markdown>{line.text}</Markdown></div></> : <div className="bubble"><MessageFiles files={line.files} />{line.text}</div>}
           </div>
         ))}
         {busy && <div className="msg message-arrival"><Mascot id="assistant" size={30} working /><div className="waiting"><span className="dots" aria-hidden="true"><i /><i /><i /></span>{notice || "Working"}</div></div>}
-        {ask && <Approval ask={ask} onAnswered={() => setAsk(null)} />}
+        {ask && <Approval ask={ask} onAnswered={() => answered("")} />}
         <div ref={bottom} />
       </div></div>
       <div className="sr-only" role="status" aria-live="polite">{notice}</div>
@@ -482,7 +443,7 @@ function SingleChat({ computeOn }: { computeOn: boolean }) {
             : <Err error={error} />}
         </div>
       )}
-      <Composer draft={draft} onChange={setDraft} onSend={() => void send()} busy={busy} disabled={!computeOn} />
+      <Composer conversation="assistant" draft={draft} onChange={(value) => setDraft("", value)} onSend={send} busy={busy} onStop={() => stop("")} disabled={!computeOn} />
       </div>
     </Frame>
   );

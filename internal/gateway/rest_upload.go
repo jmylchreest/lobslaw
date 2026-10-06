@@ -8,10 +8,13 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/promptguard"
@@ -54,7 +57,10 @@ type uploadResponse struct {
 	MimeType  string    `json:"mime_type"`
 	Size      int64     `json:"size"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Filename  string    `json:"filename"`
 }
+
+var uploadMediaTypes = []string{"image/png", "image/jpeg", "image/gif", "image/webp", "audio/ogg", "audio/webm", "audio/mpeg", "audio/mp4", "audio/wav", "audio/flac", "application/pdf", "text/plain", "text/markdown", "text/csv", "application/json", "application/xml", "application/yaml"}
 
 func newRESTUploads(root string) *restUploads {
 	if root == "" {
@@ -251,16 +257,27 @@ func uploadMediaType(header string) (string, string, types.AttachmentKind) {
 		return "audio/wav", ".wav", types.AttachmentAudio
 	case "audio/flac":
 		return typ, ".flac", types.AttachmentAudio
+	case "application/pdf":
+		return typ, ".pdf", types.AttachmentDocument
+	case "text/plain":
+		return typ, ".txt", types.AttachmentDocument
+	case "text/markdown":
+		return typ, ".md", types.AttachmentDocument
+	case "text/csv":
+		return typ, ".csv", types.AttachmentDocument
+	case "application/json":
+		return typ, ".json", types.AttachmentDocument
+	case "application/xml", "text/xml":
+		return "application/xml", ".xml", types.AttachmentDocument
+	case "application/yaml", "text/yaml":
+		return "application/yaml", ".yaml", types.AttachmentDocument
 	default:
 		return "", "", ""
 	}
 }
 
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	w.Header().Set("Cache-Control", "no-store")
 	authn, err := s.authenticateRequest(r)
 	claims := authn.Claims
 	if err != nil || claims == nil || claims.UserID == "" || claims.UserID == "anon" {
@@ -271,13 +288,21 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusForbidden, err.Error())
 		return
 	}
-	if s.runner == nil {
+	if r.Method == http.MethodGet {
+		respondJSON(w, http.StatusOK, map[string]any{"enabled": s.runner != nil && s.cfg.RemoteConsole == nil, "max_bytes": restUploadMaxBytes, "max_files": restMessageMaxUploads, "media_types": uploadMediaTypes})
+		return
+	}
+	if r.Method != http.MethodPost {
+		s.jsonErr(w, http.StatusMethodNotAllowed, "GET or POST required")
+		return
+	}
+	if s.runner == nil || s.cfg.RemoteConsole != nil {
 		s.jsonErr(w, http.StatusServiceUnavailable, "agent not configured on this node")
 		return
 	}
 	media, ext, kind := uploadMediaType(r.Header.Get("Content-Type"))
 	if media == "" {
-		s.jsonErr(w, http.StatusUnsupportedMediaType, "expected a supported image or audio Content-Type with a raw file body")
+		s.jsonErr(w, http.StatusUnsupportedMediaType, "expected a supported image, audio or document Content-Type with a raw file body")
 		return
 	}
 	if r.ContentLength > restUploadMaxBytes {
@@ -336,7 +361,8 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := time.Now().Add(restUploadTTL)
-	entry := &restUpload{owner: claims.UserID, expires: expires, attachment: types.Attachment{Kind: kind, MimeType: media, Size: int(n), Reference: id, Filename: id + ext, LocalPath: path}}
+	filename := uploadFilename(r.Header.Get("X-Upload-Name"), id+ext)
+	entry := &restUpload{owner: claims.UserID, expires: expires, attachment: types.Attachment{Kind: kind, MimeType: media, Size: int(n), Reference: id, Filename: filename, LocalPath: path}}
 	// Publish before the response, so a client can immediately reference the id.
 	err = s.uploads.finish(claims.UserID, id, entry, path)
 	settled = true
@@ -346,5 +372,59 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(uploadResponse{UploadID: id, MimeType: media, Size: n, ExpiresAt: expires})
+	_ = json.NewEncoder(w).Encode(uploadResponse{UploadID: id, MimeType: media, Size: n, ExpiresAt: expires, Filename: filename})
+}
+
+func (s *Server) handleUploadDelete(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	authn, err := s.authenticateRequest(r)
+	if err != nil || !authenticatedUploadClaims(authn.Claims) {
+		s.jsonErr(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if r.Method != http.MethodDelete {
+		s.jsonErr(w, http.StatusMethodNotAllowed, "DELETE required")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/v1/uploads/")
+	s.uploads.mu.Lock()
+	entry := s.uploads.entries[id]
+	if entry == nil || entry.owner != authn.Claims.UserID || entry.deleting {
+		s.uploads.mu.Unlock()
+		s.jsonErr(w, http.StatusNotFound, errUploadUnavailable.Error())
+		return
+	}
+	if entry.active != 0 {
+		s.uploads.mu.Unlock()
+		s.jsonErr(w, http.StatusConflict, "this upload is being used by a turn")
+		return
+	}
+	entry.expires = time.Time{}
+	s.uploads.mu.Unlock()
+	s.uploads.sweep(time.Now())
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// A display name never selects a filesystem path or supplies prompt delimiters.
+func uploadFilename(header, fallback string) string {
+	name, err := url.PathUnescape(header)
+	if err != nil {
+		return fallback
+	}
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune(" ._-", r) {
+			return r
+		}
+		return -1
+	}, name)
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." || len(name) > 180 {
+		return fallback
+	}
+	return name
 }

@@ -10,6 +10,7 @@ import type {
 } from "./gen/lobslaw/v1/lobslaw_pb";
 
 import { clearLocalPush } from "./pushBinding";
+import type { UploadPolicy } from "./uploads";
 
 type Snake<S extends string> = S extends `${infer H}${infer T}`
  ? `${H extends Lowercase<H> ? H : `_${Lowercase<H>}`}${Snake<T>}` : S;
@@ -36,6 +37,12 @@ export type InboxItem = Require<Omit<REST<ConsoleInboxItemJson>, "revision" | "t
 }, "id" | "recipient" | "sender" | "subject" | "priority" | "attempts">;
 
 export interface SessionInfo { user_id: string }
+export interface ChatTurn {
+  id: string; bot?: string; session_id?: string; message: string;
+  state: "running" | "waiting" | "completed" | "failed" | "cancelled" | "interrupted";
+  event?: string; data?: Record<string, unknown>; created_at: string; updated_at: string;
+  files?: { name: string; mime: string; size: number }[];
+}
 export type LearnedChange = ConsoleLearnedChangeJson;
 export type LearnedReview = Require<ConsoleLearnedReviewJson, "id" | "name" | "revision" | "digest">;
 export type TaskApproval = Require<Pick<TaskApprovalRecordJson,
@@ -173,6 +180,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  createChatTurn: (id: string, bot: string, message: string, session_id?: string, upload_ids: string[] = []) => request<ChatTurn>("/v1/chat-turns", { method: "POST", body: JSON.stringify({ id, bot, message, session_id, upload_ids }) }),
+  chatTurn: (id: string) => request<ChatTurn>(`/v1/chat-turns/${encodeURIComponent(id)}`),
+  latestChatTurn: (bot: string, session_id = bot ? "" : "console") => request<{ turn: ChatTurn | null }>(`/v1/chat-turns?bot=${encodeURIComponent(bot)}&session_id=${encodeURIComponent(session_id)}`),
+  stopChatTurn: (id: string) => request<ChatTurn>(`/v1/chat-turns/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  uploadPolicy: () => request<UploadPolicy>("/v1/uploads"),
+  removeUpload: (id: string) => request<void>(`/v1/uploads/${encodeURIComponent(id)}`, { method: "DELETE" }),
   pushConfig: () => request<{ public_key: string }>("/v1/push"),
   subscribePush: (subscription: PushSubscriptionJSON) => request<{ binding_id: string; expires_at: string; user_id: string }>("/v1/push", { method: "POST", body: JSON.stringify({ ...subscription, protocol_version: 1 }) }),
   unsubscribePush: (endpoint: string) => request("/v1/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
@@ -335,8 +348,9 @@ export async function streamChat(
   message: string,
   onEvent: (event: string, data: Record<string, unknown>) => void,
   signal?: AbortSignal,
+  uploadIDs: string[] = [],
 ): Promise<void> {
-  await streamRequest("/v1/messages", { message, session_id: consoleSessionID }, onEvent, signal);
+  await streamRequest("/v1/messages", { message, session_id: consoleSessionID, upload_ids: uploadIDs }, onEvent, signal);
 }
 
 /** streamBotChat talks to ONE bot over SSE.
@@ -350,8 +364,9 @@ export async function streamBotChat(
   message: string,
   onEvent: (event: string, data: Record<string, unknown>) => void,
   signal?: AbortSignal,
+  uploadIDs: string[] = [],
 ): Promise<void> {
-  await streamRequest(`/v1/bots/${encodeURIComponent(botId)}/messages`, { message }, onEvent, signal);
+  await streamRequest(`/v1/bots/${encodeURIComponent(botId)}/messages`, { message, upload_ids: uploadIDs }, onEvent, signal);
 }
 
 async function streamRequest(

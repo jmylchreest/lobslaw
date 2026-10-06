@@ -36,6 +36,9 @@ func restRouteAuthTable() map[string]restRouteClass {
 		"/telegram":           restRouteOwnAuth,
 		"/v1/messages":        restRouteUserData,
 		"/v1/uploads":         restRouteUserData,
+		"/v1/chat-turns":      restRouteUserData,
+		"/v1/chat-turns/":     restRouteUserData,
+		"/v1/uploads/":        restRouteUserData,
 		"/v1/task-approvals":  restRouteUserData,
 		"/v1/task-approvals/": restRouteUserData,
 		"/v1/plan":            restRouteUserData,
@@ -74,6 +77,10 @@ func TestUnauthenticatedCallerGets401OnEveryUserDataRoute(t *testing.T) {
 		method, path, body string
 	}{
 		{http.MethodPost, "/v1/messages", `{"message":"hi"}`},
+		{http.MethodPost, "/v1/chat-turns", `{"id":"test","message":"hi"}`},
+		{http.MethodGet, "/v1/chat-turns", ""},
+		{http.MethodGet, "/v1/chat-turns/test", ""},
+		{http.MethodDelete, "/v1/chat-turns/test", ""},
 		{http.MethodGet, "/v1/plan", ""},
 		{http.MethodGet, "/v1/prompts/p1", ""},
 		{http.MethodPost, "/v1/prompts/p1/resolve", `{"approve":true}`},
