@@ -15,10 +15,6 @@ import { SourceContent } from "./SourceContent";
  * a web page, so this string is not necessarily the model's own words.
  */
 export function Markdown({ children }: { children: string }) {
-  return <SourceContent text={children} render={(text) => <MarkdownBody>{text}</MarkdownBody>} />;
-}
-
-function MarkdownBody({ children }: { children: string }) {
   return (
     <div className="md">
       <ReactMarkdown
@@ -42,4 +38,10 @@ function MarkdownBody({ children }: { children: string }) {
       </ReactMarkdown>
     </div>
   );
+}
+
+/** Attribution is opt-in for backend-wrapped context. Model-authored Markdown
+ * must never be able to mint source cards by emitting envelope-shaped text. */
+export function SourceMarkdown({ children }: { children: string }) {
+  return <SourceContent text={children} render={(text) => <Markdown>{text}</Markdown>} />;
 }
