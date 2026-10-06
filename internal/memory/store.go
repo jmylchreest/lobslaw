@@ -40,17 +40,17 @@ type Store struct {
 // Every configured bucket is ensured on open. The key is used to
 // encrypt/decrypt every value.
 func OpenStore(path string, key crypto.Key) (*Store, error) {
-	return openStore(path, key, false)
+	return openStore(path, key, false, nil)
 }
 
 // OpenStoreReadOnly opens an existing image for offline recovery inspection.
 // It bypasses recovery markers but cannot mutate buckets or restore snapshots.
 // Stop the node and retain all recovery files before inspecting either image.
 func OpenStoreReadOnly(path string, key crypto.Key) (*Store, error) {
-	return openStore(path, key, true)
+	return openStore(path, key, true, nil)
 }
 
-func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
+func openStore(path string, key crypto.Key, readOnly bool, preflight func(*Store) error) (*Store, error) {
 	if !readOnly {
 		if err := checkRestoreRecovery(path); err != nil {
 			return nil, err
@@ -71,6 +71,12 @@ func openStore(path string, key crypto.Key, readOnly bool) (*Store, error) {
 	}
 	s := &Store{key: key, cipher: c, path: path, readOnly: readOnly, failed: make(chan struct{})}
 	s.db.Store(db)
+	if preflight != nil {
+		if err := preflight(s); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+	}
 	if err := s.prepareFormat(); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("prepare state format: %w", err)
