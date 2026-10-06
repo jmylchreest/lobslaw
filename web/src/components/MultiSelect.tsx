@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 
 export interface MSOption {
   value: string;
@@ -27,6 +27,7 @@ export function MultiSelect({ label, options, value, onChange, placeholder, hint
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const id = useId();
 
   const chosen = new Set(value);
   const banned = new Set(exclude ?? []);
@@ -44,7 +45,7 @@ export function MultiSelect({ label, options, value, onChange, placeholder, hint
 
   return (
     <div className="field">
-      <label>{label}</label>
+      <label htmlFor={id}>{label}</label>
 
       {value.length > 0 && (
         <div className="ms-chips">
@@ -59,11 +60,13 @@ export function MultiSelect({ label, options, value, onChange, placeholder, hint
 
       <div className="ms">
         <input
+          id={id}
           className="in"
           value={q}
           placeholder={placeholder ?? "Search…"}
           role="combobox"
           aria-expanded={open}
+          aria-controls={`${id}-options`}
           aria-autocomplete="list"
           onChange={(e) => { setQ(e.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}
@@ -75,7 +78,7 @@ export function MultiSelect({ label, options, value, onChange, placeholder, hint
           }}
         />
         {open && (
-          <div className="ms-menu" role="listbox">
+          <div className="ms-menu" id={`${id}-options`} role="listbox" aria-label={label}>
             {matches.length === 0
               ? <div className="ms-none">{needle ? "No match" : "Nothing left to add"}</div>
               : matches.slice(0, 60).map((o) => (

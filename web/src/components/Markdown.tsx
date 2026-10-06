@@ -1,5 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { SourceContent } from "./SourceContent";
 
 /** Model output is markdown, and we were printing it raw.
  *
@@ -37,4 +38,10 @@ export function Markdown({ children }: { children: string }) {
       </ReactMarkdown>
     </div>
   );
+}
+
+/** Attribution is opt-in for backend-wrapped context. Model-authored Markdown
+ * must never be able to mint source cards by emitting envelope-shaped text. */
+export function SourceMarkdown({ children }: { children: string }) {
+  return <SourceContent text={children} render={(text) => <Markdown>{text}</Markdown>} />;
 }

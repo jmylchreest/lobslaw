@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:browser": "node tests/approvals.browser.mjs && node tests/learned.browser.mjs && node tests/pwa.browser.mjs",
+    "test:browser": "node tests/ui.browser.mjs && node tests/motion.browser.mjs && node tests/approvals.browser.mjs && node tests/learned.browser.mjs && node tests/pwa.browser.mjs",
     "test:pwa": "node tests/pwa.browser.mjs",
     "test:watch": "vitest",
     "proto": "cd .. && buf generate --template buf.gen.web.yaml"

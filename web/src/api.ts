@@ -431,11 +431,10 @@ async function readSSE(
           if (line.startsWith("event: ")) event = line.slice(7).trim();
           if (line.startsWith("data: ")) data = line.slice(6);
         }
-        try {
-          onEvent(event, JSON.parse(data) as Record<string, unknown>);
-        } catch {
-          /* a frame we cannot parse is one we cannot act on */
-        }
+        let parsed: Record<string, unknown>;
+        try { parsed = JSON.parse(data) as Record<string, unknown>; }
+        catch { continue; /* Ignore malformed frames, never swallow a consumer failure. */ }
+        onEvent(event, parsed);
       }
     }
   } finally {

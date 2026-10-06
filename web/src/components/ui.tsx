@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type BotStatus } from "../api";
 import { botVars, initials } from "../theme";
+import { StateText, StatusMark } from "./Motion";
 
 /** useLoad wraps the three states every screen has: loading, an error
  * worth showing, and data.
@@ -13,19 +14,27 @@ export function useLoad<T>(fn: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
+  const live = useRef(false);
+  const generation = useRef(0);
 
-  const reload = useCallback(() => {
-    let live = true;
+  const reload = useCallback(async () => {
+    const request = ++generation.current;
     setLoading(true);
-    fn()
-      .then((v) => { if (live) { setData(v); setError(null); } })
-      .catch((e: Error) => { if (live) setError(e); })
-      .finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
+    try {
+      const value = await fn();
+      if (live.current && request === generation.current) { setData(value); setError(null); }
+    } catch (e) {
+      if (live.current && request === generation.current) setError(e as Error);
+    } finally {
+      if (live.current && request === generation.current) setLoading(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
-  useEffect(() => reload(), [reload]);
+  useEffect(() => {
+    live.current = true; void reload();
+    return () => { live.current = false; generation.current++; };
+  }, [reload]);
   return { data, error, loading, reload };
 }
 
@@ -52,10 +61,10 @@ const LABEL: Record<BotStatus, string> = {
  * alone — which matters for the people who see red and green the
  * same. */
 export function Status({ status }: { status: BotStatus }) {
-  return <span className={`st ${status}`}><i />{LABEL[status] ?? status}</span>;
+  return <span className={`st ${status}`}><StatusMark status={status} /><StateText value={status}>{LABEL[status] ?? status}</StateText></span>;
 }
 
-export function Spinner() { return <div className="spin" />; }
+export function Spinner() { return <div className="spin" role="status"><span className="sr-only">Loading…</span></div>; }
 
 /** Says what went wrong in the API's own words.
  *

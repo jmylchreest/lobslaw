@@ -11,7 +11,7 @@ describe("bot streams", () => {
     expect(event).toHaveBeenCalledWith("accepted", { message: "covered by active turn" });
   });
 
-  it("passes navigation cancellation to the outstanding request", async () => {
+  it("passes explicit cancellation to the outstanding request", async () => {
     const controller = new AbortController();
     let signal: AbortSignal | undefined;
     const fetch = vi.fn((_path: string, init: RequestInit) => {
@@ -27,6 +27,18 @@ describe("bot streams", () => {
     await stopped;
     expect(signal?.aborted).toBe(true);
     expect(event).not.toHaveBeenCalled();
+  });
+
+  it("propagates a stream consumer failure instead of silently losing it", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('event: error\ndata: {"message":"provider unavailable"}\n\n')));
+    await expect(streamBotChat("worker", "hello", (_event, data) => { throw new Error(String(data.message)); })).rejects.toThrow("provider unavailable");
+  });
+
+  it("ignores malformed data while still delivering the next valid frame", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('event: delta\ndata: invalid json\n\nevent: reply\ndata: {"text":"Hello!"}\n\n')));
+    const event = vi.fn();
+    await streamBotChat("worker", "hello", event);
+    expect(event).toHaveBeenCalledExactlyOnceWith("reply", { text: "Hello!" });
   });
 
   it("logout cancels every remaining bot and single-chat stream after another finishes", async () => {
