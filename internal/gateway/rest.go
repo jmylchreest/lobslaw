@@ -222,13 +222,14 @@ type Server struct {
 	// gate serialises turns per session. See turnqueue.go.
 	gate *TurnGate
 
-	cfg     RESTConfig
-	runner  turn.Runner
-	log     *slog.Logger
-	conv    *conversationLog
-	logins  *loginStore
-	push    *push.Service
-	uploads *restUploads
+	cfg       RESTConfig
+	runner    turn.Runner
+	log       *slog.Logger
+	conv      *conversationLog
+	logins    *loginStore
+	push      *push.Service
+	uploads   *restUploads
+	chatTurns *chatTurns
 
 	mu         sync.Mutex
 	httpSrv    *http.Server
@@ -258,14 +259,17 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	chatTurns := newChatTurns()
+	chatTurns.log = cfg.Logger
 	return &Server{
-		cfg:     cfg,
-		runner:  runner,
-		log:     cfg.Logger,
-		gate:    NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
-		conv:    newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
-		logins:  newLoginStore(),
-		uploads: newRESTUploads(cfg.IncomingDir),
+		cfg:       cfg,
+		runner:    runner,
+		log:       cfg.Logger,
+		gate:      NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
+		conv:      newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
+		logins:    newLoginStore(),
+		uploads:   newRESTUploads(cfg.IncomingDir),
+		chatTurns: chatTurns,
 	}
 }
 
@@ -286,6 +290,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/learned-reviews", s.handleLearnedReviews)
 	mux.HandleFunc("/v1/learned-reviews/", s.handleLearnedReviews)
 	mux.HandleFunc("/v1/uploads", s.handleUpload)
+	mux.HandleFunc("/v1/chat-turns", s.handleChatTurns)
+	mux.HandleFunc("/v1/chat-turns/", s.handleChatTurns)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/v1/session", s.handleSession)
@@ -320,6 +326,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 // cancelled or the HTTP server returns an error. A cancelled ctx
 // triggers a graceful shutdown with a bounded timeout.
 func (s *Server) Start(ctx context.Context) error {
+	if err := s.chatTurns.open(ctx, s.cfg.LoginSessionFile); err != nil {
+		return fmt.Errorf("rest: load chat journal: %w", err)
+	}
+	defer s.chatTurns.close()
 	if err := s.logins.load(s.cfg.LoginSessionFile); err != nil {
 		return fmt.Errorf("rest: load browser sessions: %w", err)
 	}

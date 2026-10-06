@@ -47,7 +47,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   // this screen is that these read as people.
   const { data: roster } = useLoad(() => api.listBots(), []);
   const { session, send: sendMessage, stop, history, answered, draft: saveDraft } = useBotChat(botId);
-  const { messages: said, draft, busy, working, partial, notice, error: sendErr, ask, liveReply } = session;
+  const { messages: said, draft, busy, working, partial, notice, error: sendErr, ask, liveReply, reconnecting } = session;
   const setDraft = (value: string) => saveDraft(botId, value);
   // The company view's "Ask for a briefing" arrives as a query
   // parameter rather than a sent message: it drops the words in the
@@ -182,6 +182,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           needs approval, failed — and the reply itself stays in the
           thread to be read at the user's pace. */}
       <div className="sr-only" role="status" aria-live="polite">{notice}</div>
+      {reconnecting && <div className="chat-reconnecting" role="status">Reconnecting… your reply is still running on the server.</div>}
 
       <div ref={threadPane} className="thread" tabIndex={0} aria-label={settings ? "Bot settings" : "Conversation"}>
         <div className="thread-in">

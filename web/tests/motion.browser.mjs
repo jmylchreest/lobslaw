@@ -14,6 +14,7 @@ let task = { id: "task-1", actor: "bot:chief", state: "TASK_APPROVAL_STATE_WAITI
 let rejectSave = false;
 let stream;
 let chatMode = "manual";
+const turns = new Map();
 const unexpected = [];
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
@@ -23,6 +24,28 @@ const server = createServer(async (req, res) => {
     const input = body ? JSON.parse(body) : {};
     const respond = (json, status = 200) => { res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(json)); };
     if (path === "/v1/session") return respond({ user_id: "alice" });
+    if (path === "/v1/chat-turns") {
+      if (req.method !== "POST") return respond({ turn: [...turns.values()].reverse().find((turn) => turn.bot === new URL(req.url, "http://localhost").searchParams.get("bot")) ?? null });
+      const turn = { ...input, state: "running", created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+      turns.set(input.id, turn);
+      const update = (frame) => {
+        const event = frame.match(/event: (\w+)/)?.[1];
+        const data = JSON.parse(frame.match(/data: (.+)/)?.[1] || "{}");
+        if (event === "delta") data.text = (turn.event === "delta" ? turn.data.text : "") + data.text;
+        Object.assign(turn, { event, data, updated_at: new Date().toISOString() });
+        if (event === "reply") turn.state = "completed";
+        if (event === "error") turn.state = "failed";
+      };
+      stream = { destroyed: false, write: update, end: (frame) => { if (frame) update(frame); if (turn.state === "running") { turn.state = "failed"; turn.data = { message: "The connection closed before a reply arrived." }; } } };
+      if (chatMode === "empty") stream.end();
+      if (chatMode === "error") stream.end('event: error\ndata: {"message":"Provider temporarily unavailable"}\n\n');
+      return respond(turn, 202);
+    }
+    if (path.startsWith("/v1/chat-turns/")) {
+      const turn = turns.get(path.split("/").at(-1));
+      if (req.method === "DELETE") Object.assign(turn, { state: "cancelled", data: { message: "Response stopped" } });
+      return respond(turn);
+    }
     if (path === "/v1/capabilities") return respond({ compute: { available: true }, "compute-teams": { enabled: true }, "ui-web": { enabled: true } });
     if (path === "/v1/groups") return respond({ groups });
     if (path === "/v1/activity") return respond({ items: feed });
@@ -142,7 +165,7 @@ try {
 
   await draft.fill("Keep replying while I look at my team");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await page.locator('.msg[data-message-id="reply-2"] .reply-thinking.is-open').waitFor();
+  await page.locator('.msg[data-message-id^="reply-"] .reply-thinking.is-open').last().waitFor();
   await draft.fill("My next question");
   await page.locator(".desknav").click();
   await page.locator(".team-desk").waitFor();
@@ -164,6 +187,24 @@ try {
   await page.getByRole("alert").getByText("Provider temporarily unavailable", { exact: true }).waitFor();
   chatMode = "manual";
   await page.clock.runFor(3100);
+
+  const beforeReconnect = turns.size;
+  await draft.fill("Finish even if I refresh my phone");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.getByRole("button", { name: "Stop response", exact: true }).waitFor();
+  const retainedID = [...turns.keys()].at(-1);
+  await page.reload();
+  await page.getByRole("button", { name: "Stop response", exact: true }).waitFor();
+  assert.equal(turns.size, beforeReconnect + 1, "reload sent a duplicate request");
+  assert.equal([...turns.keys()].at(-1), retainedID, "reload attached to another turn");
+  await page.context().setOffline(true);
+  await page.getByText("Reconnecting… your reply is still running on the server.", { exact: true }).waitFor();
+  stream.end('event: reply\ndata: {"text":"Recovered after the keyboard, refresh, and network interruption."}\n\n'); stream = null;
+  await page.context().setOffline(false);
+  await page.locator(".thread").getByText("Recovered after the keyboard, refresh, and network interruption.", { exact: true }).waitFor();
+  await page.reload();
+  await page.locator(".thread").getByText("Recovered after the keyboard, refresh, and network interruption.", { exact: true }).waitFor();
+  assert.equal(turns.size, beforeReconnect + 1, "completed reply recovery reran the turn");
 
   const expand = page.getByRole("button", { name: "Expand: Prepare the briefing", exact: true });
   const detailId = await expand.getAttribute("aria-controls");

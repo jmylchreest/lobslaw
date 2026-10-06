@@ -34,6 +34,6 @@ export function Composer({ draft, onChange, onSend, busy, onStop, disabled, plac
       {busy && onStop ? <button className="btn stop-response" type="button" onClick={onStop} aria-label="Stop response"><span className="stop-icon" aria-hidden="true" />Stop</button>
         : <button className="btn primary" type="submit" disabled={disabled || busy || !draft.trim()}>{busy ? "Sending…" : "Send"}</button>}
     </div>
-    <div className="composer-hint">{busy ? (onStop ? "Your reply will keep running as you move around the app." : "Waiting for the assistant…") : "Enter to send · Shift + Enter for a new line"}</div>
+    <div className="composer-hint">{busy ? (onStop ? "Your reply continues if you close this tab. Reopen to reconnect." : "Waiting for the assistant…") : "Enter to send · Shift + Enter for a new line"}</div>
   </form>;
 }
