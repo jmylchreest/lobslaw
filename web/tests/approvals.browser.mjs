@@ -42,6 +42,7 @@ try {
           data: input.bot ? { text: "coordinator completed", sessionId: "bot:chief.task.task-budget", toolsUsed: ["write_file"], transcript, receipts } : { reply: "![private](https://example.test/pixel?context=private)" } };
       } else json = { turn: null };
     }
+    else if (path === "/v1/uploads") json = { enabled: false, max_bytes: 33554432, max_files: 16, media_types: [] };
     else if (path === "/v1/capabilities") json = { compute: { available: true }, "compute-teams": { enabled: teams }, "ui-web": { enabled: true } };
     else if (path === "/v1/messages") {
       await route.fulfill({ contentType: "text/event-stream", body: `event: final\ndata: ${JSON.stringify({ reply: "![private](https://example.test/pixel?context=private)" })}\n\n` });

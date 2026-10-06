@@ -38,6 +38,7 @@ func restRouteAuthTable() map[string]restRouteClass {
 		"/v1/uploads":         restRouteUserData,
 		"/v1/chat-turns":      restRouteUserData,
 		"/v1/chat-turns/":     restRouteUserData,
+		"/v1/uploads/":        restRouteUserData,
 		"/v1/task-approvals":  restRouteUserData,
 		"/v1/task-approvals/": restRouteUserData,
 		"/v1/plan":            restRouteUserData,

@@ -58,20 +58,26 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var body struct {
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
+	var body messageRequest
+	if !s.decodeMessageRequest(w, r, &body) {
 		return
 	}
+	if len(body.UploadIDs) > 0 && !authenticatedUploadClaims(authn.Claims) {
+		s.jsonErr(w, http.StatusUnauthorized, "authentication required for uploads")
+		return
+	}
+	attachments, release, err := s.uploads.acquire(authn.Claims.UserID, body.UploadIDs, time.Now())
+	if err != nil {
+		s.jsonErr(w, http.StatusNotFound, errUploadUnavailable.Error())
+		return
+	}
+	defer release()
 	if strings.TrimSpace(body.Message) == "" {
-		s.jsonErr(w, http.StatusBadRequest, "message is required")
-		return
+		body.Message = "Please examine the attached files."
 	}
 	ctx, stopStream := s.bindStream(r.Context(), authn.LoginID)
 	defer stopStream()
-	err := s.runBotChat(ctx, authn.Claims, botID, body.Message, func() (chatEmitter, error) {
+	err = s.runBotChat(ctx, authn.Claims, botID, body.Message, attachments, func() (chatEmitter, error) {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
 			// Without flushing, SSE is just a slow JSON response that

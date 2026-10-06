@@ -292,6 +292,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/uploads", s.handleUpload)
 	mux.HandleFunc("/v1/chat-turns", s.handleChatTurns)
 	mux.HandleFunc("/v1/chat-turns/", s.handleChatTurns)
+	mux.HandleFunc("/v1/uploads/", s.handleUploadDelete)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.HandleFunc("/v1/session", s.handleSession)

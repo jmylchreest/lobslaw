@@ -47,6 +47,7 @@ try {
       "/v1/learned-reviews": { reviews: [] },
       "/v1/task-approvals": { records: [] },
       "/v1/chat-turns": { turn: null },
+      "/v1/uploads": { enabled: false, max_bytes: 33554432, max_files: 16, media_types: [] },
     };
     assert.ok(path in responses, `Unexpected API request: ${path}`);
     await route.fulfill({ json: responses[path] });
