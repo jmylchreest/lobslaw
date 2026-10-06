@@ -12,6 +12,8 @@ import { CheckIcon, Chevron, Collapse, Disclosure, StateText, StatusMark, useFee
 import { useBotChat, type ChatMessage } from "../components/ChatSessions";
 import { Composer } from "../components/Composer";
 import { TranscriptText } from "../components/SourceContent";
+import { MessageFiles } from "../components/Uploads";
+import type { MessageFile } from "../uploads";
 
 /** One bot, one room.
  *
@@ -47,7 +49,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
   // this screen is that these read as people.
   const { data: roster } = useLoad(() => api.listBots(), []);
   const { session, send: sendMessage, stop, history, answered, draft: saveDraft } = useBotChat(botId);
-  const { messages: said, draft, busy, working, partial, notice, error: sendErr, ask, liveReply } = session;
+  const { messages: said, draft, busy, working, partial, notice, error: sendErr, ask, liveReply, reconnecting } = session;
   const setDraft = (value: string) => saveDraft(botId, value);
   // The company view's "Ask for a briefing" arrives as a query
   // parameter rather than a sent message: it drops the words in the
@@ -129,7 +131,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
     if (settings) threadPane.current?.scrollTo({ top: 0, behavior: "auto" });
   }, [settings]);
 
-  const send = () => void sendMessage(botId, draft.trim(), bot?.display_name || botId);
+  const send = (ids: string[] = [], files: MessageFile[] = []) => void sendMessage(botId, draft.trim(), bot?.display_name || botId, ids, files);
 
   if (error) return <div className="wrap"><Err error={error} /></div>;
   if (loading && !bot) return <Spinner />;
@@ -182,6 +184,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
           needs approval, failed — and the reply itself stays in the
           thread to be read at the user's pace. */}
       <div className="sr-only" role="status" aria-live="polite">{notice}</div>
+      {reconnecting && <div className="chat-reconnecting" role="status">Reconnecting… your reply is still running on the server.</div>}
 
       <div ref={threadPane} className="thread" tabIndex={0} aria-label={settings ? "Bot settings" : "Conversation"}>
         <div className="thread-in">
@@ -218,7 +221,7 @@ export function BotRoom({ onChanged }: { onChanged: () => void }) {
       </div>
 
       <Collapse open={!settings} className="composer-reveal">
-        <Composer draft={draft} onChange={setDraft} onSend={send} busy={busy} onStop={() => stop(botId)} placeholder={`Message ${bot.display_name || bot.id}…`} />
+        <Composer conversation={`bot:${botId}`} draft={draft} onChange={setDraft} onSend={send} busy={busy} onStop={() => stop(botId)} placeholder={`Message ${bot.display_name || bot.id}…`} />
       </Collapse>
     </div>
   );
@@ -367,7 +370,7 @@ function Working({ active }: { active: boolean }) {
 
 function Said({ e, bot }: { e: Extract<Entry, { kind: "said" }>; bot: Bot }) {
   if (e.from === "me") {
-    return <div className={`msg me${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}><div className="bubble">{e.text}</div></div>;
+    return <div className={`msg me${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}><div className="bubble"><MessageFiles files={e.files} />{e.text}</div></div>;
   }
   return (
     <div className={`msg${e.animate ? " message-arrival" : ""}`} data-message-id={e.id}>
