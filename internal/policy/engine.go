@@ -336,7 +336,7 @@ func protoToRule(p *lobslawv1.PolicyRule) types.PolicyRule {
 	for _, c := range p.Conditions {
 		conds = append(conds, types.Condition{Key: c.Key, Op: c.Op, Value: c.Value})
 	}
-	return types.PolicyRule{
+	out := types.PolicyRule{
 		ID:         p.Id,
 		Subject:    p.Subject,
 		Action:     p.Action,
@@ -345,5 +345,10 @@ func protoToRule(p *lobslawv1.PolicyRule) types.PolicyRule {
 		Conditions: conds,
 		Priority:   int(p.Priority),
 		Scope:      p.Scope,
+		CreatedBy:  p.CreatedBy,
 	}
+	if p.CreatedAt != nil {
+		out.CreatedAt = p.CreatedAt.AsTime()
+	}
+	return out
 }

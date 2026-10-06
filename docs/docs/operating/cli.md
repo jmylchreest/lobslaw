@@ -52,6 +52,7 @@ lobslaw policy             # see and undo "always" approvals
 lobslaw grants             # see and undo per-conversation approvals
   policy approvals         # list the rules an approval minted
   policy revoke-approvals  # delete them, all or by id
+  policy rules             # list every rule this node enforces
 lobslaw memory             # read + edit the memory store
 lobslaw archive            # export and verify portable knowledge archives
   memory show <id>         # one record in full
@@ -389,6 +390,27 @@ hand — does not depend on which client made the call. There is deliberately no
 unscoped delete RPC. A rule that exists but was not minted by an approval is
 reported as *refused*; an id that does not exist at all is reported as *not
 found*. Those are different mistakes with different fixes.
+
+`policy rules` lists every rule the node enforces, with no provenance filter,
+in evaluation order: operator rules, approval-minted rules and anything else
+stored, by priority descending then id, followed by the node's in-memory
+defaults (shipped and config-derived fallbacks), which apply only when no
+stored rule matched, whatever their priority. The live form asks the engine
+the node evaluates with, so the listing is the policy in force.
+
+```bash
+lobslaw policy rules --context prod
+lobslaw policy rules --context prod --subject role:admin
+lobslaw policy rules --context prod --created-by seed --json
+```
+
+`--subject` matches exactly; `--created-by` matches a prefix of the rule's
+provenance: `seed` for the builtin rules a node seeds at startup, `config`
+for rules from configuration, `approval:` for approval-minted rules, and empty
+for rules an operator wrote. (`lobslaw-builtin-` is the builtin rules' id
+prefix, not their `created_by`, so it matches nothing here.) `--offline` reads
+`state.db` directly, so it lists stored rules only, by priority; the in-memory
+defaults are never written there.
 
 ## `lobslaw trace`
 

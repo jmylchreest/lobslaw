@@ -40,10 +40,23 @@ func (n *Node) wireRaftStage() error {
 
 // wirePolicyService registers the gRPC PolicyService backed by raft.
 // PolicyService reads from the local replica and writes via raft.Apply.
+// It answers from the node's own evaluating engine, so SyncRules and
+// Evaluate include the in-memory defaults and registered conditions
+// the node enforces, not just the stored rules.
 func (n *Node) wirePolicyService() error {
-	n.policySvc = policy.NewService(n.raft)
+	n.policySvc = policy.NewServiceWithEngine(n.raft, n.ensurePolicyEngine())
 	lobslawv1.RegisterPolicyServiceServer(n.server, n.policySvc)
 	return nil
+}
+
+// ensurePolicyEngine returns the node's single evaluating engine,
+// creating it over the local store on first use. Both the policy
+// service and compute wiring take it from here, whichever runs first.
+func (n *Node) ensurePolicyEngine() *policy.Engine {
+	if n.policyEngine == nil {
+		n.policyEngine = policy.NewEngine(n.store, n.log)
+	}
+	return n.policyEngine
 }
 
 // wireMemoryService registers the gRPC MemoryService.
