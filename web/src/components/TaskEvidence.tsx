@@ -1,7 +1,7 @@
 import type { TaskMessage, ToolReceipt } from "../api";
 import { Disclosure } from "./Motion";
-import { Markdown } from "./Markdown";
-import { SourceText } from "./SourceContent";
+import { Markdown, SourceMarkdown } from "./Markdown";
+import { SourceText, TranscriptText } from "./SourceContent";
 
 const receiptLabels: Record<string, string> = {
   executed: "Executed — not proof of success",
@@ -18,7 +18,9 @@ export function TaskEvidence({ transcript, receipts }: { transcript?: TaskMessag
     {!!transcript?.length && <h3>Recorded transcript</h3>}
     {(transcript ?? []).map((message, index) => <section className={`evidence-message ${message.role || "unknown"}`} key={index}>
       <h4>{message.role || "unknown role"}{message.toolCallId && ` · ${message.toolCallId}`}</h4>
-      {message.content && (message.role === "user" || message.role === "assistant" ? <div className="evidence-prose"><Markdown>{message.content}</Markdown></div> : <SourceText>{message.content}</SourceText>)}
+      {message.content && (message.role === "user" ? <div className="evidence-prose"><SourceMarkdown>{message.content}</SourceMarkdown></div>
+        : message.role === "assistant" ? <div className="evidence-prose"><Markdown>{message.content}</Markdown></div>
+        : <TranscriptText role={message.role}>{message.content}</TranscriptText>)}
       {(message.toolCalls ?? []).map((call, callIndex) => <div key={callIndex}>
         <p>Requested tool: {call.name} · {call.id}</p><pre>{call.arguments}</pre>
       </div>)}

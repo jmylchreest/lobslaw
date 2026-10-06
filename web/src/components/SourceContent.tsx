@@ -32,3 +32,9 @@ export function SourceContent({ text, render }: { text: string; render: (text: s
 export function SourceText({ children }: { children: string }) {
   return <SourceContent text={children} render={(text) => <pre className="source-literal">{text}</pre>} />;
 }
+
+export function TranscriptText({ role, children }: { role?: string; children: string }) {
+  return role === "user" || role === "tool" || role === "system"
+    ? <SourceText>{children}</SourceText>
+    : <pre className="source-literal">{children}</pre>;
+}

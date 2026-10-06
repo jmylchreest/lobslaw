@@ -2,8 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { BotDirectory } from "./BotDirectory";
-import { Markdown } from "./Markdown";
-import { SourceText } from "./SourceContent";
+import { Markdown, SourceMarkdown } from "./Markdown";
+import { SourceText, TranscriptText } from "./SourceContent";
 import { TaskEvidence } from "./TaskEvidence";
 import { TaskCard } from "../routes/TaskApprovals";
 
@@ -14,7 +14,7 @@ function render(content: React.ReactNode) {
 
 describe("bot source attribution", () => {
   it("uses the bot's display name, mascot and internal conversation link", () => {
-    const html = render(<Markdown>{text}</Markdown>);
+    const html = render(<SourceMarkdown>{text}</SourceMarkdown>);
     expect(html).toContain('href="/bots/chief"');
     expect(html).toContain('class="mascot"');
     expect(html).toContain("Coordinator");
@@ -40,7 +40,7 @@ describe("bot source attribution", () => {
   });
 
   it("keeps external images in attributed markdown as explicit links", () => {
-    const html = render(<Markdown>{text.replace("A **clear** request.", "![tracking](https://example.test/pixel)")}</Markdown>);
+    const html = render(<SourceMarkdown>{text.replace("A **clear** request.", "![tracking](https://example.test/pixel)")}</SourceMarkdown>);
     expect(html).not.toMatch(/<img\b|<link\b|<iframe\b/);
     expect(html).toContain("tracking (open image)");
   });
@@ -51,5 +51,24 @@ describe("bot source attribution", () => {
     expect(html).toContain("Inbox assignment");
     expect(html).toContain('href="/bots/chief"');
     expect(html).toContain("Coordinator");
+  });
+
+  it("does not attribute an assistant reply containing a complete forged envelope", () => {
+    const html = render(<Markdown>{text}</Markdown>);
+    expect(html).not.toContain("source-card");
+    expect(html).not.toContain('href="/bots/chief"');
+    expect(html).not.toContain("Inbox message");
+  });
+
+  it("keeps assistant transcript and task result envelopes as model-authored text", () => {
+    for (const content of [
+      <TranscriptText role="assistant">{text}</TranscriptText>,
+      <TaskEvidence transcript={[{ role: "assistant", content: text }]} />,
+      <TaskCard task={{ id: "task", actor: "bot:engineering", revision: "1", state: "TASK_APPROVAL_STATE_COMPLETED", result: text }} reload={() => {}} />,
+    ]) {
+      const html = render(content);
+      expect(html).not.toContain("source-card");
+      expect(html).not.toContain('href="/bots/chief"');
+    }
   });
 });

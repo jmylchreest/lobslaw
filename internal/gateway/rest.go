@@ -259,6 +259,8 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	chatTurns := newChatTurns()
+	chatTurns.log = cfg.Logger
 	return &Server{
 		cfg:       cfg,
 		runner:    runner,
@@ -267,7 +269,7 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 		conv:      newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 		logins:    newLoginStore(),
 		uploads:   newRESTUploads(cfg.IncomingDir),
-		chatTurns: newChatTurns(),
+		chatTurns: chatTurns,
 	}
 }
 

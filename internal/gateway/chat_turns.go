@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -72,10 +73,11 @@ type chatTurns struct {
 	ctx     context.Context
 	closed  bool
 	wg      sync.WaitGroup
+	log     *slog.Logger
 }
 
 func newChatTurns() *chatTurns {
-	return &chatTurns{entries: make(map[string]*chatTurn), ctx: context.Background()}
+	return &chatTurns{entries: make(map[string]*chatTurn), ctx: context.Background(), log: slog.Default()}
 }
 func chatTurnKey(owner, id string) string {
 	sum := sha256.Sum256([]byte(owner + "\x00" + id))
@@ -121,34 +123,19 @@ func (t *chatTurns) open(ctx context.Context, loginPath string) error {
 		if filepath.Ext(file.Name()) != ".turn" {
 			continue
 		}
-		info, err := file.Info()
+		turn, err := t.readRecord(file)
 		if err != nil {
-			return err
+			t.quarantine(file.Name(), err)
+			continue
 		}
-		if info.Size() > chatTurnMaxBytes+128 {
-			return errors.New("chat journal record too large")
-		}
-		sealed, err := os.ReadFile(filepath.Join(t.dir, file.Name()))
-		if err != nil {
-			return err
-		}
-		plain, err := t.cipher.OpenTo(nil, sealed)
-		if err != nil {
-			return fmt.Errorf("decrypt chat journal: %w", err)
-		}
-		var record savedChatTurn
-		if err := json.Unmarshal(plain, &record); err != nil {
-			return err
-		}
-		if record.Version != 1 || record.Turn == nil || record.Owner == "" || file.Name() != chatTurnKey(record.Owner, record.Turn.ID)+".turn" {
-			return errors.New("invalid chat journal record")
-		}
-		turn := record.Turn
-		turn.Owner = record.Owner
 		if time.Since(turn.CreatedAt) >= chatTurnTTL {
 			if err := os.Remove(filepath.Join(t.dir, file.Name())); err != nil {
-				return err
+				t.log.Warn("chat journal expired record could not be removed", "record", file.Name(), "err", err)
 			}
+			continue
+		}
+		if len(t.entries) >= chatTurnMaxRecords {
+			t.log.Warn("chat journal capacity reached; skipping record", "record", file.Name())
 			continue
 		}
 		if activeChatTurn(turn.State) {
@@ -156,15 +143,60 @@ func (t *chatTurns) open(ctx context.Context, loginPath string) error {
 			turn.Data = chatErrorData("The gateway restarted before this reply finished. Review the conversation before sending again; actions may already have run.")
 			turn.UpdatedAt = time.Now().UTC()
 			if err := t.save(turn); err != nil {
-				return err
+				t.log.Warn("chat journal interruption could not be retained", "record", file.Name(), "err", err)
 			}
 		}
 		t.entries[chatTurnKey(turn.Owner, turn.ID)] = turn
-		if len(t.entries) > chatTurnMaxRecords {
-			return errors.New("chat journal capacity exceeded")
-		}
 	}
 	return nil
+}
+
+func (t *chatTurns) readRecord(file os.DirEntry) (*chatTurn, error) {
+	info, err := file.Info()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > chatTurnMaxBytes+128 {
+		return nil, errors.New("chat journal record is not a bounded regular file")
+	}
+	sealed, err := os.ReadFile(filepath.Join(t.dir, file.Name()))
+	if err != nil {
+		return nil, err
+	}
+	plain, err := t.cipher.OpenTo(nil, sealed)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt chat journal: %w", err)
+	}
+	var record savedChatTurn
+	if err := json.Unmarshal(plain, &record); err != nil {
+		return nil, errors.New("invalid chat journal JSON")
+	}
+	if record.Version != 1 || record.Turn == nil || record.Owner == "" || file.Name() != chatTurnKey(record.Owner, record.Turn.ID)+".turn" {
+		return nil, errors.New("invalid chat journal record")
+	}
+	record.Turn.Owner = record.Owner
+	return record.Turn, nil
+}
+
+// A reconnect cache is not a startup prerequisite. Preserve unreadable bytes
+// for inspection, using an exclusively reserved name so earlier quarantines
+// cannot be overwritten. A filesystem failure to quarantine still skips it.
+func (t *chatTurns) quarantine(name string, cause error) {
+	t.log.Warn("chat journal record unreadable; skipping", "record", name, "err", cause)
+	file, err := os.CreateTemp(t.dir, name+".unreadable-*")
+	if err != nil {
+		t.log.Warn("chat journal record could not be quarantined", "record", name, "err", err)
+		return
+	}
+	target := file.Name()
+	err = file.Close()
+	if err == nil {
+		err = os.Rename(filepath.Join(t.dir, name), target)
+	}
+	if err != nil {
+		_ = os.Remove(target)
+		t.log.Warn("chat journal record could not be quarantined", "record", name, "err", err)
+	}
 }
 
 func chatErrorData(message string) json.RawMessage {
@@ -297,6 +329,11 @@ func (t *chatTurns) event(owner, id, event string, data json.RawMessage) error {
 		return errors.New("reply exceeds retention limit; inspect recorded conversation")
 	}
 	if err := t.save(&next); err != nil {
+		// The worker cannot make this result durable. Release the in-memory
+		// conversation rather than leaving it running until Stop or restart.
+		turn.State, turn.Event = "interrupted", "error"
+		turn.Data = chatErrorData("Cannot retain the reply. Inspect the recorded conversation before sending again.")
+		turn.UpdatedAt = next.UpdatedAt
 		return err
 	}
 	*turn = next

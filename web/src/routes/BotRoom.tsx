@@ -11,7 +11,7 @@ import { botVars } from "../theme";
 import { CheckIcon, Chevron, Collapse, Disclosure, StateText, StatusMark, useFeedback, useNewItems } from "../components/Motion";
 import { useBotChat, type ChatMessage } from "../components/ChatSessions";
 import { Composer } from "../components/Composer";
-import { SourceText } from "../components/SourceContent";
+import { TranscriptText } from "../components/SourceContent";
 import { MessageFiles } from "../components/Uploads";
 import type { MessageFile } from "../uploads";
 
@@ -655,7 +655,7 @@ function Transcript({ sessionId }: { sessionId: string }) {
             <div key={m.seq}>
               <div className="lbl">{m.role}{m.tool_calls ? ` · ${m.tool_calls} tool calls` : ""}</div>
               <div style={{ fontSize: 13, color: "var(--mid)", whiteSpace: "pre-wrap", marginTop: 2 }}>
-                {m.content ? <SourceText>{m.content}</SourceText> : "(tool calls only)"}
+                {m.content ? <TranscriptText role={m.role}>{m.content}</TranscriptText> : "(tool calls only)"}
               </div>
             </div>
           ))}
