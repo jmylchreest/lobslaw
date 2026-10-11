@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
+	"strings"
 	"testing"
 
 	logfilter "github.com/jmylchreest/slog-logfilter"
@@ -10,9 +12,7 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
-// Built through internal/logging rather than slog directly: the
-// package-level filter API is a no-op until logfilter.New has
-// installed a global handler, which is what logging.New does.
+// Use the same filtering handler as the application.
 func discardLogger() *slog.Logger {
 	return logging.New(nopWriter{}, slog.LevelInfo, logging.FormatJSON)
 }
@@ -38,23 +38,20 @@ func TestRestartRequiredSectionsExcludesLogging(t *testing.T) {
 }
 
 func TestLoggingReloadAppliesLevel(t *testing.T) {
-	// NOT parallel: logfilter's level is process-global.
-	t.Cleanup(func() { logfilter.SetLevel(slog.LevelInfo) })
+	t.Parallel()
 	old := config.LoggingConfig{Level: "info"}
 	next := config.LoggingConfig{Level: "debug"}
-	applyLoggingReload(old, next, flags{logSetOnWire: map[string]bool{}}, discardLogger())
-	if got := logfilter.GetLevel(); got != slog.LevelDebug {
+	logger := discardLogger()
+	applyLoggingReload(old, next, flags{logSetOnWire: map[string]bool{}}, logger)
+	if got := logger.Handler().(*logfilter.Handler).GetLevel(); got != slog.LevelDebug {
 		t.Errorf("level = %v, want debug from the file", got)
 	}
 }
 
 func TestLoggingReloadLeavesTheFlagAlone(t *testing.T) {
-	// NOT parallel: logfilter's level is process-global.
-	// Logger first: logging.New installs a fresh global handler at its
-	// own level, so building one after SetLevel would undo it.
+	t.Parallel()
 	logger := discardLogger()
-	logfilter.SetLevel(slog.LevelError)
-	t.Cleanup(func() { logfilter.SetLevel(slog.LevelInfo) })
+	logger.Handler().(*logfilter.Handler).SetLevel(slog.LevelError)
 	old := config.LoggingConfig{Level: "info"}
 	next := config.LoggingConfig{Level: "debug"}
 	// Somebody booted with --log-level to debug THIS process; the file
@@ -63,26 +60,59 @@ func TestLoggingReloadLeavesTheFlagAlone(t *testing.T) {
 		logLevel:     "error",
 		logSetOnWire: map[string]bool{"log-level": true},
 	}, logger)
-	if got := logfilter.GetLevel(); got != slog.LevelError {
+	if got := logger.Handler().(*logfilter.Handler).GetLevel(); got != slog.LevelError {
 		t.Errorf("level = %v, want the flag's error level to survive", got)
 	}
 }
 
 func TestLoggingReloadClearsRemovedFilters(t *testing.T) {
-	// NOT parallel: logfilter's filter set is process-global.
-	t.Cleanup(logfilter.ClearFilters)
+	t.Parallel()
 	logger := discardLogger()
 	old := config.LoggingConfig{Filters: []config.LogFilterConfig{
 		{Type: "component", Pattern: "raft", Level: "debug", Enabled: true},
 	}}
 	applyLogFilters(old.Filters, logger)
-	if len(logfilter.GetFilters()) == 0 {
+	if len(logger.Handler().(*logfilter.Handler).GetFilters()) == 0 {
 		t.Fatal("precondition: filter was not installed")
 	}
 	// Deleting every filter from the file must remove them. applyLogFilters
 	// no-ops on empty, which is right at boot and wrong on reload.
-	applyLoggingReload(old, config.LoggingConfig{}, flags{logSetOnWire: map[string]bool{}}, discardLogger())
-	if got := logfilter.GetFilters(); len(got) != 0 {
+	applyLoggingReload(old, config.LoggingConfig{}, flags{logSetOnWire: map[string]bool{}}, logger)
+	if got := logger.Handler().(*logfilter.Handler).GetFilters(); len(got) != 0 {
 		t.Errorf("filters survived their removal from the file: %v", got)
+	}
+}
+
+func TestLoggingReloadUpdatesChildrenAndIsolatesOtherLoggers(t *testing.T) {
+	t.Parallel()
+	var output, otherOutput bytes.Buffer
+	logger := logging.New(&output, slog.LevelInfo, logging.FormatJSON)
+	child := logger.With("component", "worker")
+	other := logging.New(&otherOutput, slog.LevelInfo, logging.FormatJSON)
+	flags := flags{logSetOnWire: map[string]bool{}}
+	old := config.LoggingConfig{Level: "info"}
+	next := config.LoggingConfig{Level: "debug"}
+	applyLoggingReload(old, next, flags, logger)
+	output.Reset()
+	child.Debug("child enabled")
+	other.Debug("other suppressed")
+	if !strings.Contains(output.String(), "child enabled") || otherOutput.Len() != 0 {
+		t.Fatalf("level reload: child=%s other=%s", output.String(), otherOutput.String())
+	}
+	filtered := config.LoggingConfig{Level: "info", Filters: []config.LogFilterConfig{
+		{Type: "component", Pattern: "worker", Level: "debug", Enabled: true},
+	}}
+	applyLoggingReload(next, filtered, flags, logger)
+	output.Reset()
+	child.Debug("filter enabled")
+	other.With("component", "worker").Debug("other suppressed")
+	if !strings.Contains(output.String(), "filter enabled") || otherOutput.Len() != 0 {
+		t.Fatalf("filter reload: child=%s other=%s", output.String(), otherOutput.String())
+	}
+	applyLoggingReload(filtered, old, flags, logger)
+	output.Reset()
+	child.Debug("filter removed")
+	if output.Len() != 0 {
+		t.Fatalf("child retained removed filter: %s", output.String())
 	}
 }

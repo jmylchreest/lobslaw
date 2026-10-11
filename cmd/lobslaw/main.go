@@ -203,8 +203,8 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 }
 
 // applyLogFilters translates config-file filter entries into
-// logfilter.LogFilter values and installs them via the library's
-// global API. A no-op when cfgFilters is empty.
+// logfilter.LogFilter values and installs them via the logger's
+// handler API. A no-op when cfgFilters is empty.
 func applyLogFilters(cfgFilters []config.LogFilterConfig, logger *slog.Logger) {
 	if len(cfgFilters) == 0 {
 		return
@@ -219,7 +219,7 @@ func applyLogFilters(cfgFilters []config.LogFilterConfig, logger *slog.Logger) {
 			Enabled:     f.Enabled,
 		})
 	}
-	logfilter.SetFilters(filters)
+	logger.Handler().(*logfilter.Handler).SetFilters(filters)
 	logger.Info("log filters applied from config", "count", len(filters))
 }
 
@@ -748,7 +748,7 @@ func applyLoggingReload(old, next config.LoggingConfig, f flags, logger *slog.Lo
 			logger.Info("config reload: [logging] level ignored; --log-level was set on this boot",
 				"file_level", lvl, "flag_level", f.logLevel)
 		} else {
-			logfilter.SetLevel(parseLogLevel(lvl))
+			logger.Handler().(*logfilter.Handler).SetLevel(parseLogLevel(lvl))
 			logger.Info("config reload: log level applied", "level", lvl)
 		}
 	}
@@ -761,7 +761,7 @@ func applyLoggingReload(old, next config.LoggingConfig, f flags, logger *slog.Lo
 			// applyLogFilters no-ops on empty, which is right at boot
 			// and wrong here: deleting every filter from the file must
 			// remove them, not leave the previous set installed.
-			logfilter.ClearFilters()
+			logger.Handler().(*logfilter.Handler).ClearFilters()
 			logger.Info("config reload: log filters cleared")
 			return
 		}

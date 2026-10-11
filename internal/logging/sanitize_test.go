@@ -52,3 +52,27 @@ func TestStandardDiagnosticsSanitized(t *testing.T) {
 		t.Fatal(out.String())
 	}
 }
+
+func TestSanitizerCustomCredentialKeys(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"x-api-key", "X_API_KEY", "xAuthToken", "x-amz-security-token", "bot_token"} {
+		t.Run(key, func(t *testing.T) {
+			const secret = "hidden-custom-credential"
+			for _, queryKey := range []string{url.QueryEscape(key), strings.NewReplacer("_", "%5F", "-", "%2D").Replace(key)} {
+				rawURL := "https://example.com/request?" + queryKey + "=" + secret + "&count=2"
+				if got := SanitizeText(rawURL); strings.Contains(got, secret) || !strings.Contains(got, "example.com") || !strings.Contains(got, "count=2") {
+					t.Fatalf("custom URL credential: %s", got)
+				}
+			}
+			for _, format := range []Format{FormatJSON, FormatText} {
+				var out bytes.Buffer
+				l := New(&out, slog.LevelInfo, format)
+				l.With(key, secret).WithGroup(key).Info("request", "value", secret)
+				l.Info("object", "data", map[string]string{key: secret})
+				if strings.Contains(out.String(), secret) {
+					t.Fatalf("custom field credential: %s", out.String())
+				}
+			}
+		})
+	}
+}

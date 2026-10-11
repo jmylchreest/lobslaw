@@ -21,18 +21,15 @@ const (
 // New returns a filter-aware slog.Logger writing to w at the given
 // level. Format "auto" picks text when w is a TTY file, JSON otherwise.
 //
-// The returned logger uses the global filter handler from
-// github.com/jmylchreest/slog-logfilter so callers can mutate filters
-// at runtime via the library's package-level API (SetFilters,
-// AddFilter, SetLevel, etc.). This supports per-subsystem debug
-// enabling without a restart.
+// Each logger owns its configuration. Its derived loggers share live level
+// and filter updates through the returned logger's *logfilter.Handler.
 func New(w io.Writer, level slog.Level, format Format) *slog.Logger {
 	return logfilter.New(
 		logfilter.WithOutput(w),
 		logfilter.WithLevel(level),
 		logfilter.WithFormat(resolveFormat(w, format)),
 		logfilter.WithSource(true),
-		logfilter.WithSanitizer(sanitizer),
+		logfilter.WithSanitiser(sanitizer),
 	)
 }
 
