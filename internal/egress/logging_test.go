@@ -20,12 +20,12 @@ func TestDependencyLoggerUsesSharedPipeline(t *testing.T) {
 		t.Fatal(out.String())
 	}
 	out.Reset()
-	logfilter.SetLevel(slog.LevelError)
+	l.Handler().(*logfilter.Handler).SetLevel(slog.LevelError)
 	bridge.Warn("suppressed")
 	if out.Len() != 0 {
 		t.Fatal(out.String())
 	}
-	logfilter.SetLevel(slog.LevelDebug)
+	l.Handler().(*logfilter.Handler).SetLevel(slog.LevelDebug)
 	bridge.Debug("visible debug")
 	if !strings.Contains(out.String(), "visible debug") {
 		t.Fatal(out.String())
