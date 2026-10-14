@@ -3,6 +3,20 @@
 Single-node compose deployment: a one-shot init container that signs
 this node's mTLS cert, the node itself, and a shell sidecar.
 
+## Updating the container
+
+The node checks its persistent data format during normal startup. For compatible
+updates, recreate the Lobslaw container using its existing volumes, configuration,
+certificates, and `LOBSLAW_MEMORY_KEY`. Supported old state is migrated before the
+node starts serving; startup publishes a private core-data backup in the data
+volume before migrating populated unversioned state. Logs identify the checked
+formats and backup path. Current data is reused on subsequent restarts.
+
+Historical logs with ambiguous schema provenance require the explicit offline
+workflow, and cluster-wide contract changes wait for compatible, ready members.
+See [Data upgrades and recovery](../../docs/docs/operating/data-migrations.md).
+Do not remove the data volume or regenerate its memory key when updating.
+
 ## Layout
 
 ```

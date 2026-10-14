@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -35,10 +34,16 @@ func (n *Node) wireRaft(advertise string) error {
 		return fmt.Errorf("protect raft paths: %w", err)
 	}
 	n.unprotectRaftPaths = unprotect
-	store, err := memory.OpenStore(filepath.Join(n.cfg.DataDir, "state.db"), n.cfg.MemoryKey)
+	store, startupData, err := memory.OpenNodeStore(n.cfg.DataDir, n.cfg.MemoryKey)
 	if err != nil {
 		return fmt.Errorf("open state.db: %w", err)
 	}
+	n.log.Info("startup data compatibility checked",
+		"stored_format", startupData.Before.Version,
+		"active_format", startupData.After.Version,
+		"migrated", startupData.Migrated,
+		"backup", startupData.Backup,
+	)
 	fsm := memory.NewFSM(store)
 
 	transport, err := rafttransport.New(rafttransport.Config{
