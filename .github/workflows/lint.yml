@@ -103,12 +103,22 @@ jobs:
       # Installed from source via the Makefile rather than a marketplace
       # action, so the version pin lives in one place and CI cannot drift from
       # what the pre-commit hook runs.
+      - name: Resolve latest hook tool versions
+        id: hook-versions
+        run: |
+          # Keep the scanner fresh while reusing binaries for an unchanged upstream release.
+          export GOTOOLCHAIN=$(sed -n 's/^HOOK_TOOLCHAIN := //p' Makefile)
+          betterleaks=$(go list -m -f '{{.Version}}' github.com/betterleaks/betterleaks@latest)
+          echo "betterleaks=$betterleaks" >> "$GITHUB_OUTPUT"
+          lefthook=$(go list -m -f '{{.Version}}' github.com/evilmartians/lefthook@latest)
+          echo "lefthook=$lefthook" >> "$GITHUB_OUTPUT"
       - name: Cache hook tools
         id: hook-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: "~/go/bin/betterleaks\n~/go/bin/lefthook"
-          key: hook-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+          key: hook-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}-${{ steps.hook-versions.outputs.betterleaks
+            }}-${{ steps.hook-versions.outputs.lefthook }}
       - name: install betterleaks
         run: make hook-tools
 
@@ -116,5 +126,8 @@ jobs:
       # delays the check rather than skipping it. --redact keeps a finding out
       # of the CI log, which is world-readable on a public repository.
         if: steps.hook-cache.outputs.cache-hit != 'true'
+        env:
+          HOOK_BETTERLEAKS_VERSION: ${{ steps.hook-versions.outputs.betterleaks }}
+          HOOK_LEFTHOOK_VERSION: ${{ steps.hook-versions.outputs.lefthook }}
       - name: scan for secrets
         run: "$(go env GOPATH)/bin/betterleaks git . --redact --no-banner"

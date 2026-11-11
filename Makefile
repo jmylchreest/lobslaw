@@ -140,9 +140,12 @@ hooks: hook-tools
 # builds clean on the repo's Go.
 HOOK_TOOLCHAIN := go1.26.2
 
+HOOK_LEFTHOOK_VERSION ?= latest
+HOOK_BETTERLEAKS_VERSION ?= latest
+
 hook-tools:
-	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/evilmartians/lefthook@latest
-	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/betterleaks/betterleaks@latest
+	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/evilmartians/lefthook@$(HOOK_LEFTHOOK_VERSION)
+	@GOTOOLCHAIN=$(HOOK_TOOLCHAIN) go install github.com/betterleaks/betterleaks@$(HOOK_BETTERLEAKS_VERSION)
 
 
 # Excludes assets and SPA wiring even if make web was run earlier.
