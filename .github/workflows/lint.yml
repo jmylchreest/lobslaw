@@ -108,6 +108,8 @@ jobs:
         run: |
           # Keep the scanner fresh while reusing binaries for an unchanged upstream release.
           export GOTOOLCHAIN=$(sed -n 's/^HOOK_TOOLCHAIN := //p' Makefile)
+          export GOWORK=off
+          cd "$RUNNER_TEMP"
           betterleaks=$(go list -m -f '{{.Version}}' github.com/betterleaks/betterleaks@latest)
           echo "betterleaks=$betterleaks" >> "$GITHUB_OUTPUT"
           lefthook=$(go list -m -f '{{.Version}}' github.com/evilmartians/lefthook@latest)
