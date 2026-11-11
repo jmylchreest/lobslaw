@@ -103,11 +103,18 @@ jobs:
       # Installed from source via the Makefile rather than a marketplace
       # action, so the version pin lives in one place and CI cannot drift from
       # what the pre-commit hook runs.
+      - name: Cache hook tools
+        id: hook-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: "~/go/bin/betterleaks\n~/go/bin/lefthook"
+          key: hook-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
       - name: install betterleaks
         run: make hook-tools
 
       # The same scanner the pre-commit hook runs, so `git commit --no-verify`
       # delays the check rather than skipping it. --redact keeps a finding out
       # of the CI log, which is world-readable on a public repository.
+        if: steps.hook-cache.outputs.cache-hit != 'true'
       - name: scan for secrets
         run: "$(go env GOPATH)/bin/betterleaks git . --redact --no-banner"
