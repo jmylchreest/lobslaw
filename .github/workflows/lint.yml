@@ -132,4 +132,4 @@ jobs:
           HOOK_BETTERLEAKS_VERSION: ${{ steps.hook-versions.outputs.betterleaks }}
           HOOK_LEFTHOOK_VERSION: ${{ steps.hook-versions.outputs.lefthook }}
       - name: scan for secrets
-        run: "$(go env GOPATH)/bin/betterleaks git . --redact --no-banner"
+        run: "$(go env GOPATH)/bin/betterleaks git . --config .betterleaks.toml --redact --no-banner"
