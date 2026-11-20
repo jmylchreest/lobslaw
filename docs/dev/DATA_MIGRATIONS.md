@@ -20,6 +20,10 @@ pre-upgrade source using its original binary and keys instead.
   `compatibleLogStore` supplies the same canonical bytes for Raft replay and peer
   replication. Original committed log bytes, terms, indexes and membership survive.
 - `memory.InspectData`: offline validation under the state and Raft database locks.
+- `memory.OpenNodeStore`: node-startup preflight before state migration or derived
+  index rebuild. It validates retained logs/snapshots under the existing DB locks
+  and durably retains a private core-data image before migrating populated legacy
+  state. Missing state with retained artifacts is checked before creation.
 - `memory.MigrateData`: validates the source, builds and validates a private copy,
   then publishes a new directory. Never overwrites the source or an existing target.
 - State open and snapshot restore: format metadata and supported buckets are
@@ -115,6 +119,65 @@ are not portable archive content. Missing keys cannot be repaired by migration.
 - Old peers cannot dispatch versioned Raft mutations; new peers interoperate.
 - Portable schema 1 imports retain explicit identity/ownership requirements.
 - Recovery requires deliberate acknowledgement before normal execution.
+
+## Real-install upgrade rehearsal
+
+`scripts/startup-upgrade-rehearsal.py` runs complete historical `lobslaw run`
+processes, drives their real mTLS APIs and authenticated REST conversations, stops
+them, and installs the candidate against their persisted data. It also builds its
+workload client against the historical protobuf module: historical log bytes are
+produced by the old implementation, rather than simulated by the new one.
+
+The scenarios cover:
+
+- Main `5f4e6c4`: unversioned ordinary data migrates during normal startup; its
+  startup backup is checked byte-for-byte and booted with the original binary.
+- The same old install after sharing memory and writing historical connector
+  state: colliding log field 38 refuses startup without changing core files;
+  verified `main-v0` offline migration, recovery acknowledgement, and rollback to
+  the original source are exercised.
+- `4b1179a`: an existing contract-1 install updates in place; future-format data is
+  refused without changing its files.
+
+Each install has 64 explicit vector memories, 32 episodic memories and their
+generated vectors, pinned profile entries, a synthetic encrypted credential, a
+disabled scheduled task, a future commitment, user preferences, and a four-turn
+conversation. `--snapshots` adds 9,000 real writes and waits for the old binary's
+own Raft snapshot. Checks include encrypted record fingerprints, ownership,
+Unicode, embeddings/search, transcript replay into the provider, contract 1 → 2
+automatic activation, bot creation/readback, new writes, browser-cookie persistence,
+and repeated restarts. Built-in housekeeping tasks may legitimately advance after
+the preservation checkpoint. Only the external LLM/embedding provider is stubbed.
+
+Example on Linux with Go and Docker (run from the repository root):
+
+```sh
+ROOT="$PWD"
+WORK="$(mktemp -d)"
+export CGO_ENABLED=0
+git worktree add --detach "$WORK/legacy" 5f4e6c4
+git worktree add --detach "$WORK/versioned" 4b1179a
+go -C "$WORK/legacy" build -o "$WORK/legacy-node" ./cmd/lobslaw
+go -C "$WORK/versioned" build -o "$WORK/versioned-node" ./cmd/lobslaw
+go build -o "$WORK/candidate-node" ./cmd/lobslaw
+go -C "$WORK/legacy" build -o "$WORK/legacy-probe" "$ROOT/scripts/upgrade-probe/main.go"
+go -C "$WORK/versioned" build -o "$WORK/versioned-probe" "$ROOT/scripts/upgrade-probe/main.go"
+go build -o "$WORK/probe" ./scripts/upgrade-probe
+docker pull debian:12-slim
+python3 scripts/startup-upgrade-rehearsal.py \
+  --legacy "$WORK/legacy-node" --versioned "$WORK/versioned-node" \
+  --candidate "$WORK/candidate-node" --legacy-probe "$WORK/legacy-probe" \
+  --versioned-probe "$WORK/versioned-probe" --probe "$WORK/probe" \
+  --output "$WORK/evidence" --snapshots --container-image debian:12-slim
+```
+
+Containers run as the invoking user's UID/GID and are recreated with the same
+bind-mounted installation and hostname. Omitting `--container-image` runs native
+binaries. Use `--scenario direct|ambiguous|versioned` to repeat one scenario. Allow
+several minutes for real snapshot timers and the normal activation stability
+windows. The private output retains `report.json`, node logs, provider requests,
+before/after fingerprints, original data, and backups; running nodes are stopped
+on completion or failure.
 
 ## Extending support
 

@@ -294,6 +294,12 @@ func TestRollingMixedBinaries(t *testing.T) {
 		nodes[i].start(t, candidate)
 	}
 	rollingWait(t, func() bool {
+		// Restarting voters may elect a different leader. Discover it for
+		// each attempt instead of retrying against the former leader forever.
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
 		_, err := leader.change(prepare)
 		if err != nil {
 			t.Log("prepare", err)
@@ -310,6 +316,10 @@ func TestRollingMixedBinaries(t *testing.T) {
 	nodes[2].start(t, candidate)
 	finalize := &pb.ChangeUpgradeRequest{Action: "finalize", TransitionId: "teams", Target: 2}
 	rollingWait(t, func() bool {
+		leader = currentRollingLeader(nodes)
+		if leader == nil {
+			return false
+		}
 		_, err := leader.change(finalize)
 		if err != nil {
 			t.Log("finalize", err)
