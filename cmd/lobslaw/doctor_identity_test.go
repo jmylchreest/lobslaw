@@ -68,6 +68,20 @@ func TestDoctorRolesReachableViaAlias(t *testing.T) {
 	}
 }
 
+func TestDoctorRolesReachableViaChannelBinding(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Users: []config.UserConfig{{
+			ID:       "alice",
+			Roles:    []string{"operator"},
+			Channels: []config.UserChannelAddrConfig{{Type: "telegram", Address: "123456789"}},
+		}},
+	}
+	if _, err := env(cfg).checkUserRolesReachable(); err != nil {
+		t.Fatalf("a user bound by channel address failed: %v", err)
+	}
+}
+
 func TestDoctorOperatorRoleWithoutGrant(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{

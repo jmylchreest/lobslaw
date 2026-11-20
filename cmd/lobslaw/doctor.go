@@ -420,10 +420,9 @@ func (d doctorEnv) checkIdentityAliases() (string, error) {
 
 // checkUserRolesReachable catches roles that can never apply.
 //
-// Role lookup resolves a channel id through [identity.aliases] and
-// then matches [[user]].id. Telegram yields "tg-@alice" while
-// [[user]].channels binds numeric addresses, so those do not join —
-// without an alias entry, a [[user]] with roles is inert on every
+// Role lookup resolves a channel id through [[user]].channels bindings
+// or [identity.aliases] and then matches [[user]].id. With neither,
+// a [[user]] with roles is inert on every
 // channel that has no JWT. The declaration looks correct and does
 // nothing, which is exactly the failure doctor exists to surface.
 func (d doctorEnv) checkUserRolesReachable() (string, error) {
@@ -438,7 +437,7 @@ func (d doctorEnv) checkUserRolesReachable() (string, error) {
 			continue
 		}
 		withRoles = append(withRoles, u.ID)
-		if !targets[u.ID] {
+		if !targets[u.ID] && len(u.Channels) == 0 {
 			unreachable = append(unreachable, u.ID)
 		}
 	}
