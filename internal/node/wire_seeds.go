@@ -240,6 +240,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 			Resource:  r.Resource,
 			Effect:    r.Effect,
 			Priority:  r.Priority,
+			Scope:     r.Scope,
 		}
 		// Written every boot when it differs, rather than skipped when
 		// present. Skipping meant an operator who changed a rule's
@@ -253,7 +254,7 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		}
 		n.log.Info("policy: seeded operator rule",
 			"id", r.ID, "subject", r.Subject, "action", r.Action,
-			"resource", r.Resource, "effect", r.Effect, "priority", r.Priority)
+			"resource", r.Resource, "effect", r.Effect, "priority", r.Priority, "scope", r.Scope)
 	}
 
 	n.reconcilePolicyRules(configIDs, seedIDs, gcRule)
@@ -283,7 +284,8 @@ func sameRule(a, b *lobslawv1.PolicyRule) bool {
 		a.GetAction() == b.GetAction() &&
 		a.GetResource() == b.GetResource() &&
 		a.GetEffect() == b.GetEffect() &&
-		a.GetPriority() == b.GetPriority()
+		a.GetPriority() == b.GetPriority() &&
+		a.GetScope() == b.GetScope()
 }
 
 // shouldRemoveRule reports whether a rule's reason for existing has
