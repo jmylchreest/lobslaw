@@ -59,3 +59,12 @@ func TestReconcileKeepsWhatIsStillJustified(t *testing.T) {
 		})
 	}
 }
+
+func TestSameRuleComparesScope(t *testing.T) {
+	t.Parallel()
+	a := &lobslawv1.PolicyRule{Id: "r", Effect: "allow"}
+	b := &lobslawv1.PolicyRule{Id: "r", Effect: "allow", Scope: "scheduler"}
+	if sameRule(a, b) {
+		t.Error("a rule whose scope changed in config must be rewritten")
+	}
+}

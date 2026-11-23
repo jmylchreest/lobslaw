@@ -464,6 +464,7 @@ type PolicyRuleConfig struct {
 	Resource string `koanf:"resource"`
 	Effect   string `koanf:"effect"`             // "allow" | "deny"
 	Priority int32  `koanf:"priority,omitempty"` // higher wins
+	Scope    string `koanf:"scope,omitempty"`    // empty matches any scope, e.g. "scheduler"
 }
 
 // ComputeTeamsConfig is the [compute-teams] section. Off by default;
