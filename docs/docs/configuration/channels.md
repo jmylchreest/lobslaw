@@ -270,6 +270,7 @@ name              = "ci"
 webhook_path      = "/hooks/ci"            # default: /webhook/<name>
 shared_secret_ref = "env:WEBHOOK_SHARED_SECRET"
 scope             = "webhook"                  # default
+ingest            = false                      # default true: keep these turns out of episodic memory
 ```
 
 Webhooks are served on the gateway HTTP port. External services POST to `http://<host>:8443/hooks/ci` with `Authorization: Bearer <shared secret>`, either JSON (`{"prompt": "..."}`) or a `text/plain` body used as the prompt. Each POST becomes one agent turn in `scope`, and the reply is returned in the response body. The secret is compared as a bearer token; the request body is not HMAC-signed, so a sender that only signs payloads (GitHub's `X-Hub-Signature-256`, Stripe's `Stripe-Signature`) needs a relay that adds the header. Useful for anything that can set a header: CI jobs, Home Assistant automations, scripts, IoT triggers.

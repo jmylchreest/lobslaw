@@ -1675,6 +1675,8 @@ type GatewayChannelConfig struct {
 	WebhookPath     string `koanf:"webhook_path,omitempty"`
 	SharedSecretRef string `koanf:"shared_secret_ref,omitempty"`
 	Scope           string `koanf:"scope,omitempty"`
+	// Ingest = false keeps this webhook's turns out of episodic memory.
+	Ingest *bool `koanf:"ingest,omitempty"`
 
 	// Slack channel fields. Only consulted when Type == "slack".
 	//

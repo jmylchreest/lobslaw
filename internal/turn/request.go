@@ -29,6 +29,7 @@ type Request struct {
 	Spent               BudgetState
 	BotID               string
 	Stream              StreamObserver
+	SkipEpisodicIngest  bool
 }
 
 // Response is the per-turn output a channel renders.

@@ -48,6 +48,9 @@ type WebhookConfig struct {
 	// DefaultBudget applies per request. Same shape as other channels.
 	DefaultBudget turn.BudgetCaps
 
+	// SkipEpisodicIngest keeps this webhook's turns out of episodic memory.
+	SkipEpisodicIngest bool
+
 	// Logger — nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -145,6 +148,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Claims:  claims,
 		TurnID:  turnID,
 		Caps:    h.cfg.DefaultBudget,
+
+		SkipEpisodicIngest: h.cfg.SkipEpisodicIngest,
 	})
 	if err != nil {
 		h.log.Error("webhook: agent error", "turn_id", turnID, "err", err)

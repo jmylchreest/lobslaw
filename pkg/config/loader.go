@@ -180,6 +180,9 @@ func (c *Config) Validate() error {
 		if ch.NotifyTasks && (ch.Type != "telegram" || c.UIWeb.PublicURL == "") {
 			return fmt.Errorf("%w: notify_tasks requires a Telegram channel and [ui-web].public_url", types.ErrInvalidConfig)
 		}
+		if ch.Ingest != nil && ch.Type != "webhook" {
+			return fmt.Errorf("%w: ingest is only supported on webhook channels", types.ErrInvalidConfig)
+		}
 	}
 	return nil
 }

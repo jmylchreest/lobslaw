@@ -483,6 +483,9 @@ type ProcessMessageRequest struct {
 	// main assistant — the behaviour a deployment without bots has.
 	BotID string
 
+	// SkipEpisodicIngest keeps this turn out of episodic memory.
+	SkipEpisodicIngest bool
+
 	// Bot is the resolved profile. Set by resolveBot when BotID is
 	// known; callers such as ask_bot may pass a modified copy
 	// (Without("ask_bot")) so the child cannot re-delegate.
@@ -780,7 +783,7 @@ func (a *Agent) recallContext(ctx context.Context, req *ProcessMessageRequest) {
 // turn is preferable to dropping the user's reply for a backend
 // hiccup.
 func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string, calls []ToolInvocation) {
-	if a.cfg.EpisodicIngester == nil || reply == "" || req.Bot.IsSpecialist() || isolatedTask(ctx, req) {
+	if a.cfg.EpisodicIngester == nil || reply == "" || req.SkipEpisodicIngest || req.Bot.IsSpecialist() || isolatedTask(ctx, req) {
 		return
 	}
 	// Channel and ChatID come from the request, which is where they
