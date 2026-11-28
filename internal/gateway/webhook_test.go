@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/turn"
@@ -195,5 +196,25 @@ func TestWebhookPassesSkipEpisodicIngest(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	if !runner.got.SkipEpisodicIngest {
 		t.Fatal("the webhook turn did not ask to skip episodic ingest")
+	}
+}
+
+func TestWebhookHardTimeoutEndsAStalledTurn(t *testing.T) {
+	t.Parallel()
+	h := &WebhookHandler{
+		cfg:    WebhookConfig{Name: "x", SharedSecret: "secret", HardTimeout: 30 * time.Millisecond},
+		runner: compute.Adapt(stallingAgent(t)),
+		log:    slog.Default(),
+	}
+	r := httptest.NewRequest(http.MethodPost, "/webhook/x", strings.NewReader("hello"))
+	r.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("status %d, body is not JSON: %v", w.Code, err)
+	}
+	if reply, _ := body["reply"].(string); !strings.Contains(strings.ToLower(reply), "too long") {
+		t.Errorf("reply = %q; it does not say the turn was cut short", reply)
 	}
 }
