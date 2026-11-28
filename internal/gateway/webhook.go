@@ -51,6 +51,9 @@ type WebhookConfig struct {
 	// SkipEpisodicIngest keeps this webhook's turns out of episodic memory.
 	SkipEpisodicIngest bool
 
+	// HardTimeout caps each turn as [gateway] hard_timeout does for other channels.
+	HardTimeout time.Duration
+
 	// Logger — nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -143,7 +146,9 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	turnID := "webhook-" + time.Now().UTC().Format("20060102T150405.000")
 
-	resp, err := h.runner.Run(r.Context(), turn.Request{
+	turnCtx, stop := startResponsiveness(r.Context(), nil, ResponsivenessConfig{HardTimeout: h.cfg.HardTimeout})
+	defer stop()
+	resp, err := h.runner.Run(turnCtx, turn.Request{
 		Message: prompt,
 		Claims:  claims,
 		TurnID:  turnID,
