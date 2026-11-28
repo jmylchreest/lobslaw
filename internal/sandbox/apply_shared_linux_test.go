@@ -5,6 +5,7 @@ package sandbox_test
 import (
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,8 +16,8 @@ import (
 
 func checkChildPolicyDefaults(t *testing.T, cmd *exec.Cmd, mounts []sandbox.PolicyMount) {
 	t.Helper()
-	for i := len(cmd.Env) - 1; i >= 0; i-- {
-		entry := cmd.Env[i]
+	for _, entry := range slices.Backward(cmd.Env) {
+
 		if raw, ok := strings.CutPrefix(entry, sandbox.PolicyEnvVar+"="); ok {
 			child, err := sandbox.DecodePolicy(raw)
 			if err != nil {

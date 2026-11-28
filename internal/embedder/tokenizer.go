@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -516,8 +517,8 @@ func (t *Tokenizer) viterbi(word string) []int32 {
 	// fuse_unk: consecutive unknown pieces collapse into a single
 	// <unk>, matching the reference. Without it a run of unmapped
 	// characters becomes one id per character.
-	for i := len(reversed) - 1; i >= 0; i-- {
-		id := reversed[i]
+	for _, id := range slices.Backward(reversed) {
+
 		if id == t.unkID && len(out) > 0 && out[len(out)-1] == t.unkID {
 			continue
 		}

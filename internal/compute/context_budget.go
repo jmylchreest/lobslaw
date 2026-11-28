@@ -2,6 +2,7 @@ package compute
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -114,8 +115,8 @@ func elideToolResults(history []Message, maxBytes int) []Message {
 func trimToTokens(history []Message, budget int) []Message {
 	total := 0
 	cut := 0
-	for i := len(history) - 1; i >= 0; i-- {
-		total += estimateTokens(history[i])
+	for i, h := range slices.Backward(history) {
+		total += estimateTokens(h)
 		if total > budget {
 			cut = i + 1
 			break

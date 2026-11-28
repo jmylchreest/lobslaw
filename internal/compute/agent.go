@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -2267,17 +2268,17 @@ func endsWithNewline(b []byte) bool {
 // which is serialised into the durable continuation and would have made
 // every paused turn from an older build unreadable.
 func pendingToolCall(msgs []Message) (ToolCall, int, bool) {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != "tool" {
+	for i, msg := range slices.Backward(msgs) {
+		if msg.Role != "tool" {
 			continue
 		}
-		if !msgs[i].BudgetPending && !strings.Contains(msgs[i].Content, ErrRequireConfirm.Error()) {
+		if !msg.BudgetPending && !strings.Contains(msg.Content, ErrRequireConfirm.Error()) {
 			// A tool result that is not a refusal means the tail has
 			// already been answered; stop rather than reaching further
 			// back into the turn.
 			return ToolCall{}, 0, false
 		}
-		id := msgs[i].ToolCallID
+		id := msg.ToolCallID
 		if id == "" {
 			// Nothing to match on. Some OpenAI-compatible servers omit
 			// the id entirely, and guessing which call this was is how

@@ -179,7 +179,7 @@ func (d *countingJobDriver) Poll(ctx context.Context, h compute.JobHandle) (comp
 // is a commitment rather than a tool call that blocks.
 func TestSubmittingAVideoNeverPolls(t *testing.T) {
 	t.Parallel()
-	d := &countingJobDriver{MockJobDriver: compute.MockJobDriver{PollsBeforeDone: 1}}
+	d := &countingJobDriver{PollsBeforeDone: 1}
 	s := &recordingStarter{}
 	b := NewBuiltins()
 	if err := RegisterVideoBuiltin(b, VideoConfig{Driver: d, Start: s.start, Label: "v"}); err != nil {

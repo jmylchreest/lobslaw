@@ -117,9 +117,7 @@ func TestInboxClaimIsExactlyOnce(t *testing.T) {
 		wg      sync.WaitGroup
 	)
 	for i := range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			item, err := svc.Claim(context.Background(), "engineering", fmt.Sprintf("node-%d", i))
 			if err != nil {
 				return
@@ -129,7 +127,7 @@ func TestInboxClaimIsExactlyOnce(t *testing.T) {
 				winners = append(winners, item.GetClaimedBy())
 				mu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -128,14 +128,12 @@ func TestContentionProfilesRecordOnlyWhenEnabled(t *testing.T) {
 		var wg sync.WaitGroup
 		ch := make(chan struct{})
 		for range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				mu.Lock()
 				time.Sleep(time.Millisecond)
 				mu.Unlock()
 				<-ch
-			}()
+			})
 		}
 		time.Sleep(20 * time.Millisecond)
 		close(ch)
