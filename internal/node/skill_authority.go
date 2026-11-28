@@ -12,13 +12,15 @@ import (
 // Installed operator/signed skills are shared capabilities. Learned skills are
 // private to their authoring principal, even after activation materialises them
 // into the node-wide execution cache. A stale cache cannot confer authority.
+// MCP tools share the dispatcher chain, so a registered one passes and policy decides.
 func (n *Node) skillAllowed(ctx context.Context, name string) bool {
-	if n.skillRegistry == nil {
-		return false
+	var skill *skills.Skill
+	var err error
+	if n.skillRegistry != nil {
+		skill, err = n.skillRegistry.Get(name)
 	}
-	skill, err := n.skillRegistry.Get(name)
-	if err != nil {
-		return false
+	if n.skillRegistry == nil || err != nil {
+		return n.mcpLoader != nil && n.mcpLoader.Has(name)
 	}
 	if skill.Tier != skills.TierAgent {
 		return true
