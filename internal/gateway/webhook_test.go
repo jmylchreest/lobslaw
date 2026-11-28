@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -169,3 +170,30 @@ func (p *shimProvider) Chat(_ context.Context, req compute.ChatRequest) (*comput
 
 // ensure types import stays live even if the stub path doesn't reach it.
 var _ = types.ErrInvalidConfig
+
+type capturingRunner struct{ got turn.Request }
+
+func (c *capturingRunner) Run(_ context.Context, req turn.Request) (*turn.Response, error) {
+	c.got = req
+	return &turn.Response{Reply: "ok"}, nil
+}
+
+func (c *capturingRunner) Resume(ctx context.Context, req turn.Request, _ []turn.Message) (*turn.Response, error) {
+	return c.Run(ctx, req)
+}
+
+func TestWebhookPassesSkipEpisodicIngest(t *testing.T) {
+	t.Parallel()
+	runner := &capturingRunner{}
+	h := &WebhookHandler{
+		cfg:    WebhookConfig{Name: "x", SharedSecret: "secret", SkipEpisodicIngest: true},
+		runner: runner,
+		log:    slog.Default(),
+	}
+	r := httptest.NewRequest(http.MethodPost, "/webhook/x", strings.NewReader("hello"))
+	r.Header.Set("Authorization", "Bearer secret")
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if !runner.got.SkipEpisodicIngest {
+		t.Fatal("the webhook turn did not ask to skip episodic ingest")
+	}
+}

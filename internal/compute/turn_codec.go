@@ -26,6 +26,7 @@ func requestToProto(req turn.Request) *lobslawv1.RunTurnRequest {
 		ConversationSummary: req.ConversationSummary,
 		RecalledContext:     req.RecalledContext,
 		BotId:               req.BotID,
+		SkipEpisodicIngest:  req.SkipEpisodicIngest,
 		Caps: &lobslawv1.TurnBudgetCaps{
 			MaxToolCalls:   int32(req.Caps.MaxToolCalls),
 			MaxSpendUsd:    req.Caps.MaxSpendUSD,
@@ -68,6 +69,7 @@ func requestFromProto(p *lobslawv1.RunTurnRequest) turn.Request {
 		ConversationSummary: p.ConversationSummary,
 		RecalledContext:     p.RecalledContext,
 		BotID:               p.BotId,
+		SkipEpisodicIngest:  p.SkipEpisodicIngest,
 	}
 	if p.Caps != nil {
 		out.Caps = turn.BudgetCaps{

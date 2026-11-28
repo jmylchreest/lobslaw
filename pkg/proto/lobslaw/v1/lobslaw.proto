@@ -2651,6 +2651,8 @@ message RunTurnRequest {
   TurnBudgetCaps caps = 16;
   TurnBudgetState spent = 17;
   string bot_id = 18;
+  // Keeps the turn out of episodic memory.
+  bool skip_episodic_ingest = 19;
 }
 
 message ResumeTurnRequest {

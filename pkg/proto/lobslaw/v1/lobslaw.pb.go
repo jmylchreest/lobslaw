@@ -15498,8 +15498,10 @@ type RunTurnRequest struct {
 	Caps                *TurnBudgetCaps   `protobuf:"bytes,16,opt,name=caps,proto3" json:"caps,omitempty"`
 	Spent               *TurnBudgetState  `protobuf:"bytes,17,opt,name=spent,proto3" json:"spent,omitempty"`
 	BotId               string            `protobuf:"bytes,18,opt,name=bot_id,json=botId,proto3" json:"bot_id,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Keeps the turn out of episodic memory.
+	SkipEpisodicIngest bool `protobuf:"varint,19,opt,name=skip_episodic_ingest,json=skipEpisodicIngest,proto3" json:"skip_episodic_ingest,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *RunTurnRequest) Reset() {
@@ -15656,6 +15658,13 @@ func (x *RunTurnRequest) GetBotId() string {
 		return x.BotId
 	}
 	return ""
+}
+
+func (x *RunTurnRequest) GetSkipEpisodicIngest() bool {
+	if x != nil {
+		return x.SkipEpisodicIngest
+	}
+	return false
 }
 
 type ResumeTurnRequest struct {
@@ -24044,7 +24053,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x04args\x18\x03 \x01(\tR\x04args\x12\x16\n" +
 	"\x06output\x18\x04 \x01(\tR\x06output\x12\x1b\n" +
 	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"\xd0\x05\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\"\x82\x06\n" +
 	"\x0eRunTurnRequest\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12*\n" +
 	"\x06claims\x18\x02 \x01(\v2\x12.lobslaw.v1.ClaimsR\x06claims\x12\x1c\n" +
@@ -24065,7 +24074,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\vattachments\x18\x0f \x03(\v2\x1a.lobslaw.v1.TurnAttachmentR\vattachments\x12.\n" +
 	"\x04caps\x18\x10 \x01(\v2\x1a.lobslaw.v1.TurnBudgetCapsR\x04caps\x121\n" +
 	"\x05spent\x18\x11 \x01(\v2\x1b.lobslaw.v1.TurnBudgetStateR\x05spent\x12\x15\n" +
-	"\x06bot_id\x18\x12 \x01(\tR\x05botId\"\xd1\x01\n" +
+	"\x06bot_id\x18\x12 \x01(\tR\x05botId\x120\n" +
+	"\x14skip_episodic_ingest\x18\x13 \x01(\bR\x12skipEpisodicIngest\"\xd1\x01\n" +
 	"\x11ResumeTurnRequest\x124\n" +
 	"\arequest\x18\x01 \x01(\v2\x1a.lobslaw.v1.RunTurnRequestR\arequest\x120\n" +
 	"\x05prior\x18\x02 \x03(\v2\x1a.lobslaw.v1.SessionMessageR\x05prior\x12'\n" +

@@ -60,6 +60,7 @@ func requestFromTurn(req turn.Request) (ProcessMessageRequest, error) {
 		RecalledContext:     req.RecalledContext,
 		Attachments:         req.Attachments,
 		BotID:               req.BotID,
+		SkipEpisodicIngest:  req.SkipEpisodicIngest,
 	}, nil
 }
 

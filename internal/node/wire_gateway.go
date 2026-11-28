@@ -467,6 +467,8 @@ func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig, runner turn.R
 		Scope:         ch.Scope,
 		DefaultBudget: compute.FromComputeConfig(n.cfg.Compute),
 		Logger:        n.log,
+
+		SkipEpisodicIngest: ch.Ingest != nil && !*ch.Ingest,
 	}, runner)
 }
 
