@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -172,8 +173,8 @@ func ListTurns(dir string, limit int) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		for i := len(spans) - 1; i >= 0; i-- {
-			id := spans[i].TurnID
+		for _, span := range slices.Backward(spans) {
+			id := span.TurnID
 			if id == "" || seen[id] {
 				continue
 			}

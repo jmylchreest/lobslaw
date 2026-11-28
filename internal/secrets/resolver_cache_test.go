@@ -71,24 +71,21 @@ func TestResolverShortTTLDoesNotSpinCleanup(t *testing.T) {
 		}
 		r.store("lookup", "value")
 		r.store("idle", "value")
-		time.Sleep(ttl)
-		synctest.Wait()
+		synctest.Sleep(ttl)
 		if _, ok := r.cached("lookup"); ok {
 			t.Fatal("cleanup floor extended lookup TTL")
 		}
 		// Refresh just before the first scan so its callback must rearm.
 		time.Sleep(time.Second - ttl - ttl/2)
 		r.store("idle", "fresh")
-		time.Sleep(ttl / 2)
-		synctest.Wait()
+		synctest.Sleep(ttl / 2)
 		if got := scheduled.Load(); got != 2 {
 			t.Fatalf("scheduled %d timers through first scan; want 2", got)
 		}
 		if value, ok := r.cached("idle"); !ok || value != "fresh" {
 			t.Fatal("first scan lost unexpired refresh")
 		}
-		time.Sleep(time.Second)
-		synctest.Wait()
+		synctest.Sleep(time.Second)
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if len(r.cache) != 0 || r.cleanupScheduled {
@@ -107,8 +104,7 @@ func TestResolverIdleCleanupAndRestart(t *testing.T) {
 				r := NewResolver(nil, ttl)
 				for range 2 {
 					r.store("vault:key", "value")
-					time.Sleep(ttl)
-					synctest.Wait()
+					synctest.Sleep(ttl)
 					r.mu.Lock()
 					count, scheduled := len(r.cache), r.cleanupScheduled
 					r.mu.Unlock()
@@ -158,8 +154,7 @@ func TestResolverCapacityEvictsNearestExpiry(t *testing.T) {
 			t.Fatal("replacement changed size")
 		}
 		// Do not leave the timer retaining the resolver after the test.
-		time.Sleep(time.Hour)
-		synctest.Wait()
+		synctest.Sleep(time.Hour)
 	})
 }
 
@@ -177,8 +172,7 @@ func TestResolverCapacityPrunesExpiredBeforeEvicting(t *testing.T) {
 		if value, ok := r.cached("0"); !ok || value != "live" {
 			t.Fatal("live entry evicted")
 		}
-		time.Sleep(time.Hour)
-		synctest.Wait()
+		synctest.Sleep(time.Hour)
 	})
 }
 
@@ -198,8 +192,7 @@ func TestResolverCleanupPreservesConcurrentRefresh(t *testing.T) {
 		if value, ok := r.cached("key"); !ok || value != "fresh" {
 			t.Fatal("cleanup lost refreshed value")
 		}
-		time.Sleep(time.Minute)
-		synctest.Wait()
+		synctest.Sleep(time.Minute)
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if len(r.cache) != 0 || r.cleanupScheduled {

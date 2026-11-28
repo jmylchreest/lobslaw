@@ -742,11 +742,11 @@ func TestNodeSchedulerFiresCommitmentAfterBoot(t *testing.T) {
 
 	// Register a commitment handler BEFORE Start so it's in place
 	// when the scheduler starts ticking.
-	var fired int32
+	var fired atomic.Int32
 	cb := make(chan struct{}, 1)
 	_ = n.Scheduler().Handlers().RegisterCommitment("test-ping",
 		func(_ context.Context, _ *lobslawv1.AgentCommitment) error {
-			atomic.AddInt32(&fired, 1)
+			fired.Add(1)
 			select {
 			case cb <- struct{}{}:
 			default:
@@ -793,8 +793,8 @@ func TestNodeSchedulerFiresCommitmentAfterBoot(t *testing.T) {
 		<-done
 		t.Fatal("handler never fired within 5s")
 	}
-	if atomic.LoadInt32(&fired) != 1 {
-		t.Errorf("handler fired %d times; want 1", atomic.LoadInt32(&fired))
+	if fired.Load() != 1 {
+		t.Errorf("handler fired %d times; want 1", fired.Load())
 	}
 
 	cancel()

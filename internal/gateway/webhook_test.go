@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,9 +160,9 @@ type shimProvider struct{ stub *stubAgent }
 
 func (p *shimProvider) Chat(_ context.Context, req compute.ChatRequest) (*compute.ChatResponse, error) {
 	// Last user message is the prompt the webhook extracted.
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role == "user" {
-			p.stub.lastPrompt = req.Messages[i].Content
+	for _, v := range slices.Backward(req.Messages) {
+		if v.Role == "user" {
+			p.stub.lastPrompt = v.Content
 			break
 		}
 	}

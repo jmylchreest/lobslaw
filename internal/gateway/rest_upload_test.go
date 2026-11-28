@@ -271,8 +271,7 @@ func TestRESTUploadPeriodicExpiry(t *testing.T) {
 		defer cancel()
 		go s.uploads.run(ctx)
 		synctest.Wait()
-		time.Sleep(restUploadTTL + time.Minute)
-		synctest.Wait()
+		synctest.Sleep(restUploadTTL + time.Minute)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatal("expiry did not remove file", err)
 		}

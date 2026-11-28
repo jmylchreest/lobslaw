@@ -31,14 +31,14 @@ func TestWatchFiresOnWrite(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	var fires int32
+	var fires atomic.Int32
 	done := make(chan struct{}, 1)
 	go func() {
 		_ = Watch(ctx, WatchOptions{
 			Paths:    []string{path},
 			Debounce: 50 * time.Millisecond,
 		}, func([]fsnotify.Event) {
-			atomic.AddInt32(&fires, 1)
+			fires.Add(1)
 			select {
 			case done <- struct{}{}:
 			default:
@@ -59,7 +59,7 @@ func TestWatchFiresOnWrite(t *testing.T) {
 		t.Fatal("watcher did not fire within 2s of write")
 	}
 
-	if got := atomic.LoadInt32(&fires); got != 1 {
+	if got := fires.Load(); got != 1 {
 		t.Errorf("fires = %d; want 1", got)
 	}
 }
@@ -78,7 +78,7 @@ func TestWatchDebouncesBursts(t *testing.T) {
 	defer cancel()
 
 	var (
-		fires  int32
+		fires  atomic.Int32
 		mu     sync.Mutex
 		events []fsnotify.Event
 	)
@@ -107,7 +107,7 @@ func TestWatchDebouncesBursts(t *testing.T) {
 			// prompt.
 			Debounce: time.Second,
 		}, func(batch []fsnotify.Event) {
-			atomic.AddInt32(&fires, 1)
+			fires.Add(1)
 			mu.Lock()
 			events = append(events, batch...)
 			mu.Unlock()
@@ -137,7 +137,7 @@ func TestWatchDebouncesBursts(t *testing.T) {
 	// actually collapse the burst.
 	time.Sleep(300 * time.Millisecond)
 
-	if got := atomic.LoadInt32(&fires); got != 1 {
+	if got := fires.Load(); got != 1 {
 		t.Errorf("fires = %d; want 1 (debounce should collapse bursts)", got)
 	}
 	mu.Lock()
@@ -161,13 +161,13 @@ func TestWatchIgnoresSiblingFiles(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	var fires int32
+	var fires atomic.Int32
 	go func() {
 		_ = Watch(ctx, WatchOptions{
 			Paths:    []string{watched},
 			Debounce: 50 * time.Millisecond,
 		}, func([]fsnotify.Event) {
-			atomic.AddInt32(&fires, 1)
+			fires.Add(1)
 		})
 	}()
 
@@ -178,7 +178,7 @@ func TestWatchIgnoresSiblingFiles(t *testing.T) {
 	}
 	time.Sleep(250 * time.Millisecond)
 
-	if got := atomic.LoadInt32(&fires); got != 0 {
+	if got := fires.Load(); got != 0 {
 		t.Errorf("watcher fired on sibling file change; fires=%d", got)
 	}
 }

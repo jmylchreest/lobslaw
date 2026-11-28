@@ -32,13 +32,11 @@ func TestTaskAdmissionRejectsCapacityWithoutOrphanRecords(t *testing.T) {
 	}
 	var workers sync.WaitGroup
 	for range 12 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			if _, err := create(); status.Code(err) != codes.ResourceExhausted {
 				t.Errorf("capacity: %v", err)
 			}
-		}()
+		})
 	}
 	workers.Wait()
 	count := 0
